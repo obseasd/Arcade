@@ -1,0 +1,242 @@
+"use client";
+
+import { ExternalLink, Twitter, MessageSquare, Globe, ArrowLeft } from "lucide-react";
+import Link from "next/link";
+import { useParams } from "next/navigation";
+import { useMemo } from "react";
+import { Address, erc20Abi, isAddress } from "viem";
+import { useReadContract } from "wagmi";
+import { LAUNCHPAD_ABI } from "@/lib/abis/launchpad";
+import { ADDRESSES } from "@/lib/constants";
+import { parseInlineMetadata, getImageUrl, type TokenMetadata } from "@/lib/metadata";
+import { formatAddress, formatUSDC } from "@/lib/utils";
+import { TokenIcon } from "@/components/ui/TokenIcon";
+import { PriceChart } from "@/components/launchpad/PriceChart";
+import { TradePanel } from "@/components/launchpad/TradePanel";
+import { Comments } from "@/components/launchpad/Comments";
+
+const CURVE_SUPPLY = 800_000_000n * 10n ** 18n;
+const MIGRATION_TARGET = 20_000n * 10n ** 6n;
+
+export default function TokenDetailPage() {
+  const params = useParams();
+  const addressParam = params.address as string;
+  const isValid = isAddress(addressParam);
+  const token = addressParam as Address;
+
+  const tokenState = useReadContract({
+    address: ADDRESSES.launchpad,
+    abi: LAUNCHPAD_ABI,
+    functionName: "getTokenState",
+    args: isValid ? [token] : undefined,
+    query: { enabled: isValid },
+  });
+
+  const nameQ = useReadContract({
+    address: isValid ? token : undefined,
+    abi: erc20Abi,
+    functionName: "name",
+    query: { enabled: isValid },
+  });
+  const symbolQ = useReadContract({
+    address: isValid ? token : undefined,
+    abi: erc20Abi,
+    functionName: "symbol",
+    query: { enabled: isValid },
+  });
+  const mcapQ = useReadContract({
+    address: ADDRESSES.launchpad,
+    abi: LAUNCHPAD_ABI,
+    functionName: "marketCap",
+    args: isValid ? [token] : undefined,
+    query: { enabled: isValid },
+  });
+
+  const state = tokenState.data as any;
+  const symbol = (symbolQ.data as string | undefined) ?? "?";
+  const name = (nameQ.data as string | undefined) ?? "Unnamed";
+  const mcap = mcapQ.data as bigint | undefined;
+
+  const metadata: TokenMetadata = useMemo(() => {
+    if (!state?.metadataURI) return {};
+    return parseInlineMetadata(state.metadataURI) ?? {};
+  }, [state?.metadataURI]);
+  const image = state?.metadataURI ? getImageUrl(state.metadataURI) : undefined;
+
+  const tokensSold = (state?.tokensSold as bigint | undefined) ?? 0n;
+  const realUsdc = (state?.realUsdcReserve as bigint | undefined) ?? 0n;
+  const migrated = !!state?.migrated;
+  const progress = !migrated && CURVE_SUPPLY > 0n
+    ? Number((tokensSold * 10_000n) / CURVE_SUPPLY) / 100
+    : migrated
+      ? 100
+      : 0;
+
+  if (!isValid) {
+    return (
+      <div className="mx-auto max-w-2xl px-4 py-16 sm:px-6">
+        <div className="arc-card p-8 text-center">
+          <p className="text-arc-danger">Invalid token address.</p>
+          <Link href="/launchpad" className="mt-4 inline-block text-arc-primary hover:underline">
+            ← Back to launchpad
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
+  if (tokenState.isLoading) {
+    return <div className="mx-auto max-w-7xl px-4 py-16 text-center text-arc-text-muted">Loading…</div>;
+  }
+
+  if (!state || state.token === "0x0000000000000000000000000000000000000000") {
+    return (
+      <div className="mx-auto max-w-2xl px-4 py-16 sm:px-6">
+        <div className="arc-card p-8 text-center">
+          <p className="text-arc-text-muted">Token not found on this launchpad.</p>
+          <Link href="/launchpad" className="mt-4 inline-block text-arc-primary hover:underline">
+            ← Back to launchpad
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6">
+      <Link
+        href="/launchpad"
+        className="mb-6 inline-flex items-center gap-2 text-sm text-arc-text-muted hover:text-arc-text"
+      >
+        <ArrowLeft className="h-4 w-4" /> Launchpad
+      </Link>
+
+      <div className="grid gap-6 lg:grid-cols-3">
+        {/* Left: header + chart + comments */}
+        <div className="space-y-6 lg:col-span-2">
+          {/* Header */}
+          <div className="arc-card p-6">
+            <div className="flex items-start gap-4">
+              {image ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={image}
+                  alt={symbol}
+                  className="h-20 w-20 rounded-2xl border border-arc-border object-cover"
+                  onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = "none")}
+                />
+              ) : (
+                <TokenIcon symbol={symbol} size={80} />
+              )}
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-baseline gap-2">
+                  <h1 className="truncate text-2xl font-semibold">{name}</h1>
+                  <span className="tabular-nums text-arc-text-muted">${symbol}</span>
+                  {migrated && (
+                    <span className="rounded-full border border-arc-success/30 bg-arc-success/10 px-2 py-0.5 text-xs font-medium text-arc-success">
+                      Migrated to DEX
+                    </span>
+                  )}
+                </div>
+                <div className="mt-1 text-xs text-arc-text-muted">
+                  {token} · created by{" "}
+                  <a
+                    href={`https://testnet.arcscan.app/address/${state.creator}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="hover:text-arc-text"
+                  >
+                    {formatAddress(state.creator)}
+                  </a>
+                </div>
+                {metadata.description && (
+                  <p className="mt-3 max-w-2xl text-sm text-arc-text-muted">{metadata.description}</p>
+                )}
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  {metadata.twitter && <SocialLink href={metadata.twitter} icon={<Twitter className="h-3.5 w-3.5" />}>Twitter</SocialLink>}
+                  {metadata.telegram && <SocialLink href={metadata.telegram} icon={<MessageSquare className="h-3.5 w-3.5" />}>Telegram</SocialLink>}
+                  {metadata.website && <SocialLink href={metadata.website} icon={<Globe className="h-3.5 w-3.5" />}>Website</SocialLink>}
+                  <a
+                    href={`https://testnet.arcscan.app/address/${token}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="arc-pill"
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" /> Explorer
+                  </a>
+                </div>
+              </div>
+            </div>
+
+            {/* Stats row */}
+            <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <Stat
+                label="Market cap"
+                value={mcap ? `$${formatUSDC(mcap, 6, 0)}` : "—"}
+              />
+              <Stat
+                label="USDC raised"
+                value={migrated ? "Migrated" : `$${formatUSDC(realUsdc, 6, 0)}`}
+              />
+              <Stat label="Progress" value={`${progress.toFixed(1)}%`} />
+              <Stat
+                label={migrated ? "DEX pool" : "Migration at"}
+                value={
+                  migrated && state.v2Pair
+                    ? formatAddress(state.v2Pair)
+                    : `$${formatUSDC(MIGRATION_TARGET, 6, 0)}`
+                }
+              />
+            </div>
+
+            {!migrated && (
+              <div className="mt-4">
+                <div className="h-2 overflow-hidden rounded-full bg-arc-bg-elevated">
+                  <div
+                    className="h-full bg-gradient-to-r from-arc-primary to-arc-primary-hover"
+                    style={{ width: `${Math.min(progress, 100)}%` }}
+                  />
+                </div>
+                <div className="mt-1 text-xs text-arc-text-faint">
+                  Curve auto-migrates to the DEX at 100%. All LP tokens are burned on migration.
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Chart */}
+          <div className="arc-card p-5">
+            <h3 className="mb-3 text-base font-semibold">Price</h3>
+            <PriceChart token={token} />
+          </div>
+
+          {/* Comments */}
+          <Comments token={token} />
+        </div>
+
+        {/* Right: trade panel */}
+        <div className="space-y-6">
+          <TradePanel token={token} symbol={symbol} migrated={migrated} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Stat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-xl border border-arc-border bg-arc-bg-elevated p-3">
+      <div className="text-xs text-arc-text-muted">{label}</div>
+      <div className="mt-1 truncate tabular-nums text-base font-medium">{value}</div>
+    </div>
+  );
+}
+
+function SocialLink({ href, icon, children }: { href: string; icon: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <a href={href} target="_blank" rel="noopener noreferrer" className="arc-pill hover:bg-arc-surface-3">
+      {icon}
+      {children}
+    </a>
+  );
+}

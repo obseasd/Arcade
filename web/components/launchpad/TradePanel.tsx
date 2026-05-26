@@ -1,0 +1,253 @@
+"use client";
+
+import { useMemo, useState } from "react";
+import { Address, erc20Abi, formatUnits, parseUnits } from "viem";
+import { useAccount, usePublicClient, useReadContract, useWriteContract } from "wagmi";
+import { LAUNCHPAD_ABI } from "@/lib/abis/launchpad";
+import { ROUTER_ABI } from "@/lib/abis/dex";
+import { ADDRESSES, LAUNCHPAD_TOKEN_DECIMALS, USDC_DECIMALS } from "@/lib/constants";
+import { AmountInput } from "@/components/ui/AmountInput";
+import { TxStatus, type TxState } from "@/components/ui/TxStatus";
+import { useApproveIfNeeded } from "@/lib/hooks/useApproveIfNeeded";
+import { cn, formatToken, formatUSDC } from "@/lib/utils";
+
+interface Props {
+  token: Address;
+  symbol: string;
+  migrated: boolean;
+}
+
+export function TradePanel({ token, symbol, migrated }: Props) {
+  const { address: account } = useAccount();
+  const publicClient = usePublicClient();
+  const [side, setSide] = useState<"buy" | "sell">("buy");
+  const [amount, setAmount] = useState("");
+  const [slippageBps, setSlippageBps] = useState(100); // 1% default for curve
+  const [tx, setTx] = useState<TxState>({ status: "idle" });
+
+  // Spender depends on migration status
+  const spender = migrated ? ADDRESSES.router : ADDRESSES.launchpad;
+
+  const usdcBalance = useReadContract({
+    address: ADDRESSES.usdc,
+    abi: erc20Abi,
+    functionName: "balanceOf",
+    args: account ? [account] : undefined,
+    query: { enabled: !!account },
+  });
+
+  const tokenBalance = useReadContract({
+    address: token,
+    abi: erc20Abi,
+    functionName: "balanceOf",
+    args: account ? [account] : undefined,
+    query: { enabled: !!account },
+  });
+
+  const amountRaw = useMemo(() => {
+    try {
+      if (!amount) return 0n;
+      const dec = side === "buy" ? USDC_DECIMALS : LAUNCHPAD_TOKEN_DECIMALS;
+      return parseUnits(amount, dec);
+    } catch {
+      return 0n;
+    }
+  }, [amount, side]);
+
+  // Curve quote
+  const curveBuyQuote = useReadContract({
+    address: ADDRESSES.launchpad,
+    abi: LAUNCHPAD_ABI,
+    functionName: "quoteBuy",
+    args: amountRaw > 0n ? [token, amountRaw] : undefined,
+    query: { enabled: !migrated && side === "buy" && amountRaw > 0n },
+  });
+  const curveSellQuote = useReadContract({
+    address: ADDRESSES.launchpad,
+    abi: LAUNCHPAD_ABI,
+    functionName: "quoteSell",
+    args: amountRaw > 0n ? [token, amountRaw] : undefined,
+    query: { enabled: !migrated && side === "sell" && amountRaw > 0n },
+  });
+
+  // DEX quote (when migrated)
+  const dexQuote = useReadContract({
+    address: ADDRESSES.router,
+    abi: ROUTER_ABI,
+    functionName: "getAmountsOut",
+    args:
+      amountRaw > 0n
+        ? [
+            amountRaw,
+            side === "buy" ? [ADDRESSES.usdc, token] : [token, ADDRESSES.usdc],
+          ]
+        : undefined,
+    query: { enabled: migrated && amountRaw > 0n },
+  });
+
+  let estimatedOut = 0n;
+  let refund = 0n;
+  if (!migrated) {
+    if (side === "buy") {
+      const r = curveBuyQuote.data as [bigint, bigint] | undefined;
+      estimatedOut = r?.[0] ?? 0n;
+      refund = r?.[1] ?? 0n;
+    } else {
+      estimatedOut = (curveSellQuote.data as bigint | undefined) ?? 0n;
+    }
+  } else {
+    estimatedOut = (dexQuote.data as bigint[] | undefined)?.[1] ?? 0n;
+  }
+
+  const minOut = (estimatedOut * BigInt(10_000 - slippageBps)) / 10_000n;
+
+  const { ensureAllowance } = useApproveIfNeeded(side === "buy" ? ADDRESSES.usdc : token, spender);
+  const { writeContractAsync } = useWriteContract();
+
+  const onTrade = async () => {
+    if (!account || amountRaw === 0n) return;
+    setTx({ status: "pending", message: "Approving…" });
+    try {
+      await ensureAllowance(amountRaw);
+      setTx({ status: "pending", message: "Submitting trade…" });
+
+      let hash;
+      if (!migrated) {
+        hash = await writeContractAsync({
+          address: ADDRESSES.launchpad,
+          abi: LAUNCHPAD_ABI,
+          functionName: side === "buy" ? "buy" : "sell",
+          args: [token, amountRaw, minOut],
+        });
+      } else {
+        const path = side === "buy" ? [ADDRESSES.usdc, token] : [token, ADDRESSES.usdc];
+        hash = await writeContractAsync({
+          address: ADDRESSES.router,
+          abi: ROUTER_ABI,
+          functionName: "swapExactTokensForTokens",
+          args: [amountRaw, minOut, path, account, BigInt(Math.floor(Date.now() / 1000) + 600)],
+        });
+      }
+      if (publicClient) await publicClient.waitForTransactionReceipt({ hash });
+      setTx({ status: "success", message: "Trade confirmed" });
+      setAmount("");
+      usdcBalance.refetch();
+      tokenBalance.refetch();
+    } catch (e: any) {
+      setTx({ status: "error", message: e?.shortMessage || e?.message || "Trade failed" });
+    }
+  };
+
+  const sideToken = side === "buy" ? "USDC" : symbol;
+  const sideDecimals = side === "buy" ? USDC_DECIMALS : LAUNCHPAD_TOKEN_DECIMALS;
+  const inBalance = side === "buy" ? (usdcBalance.data as bigint | undefined) : (tokenBalance.data as bigint | undefined);
+  const inBalanceFmt = inBalance
+    ? side === "buy"
+      ? formatUSDC(inBalance, USDC_DECIMALS, 2)
+      : formatToken(inBalance, LAUNCHPAD_TOKEN_DECIMALS, 4)
+    : "0";
+
+  return (
+    <div className="arc-card p-5">
+      <div className="mb-4 grid grid-cols-2 gap-1 rounded-xl border border-arc-border bg-arc-bg-elevated p-1">
+        <button
+          onClick={() => {
+            setSide("buy");
+            setAmount("");
+          }}
+          className={cn(
+            "rounded-lg py-2 text-sm font-medium transition-colors",
+            side === "buy" ? "bg-arc-primary text-white" : "text-arc-text-muted hover:text-arc-text",
+          )}
+        >
+          Buy
+        </button>
+        <button
+          onClick={() => {
+            setSide("sell");
+            setAmount("");
+          }}
+          className={cn(
+            "rounded-lg py-2 text-sm font-medium transition-colors",
+            side === "sell" ? "bg-arc-primary text-white" : "text-arc-text-muted hover:text-arc-text",
+          )}
+        >
+          Sell
+        </button>
+      </div>
+
+      <AmountInput
+        label={side === "buy" ? "You pay" : "You sell"}
+        value={amount}
+        onChange={setAmount}
+        symbol={sideToken}
+        balanceLabel={account ? `Balance: ${inBalanceFmt}` : undefined}
+        onMax={
+          account && inBalance ? () => setAmount(formatUnits(inBalance, sideDecimals)) : undefined
+        }
+      />
+
+      <div className="mt-3 rounded-xl border border-arc-border bg-arc-bg-elevated p-3 text-sm">
+        <div className="flex justify-between text-arc-text-muted">
+          <span>You receive</span>
+          <span className="tabular-nums text-arc-text">
+            {side === "buy"
+              ? formatToken(estimatedOut, LAUNCHPAD_TOKEN_DECIMALS, 6)
+              : formatUSDC(estimatedOut, USDC_DECIMALS, 6)}{" "}
+            <span className="text-arc-text-muted">{side === "buy" ? symbol : "USDC"}</span>
+          </span>
+        </div>
+        {refund > 0n && (
+          <div className="mt-1 flex justify-between text-arc-text-muted">
+            <span>Refund (overshoot)</span>
+            <span className="tabular-nums text-arc-warn">{formatUSDC(refund, USDC_DECIMALS, 6)} USDC</span>
+          </div>
+        )}
+        <div className="mt-1 flex justify-between text-xs text-arc-text-faint">
+          <span>Slippage tolerance</span>
+          <span className="flex gap-1">
+            {[50, 100, 300].map((bps) => (
+              <button
+                key={bps}
+                onClick={() => setSlippageBps(bps)}
+                className={cn(
+                  "rounded px-1.5 py-0.5",
+                  slippageBps === bps ? "bg-arc-primary text-white" : "hover:text-arc-text",
+                )}
+              >
+                {bps / 100}%
+              </button>
+            ))}
+          </span>
+        </div>
+        {!migrated && (
+          <div className="mt-2 text-[11px] text-arc-text-faint">
+            Trade fee: 1% (0.5% platform · 0.5% creator)
+          </div>
+        )}
+        {migrated && <div className="mt-2 text-[11px] text-arc-text-faint">DEX fee: 0.3% to LPs</div>}
+      </div>
+
+      <button
+        onClick={onTrade}
+        disabled={!account || amountRaw === 0n || tx.status === "pending"}
+        className={cn(
+          "mt-4 w-full py-3 text-base",
+          side === "buy" ? "arc-button-primary" : "arc-button-secondary",
+        )}
+      >
+        {!account
+          ? "Connect wallet"
+          : amountRaw === 0n
+            ? "Enter amount"
+            : tx.status === "pending"
+              ? `${side === "buy" ? "Buying" : "Selling"}…`
+              : side === "buy"
+                ? `Buy ${symbol}`
+                : `Sell ${symbol}`}
+      </button>
+
+      <TxStatus state={tx} className="mt-3" />
+    </div>
+  );
+}

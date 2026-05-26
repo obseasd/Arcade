@@ -1,0 +1,146 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html,
+  body {
+    background-color: theme("colors.arc.bg");
+    color: theme("colors.arc.text");
+    font-feature-settings: "cv11", "ss01";
+    -webkit-font-smoothing: antialiased;
+  }
+
+  body {
+    background-image:
+      /* center-left blue glow — shifted toward center */
+      radial-gradient(circle 30rem at 35% 55%, rgba(14, 58, 106, 0.42) 0%, transparent 70%),
+      /* top-left subtle blue */
+      radial-gradient(ellipse 16rem 11rem at 5% 2%, rgba(21, 80, 143, 0.20) 0%, transparent 70%),
+      /* center main glow */
+      radial-gradient(circle 28rem at 50% 40%, rgba(21, 80, 143, 0.10) 0%, transparent 60%),
+      /* bottom-right subtle */
+      radial-gradient(circle at 95% 95%, rgba(52, 90, 120, 0.10) 0%, transparent 40%);
+    background-attachment: fixed;
+    min-height: 100vh;
+  }
+
+  ::selection {
+    background-color: theme("colors.arc.primary");
+    color: white;
+  }
+}
+
+@layer utilities {
+  /* Top-right header glow — narrower (15%↓) and taller (30%↑), descended a
+     touch so it sits closer to the page top. Visibly drifts. */
+  .arc-header-glow {
+    position: fixed;
+    pointer-events: none;
+    z-index: 0;
+    top: -18rem;
+    right: -6rem;
+    width: 56rem;
+    height: 42rem;
+    border-radius: 9999px;
+    background: radial-gradient(
+      ellipse at center,
+      rgba(52, 90, 120, 0.55) 0%,
+      rgba(42, 78, 110, 0.32) 28%,
+      rgba(30, 66, 100, 0.14) 52%,
+      transparent 72%
+    );
+    filter: blur(8px);
+    animation: arc-glow-drift 11s ease-in-out infinite;
+    will-change: transform;
+  }
+
+  /* Button glow — same gradient as the active-nav page underline glow.
+     Rendered with z-index above the parent card so it isn't clipped by the
+     card's stacking context. */
+  .arc-cta-button-glow {
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    margin-top: -3px;
+    transform: translateX(-50%);
+    width: 110%;
+    height: 2.5rem;
+    pointer-events: none;
+    z-index: 30;
+    border-radius: 9999px;
+    background: radial-gradient(
+      ellipse at center top,
+      rgba(52, 90, 120, 0.95) 0%,
+      rgba(52, 90, 120, 0.45) 35%,
+      transparent 75%
+    );
+    filter: blur(12px);
+    opacity: 0.9;
+  }
+}
+
+@keyframes arc-glow-drift {
+  0%,
+  100% {
+    transform: translate(0, 0);
+  }
+  33% {
+    transform: translate(-22px, 16px);
+  }
+  66% {
+    transform: translate(14px, 8px);
+  }
+}
+
+@keyframes arc-glow-drift-x {
+  0%,
+  100% {
+    transform: translateX(-50%);
+  }
+  50% {
+    transform: translateX(calc(-50% + 8px));
+  }
+}
+
+@layer components {
+  .arc-card {
+    @apply rounded-2xl border border-arc-border bg-black/15 backdrop-blur-xl shadow-arc-card;
+    background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.02) 0%, transparent 50%);
+  }
+
+  .arc-button {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl font-medium transition-colors
+           focus:outline-none focus:ring-2 focus:ring-arc-cta/50 disabled:cursor-not-allowed;
+  }
+
+  .arc-button-primary {
+    @apply arc-button bg-arc-cta hover:bg-arc-cta-hover text-white
+           disabled:bg-arc-cta-disabled disabled:text-arc-text-muted;
+  }
+
+  .arc-button-secondary {
+    @apply arc-button bg-arc-surface-2 hover:bg-arc-surface-3 text-arc-text border border-arc-border
+           disabled:opacity-50;
+  }
+
+  .arc-input {
+    @apply w-full bg-transparent text-arc-text placeholder:text-arc-text-faint
+           focus:outline-none;
+  }
+
+  .arc-pill {
+    @apply inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium
+           bg-arc-surface-2 border border-arc-border text-arc-text-muted;
+  }
+}
+
+/* RainbowKit overrides to blend with Arc palette */
+[data-rk] {
+  --rk-colors-accentColor: #345a78 !important;
+  --rk-colors-accentColorForeground: #ffffff !important;
+  --rk-colors-modalBackground: #061a36 !important;
+  --rk-colors-modalBorder: #15324f !important;
+  --rk-colors-modalText: #e5eef8 !important;
+  --rk-colors-modalTextSecondary: #92a8c2 !important;
+}
