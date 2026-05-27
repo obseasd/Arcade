@@ -6,6 +6,7 @@ import {MockUSDC} from "../src/mocks/MockUSDC.sol";
 import {ArcadeV2Factory} from "../src/dex/ArcadeV2Factory.sol";
 import {ArcadeV2Router} from "../src/dex/ArcadeV2Router.sol";
 import {ArcadeLaunchpad} from "../src/launchpad/ArcadeLaunchpad.sol";
+import {ArcadeTokenVault} from "../src/launchpad/ArcadeTokenVault.sol";
 import {IArcadeLaunchpad} from "../src/launchpad/interfaces/IArcadeLaunchpad.sol";
 import {IArcadeV3Factory, IArcadeV3Pool, IArcadeV3Locker} from "../src/v3/interfaces/IArcadeV3Minimal.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -45,6 +46,11 @@ contract ArcadeV3MigrationTest is Test {
     address v3Locker;
     address v3Router;
     address v3Quoter;
+    ArcadeTokenVault tokenVault;
+
+    function _noVault() internal pure returns (ArcadeLaunchpad.VaultConfig memory) {
+        return ArcadeLaunchpad.VaultConfig(0, 0, 0, address(0));
+    }
 
     address treasury = address(0xBEEF);
     address creator = address(0xC0FFEE);
@@ -70,7 +76,8 @@ contract ArcadeV3MigrationTest is Test {
         v3Quoter = _deploy(
             "out-v3/ArcadeV3Quoter.sol/ArcadeV3Quoter.json", abi.encode(v3Factory, address(usdc))
         );
-        launchpad.setV3Infra(v3Locker, v3Router);
+        tokenVault = new ArcadeTokenVault(address(launchpad));
+        launchpad.setV3Infra(v3Locker, v3Router, address(tokenVault));
         // Enable 2% / 3% fee tiers on the freshly-deployed V3 factory.
         IArcadeV3Factory(v3Factory).enableFeeAmount(20_000, 200);
         IArcadeV3Factory(v3Factory).enableFeeAmount(30_000, 200);
@@ -222,7 +229,7 @@ contract ArcadeV3MigrationTest is Test {
     function _createClankerV3(IArcadeV3Locker.Recipient[] memory rs) internal returns (address token, address pool) {
         vm.startPrank(creator);
         usdc.approve(address(launchpad), type(uint256).max);
-        token = launchpad.createClankerV3("Multi Cat", "MCAT", "ipfs://x", rs, FEE, 0);
+        token = launchpad.createClankerV3("Multi Cat", "MCAT", "ipfs://x", rs, FEE, 0, _noVault());
         vm.stopPrank();
         pool = IArcadeV3Factory(v3Factory).getPool(address(usdc), token, FEE);
     }
@@ -267,7 +274,7 @@ contract ArcadeV3MigrationTest is Test {
         vm.startPrank(creator);
         usdc.approve(address(launchpad), type(uint256).max);
         vm.expectRevert(bytes("BPS_SUM"));
-        launchpad.createClankerV3("X", "X", "ipfs://x", rs, FEE, 0);
+        launchpad.createClankerV3("X", "X", "ipfs://x", rs, FEE, 0, _noVault());
         vm.stopPrank();
     }
 
@@ -280,7 +287,7 @@ contract ArcadeV3MigrationTest is Test {
         IArcadeV3Locker.Recipient[] memory rs = _defaultRecipients();
         vm.startPrank(creator);
         usdc.approve(address(launchpad), type(uint256).max);
-        address token = launchpad.createClankerV3("Two Pct", "TWO", "ipfs://x", rs, 20_000, 0);
+        address token = launchpad.createClankerV3("Two Pct", "TWO", "ipfs://x", rs, 20_000, 0, _noVault());
         vm.stopPrank();
         // Pool exists at the 2% tier, not at 1%.
         assertTrue(IArcadeV3Factory(v3Factory).getPool(address(usdc), token, 20_000) != address(0), "2% pool");
@@ -292,7 +299,7 @@ contract ArcadeV3MigrationTest is Test {
         vm.startPrank(creator);
         usdc.approve(address(launchpad), type(uint256).max);
         vm.expectRevert(ArcadeLaunchpad.BadFeeTier.selector);
-        launchpad.createClankerV3("X", "X", "ipfs://x", rs, 3000, 0); // 0.3% not allowed
+        launchpad.createClankerV3("X", "X", "ipfs://x", rs, 3000, 0, _noVault()); // 0.3% not allowed
         vm.stopPrank();
     }
 
@@ -301,7 +308,7 @@ contract ArcadeV3MigrationTest is Test {
         vm.startPrank(creator);
         usdc.approve(address(launchpad), type(uint256).max);
         uint256 cBefore = usdc.balanceOf(creator);
-        address token = launchpad.createClankerV3("Buy Cat", "BUY", "ipfs://x", rs, FEE, 5_000e6);
+        address token = launchpad.createClankerV3("Buy Cat", "BUY", "ipfs://x", rs, FEE, 5_000e6, _noVault());
         vm.stopPrank();
         // Creator received tokens from the launch buy, and spent 3 USDC fee + 5000 buy.
         assertGt(IERC20(token).balanceOf(creator), 0, "creator got tokens from buy");
@@ -324,5 +331,63 @@ contract ArcadeV3MigrationTest is Test {
         IArcadeV3Locker.Recipient[] memory rs = IArcadeV3Locker(v3Locker).getRecipients(positionId);
         assertEq(rs[0].recipient, newRecipient, "recipient rotated");
         assertEq(rs[0].admin, creator, "admin unchanged");
+    }
+
+    // ====================== Vault / vesting (Phase 3) ======================
+
+    function test_vault_carvesSupply_lockupThenLinearVesting() public {
+        IArcadeV3Locker.Recipient[] memory rs = _defaultRecipients();
+        // 20% vaulted, 7-day lockup, 30-day linear vesting, to the creator.
+        ArcadeLaunchpad.VaultConfig memory v = ArcadeLaunchpad.VaultConfig(2000, 7 days, 30 days, creator);
+        vm.startPrank(creator);
+        usdc.approve(address(launchpad), type(uint256).max);
+        address token = launchpad.createClankerV3("Vault Cat", "VLT", "ipfs://x", rs, FEE, 0, v);
+        vm.stopPrank();
+
+        uint256 vestId = tokenVault.vestIdByToken(token);
+        assertGt(vestId, 0, "vest registered");
+        uint256 vaulted = (1_000_000_000e18 * 2000) / 10000; // 200M
+        // The vault holds the 20%; the pool holds the other 80%.
+        assertEq(IERC20(token).balanceOf(address(tokenVault)), vaulted, "vault holds 20%");
+        address pool = IArcadeV3Factory(v3Factory).getPool(address(usdc), token, FEE);
+        assertApproxEqAbs(IERC20(token).balanceOf(pool), 1_000_000_000e18 - vaulted, 1e18, "pool holds 80%");
+
+        // Locked: nothing claimable during the lockup.
+        assertEq(tokenVault.claimable(vestId), 0, "locked during lockup");
+
+        // Halfway through vesting: ~50%.
+        vm.warp(block.timestamp + 7 days + 15 days);
+        assertApproxEqAbs(tokenVault.claimable(vestId), vaulted / 2, vaulted / 1000, "~50% vested");
+
+        // Claim sends to the recipient.
+        uint256 before = IERC20(token).balanceOf(creator);
+        tokenVault.claim(vestId);
+        assertApproxEqAbs(IERC20(token).balanceOf(creator) - before, vaulted / 2, vaulted / 1000, "claimed ~50%");
+
+        // After full vesting: the rest is claimable.
+        vm.warp(block.timestamp + 30 days);
+        tokenVault.claim(vestId);
+        assertEq(IERC20(token).balanceOf(creator) - before, vaulted, "all vested claimed");
+        assertEq(tokenVault.claimable(vestId), 0, "nothing left");
+    }
+
+    function test_vault_shortLockup_reverts() public {
+        IArcadeV3Locker.Recipient[] memory rs = _defaultRecipients();
+        ArcadeLaunchpad.VaultConfig memory v = ArcadeLaunchpad.VaultConfig(1000, 1 days, 0, creator); // < 7d
+        vm.startPrank(creator);
+        usdc.approve(address(launchpad), type(uint256).max);
+        vm.expectRevert(ArcadeTokenVault.BadDuration.selector);
+        launchpad.createClankerV3("X", "X", "ipfs://x", rs, FEE, 0, v);
+        vm.stopPrank();
+    }
+
+    function test_vault_tooMuch_reverts() public {
+        IArcadeV3Locker.Recipient[] memory rs = _defaultRecipients();
+        ArcadeLaunchpad.VaultConfig memory v = ArcadeLaunchpad.VaultConfig(9500, 7 days, 0, creator); // > 90%
+        vm.startPrank(creator);
+        usdc.approve(address(launchpad), type(uint256).max);
+        vm.expectRevert(ArcadeLaunchpad.BadVault.selector);
+        launchpad.createClankerV3("X", "X", "ipfs://x", rs, FEE, 0, v);
+        vm.stopPrank();
     }
 }

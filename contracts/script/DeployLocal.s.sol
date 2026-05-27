@@ -8,6 +8,7 @@ import {ArcadeV2Router} from "../src/dex/ArcadeV2Router.sol";
 import {ArcadeLaunchpad} from "../src/launchpad/ArcadeLaunchpad.sol";
 import {IArcadeLaunchpad} from "../src/launchpad/interfaces/IArcadeLaunchpad.sol";
 import {ArcadeMultiSwap} from "../src/swap/ArcadeMultiSwap.sol";
+import {ArcadeTokenVault} from "../src/launchpad/ArcadeTokenVault.sol";
 import {IArcadeV3Factory} from "../src/v3/interfaces/IArcadeV3Minimal.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
@@ -55,8 +56,9 @@ contract DeployLocal is Script {
         address v3Locker = _deployV3Locker(address(launchpad), v3Factory);
         address v3Router = _deployV3Aux("out-v3/ArcadeV3SwapRouter.sol/ArcadeV3SwapRouter.json", v3Factory, address(usdc));
         address v3Quoter = _deployV3Aux("out-v3/ArcadeV3Quoter.sol/ArcadeV3Quoter.json", v3Factory, address(usdc));
-        // Wire locker + router into the launchpad (one-time).
-        launchpad.setV3Infra(v3Locker, v3Router);
+        ArcadeTokenVault tokenVault = new ArcadeTokenVault(address(launchpad));
+        // Wire locker + router + vault into the launchpad (one-time).
+        launchpad.setV3Infra(v3Locker, v3Router, address(tokenVault));
         // Enable the 2% and 3% fee tiers (1% is enabled by the V3 factory by default).
         IArcadeV3Factory(v3Factory).enableFeeAmount(20_000, 200);
         IArcadeV3Factory(v3Factory).enableFeeAmount(30_000, 200);
@@ -113,6 +115,7 @@ contract DeployLocal is Script {
         console2.log("V3 Locker:   ", v3Locker);
         console2.log("V3 Router:   ", v3Router);
         console2.log("V3 Quoter:   ", v3Quoter);
+        console2.log("Token Vault: ", address(tokenVault));
         console2.log("Launchpad:   ", address(launchpad));
         console2.log("MultiSwap:   ", address(multiSwap));
         console2.log("APEPE:       ", pepe);
@@ -153,6 +156,9 @@ contract DeployLocal is Script {
             '",',
             '"v3Quoter":"',
             vm.toString(v3Quoter),
+            '",',
+            '"tokenVault":"',
+            vm.toString(address(tokenVault)),
             '",',
             '"sampleTokens":[',
             '"',

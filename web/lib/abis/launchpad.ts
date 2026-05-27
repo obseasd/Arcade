@@ -157,6 +157,16 @@ export const LAUNCHPAD_ABI = [
       },
       { name: "fee", type: "uint24" },
       { name: "creatorBuyUsdc", type: "uint256" },
+      {
+        name: "vault",
+        type: "tuple",
+        components: [
+          { name: "pct", type: "uint16" },
+          { name: "lockupDuration", type: "uint64" },
+          { name: "vestingDuration", type: "uint64" },
+          { name: "recipient", type: "address" },
+        ],
+      },
     ],
     outputs: [{ type: "address" }],
   },

@@ -15,6 +15,7 @@ export const ADDRESSES = {
   v3Router: safeAddress(process.env.NEXT_PUBLIC_V3_ROUTER_ADDRESS),
   v3Quoter: safeAddress(process.env.NEXT_PUBLIC_V3_QUOTER_ADDRESS),
   v3Locker: safeAddress(process.env.NEXT_PUBLIC_V3_LOCKER_ADDRESS),
+  tokenVault: safeAddress(process.env.NEXT_PUBLIC_TOKEN_VAULT_ADDRESS),
 } as const;
 
 /** V3 fee tier used for all CLANKER_V3 pools (1%). */

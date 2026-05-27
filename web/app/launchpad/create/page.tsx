@@ -69,7 +69,19 @@ function CreateTokenInner() {
   ]);
   const [feeTier, setFeeTier] = useState<10_000 | 20_000 | 30_000>(10_000); // 1% / 2% / 3%
   const [creatorBuyStr, setCreatorBuyStr] = useState(""); // USDC to spend buying at launch
+  // Optional team vault (locked/vesting allocation).
+  const [vaultPct, setVaultPct] = useState(0); // 0–90% of supply
+  const [vaultLockupDays, setVaultLockupDays] = useState(30);
+  const [vaultVestingDays, setVaultVestingDays] = useState(0);
+  const [vaultRecipientStr, setVaultRecipientStr] = useState("");
   const isV3 = mode === LaunchMode.CLANKER_V3;
+
+  const vaultValid =
+    !isV3 ||
+    vaultPct === 0 ||
+    (vaultPct <= 90 &&
+      vaultLockupDays >= 7 &&
+      (vaultRecipientStr.trim() === "" || isAddress(vaultRecipientStr.trim())));
 
   // Prefill the first recipient with the connected wallet.
   useEffect(() => {
@@ -158,11 +170,17 @@ function CreateTokenInner() {
           const adm = (r.admin.trim() || r.recipient.trim()) as Address;
           return { recipient: rec, admin: adm, bps: Math.round(r.pct * 100), tokenPref: r.pref };
         });
+        const vaultCfg = {
+          pct: Math.round(vaultPct * 100),
+          lockupDuration: BigInt((vaultLockupDays || 0) * 86_400),
+          vestingDuration: BigInt((vaultVestingDays || 0) * 86_400),
+          recipient: (vaultRecipientStr.trim() || account) as Address,
+        };
         hash = await writeContractAsync({
           address: ADDRESSES.launchpad,
           abi: LAUNCHPAD_ABI,
           functionName: "createClankerV3",
-          args: [name.trim(), symbol.trim(), metadataURI, rs, feeTier, creatorBuyUsdc],
+          args: [name.trim(), symbol.trim(), metadataURI, rs, feeTier, creatorBuyUsdc, vaultCfg],
         });
       } else {
         // PUMP / Arcade (CLANKER): bonding curve. Arcade allows an optional
@@ -397,6 +415,67 @@ function CreateTokenInner() {
           </div>
         )}
 
+        {isV3 && (
+          <details className="rounded-xl border border-arc-border bg-arc-bg-elevated open:bg-arc-surface">
+            <summary className="cursor-pointer select-none px-4 py-3 text-sm text-arc-text-muted hover:text-arc-text">
+              Team vault — lock &amp; vest a share of supply (optional)
+            </summary>
+            <div className="space-y-3 px-4 pb-4">
+              <Field
+                label={`Vaulted supply: ${vaultPct}%`}
+                hint="Locked then vested to a recipient. Max 90% (rest goes to the LP)."
+              >
+                <input
+                  type="range"
+                  min={0}
+                  max={90}
+                  step={1}
+                  value={vaultPct}
+                  onChange={(e) => setVaultPct(Number(e.target.value))}
+                  className="w-full accent-arc-cta-hover"
+                />
+              </Field>
+              {vaultPct > 0 && (
+                <>
+                  <div className="grid grid-cols-2 gap-3">
+                    <Field label="Lockup (days)" hint="Min 7.">
+                      <input
+                        type="number"
+                        min={7}
+                        value={vaultLockupDays}
+                        onChange={(e) => setVaultLockupDays(Number(e.target.value))}
+                        className="arc-input rounded-xl border border-arc-border bg-arc-bg px-3 py-2 tabular-nums"
+                      />
+                    </Field>
+                    <Field label="Vesting (days)" hint="Linear after lockup. 0 = cliff.">
+                      <input
+                        type="number"
+                        min={0}
+                        value={vaultVestingDays}
+                        onChange={(e) => setVaultVestingDays(Number(e.target.value))}
+                        className="arc-input rounded-xl border border-arc-border bg-arc-bg px-3 py-2 tabular-nums"
+                      />
+                    </Field>
+                  </div>
+                  <Field label="Vault recipient" hint="Defaults to your wallet.">
+                    <input
+                      value={vaultRecipientStr}
+                      onChange={(e) => setVaultRecipientStr(e.target.value)}
+                      placeholder="0x… (defaults to you)"
+                      className="arc-input rounded-xl border border-arc-border bg-arc-bg px-3 py-2 tabular-nums"
+                    />
+                  </Field>
+                  {!vaultValid && (
+                    <div className="text-xs text-arc-danger">
+                      Lockup must be ≥ 7 days and the recipient (if set) a valid address.
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          </details>
+        )}
+
         {mode === LaunchMode.CLANKER && (
           <details className="rounded-xl border border-arc-border bg-arc-bg-elevated open:bg-arc-surface">
             <summary className="cursor-pointer select-none px-4 py-3 text-sm text-arc-text-muted hover:text-arc-text">
@@ -469,7 +548,13 @@ function CreateTokenInner() {
 
         <button
           onClick={onSubmit}
-          disabled={!account || !valid || (isV3 && !recipientsValid) || tx.status === "pending" || !hasFee}
+          disabled={
+            !account ||
+            !valid ||
+            (isV3 && (!recipientsValid || !vaultValid)) ||
+            tx.status === "pending" ||
+            !hasFee
+          }
           className="arc-button-primary w-full py-3 text-base"
         >
           {!account

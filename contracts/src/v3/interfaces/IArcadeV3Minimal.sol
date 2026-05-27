@@ -19,6 +19,17 @@ interface IArcadeV3Factory {
     function feeAmountTickSpacing(uint24 fee) external view returns (int24);
 }
 
+/// @notice ArcadeTokenVault — holds a locked/vesting slice of a launch's supply.
+interface IArcadeTokenVault {
+    function createVest(
+        address token,
+        address recipient,
+        uint256 amount,
+        uint64 lockupDuration,
+        uint64 vestingDuration
+    ) external returns (uint256 id);
+}
+
 /// @notice ArcadeV3SwapRouter — used by the launchpad for the optional creator buy.
 interface IArcadeV3Router {
     function exactInputSingle(
