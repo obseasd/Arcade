@@ -1,6 +1,6 @@
 "use client";
 
-import { CheckCircle2, X, XCircle } from "lucide-react";
+import { CheckCircle2, ExternalLink, X, XCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { subscribeToToasts, type ToastPayload } from "@/lib/toast";
@@ -50,12 +50,22 @@ function ToastCard({ payload, onClose }: { payload: ToastPayload; onClose: () =>
         <TokenIcon symbol={payload.tokenSymbol} size={36} />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5 text-xs text-arc-text-muted">
-            <span>Swap confirmed</span>
+            <span>Confirmed</span>
             <CheckCircle2 className="h-3.5 w-3.5 text-arc-success" />
           </div>
           <div className="mt-0.5 text-sm font-semibold tabular-nums text-arc-text">
             {payload.amountFormatted} {payload.tokenSymbol ?? "TOKEN"}
           </div>
+          {payload.explorerUrl && (
+            <a
+              href={payload.explorerUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-0.5 inline-flex items-center gap-1 text-[11px] text-sky-400 hover:text-sky-300 hover:underline"
+            >
+              View mint tx <ExternalLink className="h-2.5 w-2.5" />
+            </a>
+          )}
         </div>
         <button onClick={onClose} className="text-arc-text-faint hover:text-arc-text">
           <X className="h-3.5 w-3.5" />

@@ -25,8 +25,10 @@ export function TradePanel({ token, symbol, migrated }: Props) {
   const [slippageBps, setSlippageBps] = useState(100); // 1% default for curve
   const [tx, setTx] = useState<TxState>({ status: "idle" });
 
-  // Spender depends on migration status
-  const spender = migrated ? ADDRESSES.router : ADDRESSES.launchpad;
+  // Both pre- and post-migration swaps go through the Launchpad contract now
+  // (post-migration uses `buyMigrated`/`sellMigrated` which take a royalty for
+  // the creator + platform on top of the V2 LP fee).
+  const spender = ADDRESSES.launchpad;
 
   const usdcBalance = useReadContract({
     address: ADDRESSES.usdc,
@@ -111,23 +113,19 @@ export function TradePanel({ token, symbol, migrated }: Props) {
       await ensureAllowance(amountRaw);
       setTx({ status: "pending", message: "Submitting trade…" });
 
-      let hash;
-      if (!migrated) {
-        hash = await writeContractAsync({
-          address: ADDRESSES.launchpad,
-          abi: LAUNCHPAD_ABI,
-          functionName: side === "buy" ? "buy" : "sell",
-          args: [token, amountRaw, minOut],
-        });
-      } else {
-        const path = side === "buy" ? [ADDRESSES.usdc, token] : [token, ADDRESSES.usdc];
-        hash = await writeContractAsync({
-          address: ADDRESSES.router,
-          abi: ROUTER_ABI,
-          functionName: "swapExactTokensForTokens",
-          args: [amountRaw, minOut, path, account, BigInt(Math.floor(Date.now() / 1000) + 600)],
-        });
-      }
+      const fn = migrated
+        ? side === "buy"
+          ? "buyMigrated"
+          : "sellMigrated"
+        : side === "buy"
+          ? "buy"
+          : "sell";
+      const hash = await writeContractAsync({
+        address: ADDRESSES.launchpad,
+        abi: LAUNCHPAD_ABI,
+        functionName: fn,
+        args: [token, amountRaw, minOut],
+      });
       if (publicClient) await publicClient.waitForTransactionReceipt({ hash });
       setTx({ status: "success", message: "Trade confirmed" });
       setAmount("");

@@ -10,6 +10,7 @@ const NAV_ITEMS = [
   { href: "/swap", label: "Swap" },
   { href: "/launchpad", label: "Launchpad" },
   { href: "/positions", label: "Positions" },
+  { href: "/bridge", label: "Bridge" },
 ];
 
 export function Navbar() {

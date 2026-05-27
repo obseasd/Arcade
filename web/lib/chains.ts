@@ -1,12 +1,18 @@
 import { defineChain } from "viem";
+import {
+  sepolia,
+  baseSepolia,
+  arbitrumSepolia,
+  optimismSepolia,
+  avalancheFuji,
+} from "viem/chains";
 
 /**
  * Arc testnet — Circle's EVM L1. USDC is the native gas token, but it's
- * exposed to user-space as a normal ERC20 contract. We treat the in-RPC
- * "native currency" only for gas balance / fee display purposes.
+ * exposed to user-space as a normal ERC20 contract.
  */
 export const arcTestnet = defineChain({
-  id: 5042002,
+  id: 5_042_002,
   name: "Arc Testnet",
   nativeCurrency: {
     name: "USDC",
@@ -29,3 +35,6 @@ export const anvilLocal = defineChain({
   rpcUrls: { default: { http: ["http://127.0.0.1:8545"] } },
   testnet: true,
 });
+
+// Re-export CCTP source chains so wagmi config can register them.
+export { sepolia, baseSepolia, arbitrumSepolia, optimismSepolia, avalancheFuji };

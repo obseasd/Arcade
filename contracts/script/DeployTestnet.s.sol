@@ -30,7 +30,11 @@ contract DeployTestnet is Script {
 
         ArcadeV2Factory factory = new ArcadeV2Factory(deployer);
         ArcadeV2Router router = new ArcadeV2Router(address(factory));
-        ArcadeLaunchpad launchpad = new ArcadeLaunchpad(IERC20(usdc), factory, treasury);
+        ArcadeLaunchpad launchpad = new ArcadeLaunchpad(IERC20(usdc), factory, address(router), treasury);
+
+        // Activate `feeTo` so 1/6 of all V2 LP fees route to the treasury
+        // (= 0.05% of swap volume) instead of all going to LPs.
+        factory.setFeeTo(treasury);
 
         console2.log("Chain:       Arc testnet");
         console2.log("USDC:        ", usdc);

@@ -27,7 +27,7 @@ contract ArcadeLaunchpadTest is Test {
         usdc = new MockUSDC();
         factory = new ArcadeV2Factory(address(this));
         router = new ArcadeV2Router(address(factory));
-        launchpad = new ArcadeLaunchpad(IERC20(address(usdc)), factory, treasury);
+        launchpad = new ArcadeLaunchpad(IERC20(address(usdc)), factory, address(router), treasury);
 
         // Fund users
         usdc.mint(creator, 100 * 10 ** 6);
@@ -126,6 +126,68 @@ contract ArcadeLaunchpadTest is Test {
         // LP tokens locked to dead address
         uint256 deadLp = IERC20(state.v2Pair).balanceOf(launchpad.DEAD());
         assertGt(deadLp, 0, "LP burned");
+    }
+
+    function test_buyMigrated_takesRoyaltyAndDelivers() public {
+        address creator2 = address(0xCAFE);
+        address token = _createTokenMode(IArcadeLaunchpad.LaunchMode.CLANKER, creator2, 5_000);
+
+        // Migrate the curve by overshooting
+        vm.startPrank(alice);
+        usdc.approve(address(launchpad), type(uint256).max);
+        launchpad.buy(token, 100_000 * 10 ** 6, 0);
+        vm.stopPrank();
+
+        // Snapshot fee receivers AFTER migration
+        uint256 t0 = usdc.balanceOf(treasury);
+        uint256 c1_0 = usdc.balanceOf(creator);
+        uint256 c2_0 = usdc.balanceOf(creator2);
+
+        // Bob buys 100 USDC of the migrated token via the launchpad's wrapper
+        uint256 amountIn = 100 * 10 ** 6;
+        vm.startPrank(bob);
+        usdc.approve(address(launchpad), type(uint256).max);
+        uint256 tokensOut = launchpad.buyMigrated(token, amountIn, 0);
+        vm.stopPrank();
+
+        assertGt(tokensOut, 0, "tokens received");
+
+        // Post-migration royalty = 0.30% on 100 USDC = 0.30 USDC.
+        // Uniform 0.20% platform / 0.10% creator split (mode-independent).
+        // For CLANKER with creator2 at 50/50: creator1 = 0.05%, creator2 = 0.05%.
+        uint256 expectedPlatform = (amountIn * 20) / 10_000; // 0.20 USDC
+        uint256 expectedCreatorPortion = (amountIn * 10) / 10_000; // 0.10 USDC
+        uint256 expectedCreator2 = expectedCreatorPortion / 2;
+        uint256 expectedCreator1 = expectedCreatorPortion - expectedCreator2;
+        assertEq(usdc.balanceOf(treasury), t0 + expectedPlatform, "treasury royalty");
+        assertEq(usdc.balanceOf(creator), c1_0 + expectedCreator1, "creator1 royalty");
+        assertEq(usdc.balanceOf(creator2), c2_0 + expectedCreator2, "creator2 royalty");
+    }
+
+    function test_sellMigrated_takesRoyaltyOnOutput() public {
+        address token = _createToken(); // PUMP mode, single creator
+
+        vm.startPrank(alice);
+        usdc.approve(address(launchpad), type(uint256).max);
+        launchpad.buy(token, 100_000 * 10 ** 6, 0); // migrate
+        vm.stopPrank();
+
+        // Bob buys some via the migrated wrapper to acquire tokens
+        vm.startPrank(bob);
+        usdc.approve(address(launchpad), type(uint256).max);
+        uint256 bought = launchpad.buyMigrated(token, 500 * 10 ** 6, 0);
+
+        uint256 t0 = usdc.balanceOf(treasury);
+        uint256 c0 = usdc.balanceOf(creator);
+
+        IERC20(token).approve(address(launchpad), type(uint256).max);
+        uint256 received = launchpad.sellMigrated(token, bought, 0);
+        vm.stopPrank();
+
+        // Sell pays USDC out, with 0.30% royalty skimmed first; PUMP = 50/50
+        assertGt(received, 0, "received USDC");
+        assertGt(usdc.balanceOf(treasury), t0, "treasury got fees");
+        assertGt(usdc.balanceOf(creator), c0, "creator got fees");
     }
 
     function test_postMigration_swapWorksViaRouter() public {

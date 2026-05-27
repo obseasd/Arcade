@@ -37,7 +37,7 @@ contract DeployLocal is Script {
         MockUSDC usdc = new MockUSDC();
         ArcadeV2Factory factory = new ArcadeV2Factory(deployer);
         ArcadeV2Router router = new ArcadeV2Router(address(factory));
-        ArcadeLaunchpad launchpad = new ArcadeLaunchpad(IERC20(address(usdc)), factory, deployer);
+        ArcadeLaunchpad launchpad = new ArcadeLaunchpad(IERC20(address(usdc)), factory, address(router), deployer);
 
         // Activate Uniswap V2 `feeTo` — routes 1/6 of all LP fees to the treasury
         // (= 0.05% of swap volume). Treasury is the deployer here for the local demo;

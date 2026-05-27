@@ -165,6 +165,29 @@ export const LAUNCHPAD_ABI = [
   },
   {
     type: "function",
+    name: "buyMigrated",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "token", type: "address" },
+      { name: "usdcIn", type: "uint256" },
+      { name: "minTokensOut", type: "uint256" },
+    ],
+    outputs: [{ name: "tokensOut", type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "sellMigrated",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "token", type: "address" },
+      { name: "tokensIn", type: "uint256" },
+      { name: "minUsdcOut", type: "uint256" },
+    ],
+    outputs: [{ name: "usdcOut", type: "uint256" }],
+  },
+  { type: "function", name: "MIGRATED_ROYALTY_BPS", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] },
+  {
+    type: "function",
     name: "postComment",
     stateMutability: "nonpayable",
     inputs: [

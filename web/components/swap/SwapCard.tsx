@@ -11,6 +11,7 @@ import { ADDRESSES, USDC_DECIMALS } from "@/lib/constants";
 import { useApproveIfNeeded } from "@/lib/hooks/useApproveIfNeeded";
 import { useV2Tokens } from "@/lib/hooks/useV2Tokens";
 import { useUsdValue } from "@/lib/hooks/useTokenUsdPrice";
+import { useSwapRoute } from "@/lib/hooks/useSwapRoute";
 import { pushToast } from "@/lib/toast";
 import { TokenIcon } from "@/components/ui/TokenIcon";
 import { TokenSelectModal, TokenOption } from "@/components/ui/TokenSelectModal";
@@ -34,7 +35,7 @@ type Side = "in" | "out";
 export function SwapCard() {
   const { address: account } = useAccount();
   const publicClient = usePublicClient();
-  const { tokens: v2Tokens, isLoading: tokensLoading } = useV2Tokens();
+  const { tokens: v2Tokens } = useV2Tokens();
   const { writeContractAsync } = useWriteContract();
 
   const allTokens: TokenOption[] = useMemo(() => [USDC_TOKEN, ...v2Tokens], [v2Tokens]);
@@ -73,24 +74,30 @@ export function SwapCard() {
     }
   }, [amountOutStr, decimalsOut, lastEdited]);
 
+  // Resolve the swap path (direct if a pool exists, else via USDC)
+  const route = useSwapRoute(tokenIn.address, tokenOut?.address);
+  const path = route.path;
+
   const quoteOut = useReadContract({
     address: ADDRESSES.router,
     abi: ROUTER_ABI,
     functionName: "getAmountsOut",
-    args: amountInRaw > 0n && tokenOut ? [amountInRaw, [tokenIn.address, tokenOut.address]] : undefined,
-    query: { enabled: lastEdited === "in" && amountInRaw > 0n && !!tokenOut },
+    args: amountInRaw > 0n && path.length >= 2 ? [amountInRaw, path] : undefined,
+    query: { enabled: lastEdited === "in" && amountInRaw > 0n && path.length >= 2 },
   });
   const quoteIn = useReadContract({
     address: ADDRESSES.router,
     abi: ROUTER_ABI,
     functionName: "getAmountsIn",
-    args:
-      amountOutRawTyped > 0n && tokenOut ? [amountOutRawTyped, [tokenIn.address, tokenOut.address]] : undefined,
-    query: { enabled: lastEdited === "out" && amountOutRawTyped > 0n && !!tokenOut },
+    args: amountOutRawTyped > 0n && path.length >= 2 ? [amountOutRawTyped, path] : undefined,
+    query: { enabled: lastEdited === "out" && amountOutRawTyped > 0n && path.length >= 2 },
   });
 
-  const computedAmountOut = (quoteOut.data as bigint[] | undefined)?.[1];
-  const computedAmountIn = (quoteIn.data as bigint[] | undefined)?.[0];
+  // `getAmountsOut/In` return all intermediate amounts; we want first/last.
+  const amountsOut = quoteOut.data as bigint[] | undefined;
+  const amountsIn = quoteIn.data as bigint[] | undefined;
+  const computedAmountOut = amountsOut?.[amountsOut.length - 1];
+  const computedAmountIn = amountsIn?.[0];
 
   useEffect(() => {
     if (lastEdited === "in") {
@@ -199,13 +206,13 @@ export function SwapCard() {
             address: ADDRESSES.router,
             abi: ROUTER_ABI,
             functionName: "swapExactTokensForTokens",
-            args: [finalAmountIn, minOut, [tokenIn.address, tokenOut.address], account, deadline],
+            args: [finalAmountIn, minOut, path, account, deadline],
           })
         : await writeContractAsync({
             address: ADDRESSES.router,
             abi: ROUTER_ABI,
             functionName: "swapTokensForExactTokens",
-            args: [finalAmountOut, maxIn, [tokenIn.address, tokenOut.address], account, deadline],
+            args: [finalAmountOut, maxIn, path, account, deadline],
           });
       if (publicClient) await publicClient.waitForTransactionReceipt({ hash });
 
@@ -309,6 +316,11 @@ export function SwapCard() {
             <Image src="/route.png" alt="" width={14} height={14} className="h-3.5 w-3.5 opacity-75" />
             <span>via</span>
             <span className="font-medium text-arc-text">Arcade V2</span>
+            {route.viaUsdc && (
+              <span className="ml-1 rounded-full border border-arc-cta-hover/40 bg-arc-cta-hover/10 px-1.5 py-0.5 text-[10px] font-medium text-arc-cta-hover">
+                {symIn} → USDC → {symOut}
+              </span>
+            )}
           </div>
           <div className="text-arc-text-muted tabular-nums">
             1 {symIn} ≈{" "}
@@ -357,7 +369,6 @@ export function SwapCard() {
         excludeAddress={pickerOpen === "in" ? tokenOut?.address : tokenIn.address}
       />
 
-      {tokensLoading && <div className="mt-2 text-center text-xs text-arc-text-faint">Loading tokens…</div>}
 
       {tokenOut && (
         <SwapConfirmModal

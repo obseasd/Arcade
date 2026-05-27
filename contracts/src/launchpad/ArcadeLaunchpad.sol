@@ -9,6 +9,7 @@ import {ArcadeLaunchToken} from "./ArcadeLaunchToken.sol";
 import {IArcadeLaunchpad} from "./interfaces/IArcadeLaunchpad.sol";
 import {IArcadeV2Factory} from "../dex/interfaces/IArcadeV2Factory.sol";
 import {IArcadeV2Pair} from "../dex/interfaces/IArcadeV2Pair.sol";
+import {IArcadeV2Router} from "../dex/interfaces/IArcadeV2Router.sol";
 
 /**
  * @title ArcadeLaunchpad
@@ -42,7 +43,7 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
     uint256 public constant K_CONSTANT = VIRTUAL_USDC_RESERVE * VIRTUAL_TOKEN_RESERVE;
     uint256 public constant MIGRATION_USDC_TARGET = 20_000e6; // 20,000 USDC raised
 
-    uint256 public constant CREATION_FEE = 2e6; // 2 USDC
+    uint256 public constant CREATION_FEE = 3e6; // 3 USDC
     uint256 public constant TRADE_FEE_BPS = 100; // 1% total
     uint256 public constant FEE_DENOMINATOR = 10_000;
 
@@ -51,12 +52,21 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
     // CLANKER mode: 70% platform / 30% creator(s)
     uint256 public constant CLANKER_PLATFORM_BPS = 7_000; // 70% of the trade fee
 
+    /// @notice Post-migration royalty taken on top of V2 LP fees when the
+    /// swap is routed through `buyMigrated` / `sellMigrated`. Uniform split
+    /// across both launch modes (the bonding-curve split logic only applies
+    /// while the curve is active).
+    uint256 public constant MIGRATED_PLATFORM_BPS = 20; // 0.20% to platform
+    uint256 public constant MIGRATED_CREATOR_BPS = 10; // 0.10% to creator(s)
+    uint256 public constant MIGRATED_ROYALTY_BPS = MIGRATED_PLATFORM_BPS + MIGRATED_CREATOR_BPS; // 0.30% total
+
     address public constant DEAD = 0x000000000000000000000000000000000000dEaD;
 
     // --- Immutables ---
 
     IERC20 public immutable USDC;
     IArcadeV2Factory public immutable v2Factory;
+    address public immutable v2Router;
     address public immutable treasury;
 
     // --- State ---
@@ -84,10 +94,12 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
     error ZeroAmount();
     error InvalidMode();
     error InvalidShare();
+    error NoRouter();
 
-    constructor(IERC20 usdc_, IArcadeV2Factory v2Factory_, address treasury_) {
+    constructor(IERC20 usdc_, IArcadeV2Factory v2Factory_, address v2Router_, address treasury_) {
         USDC = usdc_;
         v2Factory = v2Factory_;
+        v2Router = v2Router_;
         treasury = treasury_;
     }
 
@@ -136,24 +148,41 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
     }
 
     /**
-     * @dev Internal helper that splits a trade fee between platform, creator
-     * and (optionally) a secondary creator receiver, then settles the USDC
-     * transfers. Returns the *total* fee dispatched (always equal to `feeIn`,
-     * minus any zero-amount transfers skipped for gas).
+     * @dev Bonding-curve fee distribution: split depends on the token's
+     * launch mode (PUMP 50/50 vs CLANKER 70/30) and optionally splits the
+     * creator portion between two receivers (CLANKER).
      */
     function _distributeFee(TokenState storage s, uint256 feeIn) internal {
         if (feeIn == 0) return;
         uint256 platformBps = s.mode == LaunchMode.PUMP ? PUMP_PLATFORM_BPS : CLANKER_PLATFORM_BPS;
         uint256 platformFee = (feeIn * platformBps) / 10_000;
         uint256 creatorPortion = feeIn - platformFee;
+        _payCreatorShare(s, creatorPortion);
+        if (platformFee > 0) USDC.safeTransfer(treasury, platformFee);
+    }
 
+    /**
+     * @dev Post-migration fee distribution: uniform 0.20% platform / 0.10%
+     * creator regardless of mode. The creator portion can still be split
+     * between two receivers (CLANKER feature).
+     */
+    function _distributeMigratedFee(TokenState storage s, uint256 totalRoyalty) internal {
+        if (totalRoyalty == 0) return;
+        // 2/3 of the 0.30% royalty goes to platform, 1/3 to creator
+        uint256 platformFee = (totalRoyalty * MIGRATED_PLATFORM_BPS) / MIGRATED_ROYALTY_BPS;
+        uint256 creatorPortion = totalRoyalty - platformFee;
+        _payCreatorShare(s, creatorPortion);
+        if (platformFee > 0) USDC.safeTransfer(treasury, platformFee);
+    }
+
+    /// @dev Splits the creator portion between creator and (optional) creator2.
+    function _payCreatorShare(TokenState storage s, uint256 creatorPortion) internal {
+        if (creatorPortion == 0) return;
         uint256 creator2Cut = 0;
         if (s.creator2 != address(0) && s.creator2ShareBps > 0) {
             creator2Cut = (creatorPortion * s.creator2ShareBps) / 10_000;
         }
         uint256 creator1Cut = creatorPortion - creator2Cut;
-
-        if (platformFee > 0) USDC.safeTransfer(treasury, platformFee);
         if (creator1Cut > 0) USDC.safeTransfer(s.creator, creator1Cut);
         if (creator2Cut > 0) USDC.safeTransfer(s.creator2, creator2Cut);
     }
@@ -286,6 +315,73 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         USDC.safeTransfer(msg.sender, usdcOut);
 
         emit Sell(tokenAddr, msg.sender, tokensIn, usdcOut, _spotPriceQ64(s));
+    }
+
+    // ====================== Post-migration trading with creator royalty ======================
+
+    /**
+     * @notice Buy a migrated token by routing through the V2 router, while
+     * skimming `MIGRATED_ROYALTY_BPS` from the input as a perpetual royalty
+     * for the creator(s) + platform. LPs still receive the standard 0.30%
+     * V2 swap fee on the remaining amount.
+     */
+    function buyMigrated(address tokenAddr, uint256 usdcIn, uint256 minTokensOut)
+        external
+        nonReentrant
+        returns (uint256 tokensOut)
+    {
+        TokenState storage s = tokens[tokenAddr];
+        if (s.token == address(0)) revert UnknownToken();
+        if (!s.migrated) revert NotMigrated();
+        if (usdcIn == 0) revert ZeroAmount();
+        if (v2Router == address(0)) revert NoRouter();
+
+        USDC.safeTransferFrom(msg.sender, address(this), usdcIn);
+
+        uint256 royalty = (usdcIn * MIGRATED_ROYALTY_BPS) / FEE_DENOMINATOR;
+        if (royalty > 0) _distributeMigratedFee(s, royalty);
+
+        uint256 netIn = usdcIn - royalty;
+        USDC.forceApprove(v2Router, netIn);
+
+        address[] memory path = new address[](2);
+        path[0] = address(USDC);
+        path[1] = tokenAddr;
+        uint256[] memory amounts = IArcadeV2Router(v2Router).swapExactTokensForTokens(
+            netIn, minTokensOut, path, msg.sender, block.timestamp + 600
+        );
+        tokensOut = amounts[1];
+    }
+
+    /// @notice Sell a migrated token via V2, then skim the royalty from the USDC output.
+    function sellMigrated(address tokenAddr, uint256 tokensIn, uint256 minUsdcOut)
+        external
+        nonReentrant
+        returns (uint256 usdcOut)
+    {
+        TokenState storage s = tokens[tokenAddr];
+        if (s.token == address(0)) revert UnknownToken();
+        if (!s.migrated) revert NotMigrated();
+        if (tokensIn == 0) revert ZeroAmount();
+        if (v2Router == address(0)) revert NoRouter();
+
+        IERC20(tokenAddr).safeTransferFrom(msg.sender, address(this), tokensIn);
+        IERC20(tokenAddr).forceApprove(v2Router, tokensIn);
+
+        address[] memory path = new address[](2);
+        path[0] = tokenAddr;
+        path[1] = address(USDC);
+        uint256[] memory amounts = IArcadeV2Router(v2Router).swapExactTokensForTokens(
+            tokensIn, 0, path, address(this), block.timestamp + 600
+        );
+        uint256 grossUsdc = amounts[1];
+
+        uint256 royalty = (grossUsdc * MIGRATED_ROYALTY_BPS) / FEE_DENOMINATOR;
+        usdcOut = grossUsdc - royalty;
+        if (usdcOut < minUsdcOut) revert Slippage();
+
+        if (royalty > 0) _distributeMigratedFee(s, royalty);
+        USDC.safeTransfer(msg.sender, usdcOut);
     }
 
     // ====================== Migration ======================

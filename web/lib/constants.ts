@@ -15,7 +15,7 @@ export const USDC_DECIMALS = 6;
 export const LAUNCHPAD_TOKEN_DECIMALS = 18;
 export const LAUNCHPAD_TOTAL_SUPPLY = 1_000_000_000n; // 1B fixed supply
 export const TRADE_FEE_BPS = 100; // 1% total — split 0.5% platform + 0.5% creator
-export const CREATION_FEE_USDC = 2_000_000n; // 2 USDC (6 decimals)
+export const CREATION_FEE_USDC = 3_000_000n; // 3 USDC (6 decimals)
 
 export enum LaunchMode {
   PUMP = 0, // 50% Arcade / 50% creator(s)

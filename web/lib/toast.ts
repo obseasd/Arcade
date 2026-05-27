@@ -15,6 +15,8 @@ export interface SwapToastPayload {
   tokenAddress?: Address;
   tokenSymbol?: string;
   amountFormatted: string;
+  /** Optional block-explorer URL for the receive/mint tx. */
+  explorerUrl?: string;
 }
 
 export interface InfoToastPayload {
