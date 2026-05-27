@@ -140,37 +140,38 @@
     -webkit-appearance: none;
     appearance: none;
     width: 100%;
-    height: 6px;
+    height: 8px;
     border-radius: 9999px;
-    background: #1e4264;
+    background: rgba(255, 255, 255, 0.16);
     cursor: pointer;
     outline: none;
   }
+  /* Round blue thumb with a soft halo (the page's accent colour). */
   .arc-slider::-webkit-slider-thumb {
     -webkit-appearance: none;
     appearance: none;
-    height: 18px;
-    width: 18px;
+    height: 20px;
+    width: 20px;
     border-radius: 9999px;
-    background: #15508f;
-    border: 2px solid #e5eef8;
-    box-shadow: 0 0 0 4px rgba(21, 80, 143, 0.25);
+    background: #2f7fd6;
+    border: 3px solid #e5eef8;
+    box-shadow: 0 0 0 4px rgba(47, 127, 214, 0.25);
     transition: transform 0.1s ease, box-shadow 0.1s ease;
   }
   .arc-slider::-webkit-slider-thumb:hover {
-    transform: scale(1.12);
-    box-shadow: 0 0 0 6px rgba(21, 80, 143, 0.35);
+    transform: scale(1.1);
+    box-shadow: 0 0 0 6px rgba(47, 127, 214, 0.4);
   }
   .arc-slider:active::-webkit-slider-thumb {
     transform: scale(1.18);
   }
   .arc-slider::-moz-range-thumb {
-    height: 18px;
-    width: 18px;
+    height: 20px;
+    width: 20px;
     border-radius: 9999px;
-    background: #15508f;
-    border: 2px solid #e5eef8;
-    box-shadow: 0 0 0 4px rgba(21, 80, 143, 0.25);
+    background: #2f7fd6;
+    border: 3px solid #e5eef8;
+    box-shadow: 0 0 0 4px rgba(47, 127, 214, 0.25);
     cursor: pointer;
   }
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, X, Image as ImageIcon, Upload, ChevronDown, Pencil } from "lucide-react";
+import { ArrowLeft, X, Image as ImageIcon, Upload, ChevronDown, Pencil, Check } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
@@ -21,10 +21,12 @@ function modeLabel(mode: LaunchMode): string {
   return "Clanker"; // CLANKER_V3
 }
 
-/** Filled-track gradient for `.arc-slider`, given the value as a 0-100 %. */
+/** Filled-track gradient for `.arc-slider`, given the value as a 0-100 %.
+ * Filled = the site's blue accent; unfilled = translucent white (stays legible,
+ * never the page background) — same active/inactive contrast as a slider's dots. */
 function sliderFill(pct: number): string {
   const p = Math.max(0, Math.min(100, pct));
-  return `linear-gradient(to right, #15508f 0%, #15508f ${p}%, #1e4264 ${p}%, #1e4264 100%)`;
+  return `linear-gradient(to right, #15508f 0%, #2f7fd6 ${p}%, rgba(255,255,255,0.16) ${p}%, rgba(255,255,255,0.16) 100%)`;
 }
 
 /** Pool-type presets (mirror the launchpad's POOL_* constants). */
@@ -397,33 +399,16 @@ function CreateTokenInner() {
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
         <div className="arc-card space-y-5 p-6">
-        {/* Chosen launch mode — background = the mode's illustration */}
-        <div
-          className="relative flex items-center justify-between overflow-hidden rounded-xl border border-arc-border bg-cover bg-center px-4 py-3"
-          style={{ backgroundImage: `url('${modeBg}')` }}
-        >
-          <span className="pointer-events-none absolute inset-0 bg-black/55" aria-hidden />
-          <div className="relative">
-            <div className="text-xs text-white/70">Launch mode</div>
-            <div className="text-sm font-semibold text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]">
-              {modeLabel(mode)}
-            </div>
-          </div>
-          <Link href="/launchpad" className="relative text-xs font-medium text-white hover:underline">
-            Change
-          </Link>
-        </div>
-
-        {/* Image (top-left) + Name / Symbol */}
+        {/* Image (left, spans the full height of the 3 fields) + launch mode / name / symbol */}
         <div className="flex gap-3">
-          <label className="flex h-[76px] w-[76px] shrink-0 cursor-pointer flex-col items-center justify-center gap-1 overflow-hidden rounded-xl border border-dashed border-arc-border bg-arc-bg-elevated transition-colors hover:border-arc-cta-hover">
+          <label className="flex w-36 shrink-0 cursor-pointer flex-col items-center justify-center gap-1.5 self-stretch overflow-hidden rounded-xl border border-dashed border-arc-border bg-arc-bg-elevated transition-colors hover:border-arc-cta-hover">
             {image.trim() ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img src={image.trim()} alt="" className="h-full w-full object-cover" />
             ) : (
               <>
-                <Upload className="h-5 w-5 text-arc-text-faint" />
-                <span className="text-[9px] leading-none text-arc-text-faint">PNG / JPEG</span>
+                <Upload className="h-6 w-6 text-arc-text-faint" />
+                <span className="text-[10px] leading-none text-arc-text-faint">PNG / JPEG</span>
               </>
             )}
             <input
@@ -434,6 +419,22 @@ function CreateTokenInner() {
             />
           </label>
           <div className="flex flex-1 flex-col gap-3">
+            {/* Launch mode — background = the mode's illustration */}
+            <div
+              className="relative flex items-center justify-between overflow-hidden rounded-xl border border-arc-border bg-cover bg-center px-4 py-3"
+              style={{ backgroundImage: `url('${modeBg}')` }}
+            >
+              <span className="pointer-events-none absolute inset-0 bg-black/55" aria-hidden />
+              <div className="relative">
+                <div className="text-xs text-white/70">Launch mode</div>
+                <div className="text-sm font-semibold text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]">
+                  {modeLabel(mode)}
+                </div>
+              </div>
+              <Link href="/launchpad" className="relative text-xs font-medium text-white hover:underline">
+                Change
+              </Link>
+            </div>
             <input
               value={name}
               onChange={(e) => setName(e.target.value.slice(0, 32))}
@@ -527,18 +528,27 @@ function CreateTokenInner() {
                 </div>
                 <div className="flex items-center gap-3">
                   <PrefSelect value={r.pref} onChange={(v) => setRecipient(i, { pref: v })} />
-                  <label
-                    className="flex cursor-pointer select-none items-center gap-1.5 text-xs text-arc-text-muted"
-                    title="Checked: this recipient can rotate its own payout later. Unchecked: you (the creator) stay admin of this slot."
+                  <button
+                    type="button"
+                    onClick={() => setRecipient(i, { isAdmin: !r.isAdmin })}
+                    title="On: this recipient can rotate its own payout later. Off: you (the creator) stay admin of this slot."
+                    className={cn(
+                      "flex select-none items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-colors",
+                      r.isAdmin
+                        ? "border-arc-cta-hover bg-arc-cta-hover/15 text-arc-text"
+                        : "border-arc-border bg-arc-bg-elevated text-arc-text-muted hover:text-arc-text",
+                    )}
                   >
-                    <input
-                      type="checkbox"
-                      checked={r.isAdmin}
-                      onChange={(e) => setRecipient(i, { isAdmin: e.target.checked })}
-                      className="h-4 w-4 accent-arc-cta-hover"
-                    />
+                    <span
+                      className={cn(
+                        "flex h-3.5 w-3.5 items-center justify-center rounded border transition-colors",
+                        r.isAdmin ? "border-arc-cta-hover bg-arc-cta-hover text-white" : "border-arc-border",
+                      )}
+                    >
+                      {r.isAdmin && <Check className="h-2.5 w-2.5" strokeWidth={3} />}
+                    </span>
                     Admin
-                  </label>
+                  </button>
                 </div>
               </div>
             ))}
