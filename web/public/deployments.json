@@ -1,0 +1,30 @@
+{
+  "note": "Arcade contract addresses — the source of truth for agents and the skill. UPDATE THIS FILE after every redeploy (forge script DeployTestnet) and commit it.",
+  "chain": {
+    "name": "Arc Testnet",
+    "chainId": 5042002,
+    "rpcUrl": "https://5042002.rpc.thirdweb.com",
+    "explorer": "https://testnet.arcscan.app",
+    "nativeGasToken": "USDC"
+  },
+  "addresses": {
+    "USDC": "0x3600000000000000000000000000000000000000",
+    "v2Factory": "0x5B63440019423c6D752A6857d18Fb7A75973044C",
+    "v2Router": "0x17e0dE64F86cA6188B967eA9aC6315DC81822d86",
+    "launchpad": "0xEBb11f72eBF4432bC69223e9D818d1BD3e694Dc0",
+    "multiSwap": "0x53d2d4D2E1c2f03e4beE85e73117Ad05313fd224",
+    "v3Factory": "0x22Cd36aCeB2E3E48e963F0b9867d78E252461D96",
+    "v3Locker": "0xD53ad9ff919b997b3DC692f4b0e508005Daa806f",
+    "v3Router": "0xba71014506AD6f69d78b63e170e2Bf1f298E7993",
+    "v3Quoter": "0x43429CC6c5D8A37F79c1202Ab24C005Eb7a6E9eE"
+  },
+  "constants": {
+    "tokenDecimals": 18,
+    "usdcDecimals": 6,
+    "totalSupply": "1000000000",
+    "creationFeeUsdc": "3000000",
+    "v3FeeTiers": [10000, 20000, 30000],
+    "clankerStartFdvUsdc": "5000000000"
+  },
+  "warning": "Addresses below are from the deploy BEFORE the Clanker phase-1/2 redeploy and WILL change. Re-run DeployTestnet and overwrite this file."
+}
