@@ -41,43 +41,39 @@ interface IArcadeV3Pool {
     function liquidity() external view returns (uint128);
 }
 
-/// @notice ArcadeV3Locker — permanently holds full-range V3 positions for
-/// migrated launchpad tokens, splitting collected fees creator/platform.
+/// @notice ArcadeV3Locker — permanently holds single-sided V3 launch positions
+/// and routes their fees to up to 3 configurable recipients.
 interface IArcadeV3Locker {
-    struct LockParams {
-        address pool;
-        address token0;
-        address token1;
-        int24 tickLower;
-        int24 tickUpper;
-        uint256 amount0Max;
-        uint256 amount1Max;
-        address creator;
-        address platform;
-        uint16 creatorBps;
+    enum RewardToken {Both, Paired, Clanker}
+
+    struct Recipient {
+        address recipient;
+        address admin;
+        uint16 bps;
+        RewardToken tokenPref;
     }
 
     struct SingleSidedParams {
         address pool;
+        address paired;
         address token;
         uint160 sqrtPriceX96;
         uint256 tokenAmount;
-        address creator;
-        address platform;
-        uint16 creatorBps;
+        Recipient[] recipients;
     }
-
-    function lockFullRange(LockParams calldata p)
-        external
-        returns (uint256 positionId, uint128 liquidity);
 
     function lockSingleSided(SingleSidedParams calldata p)
         external
         returns (uint256 positionId, uint128 liquidity);
 
-    function collectFees(uint256 positionId) external returns (uint256 amount0, uint256 amount1);
+    function collectFees(uint256 positionId)
+        external
+        returns (uint256 pairedAmount, uint256 clankerAmount);
 
-    function transferCreator(uint256 positionId, address newCreator) external;
+    function updateRecipient(uint256 positionId, uint256 index, address newRecipient) external;
+    function updateAdmin(uint256 positionId, uint256 index, address newAdmin) external;
 
     function positionIdByToken(address token) external view returns (uint256);
+    function recipientsCount(uint256 positionId) external view returns (uint256);
+    function getRecipients(uint256 positionId) external view returns (Recipient[] memory);
 }

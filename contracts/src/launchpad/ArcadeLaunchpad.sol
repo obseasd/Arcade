@@ -196,10 +196,60 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         // CLANKER_V3 is a true Clanker-style launch: NO bonding curve. The
         // token goes straight into a locked single-sided V3 position and is
         // tradeable immediately. `buy`/`sell` (curve ops) revert for it since
-        // it's flagged migrated from birth.
+        // it's flagged migrated from birth. This entry point uses the default
+        // fee split (creator V3_CREATOR_BPS / treasury rest); use
+        // `createClankerV3` to configure up to 3 custom recipients.
         if (mode == LaunchMode.CLANKER_V3) {
-            _launchClankerV3(s, tokenAddr);
+            IArcadeV3Locker.Recipient[] memory rs = new IArcadeV3Locker.Recipient[](2);
+            rs[0] = IArcadeV3Locker.Recipient({
+                recipient: msg.sender,
+                admin: msg.sender,
+                bps: V3_CREATOR_BPS,
+                tokenPref: IArcadeV3Locker.RewardToken.Both
+            });
+            rs[1] = IArcadeV3Locker.Recipient({
+                recipient: treasury,
+                admin: treasury,
+                bps: uint16(FEE_DENOMINATOR - V3_CREATOR_BPS),
+                tokenPref: IArcadeV3Locker.RewardToken.Both
+            });
+            _launchClankerV3(s, tokenAddr, rs);
         }
+    }
+
+    /**
+     * @notice Clanker-style launch with up to 3 custom fee recipients. No
+     * bonding curve — the full supply is locked single-sided in a V3 pool at
+     * creation. `recipients` bps must sum to 10000 and cover both fee sides
+     * (validated by the locker). Each recipient carries an admin that can later
+     * rotate its payout address / admin.
+     */
+    function createClankerV3(
+        string calldata name_,
+        string calldata symbol_,
+        string calldata metadataURI,
+        IArcadeV3Locker.Recipient[] calldata recipients
+    ) external nonReentrant returns (address tokenAddr) {
+        if (bytes(name_).length == 0 || bytes(symbol_).length == 0) revert EmptyName();
+        if (address(v3Factory) == address(0) || v3Locker == address(0)) revert V3NotConfigured();
+
+        USDC.safeTransferFrom(msg.sender, treasury, CREATION_FEE);
+
+        ArcadeLaunchToken token = new ArcadeLaunchToken(name_, symbol_, TOTAL_SUPPLY, address(this));
+        tokenAddr = address(token);
+
+        TokenState storage s = tokens[tokenAddr];
+        s.token = tokenAddr;
+        s.creator = msg.sender;
+        s.mode = LaunchMode.CLANKER_V3;
+        s.createdAt = uint64(block.timestamp);
+        s.metadataURI = metadataURI;
+        allTokens.push(tokenAddr);
+
+        emit TokenCreated(tokenAddr, msg.sender, LaunchMode.CLANKER_V3, address(0), 0, name_, symbol_, metadataURI);
+
+        IArcadeV3Locker.Recipient[] memory rs = recipients; // calldata -> memory
+        _launchClankerV3(s, tokenAddr, rs);
     }
 
     /**
@@ -592,7 +642,11 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
     /// rises as it's bought and USDC accumulates in the locked position. The
     /// creator earns 80% of perpetual LP fees (platform 20%); principal is
     /// locked forever. Called from `createToken` for CLANKER_V3.
-    function _launchClankerV3(TokenState storage s, address tokenAddr) internal {
+    function _launchClankerV3(
+        TokenState storage s,
+        address tokenAddr,
+        IArcadeV3Locker.Recipient[] memory recipients
+    ) internal {
         uint256 supply = TOTAL_SUPPLY; // 100% single-sided, like Clanker
 
         // Sort tokens (token0 < token1) and pick the start-price amounts so that
@@ -613,12 +667,11 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         IArcadeV3Locker(v3Locker).lockSingleSided(
             IArcadeV3Locker.SingleSidedParams({
                 pool: pool,
+                paired: address(USDC),
                 token: tokenAddr,
                 sqrtPriceX96: sqrtPriceX96,
                 tokenAmount: supply,
-                creator: s.creator,
-                platform: treasury,
-                creatorBps: V3_CREATOR_BPS
+                recipients: recipients
             })
         );
 

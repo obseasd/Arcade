@@ -44,26 +44,31 @@ export function CreatorFeesPanel() {
     c.status === "success" ? (c.result as bigint) : 0n,
   );
 
-  // position details (to read the creator)
-  const posCalls = useReadContracts({
+  // Recipients per position — to check if the connected wallet is one of them
+  // (as a payout recipient or an admin).
+  const recCalls = useReadContracts({
     contracts: positionIds.map((id) => ({
       address: ADDRESSES.v3Locker,
       abi: V3_LOCKER_ABI,
-      functionName: "getPosition" as const,
+      functionName: "getRecipients" as const,
       args: [id] as const,
     })),
     query: { enabled: positionIds.some((id) => id > 0n) },
   });
 
-  // Keep only positions where the connected wallet is the creator.
+  // Keep positions where the connected wallet is a recipient or an admin.
   const mine: CreatorPosition[] = useMemo(() => {
-    if (!account || !posCalls.data) return [];
+    if (!account || !recCalls.data) return [];
+    const acc = account.toLowerCase();
     const out: CreatorPosition[] = [];
     for (let i = 0; i < v3Tokens.length; i++) {
-      const r = posCalls.data[i];
+      const r = recCalls.data[i];
       if (r?.status !== "success") continue;
-      const pos = r.result as { creator: Address; exists: boolean };
-      if (pos.exists && pos.creator.toLowerCase() === account.toLowerCase()) {
+      const recips = r.result as readonly { recipient: Address; admin: Address }[];
+      const isMine = recips?.some(
+        (x) => x.recipient.toLowerCase() === acc || x.admin.toLowerCase() === acc,
+      );
+      if (isMine) {
         out.push({
           token: v3Tokens[i].address,
           symbol: v3Tokens[i].symbol,
@@ -73,7 +78,7 @@ export function CreatorFeesPanel() {
       }
     }
     return out;
-  }, [account, posCalls.data, v3Tokens, positionIds]);
+  }, [account, recCalls.data, v3Tokens, positionIds]);
 
   const claim = async (p: CreatorPosition) => {
     setClaiming(p.token);

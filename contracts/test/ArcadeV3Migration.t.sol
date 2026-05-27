@@ -198,4 +198,91 @@ contract ArcadeV3MigrationTest is Test {
         launchpad.buy(token, 100e6, 0);
         vm.stopPrank();
     }
+
+    // ====================== Custom recipients (Phase 1) ======================
+
+    address partner = address(0xAA27);
+
+    function _genFeesBothSides(address token, address pool) internal {
+        // USDC -> token accrues paired (USDC) fees; token -> USDC accrues clanker fees.
+        vm.startPrank(alice);
+        usdc.approve(v3Router, type(uint256).max);
+        uint256 got = IV3Router(v3Router).exactInputSingle(
+            address(usdc), token, FEE, alice, 20_000e6, 0, block.timestamp + 60
+        );
+        IERC20(token).approve(v3Router, type(uint256).max);
+        IV3Router(v3Router).exactInputSingle(token, address(usdc), FEE, alice, got / 2, 0, block.timestamp + 60);
+        vm.stopPrank();
+        pool; // silence
+    }
+
+    function _createClankerV3(IArcadeV3Locker.Recipient[] memory rs) internal returns (address token, address pool) {
+        vm.startPrank(creator);
+        usdc.approve(address(launchpad), type(uint256).max);
+        token = launchpad.createClankerV3("Multi Cat", "MCAT", "ipfs://x", rs);
+        vm.stopPrank();
+        pool = IArcadeV3Factory(v3Factory).getPool(address(usdc), token, FEE);
+    }
+
+    function test_createClankerV3_customRecipients_perPotSplit() public {
+        // creator 60% Both, partner 30% Paired-only (USDC), treasury 10% Both.
+        IArcadeV3Locker.Recipient[] memory rs = new IArcadeV3Locker.Recipient[](3);
+        rs[0] = IArcadeV3Locker.Recipient(creator, creator, 6000, IArcadeV3Locker.RewardToken.Both);
+        rs[1] = IArcadeV3Locker.Recipient(partner, partner, 3000, IArcadeV3Locker.RewardToken.Paired);
+        rs[2] = IArcadeV3Locker.Recipient(treasury, treasury, 1000, IArcadeV3Locker.RewardToken.Both);
+        (address token, address pool) = _createClankerV3(rs);
+        uint256 positionId = IArcadeV3Locker(v3Locker).positionIdByToken(token);
+
+        _genFeesBothSides(token, pool);
+
+        uint256 cU0 = usdc.balanceOf(creator);
+        uint256 pU0 = usdc.balanceOf(partner);
+        uint256 tU0 = usdc.balanceOf(treasury);
+        uint256 cT0 = IERC20(token).balanceOf(creator);
+        uint256 pT0 = IERC20(token).balanceOf(partner);
+        uint256 tT0 = IERC20(token).balanceOf(treasury);
+
+        (uint256 paid, uint256 clank) = IArcadeV3Locker(v3Locker).collectFees(positionId);
+        assertGt(paid, 0, "usdc fees");
+        assertGt(clank, 0, "token fees");
+
+        // USDC pot: weights 6000/3000/1000 = 10000 → 60/30/10.
+        assertApproxEqAbs(usdc.balanceOf(creator) - cU0, (paid * 6000) / 10000, 2, "creator 60% USDC");
+        assertApproxEqAbs(usdc.balanceOf(partner) - pU0, (paid * 3000) / 10000, 2, "partner 30% USDC");
+        assertApproxEqAbs(usdc.balanceOf(treasury) - tU0, (paid * 1000) / 10000, 2, "treasury 10% USDC");
+
+        // Token pot: partner is Paired-only → excluded. Weights creator 6000 + treasury 1000 = 7000.
+        assertEq(IERC20(token).balanceOf(partner) - pT0, 0, "partner gets NO token");
+        assertApproxEqAbs(IERC20(token).balanceOf(creator) - cT0, (clank * 6000) / 7000, 2, "creator 6/7 token");
+        assertApproxEqAbs(IERC20(token).balanceOf(treasury) - tT0, (clank * 1000) / 7000, 2, "treasury 1/7 token");
+    }
+
+    function test_createClankerV3_badBps_reverts() public {
+        IArcadeV3Locker.Recipient[] memory rs = new IArcadeV3Locker.Recipient[](2);
+        rs[0] = IArcadeV3Locker.Recipient(creator, creator, 6000, IArcadeV3Locker.RewardToken.Both);
+        rs[1] = IArcadeV3Locker.Recipient(partner, partner, 3000, IArcadeV3Locker.RewardToken.Both); // sums to 9000
+        vm.startPrank(creator);
+        usdc.approve(address(launchpad), type(uint256).max);
+        vm.expectRevert(bytes("BPS_SUM"));
+        launchpad.createClankerV3("X", "X", "ipfs://x", rs);
+        vm.stopPrank();
+    }
+
+    function test_updateRecipient_onlyAdmin() public {
+        (address token,) = _createV3Token(); // default: creator slot0 admin=creator, treasury slot1
+        uint256 positionId = IArcadeV3Locker(v3Locker).positionIdByToken(token);
+
+        // Non-admin can't change slot 0.
+        vm.prank(alice);
+        vm.expectRevert(bytes("ONLY_ADMIN"));
+        IArcadeV3Locker(v3Locker).updateRecipient(positionId, 0, alice);
+
+        // The slot-0 admin (creator) can.
+        address newRecipient = address(0xBEEF11);
+        vm.prank(creator);
+        IArcadeV3Locker(v3Locker).updateRecipient(positionId, 0, newRecipient);
+        IArcadeV3Locker.Recipient[] memory rs = IArcadeV3Locker(v3Locker).getRecipients(positionId);
+        assertEq(rs[0].recipient, newRecipient, "recipient rotated");
+        assertEq(rs[0].admin, creator, "admin unchanged");
+    }
 }

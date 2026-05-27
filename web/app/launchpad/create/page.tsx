@@ -1,9 +1,9 @@
 "use client";
 
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, X } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { decodeEventLog, erc20Abi, isAddress, zeroAddress, type Address } from "viem";
 import { useAccount, usePublicClient, useReadContract, useWriteContract } from "wagmi";
 import { LAUNCHPAD_ABI } from "@/lib/abis/launchpad";
@@ -11,13 +11,23 @@ import { ADDRESSES, CREATION_FEE_USDC, LaunchMode } from "@/lib/constants";
 import { encodeMetadataDataUri } from "@/lib/metadata";
 import { useApproveIfNeeded } from "@/lib/hooks/useApproveIfNeeded";
 import { TxStatus, type TxState } from "@/components/ui/TxStatus";
-import { formatUSDC } from "@/lib/utils";
+import { cn, formatUSDC } from "@/lib/utils";
 
 /** Display label for a launch mode (contract modes are unchanged). */
 function modeLabel(mode: LaunchMode): string {
   if (mode === LaunchMode.PUMP) return "Pump";
   if (mode === LaunchMode.CLANKER) return "Arcade";
   return "Clanker"; // CLANKER_V3
+}
+
+/** Reward-token preference (matches the locker's RewardToken enum). */
+type RewardPref = 0 | 1 | 2; // 0 = Both, 1 = USDC (Paired), 2 = Token (Clanker)
+
+interface RecipientRow {
+  recipient: string;
+  admin: string; // who can later rotate this slot; defaults to the recipient
+  pct: number; // 0–100, all rows sum to 100
+  pref: RewardPref;
 }
 
 export default function CreateTokenPage() {
@@ -53,6 +63,48 @@ function CreateTokenInner() {
   const [creator2SharePct, setCreator2SharePct] = useState(50); // 0–100
   const [tx, setTx] = useState<TxState>({ status: "idle" });
 
+  // CLANKER_V3 fee recipients (up to 3). Defaults to the connected wallet 100%.
+  const [recipients, setRecipients] = useState<RecipientRow[]>([
+    { recipient: "", admin: "", pct: 100, pref: 0 },
+  ]);
+  const isV3 = mode === LaunchMode.CLANKER_V3;
+
+  // Prefill the first recipient with the connected wallet.
+  useEffect(() => {
+    if (!account) return;
+    setRecipients((prev) =>
+      prev[0] && prev[0].recipient === ""
+        ? [{ ...prev[0], recipient: account, admin: account }, ...prev.slice(1)]
+        : prev,
+    );
+  }, [account]);
+
+  const recipientsValid = (() => {
+    if (!isV3) return true;
+    if (recipients.length < 1 || recipients.length > 3) return false;
+    let sum = 0;
+    let hasPaired = false;
+    let hasClanker = false;
+    for (const r of recipients) {
+      if (!isAddress(r.recipient.trim())) return false;
+      const adm = r.admin.trim() || r.recipient.trim();
+      if (!isAddress(adm)) return false;
+      if (r.pct <= 0) return false;
+      sum += r.pct;
+      if (r.pref !== 2) hasPaired = true;
+      if (r.pref !== 1) hasClanker = true;
+    }
+    return sum === 100 && hasPaired && hasClanker;
+  })();
+
+  const setRecipient = (i: number, patch: Partial<RecipientRow>) =>
+    setRecipients((prev) => prev.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
+  const addRecipient = () =>
+    setRecipients((prev) => (prev.length >= 3 ? prev : [...prev, { recipient: "", admin: "", pct: 0, pref: 0 }]));
+  const removeRecipient = (i: number) =>
+    setRecipients((prev) => prev.filter((_, idx) => idx !== i));
+  const recipientsSum = recipients.reduce((a, r) => a + (r.pct || 0), 0);
+
   const usdcBalance = useReadContract({
     address: ADDRESSES.usdc,
     abi: erc20Abi,
@@ -87,20 +139,35 @@ function CreateTokenInner() {
 
       setTx({ status: "pending", message: "Launching token…" });
 
-      // CLANKER allows an optional secondary creator address.
-      // Validate `creator2` only when set; ignore in PUMP mode.
-      const trimmedC2 = creator2.trim();
-      const useCreator2 =
-        mode === LaunchMode.CLANKER && trimmedC2.length > 0 && isAddress(trimmedC2);
-      const creator2Addr: Address = useCreator2 ? (trimmedC2 as Address) : zeroAddress;
-      const creator2ShareBps = useCreator2 ? Math.round(creator2SharePct * 100) : 0;
-
-      const hash = await writeContractAsync({
-        address: ADDRESSES.launchpad,
-        abi: LAUNCHPAD_ABI,
-        functionName: "createToken",
-        args: [name.trim(), symbol.trim(), metadataURI, mode, creator2Addr, creator2ShareBps],
-      });
+      let hash: `0x${string}`;
+      if (isV3) {
+        // Clanker mode: custom fee recipients (up to 3) with admin + token pref.
+        const rs = recipients.map((r) => {
+          const rec = r.recipient.trim() as Address;
+          const adm = (r.admin.trim() || r.recipient.trim()) as Address;
+          return { recipient: rec, admin: adm, bps: Math.round(r.pct * 100), tokenPref: r.pref };
+        });
+        hash = await writeContractAsync({
+          address: ADDRESSES.launchpad,
+          abi: LAUNCHPAD_ABI,
+          functionName: "createClankerV3",
+          args: [name.trim(), symbol.trim(), metadataURI, rs],
+        });
+      } else {
+        // PUMP / Arcade (CLANKER): bonding curve. Arcade allows an optional
+        // secondary creator address.
+        const trimmedC2 = creator2.trim();
+        const useCreator2 =
+          mode === LaunchMode.CLANKER && trimmedC2.length > 0 && isAddress(trimmedC2);
+        const creator2Addr: Address = useCreator2 ? (trimmedC2 as Address) : zeroAddress;
+        const creator2ShareBps = useCreator2 ? Math.round(creator2SharePct * 100) : 0;
+        hash = await writeContractAsync({
+          address: ADDRESSES.launchpad,
+          abi: LAUNCHPAD_ABI,
+          functionName: "createToken",
+          args: [name.trim(), symbol.trim(), metadataURI, mode, creator2Addr, creator2ShareBps],
+        });
+      }
 
       if (!publicClient) throw new Error("No public client");
       const receipt = await publicClient.waitForTransactionReceipt({ hash });
@@ -144,7 +211,8 @@ function CreateTokenInner() {
         {mode === LaunchMode.CLANKER_V3 ? (
           <>
             The full supply is locked single-sided in a Uniswap V3 pool at launch — tradeable
-            instantly, no bonding curve, LP can never be rugged, and you earn 80% of all swap fees.
+            instantly, no bonding curve, LP can never be rugged, and the swap fees flow to the
+            recipients you configure below.
           </>
         ) : (
           <>
@@ -201,6 +269,79 @@ function CreateTokenInner() {
             className="arc-input w-full resize-none rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2"
           />
         </Field>
+
+        {isV3 && (
+          <div className="space-y-3 rounded-xl border border-arc-border bg-arc-bg-elevated p-4">
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-medium text-arc-text">Fee recipients</span>
+              <span className={cn("text-xs tabular-nums", recipientsSum === 100 ? "text-arc-text-faint" : "text-arc-danger")}>
+                {recipientsSum}% / 100%
+              </span>
+            </div>
+            <p className="text-xs text-arc-text-faint">
+              Split the LP swap fees across up to 3 addresses. Each address can be its own admin
+              (able to rotate its payout later). Token: <b>Both</b> = USDC + token, or USDC-only /
+              token-only.
+            </p>
+            {recipients.map((r, i) => (
+              <div key={i} className="space-y-2 rounded-lg border border-arc-border bg-arc-bg p-3">
+                <div className="flex items-center gap-2">
+                  <input
+                    value={r.recipient}
+                    onChange={(e) => setRecipient(i, { recipient: e.target.value })}
+                    placeholder="0x recipient"
+                    className="arc-input flex-1 rounded-lg border border-arc-border bg-arc-bg-elevated px-2 py-1.5 text-sm tabular-nums"
+                  />
+                  <input
+                    type="number"
+                    min={0}
+                    max={100}
+                    value={r.pct}
+                    onChange={(e) => setRecipient(i, { pct: Number(e.target.value) })}
+                    className="arc-input w-16 rounded-lg border border-arc-border bg-arc-bg-elevated px-2 py-1.5 text-right text-sm tabular-nums"
+                  />
+                  <span className="text-xs text-arc-text-muted">%</span>
+                  {recipients.length > 1 && (
+                    <button
+                      onClick={() => removeRecipient(i)}
+                      className="text-arc-text-faint transition-colors hover:text-arc-danger"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  <select
+                    value={r.pref}
+                    onChange={(e) => setRecipient(i, { pref: Number(e.target.value) as RewardPref })}
+                    className="rounded-lg border border-arc-border bg-arc-bg-elevated px-2 py-1.5 text-xs text-arc-text"
+                  >
+                    <option value={0}>Both</option>
+                    <option value={1}>USDC only</option>
+                    <option value={2}>Token only</option>
+                  </select>
+                  <input
+                    value={r.admin}
+                    onChange={(e) => setRecipient(i, { admin: e.target.value })}
+                    placeholder="admin (defaults to recipient)"
+                    className="arc-input flex-1 rounded-lg border border-arc-border bg-arc-bg-elevated px-2 py-1.5 text-xs tabular-nums"
+                  />
+                </div>
+              </div>
+            ))}
+            {recipients.length < 3 && (
+              <button onClick={addRecipient} className="text-xs font-medium text-arc-cta-hover hover:underline">
+                + Add recipient
+              </button>
+            )}
+            {!recipientsValid && (
+              <div className="text-xs text-arc-danger">
+                Recipients must be valid addresses, sum to 100%, and cover both fee sides (at least
+                one Both/USDC and one Both/Token).
+              </div>
+            )}
+          </div>
+        )}
 
         {mode === LaunchMode.CLANKER && (
           <details className="rounded-xl border border-arc-border bg-arc-bg-elevated open:bg-arc-surface">
@@ -274,7 +415,7 @@ function CreateTokenInner() {
 
         <button
           onClick={onSubmit}
-          disabled={!account || !valid || tx.status === "pending" || !hasFee}
+          disabled={!account || !valid || (isV3 && !recipientsValid) || tx.status === "pending" || !hasFee}
           className="arc-button-primary w-full py-3 text-base"
         >
           {!account
@@ -283,9 +424,11 @@ function CreateTokenInner() {
               ? `Need ${formatUSDC(CREATION_FEE_USDC, 6, 0)} USDC to launch`
               : !valid
                 ? "Fill in name and symbol"
-                : tx.status === "pending"
-                  ? "Launching…"
-                  : "Launch token"}
+                : isV3 && !recipientsValid
+                  ? "Fix fee recipients"
+                  : tx.status === "pending"
+                    ? "Launching…"
+                    : "Launch token"}
         </button>
         <TxStatus state={tx} />
       </div>

@@ -139,6 +139,27 @@ export const LAUNCHPAD_ABI = [
   },
   {
     type: "function",
+    name: "createClankerV3",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "name", type: "string" },
+      { name: "symbol", type: "string" },
+      { name: "metadataURI", type: "string" },
+      {
+        name: "recipients",
+        type: "tuple[]",
+        components: [
+          { name: "recipient", type: "address" },
+          { name: "admin", type: "address" },
+          { name: "bps", type: "uint16" },
+          { name: "tokenPref", type: "uint8" },
+        ],
+      },
+    ],
+    outputs: [{ type: "address" }],
+  },
+  {
+    type: "function",
     name: "buy",
     stateMutability: "nonpayable",
     inputs: [
