@@ -1,11 +1,11 @@
 "use client";
 
-import Link from "next/link";
 import { useMemo, useState } from "react";
 import { Plus, Search } from "lucide-react";
 import { LAUNCHPAD_TOTAL_SUPPLY } from "@/lib/constants";
 import { useLaunchpadTokens, LaunchpadTokenInfo } from "@/lib/hooks/useLaunchpadTokens";
 import { TokenCard } from "@/components/launchpad/TokenCard";
+import { LaunchModeModal } from "@/components/launchpad/LaunchModeModal";
 import { cn } from "@/lib/utils";
 
 const CURVE_SUPPLY = 800_000_000n * 10n ** 18n;
@@ -16,6 +16,7 @@ export default function LaunchpadIndexPage() {
   const { tokens, isLoading } = useLaunchpadTokens();
   const [filter, setFilter] = useState<Filter>("all");
   const [q, setQ] = useState("");
+  const [launchOpen, setLaunchOpen] = useState(false);
 
   const filtered = useMemo(() => {
     let list: LaunchpadTokenInfo[] = [...tokens];
@@ -58,8 +59,8 @@ export default function LaunchpadIndexPage() {
             Launch and trade tokens on Arc&apos;s bonding-curve launchpad. USDC-quoted.
           </p>
         </div>
-        <Link
-          href="/launchpad/create"
+        <button
+          onClick={() => setLaunchOpen(true)}
           className="arc-button-primary relative overflow-hidden bg-cover bg-center bg-no-repeat px-5 py-2.5 shadow-[0_10px_30px_-12px_rgba(52,90,120,0.55)] ring-1 ring-arc-cta-hover/40"
           style={{ backgroundImage: "url('/create%20token.png')" }}
         >
@@ -67,7 +68,7 @@ export default function LaunchpadIndexPage() {
           <span className="relative flex items-center gap-2 font-semibold drop-shadow-[0_1px_2px_rgba(0,0,0,0.85)]">
             <Plus className="h-4 w-4" /> Launch a token
           </span>
-        </Link>
+        </button>
       </div>
 
       <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -115,7 +116,10 @@ export default function LaunchpadIndexPage() {
       )}
       {!isLoading && filtered.length === 0 && (
         <div className="arc-card p-12 text-center text-arc-text-muted">
-          No tokens yet. <Link href="/launchpad/create" className="text-arc-primary hover:underline">Launch the first one →</Link>
+          No tokens yet.{" "}
+          <button onClick={() => setLaunchOpen(true)} className="text-arc-primary hover:underline">
+            Launch the first one →
+          </button>
         </div>
       )}
       {!isLoading && filtered.length > 0 && (
@@ -130,6 +134,8 @@ export default function LaunchpadIndexPage() {
         Total supply per launch: {(LAUNCHPAD_TOTAL_SUPPLY / 1_000_000n).toString()}M ·
         Curve supply: 800M · Migration triggers automatically when the curve sells out.
       </div>
+
+      <LaunchModeModal open={launchOpen} onClose={() => setLaunchOpen(false)} />
     </div>
   );
 }

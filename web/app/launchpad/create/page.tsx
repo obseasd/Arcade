@@ -1,21 +1,45 @@
 "use client";
 
-import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { ArrowLeft } from "lucide-react";
+import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useState } from "react";
 import { decodeEventLog, erc20Abi, isAddress, zeroAddress, type Address } from "viem";
 import { useAccount, usePublicClient, useReadContract, useWriteContract } from "wagmi";
 import { LAUNCHPAD_ABI } from "@/lib/abis/launchpad";
 import { ADDRESSES, CREATION_FEE_USDC, LaunchMode } from "@/lib/constants";
-import { cn } from "@/lib/utils";
 import { encodeMetadataDataUri } from "@/lib/metadata";
 import { useApproveIfNeeded } from "@/lib/hooks/useApproveIfNeeded";
 import { TxStatus, type TxState } from "@/components/ui/TxStatus";
 import { formatUSDC } from "@/lib/utils";
 
+/** Display label for a launch mode (contract modes are unchanged). */
+function modeLabel(mode: LaunchMode): string {
+  if (mode === LaunchMode.PUMP) return "Pump";
+  if (mode === LaunchMode.CLANKER) return "Arcade";
+  return "Clanker"; // CLANKER_V3
+}
+
 export default function CreateTokenPage() {
+  return (
+    <Suspense fallback={<div className="mx-auto max-w-2xl px-4 py-10 sm:px-6 text-arc-text-muted">Loading…</div>}>
+      <CreateTokenInner />
+    </Suspense>
+  );
+}
+
+function CreateTokenInner() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { address: account } = useAccount();
   const publicClient = usePublicClient();
+
+  // Launch mode is chosen in the modal on /launchpad and passed via ?mode=.
+  const modeParam = Number(searchParams.get("mode"));
+  const initialMode: LaunchMode =
+    modeParam === LaunchMode.CLANKER || modeParam === LaunchMode.CLANKER_V3
+      ? modeParam
+      : LaunchMode.PUMP;
 
   const [name, setName] = useState("");
   const [symbol, setSymbol] = useState("");
@@ -24,7 +48,7 @@ export default function CreateTokenPage() {
   const [twitter, setTwitter] = useState("");
   const [telegram, setTelegram] = useState("");
   const [website, setWebsite] = useState("");
-  const [mode, setMode] = useState<LaunchMode>(LaunchMode.PUMP);
+  const [mode] = useState<LaunchMode>(initialMode);
   const [creator2, setCreator2] = useState("");
   const [creator2SharePct, setCreator2SharePct] = useState(50); // 0–100
   const [tx, setTx] = useState<TxState>({ status: "idle" });
@@ -108,6 +132,12 @@ export default function CreateTokenPage() {
 
   return (
     <div className="mx-auto max-w-2xl px-4 py-10 sm:px-6">
+      <Link
+        href="/launchpad"
+        className="mb-6 inline-flex items-center gap-2 text-sm text-arc-text-muted transition-colors hover:text-arc-text"
+      >
+        <ArrowLeft className="h-4 w-4" /> Launchpad
+      </Link>
       <h1 className="mb-2 text-3xl font-semibold">Launch a token</h1>
       <p className="mb-8 text-sm text-arc-text-muted">
         Mint a new token with a fixed 1B supply.{" "}
@@ -127,32 +157,15 @@ export default function CreateTokenPage() {
       </p>
 
       <div className="arc-card space-y-5 p-6">
-        {/* Launch mode selector */}
-        <div>
-          <div className="mb-2 text-sm font-medium text-arc-text">Launch mode</div>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-            <ModeCard
-              active={mode === LaunchMode.PUMP}
-              onClick={() => setMode(LaunchMode.PUMP)}
-              title="Pump"
-              subtitle="50% Arcade · 50% creator"
-              description="pump.fun-style bonding curve. LP burned at migration. Single creator wallet."
-            />
-            <ModeCard
-              active={mode === LaunchMode.CLANKER}
-              onClick={() => setMode(LaunchMode.CLANKER)}
-              title="Clanker"
-              subtitle="70% Arcade · 30% creator(s)"
-              description="Bonding curve, LP burned at migration. Optionally split creator fees across two wallets."
-            />
-            <ModeCard
-              active={mode === LaunchMode.CLANKER_V3}
-              onClick={() => setMode(LaunchMode.CLANKER_V3)}
-              title="Clanker V3"
-              subtitle="Creator earns 80% LP fees"
-              description="No curve — full supply locked single-sided in a V3 pool. Tradeable instantly, un-ruggable."
-            />
+        {/* Chosen launch mode (picked in the modal) */}
+        <div className="flex items-center justify-between rounded-xl border border-arc-border bg-arc-bg-elevated px-4 py-3">
+          <div>
+            <div className="text-xs text-arc-text-muted">Launch mode</div>
+            <div className="text-sm font-semibold text-arc-text">{modeLabel(mode)}</div>
           </div>
+          <Link href="/launchpad" className="text-xs text-arc-cta-hover hover:underline">
+            Change
+          </Link>
         </div>
 
         <Field label="Name" hint="Display name shown on the discovery page.">
@@ -292,41 +305,3 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
   );
 }
 
-function ModeCard({
-  active,
-  onClick,
-  title,
-  subtitle,
-  description,
-}: {
-  active: boolean;
-  onClick: () => void;
-  title: string;
-  subtitle: string;
-  description: string;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        "rounded-xl border p-4 text-left transition-all",
-        active
-          ? "border-arc-cta-hover bg-arc-cta-hover/10 shadow-arc-nav-glow"
-          : "border-arc-border bg-arc-bg-elevated hover:border-arc-border-strong hover:bg-arc-surface",
-      )}
-    >
-      <div className="flex items-center justify-between">
-        <span className="text-sm font-semibold text-arc-text">{title}</span>
-        <span
-          className={cn(
-            "h-4 w-4 rounded-full border-2 transition-colors",
-            active ? "border-arc-cta-hover bg-arc-cta-hover" : "border-arc-border",
-          )}
-        />
-      </div>
-      <div className="mt-1 text-xs text-arc-cta-hover">{subtitle}</div>
-      <div className="mt-1.5 text-xs text-arc-text-muted">{description}</div>
-    </button>
-  );
-}
