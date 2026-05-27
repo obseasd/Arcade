@@ -9,16 +9,17 @@
   },
   "addresses": {
     "USDC": "0x3600000000000000000000000000000000000000",
+    "WETH": "0x9570EBA9eE39Aa4933f64d6add280faAB289a847",
     "treasury": "0x3a0Dd90212838f32a953Acd4B32596b62859324A",
-    "v2Factory": "0xB3C67261e92D69A1b161c1d093226C5a57338AFF",
-    "v2Router": "0x048Cf9B0Dda895A742a4352be359DDaE2827b517",
-    "launchpad": "0xB36331b5118e84a0a8b235CB35b9a7343EAe8595",
-    "multiSwap": "0x29ec3dfa804a52cdE6BC5294B629Cdd2d398a20c",
-    "v3Factory": "0xad4F2c41Cf6044E44378BD891C846d2E9163C5d8",
-    "v3Locker": "0xEBEeb527748C3f21965c2f5C281818cF6feb3BA9",
-    "v3Router": "0xA9bA69ea6dBBE53e3a5C50118699CB39f68F59C2",
-    "v3Quoter": "0xbeC2C6e599fccD425FebCf093925f374E5Af2B29",
-    "tokenVault": "0x84b020d5e43808448eE37f7D0D513Aa9e56ECDAE"
+    "v2Factory": "0x4A9Db35497ceaBbAA9eCa4c2b152aD68493237C7",
+    "v2Router": "0xD491688183fb95c506d4ae2B06Fd6E2f0215BcEe",
+    "launchpad": "0x900cbF8A2C382122ff4249DC88D2550F0f2C35d3",
+    "multiSwap": "0xdf9C871aBF33A4203d99c73Dfa11Fa46E2b64eA1",
+    "v3Factory": "0x108AE9cD0bDbdD62E54172de16FcfA58d2C18640",
+    "v3Locker": "0xe8FccA43F5a04e599Ab54F66B09cC8D229f27A39",
+    "v3Router": "0x0817E94f1b8c158d7d30D202426551deFb8568F3",
+    "v3Quoter": "0xdA5E1199309C3a249fe7265f5b03dd84b91d796F",
+    "tokenVault": "0x2e3763743C6Ab9aCc30Ddc0F5b7Ed6Ec48C52B38"
   },
   "constants": {
     "tokenDecimals": 18,
@@ -26,6 +27,11 @@
     "totalSupply": "1000000000",
     "creationFeeUsdc": "3000000",
     "v3FeeTiers": [10000, 20000, 30000],
-    "clankerStartFdvUsdc": "5000000000"
+    "poolTypes": {
+      "standard": { "id": 0, "paired": "USDC", "startMcapUsdc": "35000000000", "positions": 3 },
+      "legacy": { "id": 1, "paired": "USDC", "startMcapRange": ["1000000", "1000000000000"], "positions": 1 },
+      "deep": { "id": 2, "paired": "USDC", "startMcapUsdc": "50000000000", "positions": 3 },
+      "weth": { "id": 3, "paired": "WETH", "startMcapWeth": "10000000000000000000", "positions": 3 }
+    }
   }
 }
