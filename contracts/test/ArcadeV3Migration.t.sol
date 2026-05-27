@@ -64,15 +64,18 @@ contract ArcadeV3MigrationTest is Test {
         v3Locker = _deploy(
             "out-v3/ArcadeV3Locker.sol/ArcadeV3Locker.json", abi.encode(address(launchpad), v3Factory)
         );
-        launchpad.setV3Locker(v3Locker);
         v3Router = _deploy(
             "out-v3/ArcadeV3SwapRouter.sol/ArcadeV3SwapRouter.json", abi.encode(v3Factory, address(usdc))
         );
         v3Quoter = _deploy(
             "out-v3/ArcadeV3Quoter.sol/ArcadeV3Quoter.json", abi.encode(v3Factory, address(usdc))
         );
+        launchpad.setV3Infra(v3Locker, v3Router);
+        // Enable 2% / 3% fee tiers on the freshly-deployed V3 factory.
+        IArcadeV3Factory(v3Factory).enableFeeAmount(20_000, 200);
+        IArcadeV3Factory(v3Factory).enableFeeAmount(30_000, 200);
 
-        usdc.mint(creator, 1_000e6);
+        usdc.mint(creator, 100_000e6);
         usdc.mint(alice, 1_000_000e6);
     }
 
@@ -219,7 +222,7 @@ contract ArcadeV3MigrationTest is Test {
     function _createClankerV3(IArcadeV3Locker.Recipient[] memory rs) internal returns (address token, address pool) {
         vm.startPrank(creator);
         usdc.approve(address(launchpad), type(uint256).max);
-        token = launchpad.createClankerV3("Multi Cat", "MCAT", "ipfs://x", rs);
+        token = launchpad.createClankerV3("Multi Cat", "MCAT", "ipfs://x", rs, FEE, 0);
         vm.stopPrank();
         pool = IArcadeV3Factory(v3Factory).getPool(address(usdc), token, FEE);
     }
@@ -264,8 +267,45 @@ contract ArcadeV3MigrationTest is Test {
         vm.startPrank(creator);
         usdc.approve(address(launchpad), type(uint256).max);
         vm.expectRevert(bytes("BPS_SUM"));
-        launchpad.createClankerV3("X", "X", "ipfs://x", rs);
+        launchpad.createClankerV3("X", "X", "ipfs://x", rs, FEE, 0);
         vm.stopPrank();
+    }
+
+    function _defaultRecipients() internal view returns (IArcadeV3Locker.Recipient[] memory rs) {
+        rs = new IArcadeV3Locker.Recipient[](1);
+        rs[0] = IArcadeV3Locker.Recipient(creator, creator, 10_000, IArcadeV3Locker.RewardToken.Both);
+    }
+
+    function test_createClankerV3_feeTier2pct() public {
+        IArcadeV3Locker.Recipient[] memory rs = _defaultRecipients();
+        vm.startPrank(creator);
+        usdc.approve(address(launchpad), type(uint256).max);
+        address token = launchpad.createClankerV3("Two Pct", "TWO", "ipfs://x", rs, 20_000, 0);
+        vm.stopPrank();
+        // Pool exists at the 2% tier, not at 1%.
+        assertTrue(IArcadeV3Factory(v3Factory).getPool(address(usdc), token, 20_000) != address(0), "2% pool");
+        assertEq(IArcadeV3Factory(v3Factory).getPool(address(usdc), token, 10_000), address(0), "no 1% pool");
+    }
+
+    function test_createClankerV3_badFeeTier_reverts() public {
+        IArcadeV3Locker.Recipient[] memory rs = _defaultRecipients();
+        vm.startPrank(creator);
+        usdc.approve(address(launchpad), type(uint256).max);
+        vm.expectRevert(ArcadeLaunchpad.BadFeeTier.selector);
+        launchpad.createClankerV3("X", "X", "ipfs://x", rs, 3000, 0); // 0.3% not allowed
+        vm.stopPrank();
+    }
+
+    function test_createClankerV3_creatorBuy_deliversTokens() public {
+        IArcadeV3Locker.Recipient[] memory rs = _defaultRecipients();
+        vm.startPrank(creator);
+        usdc.approve(address(launchpad), type(uint256).max);
+        uint256 cBefore = usdc.balanceOf(creator);
+        address token = launchpad.createClankerV3("Buy Cat", "BUY", "ipfs://x", rs, FEE, 5_000e6);
+        vm.stopPrank();
+        // Creator received tokens from the launch buy, and spent 3 USDC fee + 5000 buy.
+        assertGt(IERC20(token).balanceOf(creator), 0, "creator got tokens from buy");
+        assertEq(cBefore - usdc.balanceOf(creator), launchpad.CREATION_FEE() + 5_000e6, "spent fee + buy");
     }
 
     function test_updateRecipient_onlyAdmin() public {

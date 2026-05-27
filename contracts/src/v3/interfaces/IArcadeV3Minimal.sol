@@ -15,6 +15,21 @@ pragma solidity ^0.8.24;
 interface IArcadeV3Factory {
     function getPool(address tokenA, address tokenB, uint24 fee) external view returns (address pool);
     function createPool(address tokenA, address tokenB, uint24 fee) external returns (address pool);
+    function enableFeeAmount(uint24 fee, int24 tickSpacing) external;
+    function feeAmountTickSpacing(uint24 fee) external view returns (int24);
+}
+
+/// @notice ArcadeV3SwapRouter — used by the launchpad for the optional creator buy.
+interface IArcadeV3Router {
+    function exactInputSingle(
+        address tokenIn,
+        address tokenOut,
+        uint24 fee,
+        address recipient,
+        uint256 amountIn,
+        uint256 amountOutMinimum,
+        uint256 deadline
+    ) external returns (uint256 amountOut);
 }
 
 /// @notice Subset of IUniswapV3Pool needed to seed and read a pool.

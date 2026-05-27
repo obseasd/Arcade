@@ -155,6 +155,8 @@ export const LAUNCHPAD_ABI = [
           { name: "tokenPref", type: "uint8" },
         ],
       },
+      { name: "fee", type: "uint24" },
+      { name: "creatorBuyUsdc", type: "uint256" },
     ],
     outputs: [{ type: "address" }],
   },

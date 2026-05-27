@@ -3,6 +3,7 @@
 import { Address, erc20Abi } from "viem";
 import { useReadContract, useReadContracts } from "wagmi";
 import { LAUNCHPAD_ABI } from "@/lib/abis/launchpad";
+import { V3_POOL_ABI } from "@/lib/abis/v3";
 import { ADDRESSES } from "@/lib/constants";
 
 /**
@@ -57,6 +58,7 @@ export function useV3Tokens() {
 
   // tokens() returns a tuple; mode is index 4 (uint8), migrated is index 7 (bool).
   const v3Addrs: Address[] = [];
+  const v3Pools: Address[] = []; // parallel to v3Addrs (the V3 pool per token)
   if (stateCalls.data) {
     for (let i = 0; i < addrs.length; i++) {
       const r = stateCalls.data[i];
@@ -64,7 +66,10 @@ export function useV3Tokens() {
       const tuple = r.result as unknown as readonly unknown[];
       const mode = Number(tuple[4]);
       const migrated = Boolean(tuple[7]);
-      if (mode === CLANKER_V3_MODE && migrated) v3Addrs.push(addrs[i]);
+      if (mode === CLANKER_V3_MODE && migrated) {
+        v3Addrs.push(addrs[i]);
+        v3Pools.push(tuple[10] as Address); // v2Pair field stores the V3 pool
+      }
     }
   }
 
@@ -78,6 +83,12 @@ export function useV3Tokens() {
     query: { enabled: v3Addrs.length > 0 },
   });
 
+  // Each token's pool fee tier (1% / 2% / 3%) so swaps route on the right tier.
+  const feeCalls = useReadContracts({
+    contracts: v3Pools.map((p) => ({ address: p, abi: V3_POOL_ABI, functionName: "fee" as const })),
+    query: { enabled: v3Pools.length > 0 },
+  });
+
   const tokens: V3TokenInfo[] = v3Addrs.map((address, i) => ({
     address,
     symbol: metaCalls.data?.[3 * i]?.result as string | undefined,
@@ -85,6 +96,13 @@ export function useV3Tokens() {
     decimals: metaCalls.data?.[3 * i + 2]?.result as number | undefined,
     isV3: true as const,
   }));
+
+  // Map of lowercased V3 address -> fee tier (defaults to 1%).
+  const feeMap = new Map<string, number>();
+  v3Addrs.forEach((a, i) => {
+    const f = feeCalls.data?.[i]?.result as number | undefined;
+    feeMap.set(a.toLowerCase(), f ?? 10_000);
+  });
 
   // Set of lowercased V3 addresses for quick membership checks.
   const v3Set = new Set(v3Addrs.map((a) => a.toLowerCase()));
@@ -94,5 +112,6 @@ export function useV3Tokens() {
       countQ.isLoading || addrCalls.isLoading || stateCalls.isLoading || metaCalls.isLoading,
     tokens,
     isV3Token: (addr?: Address) => !!addr && v3Set.has(addr.toLowerCase()),
+    feeOf: (addr?: Address) => (addr ? feeMap.get(addr.toLowerCase()) ?? 10_000 : 10_000),
   };
 }

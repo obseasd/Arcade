@@ -10,7 +10,12 @@ import {IArcadeLaunchpad} from "./interfaces/IArcadeLaunchpad.sol";
 import {IArcadeV2Factory} from "../dex/interfaces/IArcadeV2Factory.sol";
 import {IArcadeV2Pair} from "../dex/interfaces/IArcadeV2Pair.sol";
 import {IArcadeV2Router} from "../dex/interfaces/IArcadeV2Router.sol";
-import {IArcadeV3Factory, IArcadeV3Pool, IArcadeV3Locker} from "../v3/interfaces/IArcadeV3Minimal.sol";
+import {
+    IArcadeV3Factory,
+    IArcadeV3Pool,
+    IArcadeV3Locker,
+    IArcadeV3Router
+} from "../v3/interfaces/IArcadeV3Minimal.sol";
 import {ArcadeV3PriceMath} from "../v3/ArcadeV3PriceMath.sol";
 
 /**
@@ -92,6 +97,8 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
     /// Set once post-deploy (the locker needs this contract's address at its
     /// own construction, so the wiring is circular and resolved via a setter).
     address public v3Locker;
+    /// @notice ArcadeV3SwapRouter — used for the optional creator buy at launch.
+    address public v3Router;
 
     // --- State ---
 
@@ -122,6 +129,7 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
     error V3NotConfigured();
     error NotDeployer();
     error LockerAlreadySet();
+    error BadFeeTier();
 
     constructor(
         IERC20 usdc_,
@@ -138,8 +146,17 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         deployer = msg.sender;
     }
 
-    /// @notice One-time wiring of the V3 locker (resolves the launchpad<->locker
-    /// circular constructor dependency). Callable once by the deployer.
+    /// @notice One-time wiring of the V3 locker + router (resolves the
+    /// launchpad<->locker circular constructor dependency, and gives the
+    /// launchpad the router it uses for the optional creator buy). Deployer-only.
+    function setV3Infra(address locker, address router) external {
+        if (msg.sender != deployer) revert NotDeployer();
+        if (v3Locker != address(0)) revert LockerAlreadySet();
+        v3Locker = locker;
+        v3Router = router;
+    }
+
+    /// @dev Back-compat shim — wires the locker only. Prefer setV3Infra.
     function setV3Locker(address locker) external {
         if (msg.sender != deployer) revert NotDeployer();
         if (v3Locker != address(0)) revert LockerAlreadySet();
@@ -213,7 +230,7 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
                 bps: uint16(FEE_DENOMINATOR - V3_CREATOR_BPS),
                 tokenPref: IArcadeV3Locker.RewardToken.Both
             });
-            _launchClankerV3(s, tokenAddr, rs);
+            _launchClankerV3(s, tokenAddr, rs, V3_FEE, 0);
         }
     }
 
@@ -228,10 +245,15 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         string calldata name_,
         string calldata symbol_,
         string calldata metadataURI,
-        IArcadeV3Locker.Recipient[] calldata recipients
+        IArcadeV3Locker.Recipient[] calldata recipients,
+        uint24 fee,
+        uint256 creatorBuyUsdc
     ) external nonReentrant returns (address tokenAddr) {
         if (bytes(name_).length == 0 || bytes(symbol_).length == 0) revert EmptyName();
         if (address(v3Factory) == address(0) || v3Locker == address(0)) revert V3NotConfigured();
+        // Static fee tier: 1% / 2% / 3%.
+        if (fee != 10_000 && fee != 20_000 && fee != 30_000) revert BadFeeTier();
+        if (creatorBuyUsdc > 0 && v3Router == address(0)) revert NoRouter();
 
         USDC.safeTransferFrom(msg.sender, treasury, CREATION_FEE);
 
@@ -249,7 +271,7 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         emit TokenCreated(tokenAddr, msg.sender, LaunchMode.CLANKER_V3, address(0), 0, name_, symbol_, metadataURI);
 
         IArcadeV3Locker.Recipient[] memory rs = recipients; // calldata -> memory
-        _launchClankerV3(s, tokenAddr, rs);
+        _launchClankerV3(s, tokenAddr, rs, fee, creatorBuyUsdc);
     }
 
     /**
@@ -645,7 +667,9 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
     function _launchClankerV3(
         TokenState storage s,
         address tokenAddr,
-        IArcadeV3Locker.Recipient[] memory recipients
+        IArcadeV3Locker.Recipient[] memory recipients,
+        uint24 fee,
+        uint256 creatorBuyUsdc
     ) internal {
         uint256 supply = TOTAL_SUPPLY; // 100% single-sided, like Clanker
 
@@ -655,9 +679,9 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
             ? (address(USDC), tokenAddr, CLANKER_V3_START_FDV, supply)
             : (tokenAddr, address(USDC), supply, CLANKER_V3_START_FDV);
 
-        address pool = v3Factory.getPool(token0, token1, V3_FEE);
+        address pool = v3Factory.getPool(token0, token1, fee);
         if (pool == address(0)) {
-            pool = v3Factory.createPool(token0, token1, V3_FEE);
+            pool = v3Factory.createPool(token0, token1, fee);
         }
         uint160 sqrtPriceX96 = ArcadeV3PriceMath.encodeSqrtPriceX96(amount1, amount0);
         IArcadeV3Pool(pool).initialize(sqrtPriceX96);
@@ -679,6 +703,16 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         s.migratedAt = uint64(block.timestamp);
         s.v2Pair = pool; // reuse the field to store the (V3) pool address
         emit Migrated(tokenAddr, pool, 0, supply);
+
+        // Optional creator buy: the creator spends USDC to buy their token at
+        // launch (they're the first buyer; price starts at the range bottom).
+        if (creatorBuyUsdc > 0) {
+            USDC.safeTransferFrom(s.creator, address(this), creatorBuyUsdc);
+            USDC.forceApprove(v3Router, creatorBuyUsdc);
+            IArcadeV3Router(v3Router).exactInputSingle(
+                address(USDC), tokenAddr, fee, s.creator, creatorBuyUsdc, 0, block.timestamp + 600
+            );
+        }
     }
 
     // ====================== Views ======================

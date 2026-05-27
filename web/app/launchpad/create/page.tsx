@@ -4,7 +4,7 @@ import { ArrowLeft, X } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
-import { decodeEventLog, erc20Abi, isAddress, zeroAddress, type Address } from "viem";
+import { decodeEventLog, erc20Abi, isAddress, parseUnits, zeroAddress, type Address } from "viem";
 import { useAccount, usePublicClient, useReadContract, useWriteContract } from "wagmi";
 import { LAUNCHPAD_ABI } from "@/lib/abis/launchpad";
 import { ADDRESSES, CREATION_FEE_USDC, LaunchMode } from "@/lib/constants";
@@ -67,6 +67,8 @@ function CreateTokenInner() {
   const [recipients, setRecipients] = useState<RecipientRow[]>([
     { recipient: "", admin: "", pct: 100, pref: 0 },
   ]);
+  const [feeTier, setFeeTier] = useState<10_000 | 20_000 | 30_000>(10_000); // 1% / 2% / 3%
+  const [creatorBuyStr, setCreatorBuyStr] = useState(""); // USDC to spend buying at launch
   const isV3 = mode === LaunchMode.CLANKER_V3;
 
   // Prefill the first recipient with the connected wallet.
@@ -126,7 +128,16 @@ function CreateTokenInner() {
     if (!account || !valid) return;
     setTx({ status: "pending", message: "Approving USDC creation fee…" });
     try {
-      await ensureAllowance(CREATION_FEE_USDC);
+      // Creator buy (V3 only): the launchpad pulls this USDC on top of the fee.
+      let creatorBuyUsdc = 0n;
+      if (isV3 && creatorBuyStr.trim()) {
+        try {
+          creatorBuyUsdc = parseUnits(creatorBuyStr.trim(), 6);
+        } catch {
+          creatorBuyUsdc = 0n;
+        }
+      }
+      await ensureAllowance(CREATION_FEE_USDC + creatorBuyUsdc);
 
       setTx({ status: "pending", message: "Building metadata…" });
       const metadataURI = encodeMetadataDataUri({
@@ -151,7 +162,7 @@ function CreateTokenInner() {
           address: ADDRESSES.launchpad,
           abi: LAUNCHPAD_ABI,
           functionName: "createClankerV3",
-          args: [name.trim(), symbol.trim(), metadataURI, rs],
+          args: [name.trim(), symbol.trim(), metadataURI, rs, feeTier, creatorBuyUsdc],
         });
       } else {
         // PUMP / Arcade (CLANKER): bonding curve. Arcade allows an optional
@@ -340,6 +351,49 @@ function CreateTokenInner() {
                 one Both/USDC and one Both/Token).
               </div>
             )}
+          </div>
+        )}
+
+        {isV3 && (
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            {/* Fee tier */}
+            <div>
+              <div className="mb-1.5 text-sm font-medium text-arc-text">Fee tier</div>
+              <div className="flex gap-2">
+                {([10_000, 20_000, 30_000] as const).map((f) => (
+                  <button
+                    key={f}
+                    type="button"
+                    onClick={() => setFeeTier(f)}
+                    className={cn(
+                      "flex-1 rounded-xl border py-2 text-sm font-semibold transition-all",
+                      feeTier === f
+                        ? "border-arc-cta-hover bg-arc-cta-hover/15 text-arc-text"
+                        : "border-arc-border bg-arc-bg-elevated text-arc-text-muted hover:bg-arc-surface",
+                    )}
+                  >
+                    {f / 10_000}%
+                  </button>
+                ))}
+              </div>
+              <div className="mt-1 text-xs text-arc-text-faint">Swap fee that accrues to your recipients.</div>
+            </div>
+
+            {/* Creator buy */}
+            <div>
+              <div className="mb-1.5 text-sm font-medium text-arc-text">Creator buy (optional)</div>
+              <div className="flex items-center gap-2 rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2">
+                <input
+                  value={creatorBuyStr}
+                  onChange={(e) => setCreatorBuyStr(e.target.value.replace(/[^0-9.]/g, ""))}
+                  placeholder="0"
+                  inputMode="decimal"
+                  className="arc-input flex-1 bg-transparent text-sm tabular-nums"
+                />
+                <span className="text-xs text-arc-text-muted">USDC</span>
+              </div>
+              <div className="mt-1 text-xs text-arc-text-faint">Buy your own token at launch (first buyer).</div>
+            </div>
           </div>
         )}
 

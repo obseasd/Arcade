@@ -46,9 +46,12 @@ contract DeployTestnet is Script {
         );
 
         address v3Locker = _deployV3Locker(address(launchpad), v3Factory);
-        launchpad.setV3Locker(v3Locker);
         address v3Router = _deployV3Aux("out-v3/ArcadeV3SwapRouter.sol/ArcadeV3SwapRouter.json", v3Factory, usdc);
         address v3Quoter = _deployV3Aux("out-v3/ArcadeV3Quoter.sol/ArcadeV3Quoter.json", v3Factory, usdc);
+        launchpad.setV3Infra(v3Locker, v3Router);
+        // Enable the 2% and 3% fee tiers (1% is on by default in the V3 factory).
+        IArcadeV3Factory(v3Factory).enableFeeAmount(20_000, 200);
+        IArcadeV3Factory(v3Factory).enableFeeAmount(30_000, 200);
 
         // Activate `feeTo` so 1/6 of all V2 LP fees route to the treasury
         // (= 0.05% of swap volume) instead of all going to LPs.

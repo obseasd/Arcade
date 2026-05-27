@@ -9,7 +9,7 @@ import { useAccount, useReadContract, useWriteContract, usePublicClient } from "
 import { ROUTER_ABI } from "@/lib/abis/dex";
 import { LAUNCHPAD_ABI } from "@/lib/abis/launchpad";
 import { V3_QUOTER_ABI, V3_ROUTER_ABI } from "@/lib/abis/v3";
-import { ADDRESSES, USDC_DECIMALS, V3_FEE } from "@/lib/constants";
+import { ADDRESSES, USDC_DECIMALS } from "@/lib/constants";
 import { useApproveIfNeeded } from "@/lib/hooks/useApproveIfNeeded";
 import { useV2Tokens } from "@/lib/hooks/useV2Tokens";
 import { useV3Tokens } from "@/lib/hooks/useV3Tokens";
@@ -46,7 +46,7 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
   const { address: account } = useAccount();
   const publicClient = usePublicClient();
   const { tokens: v2Tokens } = useV2Tokens();
-  const { tokens: v3Tokens, isV3Token } = useV3Tokens();
+  const { tokens: v3Tokens, isV3Token, feeOf } = useV3Tokens();
   const { writeContractAsync } = useWriteContract();
 
   const allTokens: TokenOption[] = useMemo(() => {
@@ -117,6 +117,9 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
     if ((route.useLaunchpadRouter || isV3Swap) && lastEdited === "out") setLastEdited("in");
   }, [route.useLaunchpadRouter, isV3Swap, lastEdited]);
 
+  // Fee tier of the V3 leg (the non-USDC side's pool). Both-V3 uses tokenIn's.
+  const v3Fee = inIsV3 ? feeOf(tokenIn.address) : feeOf(tokenOut?.address);
+
   // V3 quote (exact-in). Single-hop or 2-hop-through-USDC depending on the pair.
   const quoteV3 = useReadContract({
     address: ADDRESSES.v3Quoter,
@@ -124,7 +127,7 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
     functionName: v3DoubleHop ? "quoteExactInputThroughUsdc" : "quoteExactInputSingle",
     args:
       isV3Swap && !v3Unsupported && tokenOut && amountInRaw > 0n
-        ? [tokenIn.address, tokenOut.address, V3_FEE, amountInRaw]
+        ? [tokenIn.address, tokenOut.address, v3Fee, amountInRaw]
         : undefined,
     query: { enabled: isV3Swap && !v3Unsupported && !!tokenOut && amountInRaw > 0n },
   });
@@ -307,7 +310,7 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
           address: ADDRESSES.v3Router,
           abi: V3_ROUTER_ABI,
           functionName: v3DoubleHop ? "exactInputThroughUsdc" : "exactInputSingle",
-          args: [tokenIn.address, tokenOut.address, V3_FEE, account, finalAmountIn, minOut, deadline],
+          args: [tokenIn.address, tokenOut.address, v3Fee, account, finalAmountIn, minOut, deadline],
         });
       } else if (route.useLaunchpadRouter) {
         // Multi-hop through the launchpad's router so post-migration royalties

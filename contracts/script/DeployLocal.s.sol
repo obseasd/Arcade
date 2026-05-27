@@ -51,12 +51,15 @@ contract DeployLocal is Script {
             IERC20(address(usdc)), factory, router, IArcadeLaunchpad(address(launchpad))
         );
 
-        // Locker needs the launchpad address; wire it back via the one-time setter.
+        // V3 locker + swap router + quoter so CLANKER_V3 tokens are tradeable.
         address v3Locker = _deployV3Locker(address(launchpad), v3Factory);
-        launchpad.setV3Locker(v3Locker);
-        // V3 swap router + quoter so CLANKER_V3 tokens are tradeable.
         address v3Router = _deployV3Aux("out-v3/ArcadeV3SwapRouter.sol/ArcadeV3SwapRouter.json", v3Factory, address(usdc));
         address v3Quoter = _deployV3Aux("out-v3/ArcadeV3Quoter.sol/ArcadeV3Quoter.json", v3Factory, address(usdc));
+        // Wire locker + router into the launchpad (one-time).
+        launchpad.setV3Infra(v3Locker, v3Router);
+        // Enable the 2% and 3% fee tiers (1% is enabled by the V3 factory by default).
+        IArcadeV3Factory(v3Factory).enableFeeAmount(20_000, 200);
+        IArcadeV3Factory(v3Factory).enableFeeAmount(30_000, 200);
 
         // Activate Uniswap V2 `feeTo` — routes 1/6 of all LP fees to the treasury
         // (= 0.05% of swap volume). Treasury is the deployer here for the local demo;
