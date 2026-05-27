@@ -79,18 +79,18 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
     /// @notice Starting fully-diluted valuation for a CLANKER_V3 single-sided
     /// launch, in USDC (6dp). The whole supply is placed single-sided at this
     /// FDV; price rises as the token is bought. Tunable.
-    uint256 public constant CLANKER_V3_START_FDV = 5_000e6; // 5,000 USDC (legacy default)
-
     // --- Pool types (Clanker-style presets) ---
-    uint8 public constant POOL_STANDARD = 0; // USDC, 35k start, 3 positions
-    uint8 public constant POOL_LEGACY = 1; // USDC, custom 1..1M start, 1 position
-    uint8 public constant POOL_DEEP = 2; // USDC, 50k start, 3 positions
-    uint8 public constant POOL_WETH = 3; // WETH, 10 ETH start, 3 positions
-    uint256 public constant STANDARD_MCAP = 35_000e6; // 35,000 USDC
-    uint256 public constant DEEP_MCAP = 50_000e6; // 50,000 USDC
-    uint256 public constant WETH_MCAP = 10e18; // 10 WETH
-    uint256 public constant LEGACY_MIN_MCAP = 1e6; // 1 USDC
-    uint256 public constant LEGACY_MAX_MCAP = 1_000_000e6; // 1,000,000 USDC
+    // Kept `internal` (no public getters) to stay under the EIP-170 size limit;
+    // the frontend uses literal pool-type ids, not these getters.
+    uint8 internal constant POOL_STANDARD = 0; // USDC, 35k start, 3 positions
+    uint8 internal constant POOL_LEGACY = 1; // USDC, custom 1..1M start, 1 position
+    uint8 internal constant POOL_DEEP = 2; // USDC, 50k start, 3 positions
+    uint8 internal constant POOL_WETH = 3; // WETH, 10 ETH start, 3 positions
+    uint256 internal constant STANDARD_MCAP = 35_000e6; // 35,000 USDC
+    uint256 internal constant DEEP_MCAP = 50_000e6; // 50,000 USDC
+    uint256 internal constant WETH_MCAP = 10e18; // 10 WETH
+    uint256 internal constant LEGACY_MIN_MCAP = 1e6; // 1 USDC
+    uint256 internal constant LEGACY_MAX_MCAP = 1_000_000e6; // 1,000,000 USDC
     /// @notice Max share of supply that can be vaulted (locked/vesting) for the
     /// creator; the rest must go to the LP. 90%.
     uint16 public constant MAX_VAULT_BPS = 9_000;
@@ -737,7 +737,7 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
     }
 
     /// @dev Clanker-style immediate launch (no bonding curve): deploy a Uniswap
-    /// V3 pool initialized at CLANKER_V3_START_FDV, then lock the ENTIRE supply
+    /// V3 pool initialized at the pool type's start mcap, then lock the LP supply
     /// single-sided in ArcadeV3Locker. The token is tradeable immediately; price
     /// rises as it's bought and USDC accumulates in the locked position. The
     /// creator earns 80% of perpetual LP fees (platform 20%); principal is
