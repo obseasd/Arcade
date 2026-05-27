@@ -315,8 +315,8 @@ export function MultiSwapCard({ tab, onTabChange }: MultiSwapCardProps) {
             <Plus className="h-4 w-4" />
           </button>
         )}
-        <span className="rounded-xl border border-arc-border bg-arc-surface-2/40 p-1.5 backdrop-blur-md">
-          <ArrowDown className="h-3.5 w-3.5 text-arc-text-muted" />
+        <span className="rounded-xl border border-arc-border bg-arc-surface-2/40 p-2 backdrop-blur-md">
+          <ArrowDown className="h-4 w-4 text-white" />
         </span>
       </div>
 

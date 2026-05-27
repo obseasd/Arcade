@@ -77,13 +77,15 @@ export default function PositionsPage() {
       {tab === "burned" && <BurnedPositions />}
       {tab === "creator" && <CreatorFeesPanel />}
 
-      {/* New-position modal — same backdrop + translucent panel as the swap token picker */}
+      {/* New-position modal — panel matches the swap/bridge cards exactly
+          (.arc-card = bg-black/15 backdrop-blur-xl) so the token rectangles
+          read identically. */}
       <Modal
         open={newOpen}
         onClose={() => setNewOpen(false)}
         widthClassName="max-w-md"
-        backdropClassName="bg-black/30 backdrop-blur-sm"
-        className="border-arc-border bg-black/45 backdrop-blur-2xl"
+        backdropClassName="bg-black/40 backdrop-blur-sm"
+        className="border-arc-border bg-black/15 backdrop-blur-xl shadow-arc-card"
       >
         <div className="flex items-center justify-between border-b border-arc-border px-5 py-4">
           <h3 className="text-base font-semibold">New position</h3>
