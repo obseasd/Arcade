@@ -185,6 +185,32 @@ export const LAUNCHPAD_ABI = [
     ],
     outputs: [{ name: "usdcOut", type: "uint256" }],
   },
+  {
+    type: "function",
+    name: "swapMigratedRoute",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "tokenIn", type: "address" },
+      { name: "tokenOut", type: "address" },
+      { name: "tokensIn", type: "uint256" },
+      { name: "minTokensOut", type: "uint256" },
+    ],
+    outputs: [{ name: "tokensOut", type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "quoteSwapMigratedRoute",
+    stateMutability: "view",
+    inputs: [
+      { name: "tokenIn", type: "address" },
+      { name: "tokenOut", type: "address" },
+      { name: "tokensIn", type: "uint256" },
+    ],
+    outputs: [
+      { name: "tokensOut", type: "uint256" },
+      { name: "totalRoyaltyUsdc", type: "uint256" },
+    ],
+  },
   { type: "function", name: "MIGRATED_ROYALTY_BPS", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] },
   {
     type: "function",

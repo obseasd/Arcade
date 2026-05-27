@@ -278,6 +278,91 @@ contract ArcadeLaunchpadTest is Test {
         assertEq(comments[0].text, "first!");
     }
 
+    /// @notice Helper to create a token with a custom creator (sender). Used
+    /// when a test needs multiple tokens from different creators so we can
+    /// attribute royalty payouts to the right address.
+    function _createTokenAs(
+        address asCreator,
+        IArcadeLaunchpad.LaunchMode mode,
+        string memory name_,
+        string memory sym_
+    ) internal returns (address) {
+        usdc.mint(asCreator, launchpad.CREATION_FEE());
+        vm.startPrank(asCreator);
+        usdc.approve(address(launchpad), type(uint256).max);
+        address tokenAddr = launchpad.createToken(name_, sym_, "ipfs://x", mode, address(0), 0);
+        vm.stopPrank();
+        return tokenAddr;
+    }
+
+    function _migrateByBuyingOut(address token) internal {
+        vm.startPrank(alice);
+        usdc.approve(address(launchpad), type(uint256).max);
+        launchpad.buy(token, 100_000 * 10 ** 6, 0);
+        vm.stopPrank();
+    }
+
+    function test_swapMigratedRoute_chargesRoyaltyOnBothLegs() public {
+        address creatorA = address(0xA0A0);
+        address creatorB = address(0xB0B0);
+        address tokenA = _createTokenAs(creatorA, IArcadeLaunchpad.LaunchMode.PUMP, "Alpha", "A");
+        address tokenB = _createTokenAs(creatorB, IArcadeLaunchpad.LaunchMode.PUMP, "Bravo", "B");
+
+        _migrateByBuyingOut(tokenA);
+        _migrateByBuyingOut(tokenB);
+
+        // Bob now has some tokenA from an unrelated buy
+        vm.startPrank(bob);
+        usdc.approve(address(launchpad), type(uint256).max);
+        uint256 tokensA = launchpad.buyMigrated(tokenA, 200 * 10 ** 6, 0);
+        vm.stopPrank();
+
+        // Snapshot AFTER the prior buyMigrated has paid its own royalty
+        uint256 t0 = usdc.balanceOf(treasury);
+        uint256 ca0 = usdc.balanceOf(creatorA);
+        uint256 cb0 = usdc.balanceOf(creatorB);
+
+        // Quote what we're about to do
+        (uint256 quotedOut, uint256 quotedRoyalty) =
+            launchpad.quoteSwapMigratedRoute(tokenA, tokenB, tokensA);
+        assertGt(quotedRoyalty, 0, "quote shows a royalty");
+        assertGt(quotedOut, 0, "quote shows an output");
+
+        // Execute the multi-hop swap through the launchpad
+        vm.startPrank(bob);
+        IERC20(tokenA).approve(address(launchpad), type(uint256).max);
+        uint256 receivedB = launchpad.swapMigratedRoute(tokenA, tokenB, tokensA, 0);
+        vm.stopPrank();
+
+        assertEq(receivedB, quotedOut, "actual matches quote");
+
+        // Both creators must have been paid a non-zero royalty on their leg
+        assertGt(usdc.balanceOf(creatorA), ca0, "creatorA got leg-1 royalty");
+        assertGt(usdc.balanceOf(creatorB), cb0, "creatorB got leg-2 royalty");
+        // Treasury got 2/3 of the total royalty across both legs
+        assertGt(usdc.balanceOf(treasury), t0, "treasury got platform royalty");
+        uint256 totalCreatorPaid = (usdc.balanceOf(creatorA) - ca0) + (usdc.balanceOf(creatorB) - cb0);
+        uint256 totalPlatformPaid = usdc.balanceOf(treasury) - t0;
+        // Platform = 0.20% / 0.30% of total royalty = 2/3
+        // Creator  = 0.10% / 0.30% = 1/3
+        // So total platform should equal ~2x total creator
+        // Each leg rounds independently (royalty floor → 2/3 platform / 1/3 creator floor),
+        // so we allow up to 2 wei of rounding drift on the platform vs 2*creator invariant.
+        assertApproxEqAbs(totalPlatformPaid, 2 * totalCreatorPaid, 2, "platform = 2x creator");
+        assertEq(totalPlatformPaid + totalCreatorPaid, quotedRoyalty, "royalty conserved");
+    }
+
+    function test_swapMigratedRoute_revertsOnUsdcLeg() public {
+        address tokenA = _createTokenAs(address(0xA0A0), IArcadeLaunchpad.LaunchMode.PUMP, "A", "A");
+        _migrateByBuyingOut(tokenA);
+
+        // USDC as either side is invalid — caller should use buyMigrated/sellMigrated.
+        vm.expectRevert(ArcadeLaunchpad.UnknownToken.selector);
+        launchpad.swapMigratedRoute(address(usdc), tokenA, 1, 0);
+        vm.expectRevert(ArcadeLaunchpad.UnknownToken.selector);
+        launchpad.swapMigratedRoute(tokenA, address(usdc), 1, 0);
+    }
+
     function test_marketCap_increasesWithBuys() public {
         address token = _createToken();
         uint256 mcap0 = launchpad.marketCap(token);

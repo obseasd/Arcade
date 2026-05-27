@@ -9,7 +9,12 @@ export const ADDRESSES = {
   factory: safeAddress(process.env.NEXT_PUBLIC_V2_FACTORY_ADDRESS),
   router: safeAddress(process.env.NEXT_PUBLIC_V2_ROUTER_ADDRESS),
   launchpad: safeAddress(process.env.NEXT_PUBLIC_LAUNCHPAD_ADDRESS),
+  multiSwap: safeAddress(process.env.NEXT_PUBLIC_MULTISWAP_ADDRESS),
 } as const;
+
+/** Hard cap on inputs to the multi-token swap UI. The on-chain contract
+ * caps at MAX_INPUTS=8; the UI uses a lower cap (5) for ergonomic reasons. */
+export const MULTISWAP_MAX_INPUTS = 5;
 
 export const USDC_DECIMALS = 6;
 export const LAUNCHPAD_TOKEN_DECIMALS = 18;

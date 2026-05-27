@@ -58,8 +58,15 @@ export default function LaunchpadIndexPage() {
             Launch and trade tokens on Arc&apos;s bonding-curve launchpad. USDC-quoted.
           </p>
         </div>
-        <Link href="/launchpad/create" className="arc-button-primary px-4 py-2">
-          <Plus className="h-4 w-4" /> Launch a token
+        <Link
+          href="/launchpad/create"
+          className="arc-button-primary relative overflow-hidden bg-cover bg-center bg-no-repeat px-5 py-2.5 shadow-[0_10px_30px_-12px_rgba(52,90,120,0.55)] ring-1 ring-arc-cta-hover/40"
+          style={{ backgroundImage: "url('/create%20token.png')" }}
+        >
+          <span className="pointer-events-none absolute inset-0 bg-gradient-to-r from-black/55 via-black/30 to-black/55" aria-hidden />
+          <span className="relative flex items-center gap-2 font-semibold drop-shadow-[0_1px_2px_rgba(0,0,0,0.85)]">
+            <Plus className="h-4 w-4" /> Launch a token
+          </span>
         </Link>
       </div>
 

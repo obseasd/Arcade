@@ -43,4 +43,22 @@ interface IArcadeLaunchpad {
     );
     event Migrated(address indexed token, address indexed pair, uint256 usdcSeeded, uint256 tokensSeeded);
     event CommentPosted(address indexed token, address indexed author, uint256 index, string text);
+
+    /// @notice Returns true iff `tokenAddr` is a known launchpad token whose curve has migrated.
+    function isMigrated(address tokenAddr) external view returns (bool);
+
+    /// @notice Royalty-aware multi-hop swap A -> USDC -> B with launchpad royalty on each migrated leg.
+    function swapMigratedRoute(
+        address tokenIn,
+        address tokenOut,
+        uint256 tokensIn,
+        uint256 minTokensOut
+    ) external returns (uint256 tokensOut);
+
+    /// @notice View quote for `swapMigratedRoute`, returning the expected
+    /// output and total royalty (USDC) skimmed across both legs.
+    function quoteSwapMigratedRoute(address tokenIn, address tokenOut, uint256 tokensIn)
+        external
+        view
+        returns (uint256 tokensOut, uint256 totalRoyaltyUsdc);
 }

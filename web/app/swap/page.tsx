@@ -1,13 +1,9 @@
-import { SwapCard } from "@/components/swap/SwapCard";
+import { SwapContainer } from "@/components/swap/SwapContainer";
 
 export const metadata = {
   title: "Swap — Arcade",
 };
 
 export default function SwapPage() {
-  return (
-    <div className="mx-auto max-w-[490px] px-4 py-20 sm:px-6">
-      <SwapCard />
-    </div>
-  );
+  return <SwapContainer />;
 }

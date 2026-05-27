@@ -5,6 +5,8 @@ import {Script, console2} from "forge-std/Script.sol";
 import {ArcadeV2Factory} from "../src/dex/ArcadeV2Factory.sol";
 import {ArcadeV2Router} from "../src/dex/ArcadeV2Router.sol";
 import {ArcadeLaunchpad} from "../src/launchpad/ArcadeLaunchpad.sol";
+import {IArcadeLaunchpad} from "../src/launchpad/interfaces/IArcadeLaunchpad.sol";
+import {ArcadeMultiSwap} from "../src/swap/ArcadeMultiSwap.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 /**
@@ -31,6 +33,9 @@ contract DeployTestnet is Script {
         ArcadeV2Factory factory = new ArcadeV2Factory(deployer);
         ArcadeV2Router router = new ArcadeV2Router(address(factory));
         ArcadeLaunchpad launchpad = new ArcadeLaunchpad(IERC20(usdc), factory, address(router), treasury);
+        ArcadeMultiSwap multiSwap = new ArcadeMultiSwap(
+            IERC20(usdc), factory, router, IArcadeLaunchpad(address(launchpad))
+        );
 
         // Activate `feeTo` so 1/6 of all V2 LP fees route to the treasury
         // (= 0.05% of swap volume) instead of all going to LPs.
@@ -42,6 +47,7 @@ contract DeployTestnet is Script {
         console2.log("V2 Factory:  ", address(factory));
         console2.log("V2 Router:   ", address(router));
         console2.log("Launchpad:   ", address(launchpad));
+        console2.log("MultiSwap:   ", address(multiSwap));
 
         vm.stopBroadcast();
     }

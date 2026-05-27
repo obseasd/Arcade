@@ -7,6 +7,7 @@ import { useEffect, useMemo, useState } from "react";
 import { erc20Abi, formatUnits, parseUnits } from "viem";
 import { useAccount, useReadContract, useWriteContract, usePublicClient } from "wagmi";
 import { ROUTER_ABI } from "@/lib/abis/dex";
+import { LAUNCHPAD_ABI } from "@/lib/abis/launchpad";
 import { ADDRESSES, USDC_DECIMALS } from "@/lib/constants";
 import { useApproveIfNeeded } from "@/lib/hooks/useApproveIfNeeded";
 import { useV2Tokens } from "@/lib/hooks/useV2Tokens";
@@ -17,6 +18,7 @@ import { TokenIcon } from "@/components/ui/TokenIcon";
 import { TokenSelectModal, TokenOption } from "@/components/ui/TokenSelectModal";
 import { TxStatus, type TxState } from "@/components/ui/TxStatus";
 import { SwapConfirmModal } from "./SwapConfirmModal";
+import { SwapTabs, type SwapTab } from "./SwapTabs";
 import { cn, formatToken, formatUSDC } from "@/lib/utils";
 
 const USDC_TOKEN: TokenOption = {
@@ -32,7 +34,13 @@ const DEFAULT_BPS = 10;
 
 type Side = "in" | "out";
 
-export function SwapCard() {
+interface SwapCardProps {
+  /** Active tab — used by the in-card tab strip in the header. */
+  tab: SwapTab;
+  onTabChange: (t: SwapTab) => void;
+}
+
+export function SwapCard({ tab, onTabChange }: SwapCardProps) {
   const { address: account } = useAccount();
   const publicClient = usePublicClient();
   const { tokens: v2Tokens } = useV2Tokens();
@@ -78,26 +86,62 @@ export function SwapCard() {
   const route = useSwapRoute(tokenIn.address, tokenOut?.address);
   const path = route.path;
 
+  // Exact-out via the launchpad router isn't implemented (would need to
+  // invert the royalty client-side on each leg). When at least one side is
+  // a migrated launchpad token and the route is multi-hop, force exact-in.
+  useEffect(() => {
+    if (route.useLaunchpadRouter && lastEdited === "out") setLastEdited("in");
+  }, [route.useLaunchpadRouter, lastEdited]);
+
+  // V2 router quotes — used for direct routes and as the input estimator for
+  // multi-hop routes that DON'T touch a migrated launchpad token.
   const quoteOut = useReadContract({
     address: ADDRESSES.router,
     abi: ROUTER_ABI,
     functionName: "getAmountsOut",
     args: amountInRaw > 0n && path.length >= 2 ? [amountInRaw, path] : undefined,
-    query: { enabled: lastEdited === "in" && amountInRaw > 0n && path.length >= 2 },
+    query: {
+      enabled:
+        !route.useLaunchpadRouter && lastEdited === "in" && amountInRaw > 0n && path.length >= 2,
+    },
   });
   const quoteIn = useReadContract({
     address: ADDRESSES.router,
     abi: ROUTER_ABI,
     functionName: "getAmountsIn",
     args: amountOutRawTyped > 0n && path.length >= 2 ? [amountOutRawTyped, path] : undefined,
-    query: { enabled: lastEdited === "out" && amountOutRawTyped > 0n && path.length >= 2 },
+    query: {
+      enabled:
+        !route.useLaunchpadRouter && lastEdited === "out" && amountOutRawTyped > 0n && path.length >= 2,
+    },
+  });
+
+  // Launchpad-router quote — accounts for the post-migration royalty on each
+  // leg whose token is a migrated launchpad token. Only used in multi-hop
+  // mode when at least one side is migrated.
+  const quoteMigratedOut = useReadContract({
+    address: ADDRESSES.launchpad,
+    abi: LAUNCHPAD_ABI,
+    functionName: "quoteSwapMigratedRoute",
+    args:
+      route.useLaunchpadRouter && tokenOut && amountInRaw > 0n
+        ? [tokenIn.address, tokenOut.address, amountInRaw]
+        : undefined,
+    query: {
+      enabled: route.useLaunchpadRouter && !!tokenOut && amountInRaw > 0n,
+    },
   });
 
   // `getAmountsOut/In` return all intermediate amounts; we want first/last.
   const amountsOut = quoteOut.data as bigint[] | undefined;
   const amountsIn = quoteIn.data as bigint[] | undefined;
-  const computedAmountOut = amountsOut?.[amountsOut.length - 1];
+  const migratedQuote = quoteMigratedOut.data as readonly [bigint, bigint] | undefined;
+  const computedAmountOut = route.useLaunchpadRouter
+    ? migratedQuote?.[0]
+    : amountsOut?.[amountsOut.length - 1];
   const computedAmountIn = amountsIn?.[0];
+  /** USDC amount taken as royalty across both legs (0 when not via launchpad). */
+  const totalRoyaltyUsdc: bigint = migratedQuote?.[1] ?? 0n;
 
   useEffect(() => {
     if (lastEdited === "in") {
@@ -151,7 +195,10 @@ export function SwapCard() {
       ? ((outUsd.usd - inUsd.usd) / inUsd.usd) * 100
       : undefined;
 
-  const { ensureAllowance } = useApproveIfNeeded(tokenIn.address, ADDRESSES.router);
+  // When the route requires the launchpad's own router (for royalty-aware
+  // multi-hop), approve the launchpad as the spender instead of the V2 router.
+  const swapSpender = route.useLaunchpadRouter ? ADDRESSES.launchpad : ADDRESSES.router;
+  const { ensureAllowance } = useApproveIfNeeded(tokenIn.address, swapSpender);
 
   // Slippage helpers
   const onSlippagePreset = (bps: number) => {
@@ -181,7 +228,7 @@ export function SwapCard() {
     ? `${formatTokenAmount(minOut, decimalsOut, 6)} ${symOut}`
     : `${formatTokenAmount(maxIn, decimalsIn, 6)} ${symIn}`;
 
-  const fetching = quoteOut.isFetching || quoteIn.isFetching;
+  const fetching = quoteOut.isFetching || quoteIn.isFetching || quoteMigratedOut.isFetching;
   const canSwap =
     !!account && !!tokenOut && finalAmountIn > 0n && finalAmountOut > 0n && !fetching && tx.status !== "pending";
 
@@ -201,19 +248,32 @@ export function SwapCard() {
       await ensureAllowance(exactIn ? finalAmountIn : maxIn);
       setTx({ status: "pending", message: "Submitting swap…" });
       const deadline = BigInt(Math.floor(Date.now() / 1000) + 600);
-      const hash = exactIn
-        ? await writeContractAsync({
-            address: ADDRESSES.router,
-            abi: ROUTER_ABI,
-            functionName: "swapExactTokensForTokens",
-            args: [finalAmountIn, minOut, path, account, deadline],
-          })
-        : await writeContractAsync({
-            address: ADDRESSES.router,
-            abi: ROUTER_ABI,
-            functionName: "swapTokensForExactTokens",
-            args: [finalAmountOut, maxIn, path, account, deadline],
-          });
+      let hash: `0x${string}`;
+      if (route.useLaunchpadRouter) {
+        // Multi-hop through the launchpad's router so post-migration royalties
+        // are charged on each leg whose token is a migrated launchpad token.
+        // Only exact-in is supported; the effect above forces lastEdited="in".
+        hash = await writeContractAsync({
+          address: ADDRESSES.launchpad,
+          abi: LAUNCHPAD_ABI,
+          functionName: "swapMigratedRoute",
+          args: [tokenIn.address, tokenOut.address, finalAmountIn, minOut],
+        });
+      } else if (exactIn) {
+        hash = await writeContractAsync({
+          address: ADDRESSES.router,
+          abi: ROUTER_ABI,
+          functionName: "swapExactTokensForTokens",
+          args: [finalAmountIn, minOut, path, account, deadline],
+        });
+      } else {
+        hash = await writeContractAsync({
+          address: ADDRESSES.router,
+          abi: ROUTER_ABI,
+          functionName: "swapTokensForExactTokens",
+          args: [finalAmountOut, maxIn, path, account, deadline],
+        });
+      }
       if (publicClient) await publicClient.waitForTransactionReceipt({ hash });
 
       // Close the modal immediately and push a toast notification instead
@@ -240,7 +300,7 @@ export function SwapCard() {
   return (
     <div className="arc-card relative p-5">
       <div className="mb-4 flex items-center justify-between">
-        <h2 className="text-lg font-semibold">Swap</h2>
+        <SwapTabs tab={tab} onTabChange={onTabChange} />
         <SlippagePopover
           open={showSettings}
           onToggle={() => setShowSettings((s) => !s)}
@@ -319,6 +379,14 @@ export function SwapCard() {
             {route.viaUsdc && (
               <span className="ml-1 rounded-full border border-arc-cta-hover/40 bg-arc-cta-hover/10 px-1.5 py-0.5 text-[10px] font-medium text-arc-cta-hover">
                 {symIn} → USDC → {symOut}
+              </span>
+            )}
+            {route.useLaunchpadRouter && totalRoyaltyUsdc > 0n && (
+              <span
+                className="ml-1 rounded-full border border-arc-warn/30 bg-arc-warn/10 px-1.5 py-0.5 text-[10px] font-medium tabular-nums text-arc-warn"
+                title="Post-migration creator royalty charged on each launchpad-migrated leg"
+              >
+                +{formatUSDC(totalRoyaltyUsdc, USDC_DECIMALS, 2)} USDC royalty
               </span>
             )}
           </div>

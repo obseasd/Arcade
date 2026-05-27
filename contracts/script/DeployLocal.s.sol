@@ -7,6 +7,7 @@ import {ArcadeV2Factory} from "../src/dex/ArcadeV2Factory.sol";
 import {ArcadeV2Router} from "../src/dex/ArcadeV2Router.sol";
 import {ArcadeLaunchpad} from "../src/launchpad/ArcadeLaunchpad.sol";
 import {IArcadeLaunchpad} from "../src/launchpad/interfaces/IArcadeLaunchpad.sol";
+import {ArcadeMultiSwap} from "../src/swap/ArcadeMultiSwap.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 /**
@@ -38,6 +39,9 @@ contract DeployLocal is Script {
         ArcadeV2Factory factory = new ArcadeV2Factory(deployer);
         ArcadeV2Router router = new ArcadeV2Router(address(factory));
         ArcadeLaunchpad launchpad = new ArcadeLaunchpad(IERC20(address(usdc)), factory, address(router), deployer);
+        ArcadeMultiSwap multiSwap = new ArcadeMultiSwap(
+            IERC20(address(usdc)), factory, router, IArcadeLaunchpad(address(launchpad))
+        );
 
         // Activate Uniswap V2 `feeTo` — routes 1/6 of all LP fees to the treasury
         // (= 0.05% of swap volume). Treasury is the deployer here for the local demo;
@@ -81,6 +85,7 @@ contract DeployLocal is Script {
         console2.log("V2 Factory:  ", address(factory));
         console2.log("V2 Router:   ", address(router));
         console2.log("Launchpad:   ", address(launchpad));
+        console2.log("MultiSwap:   ", address(multiSwap));
         console2.log("APEPE:       ", pepe);
         console2.log("ADOGE:       ", dog);
         console2.log("ROCKET:      ", rocket);
@@ -103,6 +108,9 @@ contract DeployLocal is Script {
             '",',
             '"launchpad":"',
             vm.toString(address(launchpad)),
+            '",',
+            '"multiSwap":"',
+            vm.toString(address(multiSwap)),
             '",',
             '"sampleTokens":[',
             '"',

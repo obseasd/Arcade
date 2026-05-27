@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowDownUp, ChevronDown, Loader2, CheckCircle2 } from "lucide-react";
+import { ArrowDownUp, ChevronDown, Loader2, CheckCircle2, Pencil } from "lucide-react";
 import Image from "next/image";
 import { useEffect, useMemo, useState } from "react";
 import { erc20Abi, formatUnits, parseUnits } from "viem";
@@ -22,10 +22,17 @@ import {
   fetchAttestation,
   getCctpChain,
 } from "@/lib/cctp";
+import { Address } from "viem";
 import { ChainIcon } from "@/components/ui/ChainIcon";
 import { ChainSelectModal } from "@/components/ui/ChainSelectModal";
 import { TokenIcon } from "@/components/ui/TokenIcon";
+import { RecipientEditModal } from "./RecipientEditModal";
 import { cn, formatAddress, formatUSDC } from "@/lib/utils";
+import {
+  clearPendingBridge,
+  loadPendingBridge,
+  savePendingBridge,
+} from "@/lib/pendingBridge";
 import { pushToast } from "@/lib/toast";
 
 const ARC_CHAIN_ID = 5_042_002;
@@ -78,6 +85,34 @@ export function BridgeCard() {
   const [step, setStep] = useState<Step>({ kind: "idle" });
   const [picker, setPicker] = useState<"from" | "to" | null>(null);
   const [fastTransfer, setFastTransfer] = useState(false);
+  const [recipientOverride, setRecipientOverride] = useState<Address | null>(null);
+  const [recipientModalOpen, setRecipientModalOpen] = useState(false);
+  // True iff the active step machine was rehydrated from a previous session.
+  // We use this to show a recovery banner instead of the normal new-burn UI.
+  const [resumedFromStorage, setResumedFromStorage] = useState(false);
+
+  // If the user refreshed mid-bridge, restore the burn so they can still
+  // claim. We only restore once per mount, and the in-memory step takes
+  // priority if they're already in the middle of a fresh bridge.
+  useEffect(() => {
+    if (step.kind !== "idle") return;
+    const saved = loadPendingBridge();
+    if (!saved) return;
+    setSrcChainId(saved.srcChainId);
+    setDstChainId(saved.dstId);
+    setAmountStr(formatUnits(BigInt(saved.amountRaw6), 6));
+    setStep({
+      kind: "attesting",
+      burnTxHash: saved.burnTxHash,
+      srcDomain: saved.srcDomain,
+      dstId: saved.dstId,
+    });
+    setResumedFromStorage(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Effective recipient = override if set, otherwise the connected wallet.
+  const recipient: Address | undefined = recipientOverride ?? account;
 
   const srcChain = useMemo(() => getCctpChain(srcChainId)!, [srcChainId]);
   const dstChain = useMemo(() => getCctpChain(dstChainId)!, [dstChainId]);
@@ -180,7 +215,8 @@ export function BridgeCard() {
         await srcClient.waitForTransactionReceipt({ hash: approveHash });
       }
       setStep({ kind: "burning" });
-      const mintRecipient32 = addressToBytes32(account);
+      // Use the override recipient if set, otherwise the connected wallet.
+      const mintRecipient32 = addressToBytes32(recipientOverride ?? account);
       const destinationCaller = ("0x" + "00".repeat(32)) as `0x${string}`;
       // Fast Transfer: short finality + non-zero maxFee (1 bp upper bound; Iris
       // typically charges much less). Standard Transfer: full finality, no fee.
@@ -202,6 +238,17 @@ export function BridgeCard() {
         chainId: srcChain.id,
       });
       await srcClient.waitForTransactionReceipt({ hash: burnHash });
+      // Persist now — funds are committed on the source chain. If the page
+      // refreshes before mint, the user can resume claim from this entry.
+      savePendingBridge({
+        burnTxHash: burnHash,
+        srcDomain: srcChain.cctpDomain,
+        srcChainId: srcChain.id,
+        dstId: dstChain.id,
+        amountRaw6: amountRaw.toString(),
+        recipient: (recipientOverride ?? account) as string,
+        createdAt: Date.now(),
+      });
       setStep({
         kind: "attesting",
         burnTxHash: burnHash,
@@ -263,6 +310,8 @@ export function BridgeCard() {
       });
       await dstClient.waitForTransactionReceipt({ hash });
       const dstChainCfg = getCctpChain(step.dstId)!;
+      // Funds delivered — drop the persisted claim entry.
+      clearPendingBridge();
       setStep({ kind: "done", mintTxHash: hash, dstId: step.dstId });
       pushToast({
         kind: "swap",
@@ -278,6 +327,14 @@ export function BridgeCard() {
   const reset = () => {
     setStep({ kind: "idle" });
     setAmountStr("");
+  };
+
+  /** Manually drop a persisted pending claim — used when the user wants to
+   * stop watching an old burn (e.g. they already claimed from another tab,
+   * or the burn is stale). Does NOT touch on-chain state. */
+  const discardPendingClaim = () => {
+    clearPendingBridge();
+    setStep({ kind: "idle" });
   };
 
   const canBridge =
@@ -327,6 +384,30 @@ export function BridgeCard() {
         </div>
       </div>
 
+      {/* Recovery banner — surfaces a previous-session burn that hasn't been
+          claimed yet. The actual progress tracker / Mint button rendering is
+          handled by the normal step machine below; this banner just explains
+          to the user what they're seeing and offers an escape hatch. */}
+      {resumedFromStorage &&
+        (step.kind === "attesting" || step.kind === "minting") && (
+          <div className="mb-3 flex items-start gap-2 rounded-xl border border-arc-cta-hover/40 bg-arc-cta-hover/10 p-3 text-xs">
+            <div className="flex-1 text-arc-text">
+              <div className="font-medium">Resumed bridge claim</div>
+              <div className="mt-0.5 text-arc-text-muted">
+                A previous burn on {srcChain.name} hasn&apos;t been claimed yet — we&apos;ll
+                keep polling Circle and prompt you to mint as soon as it&apos;s ready.
+              </div>
+            </div>
+            <button
+              onClick={discardPendingClaim}
+              className="rounded-md px-2 py-1 text-[11px] font-medium text-arc-text-faint hover:bg-arc-surface-2/60 hover:text-arc-text-muted"
+              title="Stop watching this burn (does not affect funds — anyone can still mint it on the destination chain)"
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
+
       {/* FROM */}
       <ChainBox
         label="From"
@@ -365,7 +446,9 @@ export function BridgeCard() {
         disabled={isProcessing}
         balanceRaw={dstBalRaw}
         readOnlyAmount
-        recipientLabel={account ? formatAddress(account) : undefined}
+        recipientLabel={recipient ? formatAddress(recipient) : undefined}
+        onRecipientClick={!isProcessing ? () => setRecipientModalOpen(true) : undefined}
+        recipientIsOverride={!!recipientOverride}
       />
 
       {/* Same-chain warning */}
@@ -480,6 +563,15 @@ export function BridgeCard() {
         </div>
       )}
 
+      {/* Recipient edit modal */}
+      <RecipientEditModal
+        open={recipientModalOpen}
+        onClose={() => setRecipientModalOpen(false)}
+        current={recipient}
+        ownAccount={account}
+        onSave={setRecipientOverride}
+      />
+
       {/* Pickers */}
       <ChainSelectModal
         open={picker === "from"}
@@ -534,6 +626,8 @@ interface ChainBoxProps {
   onMax?: () => void;
   readOnlyAmount?: boolean;
   recipientLabel?: string;
+  onRecipientClick?: () => void;
+  recipientIsOverride?: boolean;
 }
 
 function ChainBox({
@@ -549,6 +643,8 @@ function ChainBox({
   onMax,
   readOnlyAmount,
   recipientLabel,
+  onRecipientClick,
+  recipientIsOverride,
 }: ChainBoxProps) {
   if (!chain) return null;
   const balLabel = formatUSDC(balanceRaw, 6, 2);
@@ -597,7 +693,28 @@ function ChainBox({
       <div className="mt-2 flex items-center justify-between text-xs">
         <div className="flex items-center gap-2 text-arc-text-muted">
           <span>{usdLabel}</span>
-          {recipientLabel && <span className="text-arc-text-faint">to {recipientLabel}</span>}
+          {recipientLabel &&
+            (onRecipientClick ? (
+              <button
+                onClick={onRecipientClick}
+                className={cn(
+                  "group inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 transition-colors",
+                  recipientIsOverride
+                    ? "bg-arc-cta/15 text-arc-cta-hover hover:bg-arc-cta/25"
+                    : "text-arc-text-faint hover:bg-arc-surface-2/60 hover:text-arc-text-muted",
+                )}
+                title={
+                  recipientIsOverride
+                    ? "Custom recipient — click to edit"
+                    : "Click to send to a different address"
+                }
+              >
+                <span>to {recipientLabel}</span>
+                <Pencil className="h-3 w-3 opacity-60 group-hover:opacity-100" />
+              </button>
+            ) : (
+              <span className="text-arc-text-faint">to {recipientLabel}</span>
+            ))}
         </div>
         <div className="flex items-center gap-1.5 text-arc-text-faint">
           <span>

@@ -384,6 +384,128 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         USDC.safeTransfer(msg.sender, usdcOut);
     }
 
+    // ====================== Multi-hop with royalty on both legs ======================
+
+    /**
+     * @notice Swap `tokensIn` of `tokenIn` for `tokenOut` via the USDC pivot,
+     * charging the post-migration royalty on each leg whose token is a
+     * migrated launchpad token. This is the path the frontend should use
+     * whenever at least one of {tokenIn, tokenOut} is a migrated launchpad
+     * token and the other is not USDC.
+     *
+     * Flow:
+     *   1. Pull `tokensIn` of `tokenIn` and swap it to USDC on V2.
+     *   2. If `tokenIn` is a migrated launchpad token, skim 0.30% of the
+     *      USDC output as royalty (split per `_distributeMigratedFee`).
+     *   3. If `tokenOut` is a migrated launchpad token, skim 0.30% of the
+     *      remaining USDC as royalty before the second leg.
+     *   4. Swap the remaining USDC to `tokenOut` on V2, delivering the
+     *      output directly to `msg.sender`.
+     *
+     * If neither side is a migrated launchpad token this function still
+     * works but charges nothing; the user should call the V2 router
+     * directly in that case to save gas.
+     */
+    function swapMigratedRoute(
+        address tokenIn,
+        address tokenOut,
+        uint256 tokensIn,
+        uint256 minTokensOut
+    ) external nonReentrant returns (uint256 tokensOut) {
+        if (v2Router == address(0)) revert NoRouter();
+        if (tokensIn == 0) revert ZeroAmount();
+        if (
+            tokenIn == tokenOut
+                || tokenIn == address(USDC)
+                || tokenOut == address(USDC)
+        ) revert UnknownToken();
+
+        TokenState storage sIn = tokens[tokenIn];
+        TokenState storage sOut = tokens[tokenOut];
+        bool inMigrated = sIn.token != address(0) && sIn.migrated;
+        bool outMigrated = sOut.token != address(0) && sOut.migrated;
+
+        // --- Leg 1: tokenIn -> USDC ---
+        IERC20(tokenIn).safeTransferFrom(msg.sender, address(this), tokensIn);
+        IERC20(tokenIn).forceApprove(v2Router, tokensIn);
+
+        address[] memory path1 = new address[](2);
+        path1[0] = tokenIn;
+        path1[1] = address(USDC);
+        uint256[] memory leg1 = IArcadeV2Router(v2Router).swapExactTokensForTokens(
+            tokensIn, 0, path1, address(this), block.timestamp + 600
+        );
+        uint256 usdcMid = leg1[1];
+
+        // Royalty on the USDC produced by selling tokenIn
+        if (inMigrated) {
+            uint256 royaltyA = (usdcMid * MIGRATED_ROYALTY_BPS) / FEE_DENOMINATOR;
+            if (royaltyA > 0) {
+                _distributeMigratedFee(sIn, royaltyA);
+                usdcMid -= royaltyA;
+            }
+        }
+
+        // Royalty on the USDC about to be spent buying tokenOut
+        if (outMigrated) {
+            uint256 royaltyB = (usdcMid * MIGRATED_ROYALTY_BPS) / FEE_DENOMINATOR;
+            if (royaltyB > 0) {
+                _distributeMigratedFee(sOut, royaltyB);
+                usdcMid -= royaltyB;
+            }
+        }
+
+        // --- Leg 2: USDC -> tokenOut, delivered to the user ---
+        USDC.forceApprove(v2Router, usdcMid);
+        address[] memory path2 = new address[](2);
+        path2[0] = address(USDC);
+        path2[1] = tokenOut;
+        uint256[] memory leg2 = IArcadeV2Router(v2Router).swapExactTokensForTokens(
+            usdcMid, minTokensOut, path2, msg.sender, block.timestamp + 600
+        );
+        tokensOut = leg2[1];
+        if (tokensOut < minTokensOut) revert Slippage();
+    }
+
+    /**
+     * @notice View quote for `swapMigratedRoute`. Mirrors the on-chain flow
+     * (incl. royalty skim) so the frontend can display an accurate output.
+     * Returns `(tokensOut, totalRoyaltyUsdc)`.
+     */
+    function quoteSwapMigratedRoute(address tokenIn, address tokenOut, uint256 tokensIn)
+        external
+        view
+        returns (uint256 tokensOut, uint256 totalRoyaltyUsdc)
+    {
+        if (v2Router == address(0) || tokensIn == 0) return (0, 0);
+        if (
+            tokenIn == tokenOut
+                || tokenIn == address(USDC)
+                || tokenOut == address(USDC)
+        ) return (0, 0);
+
+        bool inMigrated = tokens[tokenIn].token != address(0) && tokens[tokenIn].migrated;
+        bool outMigrated = tokens[tokenOut].token != address(0) && tokens[tokenOut].migrated;
+
+        address[] memory path1 = new address[](2);
+        path1[0] = tokenIn;
+        path1[1] = address(USDC);
+        uint256[] memory leg1 = IArcadeV2Router(v2Router).getAmountsOut(tokensIn, path1);
+        uint256 usdcMid = leg1[1];
+
+        uint256 royaltyA = inMigrated ? (usdcMid * MIGRATED_ROYALTY_BPS) / FEE_DENOMINATOR : 0;
+        usdcMid -= royaltyA;
+        uint256 royaltyB = outMigrated ? (usdcMid * MIGRATED_ROYALTY_BPS) / FEE_DENOMINATOR : 0;
+        usdcMid -= royaltyB;
+        totalRoyaltyUsdc = royaltyA + royaltyB;
+
+        address[] memory path2 = new address[](2);
+        path2[0] = address(USDC);
+        path2[1] = tokenOut;
+        uint256[] memory leg2 = IArcadeV2Router(v2Router).getAmountsOut(usdcMid, path2);
+        tokensOut = leg2[1];
+    }
+
     // ====================== Migration ======================
 
     function _migrate(address tokenAddr) internal {
@@ -431,6 +553,14 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
 
     function getTokenState(address tokenAddr) external view returns (TokenState memory) {
         return tokens[tokenAddr];
+    }
+
+    /// @notice Returns true iff `tokenAddr` is a launchpad token whose curve
+    /// has migrated to V2. Cheap one-line check for other routers (e.g.
+    /// ArcadeMultiSwap) deciding whether to apply the post-migration royalty.
+    function isMigrated(address tokenAddr) external view returns (bool) {
+        TokenState storage s = tokens[tokenAddr];
+        return s.token != address(0) && s.migrated;
     }
 
     /// @notice Returns the implied market cap of `tokenAddr` in USDC raw units (6 dp).
