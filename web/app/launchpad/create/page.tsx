@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, X, Image as ImageIcon, Upload, ChevronDown } from "lucide-react";
+import { ArrowLeft, X, Image as ImageIcon, Upload, ChevronDown, Pencil } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
@@ -11,7 +11,8 @@ import { ADDRESSES, CREATION_FEE_USDC, LaunchMode } from "@/lib/constants";
 import { encodeMetadataDataUri } from "@/lib/metadata";
 import { useApproveIfNeeded } from "@/lib/hooks/useApproveIfNeeded";
 import { TxStatus, type TxState } from "@/components/ui/TxStatus";
-import { cn, formatUSDC } from "@/lib/utils";
+import { RecipientEditModal } from "@/components/bridge/RecipientEditModal";
+import { cn, formatAddress, formatUSDC } from "@/lib/utils";
 
 /** Display label for a launch mode (contract modes are unchanged). */
 function modeLabel(mode: LaunchMode): string {
@@ -93,7 +94,9 @@ function CreateTokenInner() {
   const [vaultPct, setVaultPct] = useState(0); // 0–90% of supply
   const [vaultLockupDays, setVaultLockupDays] = useState(30);
   const [vaultVestingDays, setVaultVestingDays] = useState(0);
-  const [vaultRecipientStr, setVaultRecipientStr] = useState("");
+  // Vault recipient: defaults to the connected wallet; pencil opens an override.
+  const [vaultRecipientOverride, setVaultRecipientOverride] = useState<Address | null>(null);
+  const [vaultRecipientModalOpen, setVaultRecipientModalOpen] = useState(false);
   // Optional anti-sniper tax (soft, router-enforced): a starting % of each buy
   // skimmed to the treasury, decaying linearly to 0 over the window (seconds).
   const [snipeStartPct, setSnipeStartPct] = useState(0); // 0-50%
@@ -102,13 +105,17 @@ function CreateTokenInner() {
 
   const snipeValid = !isV3 || snipeStartPct === 0 || (snipeStartPct <= 50 && snipeDecaySeconds >= 1);
 
-  const vaultValid =
-    !isV3 ||
-    vaultPct === 0 ||
-    (vaultPct <= 90 &&
-      vaultLockupDays >= 7 &&
-      (vaultRecipientStr.trim() === "" || isAddress(vaultRecipientStr.trim())));
+  // Effective vault recipient (override, else the connected wallet).
+  const vaultRecipient = vaultRecipientOverride ?? account;
+  const vaultValid = !isV3 || vaultPct === 0 || (vaultPct <= 90 && vaultLockupDays >= 7);
 
+  // Background illustration matching the chosen launch mode.
+  const modeBg =
+    mode === LaunchMode.PUMP
+      ? "/pumpfuntoken.png"
+      : mode === LaunchMode.CLANKER
+        ? "/arctoken.png"
+        : "/clankertoken.png";
   const isWethPool = poolType === 3;
   const legacyMcapNum = Number(legacyMcapStr);
   const poolValid =
@@ -307,7 +314,7 @@ function CreateTokenInner() {
               vaultPct: Math.round(vaultPct * 100),
               vaultLockupDuration: BigInt((vaultLockupDays || 0) * 86_400),
               vaultVestingDuration: BigInt((vaultVestingDays || 0) * 86_400),
-              vaultRecipient: (vaultRecipientStr.trim() || account) as Address,
+              vaultRecipient: (vaultRecipientOverride ?? account) as Address,
               snipeStartBps: Math.round(snipeStartPct * 100),
               snipeDecaySeconds: snipeDecaySeconds || 0,
               poolType,
@@ -390,58 +397,54 @@ function CreateTokenInner() {
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
         <div className="arc-card space-y-5 p-6">
-        {/* Chosen launch mode (picked in the modal) */}
-        <div className="flex items-center justify-between rounded-xl border border-arc-border bg-arc-bg-elevated px-4 py-3">
-          <div>
-            <div className="text-xs text-arc-text-muted">Launch mode</div>
-            <div className="text-sm font-semibold text-arc-text">{modeLabel(mode)}</div>
+        {/* Chosen launch mode — background = the mode's illustration */}
+        <div
+          className="relative flex items-center justify-between overflow-hidden rounded-xl border border-arc-border bg-cover bg-center px-4 py-3"
+          style={{ backgroundImage: `url('${modeBg}')` }}
+        >
+          <span className="pointer-events-none absolute inset-0 bg-black/55" aria-hidden />
+          <div className="relative">
+            <div className="text-xs text-white/70">Launch mode</div>
+            <div className="text-sm font-semibold text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]">
+              {modeLabel(mode)}
+            </div>
           </div>
-          <Link href="/launchpad" className="text-xs text-arc-cta-hover hover:underline">
+          <Link href="/launchpad" className="relative text-xs font-medium text-white hover:underline">
             Change
           </Link>
         </div>
 
-        <Field label="Name">
-          <input
-            value={name}
-            onChange={(e) => setName(e.target.value.slice(0, 32))}
-            placeholder="e.g. Moon Rocket"
-            className="arc-input rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2"
-          />
-        </Field>
-        <Field label="Symbol">
-          <input
-            value={symbol}
-            onChange={(e) => setSymbol(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 12))}
-            placeholder="ROCKET"
-            className="arc-input rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2 tabular-nums"
-          />
-        </Field>
-        <div className="space-y-1.5">
-          <span className="text-sm font-medium text-arc-text">Image</span>
-          <div className="flex items-center gap-3">
-            <label className="flex h-16 w-16 shrink-0 cursor-pointer flex-col items-center justify-center gap-0.5 overflow-hidden rounded-xl border border-dashed border-arc-border bg-arc-bg-elevated transition-colors hover:border-arc-cta-hover">
-              {image.trim() ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={image.trim()} alt="" className="h-full w-full object-cover" />
-              ) : (
-                <>
-                  <Upload className="h-4 w-4 text-arc-text-faint" />
-                  <span className="text-[9px] leading-none text-arc-text-faint">PNG / JPEG</span>
-                </>
-              )}
-              <input
-                type="file"
-                accept="image/png,image/jpeg,image/webp"
-                className="hidden"
-                onChange={(e) => onImageFile(e.target.files?.[0])}
-              />
-            </label>
+        {/* Image (top-left) + Name / Symbol */}
+        <div className="flex gap-3">
+          <label className="flex h-[76px] w-[76px] shrink-0 cursor-pointer flex-col items-center justify-center gap-1 overflow-hidden rounded-xl border border-dashed border-arc-border bg-arc-bg-elevated transition-colors hover:border-arc-cta-hover">
+            {image.trim() ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={image.trim()} alt="" className="h-full w-full object-cover" />
+            ) : (
+              <>
+                <Upload className="h-5 w-5 text-arc-text-faint" />
+                <span className="text-[9px] leading-none text-arc-text-faint">PNG / JPEG</span>
+              </>
+            )}
             <input
-              value={image.startsWith("data:") ? "" : image}
-              onChange={(e) => setImage(e.target.value)}
-              placeholder="…or paste an image URL"
-              className="arc-input flex-1 rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2"
+              type="file"
+              accept="image/png,image/jpeg,image/webp"
+              className="hidden"
+              onChange={(e) => onImageFile(e.target.files?.[0])}
+            />
+          </label>
+          <div className="flex flex-1 flex-col gap-3">
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value.slice(0, 32))}
+              placeholder="Token name"
+              className="arc-input rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2"
+            />
+            <input
+              value={symbol}
+              onChange={(e) => setSymbol(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 12))}
+              placeholder="$SYMBOL"
+              className="arc-input rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2 tabular-nums"
             />
           </div>
         </div>
@@ -496,11 +499,6 @@ function CreateTokenInner() {
         {isV3 && (
           <div className="space-y-3 rounded-xl border border-arc-border bg-arc-bg-elevated p-4">
             <span className="text-sm font-medium text-arc-text">Fee recipients</span>
-            <p className="text-xs text-arc-text-faint">
-              The platform keeps <b>20%</b>; your recipients split the remaining <b>80%</b>
-              (auto-balanced to 100%). <b>Admin</b> lets a recipient rotate its own payout. Token:
-              <b>Both</b> = USDC + token, or USDC-only / token-only.
-            </p>
             {recipients.map((r, i) => (
               <div key={i} className="space-y-2 rounded-lg border border-arc-border bg-white/[0.03] p-3">
                 <div className="flex items-center gap-2">
@@ -577,12 +575,11 @@ function CreateTokenInner() {
                   </button>
                 ))}
               </div>
-              <div className="mt-1 text-xs text-arc-text-faint">Swap fee that accrues to your recipients.</div>
             </div>
 
             {/* Creator buy (USDC pools only) */}
             <div>
-              <div className="mb-1.5 text-sm font-medium text-arc-text">Creator buy (optional)</div>
+              <div className="mb-1.5 text-sm font-medium text-arc-text">Creator buy</div>
               <div
                 className={cn(
                   "flex items-center gap-2 rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2",
@@ -599,9 +596,6 @@ function CreateTokenInner() {
                 />
                 {!isWethPool && <span className="text-xs text-arc-text-muted">USDC</span>}
               </div>
-              {!isWethPool && (
-                <div className="mt-1 text-xs text-arc-text-faint">Buy your own token at launch (first buyer).</div>
-              )}
             </div>
           </div>
         )}
@@ -611,14 +605,11 @@ function CreateTokenInner() {
             <summary className="flex cursor-pointer select-none items-center gap-2 px-4 py-3 text-sm text-arc-text-muted hover:text-arc-text">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src="/safe.png" alt="" className="h-4 w-4 shrink-0" />
-              <span>Team vault - lock &amp; vest a share of supply (optional)</span>
+              <span>Team vault</span>
               <ChevronDown className="arc-disclosure ml-auto h-4 w-4 shrink-0 text-arc-text-faint" />
             </summary>
             <div className="space-y-3 px-4 pb-4">
-              <RangeField
-                label={`Vaulted supply: ${vaultPct}%`}
-                hint="Locked then vested to a recipient. Max 90% (rest goes to the LP)."
-              >
+              <RangeField label={`Vaulted supply: ${vaultPct}%`}>
                 <input
                   type="range"
                   min={0}
@@ -633,7 +624,7 @@ function CreateTokenInner() {
               {vaultPct > 0 && (
                 <>
                   <div className="grid grid-cols-2 gap-3">
-                    <Field label="Lockup (days)" hint="Min 7.">
+                    <Field label="Lockup" hint="Days, min 7.">
                       <input
                         type="number"
                         min={7}
@@ -642,7 +633,7 @@ function CreateTokenInner() {
                         className="arc-input rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2 tabular-nums"
                       />
                     </Field>
-                    <Field label="Vesting (days)" hint="Linear after lockup. 0 = cliff.">
+                    <Field label="Vesting" hint="Days.">
                       <input
                         type="number"
                         min={0}
@@ -652,18 +643,24 @@ function CreateTokenInner() {
                       />
                     </Field>
                   </div>
-                  <Field label="Vault recipient" hint="Defaults to your wallet.">
-                    <input
-                      value={vaultRecipientStr}
-                      onChange={(e) => setVaultRecipientStr(e.target.value)}
-                      placeholder="0x… (defaults to you)"
-                      className="arc-input rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2 tabular-nums"
-                    />
-                  </Field>
+                  <div className="space-y-1.5">
+                    <span className="text-sm font-medium text-arc-text">Vault recipient</span>
+                    <button
+                      type="button"
+                      onClick={() => setVaultRecipientModalOpen(true)}
+                      className="flex w-full items-center justify-between rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2 text-left transition-colors hover:border-arc-cta-hover"
+                    >
+                      <span className="text-sm tabular-nums text-arc-text">
+                        {vaultRecipient ? formatAddress(vaultRecipient) : "Connect wallet"}
+                        {!vaultRecipientOverride && account && (
+                          <span className="ml-2 text-xs text-arc-text-faint">(you)</span>
+                        )}
+                      </span>
+                      <Pencil className="h-3.5 w-3.5 text-arc-text-faint" />
+                    </button>
+                  </div>
                   {!vaultValid && (
-                    <div className="text-xs text-arc-danger">
-                      Lockup must be ≥ 7 days and the recipient (if set) a valid address.
-                    </div>
+                    <div className="text-xs text-arc-danger">Lockup must be ≥ 7 days.</div>
                   )}
                 </>
               )}
@@ -680,11 +677,6 @@ function CreateTokenInner() {
               <ChevronDown className="arc-disclosure ml-auto h-4 w-4 shrink-0 text-arc-text-faint" />
             </summary>
             <div className="space-y-3 px-4 pb-4">
-              <p className="text-xs text-arc-text-faint">
-                Skims a starting % from each buy routed through Arcade and sends it to the treasury,
-                decaying linearly to 0 over the window. Soft protection: a direct pool swap can bypass
-                it, but most buyers route through the app.
-              </p>
               <RangeField
                 label={`Starting tax: ${snipeStartPct}%`}
                 hint="Max 50%. 0 disables the tax."
@@ -701,7 +693,7 @@ function CreateTokenInner() {
                 />
               </RangeField>
               {snipeStartPct > 0 && (
-                <Field label="Decay window (seconds)" hint="Tax reaches 0 after this many seconds.">
+                <Field label="Decay window (seconds)">
                   <input
                     inputMode="numeric"
                     value={snipeDecaySeconds}
@@ -910,6 +902,16 @@ function CreateTokenInner() {
           <TxStatus state={tx} />
         </aside>
       </div>
+
+      <RecipientEditModal
+        open={vaultRecipientModalOpen}
+        onClose={() => setVaultRecipientModalOpen(false)}
+        current={vaultRecipient}
+        ownAccount={account}
+        onSave={setVaultRecipientOverride}
+        title="Vault recipient"
+        description="By default the vaulted tokens vest to your connected wallet. You can override the recipient below."
+      />
     </div>
   );
 }

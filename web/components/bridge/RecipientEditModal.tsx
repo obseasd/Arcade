@@ -15,9 +15,21 @@ interface Props {
   ownAccount?: Address;
   /** Called with the new address, or `null` to clear the override (= revert to connected wallet). */
   onSave: (recipient: Address | null) => void;
+  /** Modal heading (defaults to the bridge wording). */
+  title?: string;
+  /** Explanatory line under the heading. */
+  description?: string;
 }
 
-export function RecipientEditModal({ open, onClose, current, ownAccount, onSave }: Props) {
+export function RecipientEditModal({
+  open,
+  onClose,
+  current,
+  ownAccount,
+  onSave,
+  title = "Recipient address",
+  description = "By default, bridged USDC is minted to your connected wallet. You can override the destination address below.",
+}: Props) {
   const [value, setValue] = useState("");
   const [error, setError] = useState<string | null>(null);
 
@@ -59,16 +71,13 @@ export function RecipientEditModal({ open, onClose, current, ownAccount, onSave 
       className="border-arc-border bg-black/45 backdrop-blur-2xl"
     >
       <div className="flex items-center justify-between border-b border-arc-border px-5 py-4">
-        <h3 className="text-base font-semibold">Recipient address</h3>
+        <h3 className="text-base font-semibold">{title}</h3>
         <button onClick={onClose} className="text-arc-text-muted hover:text-arc-text">
           <X className="h-5 w-5" />
         </button>
       </div>
       <div className="space-y-4 p-5">
-        <p className="text-xs text-arc-text-muted">
-          By default, bridged USDC is minted to your connected wallet. You can override the
-          destination address below.
-        </p>
+        <p className="text-xs text-arc-text-muted">{description}</p>
 
         <label className="block">
           <span className="mb-1.5 block text-sm font-medium">Custom recipient</span>
