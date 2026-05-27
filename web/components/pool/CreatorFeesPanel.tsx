@@ -44,7 +44,7 @@ export function CreatorFeesPanel() {
     c.status === "success" ? (c.result as bigint) : 0n,
   );
 
-  // Recipients per position — to check if the connected wallet is one of them
+  // Recipients per position - to check if the connected wallet is one of them
   // (as a payout recipient or an admin).
   const recCalls = useReadContracts({
     contracts: positionIds.map((id) => ({
@@ -131,7 +131,7 @@ export function CreatorFeesPanel() {
           <div className="flex items-center gap-3">
             <TokenIcon symbol={p.symbol} size={36} />
             <div>
-              <div className="text-sm font-semibold">{p.symbol ?? "—"}</div>
+              <div className="text-sm font-semibold">{p.symbol ?? "-"}</div>
               <div className="text-xs text-arc-text-muted">{p.name ?? "Clanker V3 launch"}</div>
             </div>
           </div>

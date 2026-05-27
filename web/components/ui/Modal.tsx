@@ -11,7 +11,7 @@ interface ModalProps {
   closeOnBackdrop?: boolean;
   /** If false, the ESC key will not close the modal. */
   closeOnEscape?: boolean;
-  /** Optional max-width class — defaults to `max-w-lg`. */
+  /** Optional max-width class - defaults to `max-w-lg`. */
   widthClassName?: string;
   /** Override the backdrop classes (overlay behind the modal). */
   backdropClassName?: string;

@@ -10,9 +10,9 @@ const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
 const spaceGrotesk = Space_Grotesk({ subsets: ["latin"], variable: "--font-space-grotesk" });
 
 export const metadata: Metadata = {
-  title: "Arcade — DEX & Launchpad on Arc",
+  title: "Arcade - DEX & Launchpad on Arc",
   description:
-    "Swap stablecoins and launch tokens on Arc — Circle's EVM L1. Bonding-curve launchpad + Uniswap V2-style AMM, USDC-quoted.",
+    "Swap stablecoins and launch tokens on Arc - Circle's EVM L1. Bonding-curve launchpad + Uniswap V2-style AMM, USDC-quoted.",
   icons: {
     icon: "/arcade.png",
     apple: "/arcade.png",

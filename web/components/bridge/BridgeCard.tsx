@@ -48,7 +48,7 @@ const BPS_DENOMINATOR = 10_000n;
 function etaLabel(srcChainId: number, fast: boolean): string {
   if (fast) return "~10-30s";
   switch (srcChainId) {
-    case 11_155_111: // Ethereum Sepolia — 2 epochs ≈ 13-19 min
+    case 11_155_111: // Ethereum Sepolia - 2 epochs ≈ 13-19 min
       return "~15-20 min";
     case 84_532: // Base Sepolia
     case 421_614: // Arbitrum Sepolia
@@ -194,7 +194,7 @@ export function BridgeCard() {
         await switchChainAsync({ chainId: srcChain.id });
       }
       setStep({ kind: "approving" });
-      // Read from the SOURCE chain's RPC explicitly — the wallet might still
+      // Read from the SOURCE chain's RPC explicitly - the wallet might still
       // be reporting a stale chain right after a switchChain.
       const srcClient = getPublicClient(config, { chainId: srcChain.id });
       if (!srcClient) throw new Error("Could not get source chain client");
@@ -238,7 +238,7 @@ export function BridgeCard() {
         chainId: srcChain.id,
       });
       await srcClient.waitForTransactionReceipt({ hash: burnHash });
-      // Persist now — funds are committed on the source chain. If the page
+      // Persist now - funds are committed on the source chain. If the page
       // refreshes before mint, the user can resume claim from this entry.
       savePendingBridge({
         burnTxHash: burnHash,
@@ -310,7 +310,7 @@ export function BridgeCard() {
       });
       await dstClient.waitForTransactionReceipt({ hash });
       const dstChainCfg = getCctpChain(step.dstId)!;
-      // Funds delivered — drop the persisted claim entry.
+      // Funds delivered - drop the persisted claim entry.
       clearPendingBridge();
       setStep({ kind: "done", mintTxHash: hash, dstId: step.dstId });
       pushToast({
@@ -329,7 +329,7 @@ export function BridgeCard() {
     setAmountStr("");
   };
 
-  /** Manually drop a persisted pending claim — used when the user wants to
+  /** Manually drop a persisted pending claim - used when the user wants to
    * stop watching an old burn (e.g. they already claimed from another tab,
    * or the burn is stale). Does NOT touch on-chain state. */
   const discardPendingClaim = () => {
@@ -345,14 +345,14 @@ export function BridgeCard() {
       <div className="mb-3 flex items-center justify-between">
         <h2 className="text-lg font-semibold">Bridge</h2>
         <div className="flex items-center gap-2">
-          {/* Fast Transfer toggle — flash icon turns yellow when active */}
+          {/* Fast Transfer toggle - flash icon turns yellow when active */}
           <button
             onClick={() => setFastTransfer((f) => !f)}
             disabled={isProcessing}
             title={
               fastTransfer
-                ? "Fast Transfer ON — settles in ~10-30s with a tiny Circle fee"
-                : "Standard Transfer — free but waits for full finality (slow on Eth)"
+                ? "Fast Transfer ON - settles in ~10-30s with a tiny Circle fee"
+                : "Standard Transfer - free but waits for full finality (slow on Eth)"
             }
             className={cn(
               "rounded-xl border p-2 transition-all active:scale-95 disabled:opacity-50",
@@ -384,7 +384,7 @@ export function BridgeCard() {
         </div>
       </div>
 
-      {/* Recovery banner — surfaces a previous-session burn that hasn't been
+      {/* Recovery banner - surfaces a previous-session burn that hasn't been
           claimed yet. The actual progress tracker / Mint button rendering is
           handled by the normal step machine below; this banner just explains
           to the user what they're seeing and offers an escape hatch. */}
@@ -394,14 +394,14 @@ export function BridgeCard() {
             <div className="flex-1 text-arc-text">
               <div className="font-medium">Resumed bridge claim</div>
               <div className="mt-0.5 text-arc-text-muted">
-                A previous burn on {srcChain.name} hasn&apos;t been claimed yet — we&apos;ll
+                A previous burn on {srcChain.name} hasn&apos;t been claimed yet - we&apos;ll
                 keep polling Circle and prompt you to mint as soon as it&apos;s ready.
               </div>
             </div>
             <button
               onClick={discardPendingClaim}
               className="rounded-md px-2 py-1 text-[11px] font-medium text-arc-text-faint hover:bg-arc-surface-2/60 hover:text-arc-text-muted"
-              title="Stop watching this burn (does not affect funds — anyone can still mint it on the destination chain)"
+              title="Stop watching this burn (does not affect funds - anyone can still mint it on the destination chain)"
             >
               Dismiss
             </button>
@@ -458,7 +458,7 @@ export function BridgeCard() {
         </div>
       )}
 
-      {/* Route info line — same style as SwapCard. Always visible when the
+      {/* Route info line - same style as SwapCard. Always visible when the
           chain pair is valid, even before the user types an amount.
           Fixed height so the row doesn't grow when the flash badge appears,
           which would otherwise push the CTA button down. */}
@@ -489,7 +489,7 @@ export function BridgeCard() {
         </div>
       )}
 
-      {/* Slow source warning — only when Fast Transfer is OFF */}
+      {/* Slow source warning - only when Fast Transfer is OFF */}
       {!fastTransfer && srcChain.id === ETH_SEPOLIA_ID && !sameChain && amountRaw > 0n && (
         <div className="mt-2 rounded-xl border border-arc-warn/30 bg-arc-warn/10 p-2 text-[11px] text-arc-warn">
           Ethereum Sepolia takes ~15-20 min for finality. Enable Fast Transfer (flash icon) to
@@ -705,7 +705,7 @@ function ChainBox({
                 )}
                 title={
                   recipientIsOverride
-                    ? "Custom recipient — click to edit"
+                    ? "Custom recipient - click to edit"
                     : "Click to send to a different address"
                 }
               >

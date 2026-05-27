@@ -8,7 +8,7 @@ import {
 } from "viem/chains";
 
 /**
- * Arc testnet — Circle's EVM L1. USDC is the native gas token, but it's
+ * Arc testnet - Circle's EVM L1. USDC is the native gas token, but it's
  * exposed to user-space as a normal ERC20 contract.
  */
 export const arcTestnet = defineChain({

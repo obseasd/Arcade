@@ -7,7 +7,7 @@ import { V3_POOL_ABI } from "@/lib/abis/v3";
 import { ADDRESSES } from "@/lib/constants";
 
 /**
- * Lists CLANKER_V3 launch tokens — those that launched directly into a locked
+ * Lists CLANKER_V3 launch tokens - those that launched directly into a locked
  * single-sided Uniswap V3 pool (mode == 2, migrated). These have NO V2 pair,
  * so they don't appear in useV2Tokens; the swap UI merges both lists and
  * routes V3 tokens through the V3 router/quoter.

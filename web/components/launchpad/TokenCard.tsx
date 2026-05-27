@@ -83,7 +83,7 @@ export function TokenCard({ token, curveSupply }: Props) {
 }
 
 function ageString(unixSeconds: number) {
-  if (!unixSeconds) return "—";
+  if (!unixSeconds) return "-";
   const seconds = Math.max(1, Math.floor(Date.now() / 1000) - unixSeconds);
   if (seconds < 60) return `${seconds}s ago`;
   const minutes = Math.floor(seconds / 60);

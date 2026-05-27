@@ -1,4 +1,4 @@
-// ArcadeTokenVault — locked/vesting creator allocation for CLANKER_V3 launches.
+// ArcadeTokenVault - locked/vesting creator allocation for CLANKER_V3 launches.
 export const TOKEN_VAULT_ABI = [
   {
     type: "function",

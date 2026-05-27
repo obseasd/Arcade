@@ -37,7 +37,7 @@ const DEFAULT_BPS = 10;
 type Side = "in" | "out";
 
 interface SwapCardProps {
-  /** Active tab — used by the in-card tab strip in the header. */
+  /** Active tab - used by the in-card tab strip in the header. */
   tab: SwapTab;
   onTabChange: (t: SwapTab) => void;
 }
@@ -109,10 +109,10 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
   // Single V3 hop when exactly one side is USDC; 2-hop via USDC when both are V3.
   const v3DoubleHop = inIsV3 && outIsV3;
   const v3SingleHop = isV3Swap && !v3DoubleHop && (isUsdcIn || isUsdcOut);
-  // V3<->V2 (non-USDC) can't route in one router call — flag as unsupported.
+  // V3<->V2 (non-USDC) can't route in one router call - flag as unsupported.
   const v3Unsupported = isV3Swap && !v3DoubleHop && !v3SingleHop;
 
-  // V3 router is exact-in only — force exact-in when this is a V3 swap.
+  // V3 router is exact-in only - force exact-in when this is a V3 swap.
   useEffect(() => {
     if ((route.useLaunchpadRouter || isV3Swap) && lastEdited === "out") setLastEdited("in");
   }, [route.useLaunchpadRouter, isV3Swap, lastEdited]);
@@ -149,7 +149,7 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
   });
   const v3AmountOut = quoteV3.data as bigint | undefined;
 
-  // V2 router quotes — used for direct routes and as the input estimator for
+  // V2 router quotes - used for direct routes and as the input estimator for
   // multi-hop routes that DON'T touch a migrated launchpad token.
   const quoteOut = useReadContract({
     address: ADDRESSES.router,
@@ -172,7 +172,7 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
     },
   });
 
-  // Launchpad-router quote — accounts for the post-migration royalty on each
+  // Launchpad-router quote - accounts for the post-migration royalty on each
   // leg whose token is a migrated launchpad token. Only used in multi-hop
   // mode when at least one side is migrated.
   const quoteMigratedOut = useReadContract({
@@ -283,7 +283,7 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
           const per1 = (finalAmountOut * 10n ** BigInt(decimalsIn)) / finalAmountIn;
           return `1 ${symIn} = ${formatTokenAmount(per1, decimalsOut, 6)} ${symOut}`;
         })()
-      : "—";
+      : "-";
   const exactIn = lastEdited === "in";
   const guardKey = exactIn ? "Min. received" : "Max. sent";
   const guardLabel = exactIn
@@ -564,7 +564,7 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
       )}
 
       {/* Glow ON the card's bottom border. Bright spot AT the border itself,
-          halo fades upward into the card. (v3 — confirmed working) */}
+          halo fades upward into the card. (v3 - confirmed working) */}
       {canSwap && (
         <>
           <span
@@ -826,7 +826,7 @@ function SlippagePopover({
           </div>
           {slippageBps > 500 && (
             <div className="mt-3 rounded-lg border border-arc-warn/30 bg-arc-warn/10 p-2 text-[11px] text-arc-warn">
-              High slippage — your trade may be front-run.
+              High slippage - your trade may be front-run.
             </div>
           )}
         </div>

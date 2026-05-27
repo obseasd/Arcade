@@ -15,7 +15,7 @@ import { ADDRESSES } from "@/lib/constants";
  *
  * Multi-hop via USDC ALSO checks whether either side is a migrated launchpad
  * token. If so, `useLaunchpadRouter` is set so the caller routes the swap
- * through `Launchpad.swapMigratedRoute` instead of the V2 router — this
+ * through `Launchpad.swapMigratedRoute` instead of the V2 router - this
  * ensures the post-migration creator royalty is charged on each launchpad
  * leg (a plain V2 multi-hop would silently skip the royalty).
  */
@@ -86,7 +86,7 @@ export function useSwapRoute(tokenIn?: Address, tokenOut?: Address): SwapRoute {
         isLoading: false,
       };
     }
-    // Direct route — one side is USDC
+    // Direct route - one side is USDC
     if (isUsdcIn || isUsdcOut) {
       return {
         path: [tokenIn, tokenOut],

@@ -35,6 +35,12 @@ contract ArcadeV3Locker is IUniswapV3MintCallback {
 
     uint256 internal constant BPS = 10_000;
     uint8 public constant MAX_RECIPIENTS = 3;
+    uint8 public constant MAX_RANGES = 3;
+
+    // Tick offsets (from the launch tick) delimiting the 3-position liquidity
+    // bands. ~+4x and ~+25x in price. Snapped to the pool's tick spacing.
+    int24 internal constant BAND_OFF_1 = 13_800; // e^(13800*1e-4) ~ 3.97x
+    int24 internal constant BAND_OFF_2 = 32_200; // e^(32200*1e-4) ~ 25x
 
     enum RewardToken {Both, Paired, Clanker}
 
@@ -50,13 +56,14 @@ contract ArcadeV3Locker is IUniswapV3MintCallback {
         address token0;
         address token1;
         address clankerToken; // the launch token
-        address pairedToken; // the quote token (USDC)
-        int24 tickLower;
-        int24 tickUpper;
+        address pairedToken; // the quote token (USDC or WETH)
+        uint8 numRanges; // 1 (Legacy) or 3 (Project-style)
+        int24[3] tickLowers;
+        int24[3] tickUppers;
         bool exists;
     }
 
-    mapping(uint256 => Position) public positions;
+    mapping(uint256 => Position) internal positions;
     mapping(uint256 => Recipient[]) internal _recipients;
     uint256 public positionCount;
     mapping(address => uint256) public positionIdByToken;
@@ -87,18 +94,20 @@ contract ArcadeV3Locker is IUniswapV3MintCallback {
 
     struct SingleSidedParams {
         address pool;
-        address paired; // USDC
+        address paired; // quote token (USDC or WETH)
         address token; // launch token
         uint160 sqrtPriceX96; // pool's initialized start price
         uint256 tokenAmount; // amount of `token` to lock single-sided
+        uint16[] positionBps; // supply split per range; sums to 10000 (len 1 or 3)
         Recipient[] recipients;
     }
 
     /**
-     * @notice Lock a single-sided full-supply position and register its fee
-     * recipients. The launchpad must have transferred `tokenAmount` of `token`
-     * to this locker first. Only the launch token is supplied; the position
-     * sits above the start price so no quote asset is needed at launch.
+     * @notice Lock a single-sided position (1 or 3 ranges) over the full LP
+     * supply and register its fee recipients. The launchpad must have
+     * transferred `tokenAmount` of `token` to this locker first. Only the launch
+     * token is supplied; every range sits on the far side of the start price so
+     * no quote asset is needed at launch. The principal is locked forever.
      */
     function lockSingleSided(SingleSidedParams calldata p)
         external
@@ -108,25 +117,22 @@ contract ArcadeV3Locker is IUniswapV3MintCallback {
         require(msg.sender == launchpad, "ONLY_LAUNCHPAD");
         require(positionIdByToken[p.token] == 0, "EXISTS");
         _validateRecipients(p.recipients);
-
-        address token0 = IUniswapV3Pool(p.pool).token0();
-        address token1 = IUniswapV3Pool(p.pool).token1();
-        int24 spacing = IUniswapV3Pool(p.pool).tickSpacing();
-        (int24 tickLower, int24 tickUpper) = _singleSidedRange(p.token == token0, p.sqrtPriceX96, spacing);
-
-        liquidity = _mintSingleSided(p, token0, token1, tickLower, tickUpper);
+        uint8 n = _validateBps(p.positionBps);
 
         positionId = ++positionCount;
-        positions[positionId] = Position({
-            pool: p.pool,
-            token0: token0,
-            token1: token1,
-            clankerToken: p.token,
-            pairedToken: p.paired,
-            tickLower: tickLower,
-            tickUpper: tickUpper,
-            exists: true
-        });
+        {
+            Position storage pos = positions[positionId];
+            pos.pool = p.pool;
+            pos.token0 = IUniswapV3Pool(p.pool).token0();
+            pos.token1 = IUniswapV3Pool(p.pool).token1();
+            pos.clankerToken = p.token;
+            pos.pairedToken = p.paired;
+            pos.numRanges = n;
+            pos.exists = true;
+        }
+
+        liquidity = _mintAll(positionId, p, n);
+
         for (uint256 i; i < p.recipients.length; ++i) {
             _recipients[positionId].push(p.recipients[i]);
         }
@@ -134,6 +140,49 @@ contract ArcadeV3Locker is IUniswapV3MintCallback {
 
         _sweep(p.token, launchpad);
         emit PositionLocked(positionId, p.token, p.pool, liquidity);
+    }
+
+    function _validateBps(uint16[] calldata bps) internal pure returns (uint8 n) {
+        n = uint8(bps.length);
+        require(n == 1 || n == 3, "RANGES");
+        uint256 s;
+        for (uint256 i; i < n; ++i) s += bps[i];
+        require(s == BPS, "POS_BPS_SUM");
+    }
+
+    /// @dev Mints every single-sided range and records its ticks. Split out of
+    /// lockSingleSided to keep the 0.7.6 stack within limits.
+    function _mintAll(uint256 positionId, SingleSidedParams calldata p, uint8 n)
+        internal
+        returns (uint128 liquidity)
+    {
+        Position storage pos = positions[positionId];
+        address token0 = pos.token0;
+        address token1 = pos.token1;
+        bool tokenIsToken0 = p.token == token0;
+        (int24[3] memory lowers, int24[3] memory uppers) =
+            _computeRanges(tokenIsToken0, p.sqrtPriceX96, IUniswapV3Pool(p.pool).tickSpacing(), n);
+
+        bytes memory cb = abi.encode(token0, token1);
+        _expectedPool = p.pool;
+        uint256 remaining = p.tokenAmount;
+        for (uint256 i; i < n; ++i) {
+            uint256 amt = i == uint256(n) - 1 ? remaining : (p.tokenAmount * p.positionBps[i]) / BPS;
+            remaining -= amt;
+            uint128 liq = LiquidityAmounts.getLiquidityForAmounts(
+                p.sqrtPriceX96,
+                TickMath.getSqrtRatioAtTick(lowers[i]),
+                TickMath.getSqrtRatioAtTick(uppers[i]),
+                tokenIsToken0 ? amt : 0,
+                tokenIsToken0 ? 0 : amt
+            );
+            require(liq > 0, "ZERO_LIQUIDITY");
+            IUniswapV3Pool(p.pool).mint(address(this), lowers[i], uppers[i], liq, cb);
+            pos.tickLowers[i] = lowers[i];
+            pos.tickUppers[i] = uppers[i];
+            liquidity += liq;
+        }
+        _expectedPool = address(0);
     }
 
     function _validateRecipients(Recipient[] calldata rs) internal pure {
@@ -153,45 +202,50 @@ contract ArcadeV3Locker is IUniswapV3MintCallback {
         require(hasPaired && hasClanker, "NEED_BOTH_SIDES");
     }
 
-    function _mintSingleSided(
-        SingleSidedParams calldata p,
-        address token0,
-        address token1,
-        int24 tickLower,
-        int24 tickUpper
-    ) internal returns (uint128 liquidity) {
-        bool tokenIsToken0 = p.token == token0;
-        uint256 amount0 = tokenIsToken0 ? p.tokenAmount : 0;
-        uint256 amount1 = tokenIsToken0 ? 0 : p.tokenAmount;
-        liquidity = LiquidityAmounts.getLiquidityForAmounts(
-            p.sqrtPriceX96,
-            TickMath.getSqrtRatioAtTick(tickLower),
-            TickMath.getSqrtRatioAtTick(tickUpper),
-            amount0,
-            amount1
-        );
-        require(liquidity > 0, "ZERO_LIQUIDITY");
-        _expectedPool = p.pool;
-        IUniswapV3Pool(p.pool).mint(address(this), tickLower, tickUpper, liquidity, abi.encode(token0, token1));
-        _expectedPool = address(0);
-    }
-
-    function _singleSidedRange(bool tokenIsToken0, uint160 sqrtPriceX96, int24 spacing)
+    /// @dev Computes the 1 or 3 single-sided tick bands sitting on the far side
+    /// of the launch price. With 3 ranges the supply concentrates near the start
+    /// (band 0 = closest), spreading out to ~4x then ~25x and beyond.
+    function _computeRanges(bool tokenIsToken0, uint160 sqrtPriceX96, int24 spacing, uint8 n)
         internal
         pure
-        returns (int24 tickLower, int24 tickUpper)
+        returns (int24[3] memory lowers, int24[3] memory uppers)
     {
         int24 cur = TickMath.getTickAtSqrtRatio(sqrtPriceX96);
         int24 maxUsable = (TickMath.MAX_TICK / spacing) * spacing;
         int24 minUsable = -maxUsable;
+        int24 o1 = (BAND_OFF_1 / spacing) * spacing;
+        int24 o2 = (BAND_OFF_2 / spacing) * spacing;
+
         if (tokenIsToken0) {
-            tickLower = _floorTick(cur, spacing) + spacing;
-            tickUpper = maxUsable;
+            // Token sits ABOVE the start tick (price of token0 rises as bought).
+            int24 base = _floorTick(cur, spacing) + spacing;
+            if (n == 1) {
+                lowers[0] = base;
+                uppers[0] = maxUsable;
+            } else {
+                lowers[0] = base;
+                uppers[0] = base + o1;
+                lowers[1] = base + o1;
+                uppers[1] = base + o2;
+                lowers[2] = base + o2;
+                uppers[2] = maxUsable;
+            }
         } else {
-            tickLower = minUsable;
-            tickUpper = _floorTick(cur, spacing);
+            // Token sits BELOW the start tick.
+            int24 top = _floorTick(cur, spacing);
+            if (n == 1) {
+                lowers[0] = minUsable;
+                uppers[0] = top;
+            } else {
+                lowers[0] = top - o1;
+                uppers[0] = top;
+                lowers[1] = top - o2;
+                uppers[1] = top - o1;
+                lowers[2] = minUsable;
+                uppers[2] = top - o2;
+            }
         }
-        require(tickLower < tickUpper, "RANGE");
+        for (uint256 i; i < n; ++i) require(lowers[i] < uppers[i], "RANGE");
     }
 
     function _floorTick(int24 tick, int24 spacing) internal pure returns (int24) {
@@ -223,13 +277,20 @@ contract ArcadeV3Locker is IUniswapV3MintCallback {
         Position memory p = positions[positionId];
         require(p.exists, "NO_POSITION");
 
-        IUniswapV3Pool(p.pool).burn(p.tickLower, p.tickUpper, 0);
-        (uint128 c0, uint128 c1) = IUniswapV3Pool(p.pool).collect(
-            address(this), p.tickLower, p.tickUpper, type(uint128).max, type(uint128).max
-        );
+        // Poke + collect every range, summing the two token pots.
+        uint256 sum0;
+        uint256 sum1;
+        for (uint256 i; i < p.numRanges; ++i) {
+            IUniswapV3Pool(p.pool).burn(p.tickLowers[i], p.tickUppers[i], 0);
+            (uint128 c0, uint128 c1) = IUniswapV3Pool(p.pool).collect(
+                address(this), p.tickLowers[i], p.tickUppers[i], type(uint128).max, type(uint128).max
+            );
+            sum0 += uint256(c0);
+            sum1 += uint256(c1);
+        }
 
-        pairedAmount = p.pairedToken == p.token0 ? uint256(c0) : uint256(c1);
-        clankerAmount = p.clankerToken == p.token0 ? uint256(c0) : uint256(c1);
+        pairedAmount = p.pairedToken == p.token0 ? sum0 : sum1;
+        clankerAmount = p.clankerToken == p.token0 ? sum0 : sum1;
 
         _distributePot(positionId, p.pairedToken, pairedAmount, true);
         _distributePot(positionId, p.clankerToken, clankerAmount, false);
@@ -306,6 +367,11 @@ contract ArcadeV3Locker is IUniswapV3MintCallback {
 
     function recipientsCount(uint256 positionId) external view returns (uint256) {
         return _recipients[positionId].length;
+    }
+
+    /// @notice Number of single-sided LP ranges held for this lock (1 or 3).
+    function rangeCount(uint256 positionId) external view returns (uint256) {
+        return positions[positionId].numRanges;
     }
 
     function getPosition(uint256 positionId) external view returns (Position memory) {

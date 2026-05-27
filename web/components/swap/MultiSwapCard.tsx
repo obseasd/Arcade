@@ -39,7 +39,7 @@ interface InputRow {
 }
 
 interface MultiSwapCardProps {
-  /** Active tab — used by the in-card tab strip in the header. */
+  /** Active tab - used by the in-card tab strip in the header. */
   tab: SwapTab;
   onTabChange: (t: SwapTab) => void;
 }
@@ -261,7 +261,7 @@ export function MultiSwapCard({ tab, onTabChange }: MultiSwapCardProps) {
         />
       </div>
 
-      {/* Top button — always dashed (it's the "action" CTA). The empty-state
+      {/* Top button - always dashed (it's the "action" CTA). The empty-state
           placeholder rectangle below stays solid so it reads as the primary
           target instead of competing with this button. */}
       <button
@@ -282,7 +282,7 @@ export function MultiSwapCard({ tab, onTabChange }: MultiSwapCardProps) {
             : "Add a token"}
       </button>
 
-      {/* Input rows — when no token is selected yet, show a single empty
+      {/* Input rows - when no token is selected yet, show a single empty
           placeholder row (matches Hyperswap's idle state) which also opens
           the multi-select picker on click. */}
       <div className="space-y-3">
@@ -303,7 +303,7 @@ export function MultiSwapCard({ tab, onTabChange }: MultiSwapCardProps) {
       </div>
 
       {/* Add-more + arrow. The green "+" only appears once at least one
-          token is selected — when empty, we already have the prominent
+          token is selected - when empty, we already have the prominent
           "Select tokens" button at the top. */}
       <div className="relative z-10 my-3 flex flex-col items-center gap-1.5">
         {inputs.length > 0 && inputs.length < MULTISWAP_MAX_INPUTS && (
@@ -455,7 +455,7 @@ function InputBox({
         <div className="flex items-center gap-1.5">
           <span className="flex items-center gap-2 rounded-xl bg-arc-surface-2 px-3 py-1.5 text-sm font-semibold">
             <TokenIcon symbol={row.token.symbol} size={20} />
-            {row.token.symbol ?? "—"}
+            {row.token.symbol ?? "-"}
           </span>
           <button
             onClick={onRemove}
@@ -510,7 +510,7 @@ function PlaceholderInputBox({ onClick }: { onClick: () => void }) {
       </div>
       <div className="mt-2 flex items-center justify-between text-xs text-arc-text-faint">
         <span>$-</span>
-        <span>—</span>
+        <span>-</span>
       </div>
     </div>
   );
@@ -675,7 +675,7 @@ function SlippagePopover({
           </div>
           {slippageBps > 500 && (
             <div className="mt-3 rounded-lg border border-arc-warn/30 bg-arc-warn/10 p-2 text-[11px] text-arc-warn">
-              High slippage — your trade may be front-run.
+              High slippage - your trade may be front-run.
             </div>
           )}
         </div>

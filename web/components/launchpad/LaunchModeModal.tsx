@@ -14,15 +14,15 @@ interface Props {
 interface ModeOption {
   label: string;
   mode: LaunchMode;
-  /** Per-card background image (drop a file at this path to style it). */
+  /** Per-card token illustration (1448×1086, 4:3 - shown as the card cover). */
   bg: string;
 }
 
-// Display names only — the underlying contract modes are unchanged.
+// Display names only - the underlying contract modes are unchanged.
 const MODES: ModeOption[] = [
-  { label: "Pump", mode: LaunchMode.PUMP, bg: "/launch-pump.png" },
-  { label: "Arcade", mode: LaunchMode.CLANKER, bg: "/launch-arcade.png" },
-  { label: "Clanker", mode: LaunchMode.CLANKER_V3, bg: "/launch-clanker.png" },
+  { label: "Pump", mode: LaunchMode.PUMP, bg: "/pumpfuntoken.png" },
+  { label: "Arcade", mode: LaunchMode.CLANKER, bg: "/arctoken.png" },
+  { label: "Clanker", mode: LaunchMode.CLANKER_V3, bg: "/clankertoken.png" },
 ];
 
 /**

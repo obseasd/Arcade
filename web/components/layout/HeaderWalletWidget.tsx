@@ -72,7 +72,7 @@ export function HeaderWalletWidget() {
               </div>
             </div>
 
-            {/* Separator — 2px gray */}
+            {/* Separator - 2px gray */}
             <div className="my-2 w-0.5 rounded-full bg-arc-gray/60" />
 
             {/* Right: wallet */}
@@ -107,7 +107,7 @@ function WalletIcon({ icon, name }: { icon?: string; name: string }) {
 }
 
 /**
- * "0xXXXX...XX" — 4 prefix chars (including 0x → so 0x + 2 hex chars), `...`, 2 last chars.
+ * "0xXXXX...XX" - 4 prefix chars (including 0x → so 0x + 2 hex chars), `...`, 2 last chars.
  */
 function formatShortAddress(addr?: string): string {
   if (!addr || addr.length < 8) return addr ?? "";

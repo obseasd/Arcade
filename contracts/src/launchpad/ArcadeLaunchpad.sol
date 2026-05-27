@@ -79,7 +79,18 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
     /// @notice Starting fully-diluted valuation for a CLANKER_V3 single-sided
     /// launch, in USDC (6dp). The whole supply is placed single-sided at this
     /// FDV; price rises as the token is bought. Tunable.
-    uint256 public constant CLANKER_V3_START_FDV = 5_000e6; // 5,000 USDC
+    uint256 public constant CLANKER_V3_START_FDV = 5_000e6; // 5,000 USDC (legacy default)
+
+    // --- Pool types (Clanker-style presets) ---
+    uint8 public constant POOL_STANDARD = 0; // USDC, 35k start, 3 positions
+    uint8 public constant POOL_LEGACY = 1; // USDC, custom 1..1M start, 1 position
+    uint8 public constant POOL_DEEP = 2; // USDC, 50k start, 3 positions
+    uint8 public constant POOL_WETH = 3; // WETH, 10 ETH start, 3 positions
+    uint256 public constant STANDARD_MCAP = 35_000e6; // 35,000 USDC
+    uint256 public constant DEEP_MCAP = 50_000e6; // 50,000 USDC
+    uint256 public constant WETH_MCAP = 10e18; // 10 WETH
+    uint256 public constant LEGACY_MIN_MCAP = 1e6; // 1 USDC
+    uint256 public constant LEGACY_MAX_MCAP = 1_000_000e6; // 1,000,000 USDC
     /// @notice Max share of supply that can be vaulted (locked/vesting) for the
     /// creator; the rest must go to the LP. 90%.
     uint16 public constant MAX_VAULT_BPS = 9_000;
@@ -97,6 +108,9 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
     /// @notice Uniswap V3 factory (for CLANKER_V3 vault migrations). May be the
     /// zero address on deployments that don't use V3 vaults.
     IArcadeV3Factory public immutable v3Factory;
+    /// @notice WETH on Arc, used as the quote token for POOL_WETH launches.
+    /// May be the zero address on deployments that don't offer WETH pools.
+    address public immutable weth;
     /// @notice Deployer, allowed to wire the V3 locker exactly once.
     address public immutable deployer;
     /// @notice ArcadeV3Locker that permanently holds CLANKER_V3 LP positions.
@@ -140,6 +154,7 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
     error BadFeeTier();
     error BadVault();
     error BadSnipe();
+    error BadPoolType();
 
     /// @notice Sniper config stored per token. The Arcade V3 router skims
     /// `startBps` from buys at launch, decaying linearly to 0 over
@@ -155,11 +170,13 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         uint24 fee; // 1% / 2% / 3%
         uint256 creatorBuyUsdc;
         uint16 vaultPct; // bps of supply to vault (0 = none, max MAX_VAULT_BPS)
-        uint64 vaultLockupDuration; // ≥ vault MIN_LOCKUP when vaultPct > 0
+        uint64 vaultLockupDuration; // >= vault MIN_LOCKUP when vaultPct > 0
         uint64 vaultVestingDuration; // linear vesting after lockup (0 = cliff)
         address vaultRecipient;
         uint16 snipeStartBps; // 0 = no sniper tax
         uint32 snipeDecaySeconds;
+        uint8 poolType; // POOL_STANDARD / POOL_LEGACY / POOL_DEEP / POOL_WETH
+        uint256 legacyMcapUsdc; // start mcap for POOL_LEGACY (1..1M USDC); ignored otherwise
     }
 
     /// token => sniper config (set at CLANKER_V3 launch).
@@ -170,13 +187,15 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         IArcadeV2Factory v2Factory_,
         address v2Router_,
         address treasury_,
-        IArcadeV3Factory v3Factory_
+        IArcadeV3Factory v3Factory_,
+        address weth_
     ) {
         USDC = usdc_;
         v2Factory = v2Factory_;
         v2Router = v2Router_;
         treasury = treasury_;
         v3Factory = v3Factory_;
+        weth = weth_;
         deployer = msg.sender;
     }
 
@@ -265,7 +284,8 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
                 bps: uint16(FEE_DENOMINATOR - V3_CREATOR_BPS),
                 tokenPref: IArcadeV3Locker.RewardToken.Both
             });
-            _launchClankerV3(s, tokenAddr, rs, V3_FEE, 0, TOTAL_SUPPLY);
+            // Default entry point: Standard pool (USDC, 35k start, 3 positions).
+            _launchClankerV3(s, tokenAddr, rs, V3_FEE, 0, TOTAL_SUPPLY, POOL_STANDARD, 0);
         }
     }
 
@@ -290,6 +310,7 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         if (address(v3Factory) == address(0) || v3Locker == address(0)) revert V3NotConfigured();
         if (opts.fee != 10_000 && opts.fee != 20_000 && opts.fee != 30_000) revert BadFeeTier();
         if (opts.creatorBuyUsdc > 0 && v3Router == address(0)) revert NoRouter();
+        if (opts.poolType == POOL_WETH && opts.creatorBuyUsdc > 0) revert BadPoolType(); // USDC buy needs a USDC pool
         if (opts.vaultPct > 0 && (opts.vaultPct > MAX_VAULT_BPS || tokenVault == address(0))) revert BadVault();
         if (opts.snipeStartBps > MAX_SNIPE_BPS) revert BadSnipe();
 
@@ -313,7 +334,9 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         }
 
         uint256 lpSupply = _applyVault(tokenAddr, opts);
-        _launchClankerV3(s, tokenAddr, recipients, opts.fee, opts.creatorBuyUsdc, lpSupply);
+        _launchClankerV3(
+            s, tokenAddr, recipients, opts.fee, opts.creatorBuyUsdc, lpSupply, opts.poolType, opts.legacyMcapUsdc
+        );
     }
 
     /// @dev Carves the optional vaulted allocation; returns the LP supply.
@@ -719,19 +742,55 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
     /// rises as it's bought and USDC accumulates in the locked position. The
     /// creator earns 80% of perpetual LP fees (platform 20%); principal is
     /// locked forever. Called from `createToken` for CLANKER_V3.
+    /// @dev Resolves a pool type to (paired token, start mcap, supply split).
+    function _poolConfig(uint8 poolType, uint256 legacyMcapUsdc)
+        internal
+        view
+        returns (address paired, uint256 mcap, uint16[] memory positionBps)
+    {
+        if (poolType == POOL_LEGACY) {
+            if (legacyMcapUsdc < LEGACY_MIN_MCAP || legacyMcapUsdc > LEGACY_MAX_MCAP) revert BadPoolType();
+            paired = address(USDC);
+            mcap = legacyMcapUsdc;
+            positionBps = new uint16[](1);
+            positionBps[0] = uint16(FEE_DENOMINATOR);
+            return (paired, mcap, positionBps);
+        }
+
+        // All other types use the 3-position Clanker-style split (40/35/25).
+        positionBps = new uint16[](3);
+        positionBps[0] = 4_000;
+        positionBps[1] = 3_500;
+        positionBps[2] = 2_500;
+        if (poolType == POOL_STANDARD) {
+            (paired, mcap) = (address(USDC), STANDARD_MCAP);
+        } else if (poolType == POOL_DEEP) {
+            (paired, mcap) = (address(USDC), DEEP_MCAP);
+        } else if (poolType == POOL_WETH) {
+            if (weth == address(0)) revert BadPoolType();
+            (paired, mcap) = (weth, WETH_MCAP);
+        } else {
+            revert BadPoolType();
+        }
+    }
+
     function _launchClankerV3(
         TokenState storage s,
         address tokenAddr,
         IArcadeV3Locker.Recipient[] memory recipients,
         uint24 fee,
         uint256 creatorBuyUsdc,
-        uint256 lpSupply
+        uint256 lpSupply,
+        uint8 poolType,
+        uint256 legacyMcapUsdc
     ) internal {
+        (address paired, uint256 mcap, uint16[] memory positionBps) = _poolConfig(poolType, legacyMcapUsdc);
+
         // Start price is FDV-based on the FULL supply, regardless of how much
         // is actually placed in the LP (the rest may be vaulted).
-        (address token0, address token1, uint256 amount0, uint256 amount1) = address(USDC) < tokenAddr
-            ? (address(USDC), tokenAddr, CLANKER_V3_START_FDV, TOTAL_SUPPLY)
-            : (tokenAddr, address(USDC), TOTAL_SUPPLY, CLANKER_V3_START_FDV);
+        (address token0, address token1, uint256 amount0, uint256 amount1) = paired < tokenAddr
+            ? (paired, tokenAddr, mcap, TOTAL_SUPPLY)
+            : (tokenAddr, paired, TOTAL_SUPPLY, mcap);
 
         address pool = v3Factory.getPool(token0, token1, fee);
         if (pool == address(0)) {
@@ -745,10 +804,11 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         IArcadeV3Locker(v3Locker).lockSingleSided(
             IArcadeV3Locker.SingleSidedParams({
                 pool: pool,
-                paired: address(USDC),
+                paired: paired,
                 token: tokenAddr,
                 sqrtPriceX96: sqrtPriceX96,
                 tokenAmount: lpSupply,
+                positionBps: positionBps,
                 recipients: recipients
             })
         );
@@ -758,8 +818,7 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         s.v2Pair = pool; // reuse the field to store the (V3) pool address
         emit Migrated(tokenAddr, pool, 0, lpSupply);
 
-        // Optional creator buy: the creator spends USDC to buy their token at
-        // launch (they're the first buyer; price starts at the range bottom).
+        // Optional creator buy (USDC pools only; the router pivots through USDC).
         if (creatorBuyUsdc > 0) {
             USDC.safeTransferFrom(s.creator, address(this), creatorBuyUsdc);
             USDC.forceApprove(v3Router, creatorBuyUsdc);

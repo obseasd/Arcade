@@ -19,7 +19,7 @@ export default function PositionsPage() {
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-8 sm:px-6">
-      {/* Hero — title + description, banner image as background */}
+      {/* Hero - title + description, banner image as background */}
       <div
         className="relative mb-5 overflow-hidden rounded-3xl border border-arc-border"
         style={{
@@ -43,7 +43,7 @@ export default function PositionsPage() {
         </div>
       </div>
 
-      {/* + New position — under the banner, right-aligned */}
+      {/* + New position - under the banner, right-aligned */}
       <div className="mb-6 flex justify-end">
         <button
           onClick={() => setNewOpen(true)}
@@ -82,7 +82,7 @@ export default function PositionsPage() {
       {tab === "creator" && <CreatorFeesPanel />}
       {tab === "vault" && <VaultClaimPanel />}
 
-      {/* New-position modal — panel matches the swap/bridge cards exactly
+      {/* New-position modal - panel matches the swap/bridge cards exactly
           (.arc-card = bg-black/15 backdrop-blur-xl) so the token rectangles
           read identically. */}
       <Modal

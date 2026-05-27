@@ -85,6 +85,7 @@ interface IArcadeV3Locker {
         address token;
         uint160 sqrtPriceX96;
         uint256 tokenAmount;
+        uint16[] positionBps; // supply split per range; sums to 10000 (len 1 or 3)
         Recipient[] recipients;
     }
 
@@ -101,5 +102,6 @@ interface IArcadeV3Locker {
 
     function positionIdByToken(address token) external view returns (uint256);
     function recipientsCount(uint256 positionId) external view returns (uint256);
+    function rangeCount(uint256 positionId) external view returns (uint256);
     function getRecipients(uint256 positionId) external view returns (Recipient[] memory);
 }

@@ -172,7 +172,7 @@ export default function TokenDetailPage() {
             <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
               <Stat
                 label="Market cap"
-                value={mcap ? `$${formatUSDC(mcap, 6, 0)}` : "—"}
+                value={mcap ? `$${formatUSDC(mcap, 6, 0)}` : "-"}
               />
               <Stat
                 label="USDC raised"

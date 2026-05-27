@@ -13,7 +13,7 @@
 
   body {
     background-image:
-      /* center-left blue glow — shifted toward center */
+      /* center-left blue glow - shifted toward center */
       radial-gradient(circle 30rem at 35% 55%, rgba(14, 58, 106, 0.42) 0%, transparent 70%),
       /* top-left subtle blue */
       radial-gradient(ellipse 16rem 11rem at 5% 2%, rgba(21, 80, 143, 0.20) 0%, transparent 70%),
@@ -32,7 +32,7 @@
 }
 
 @layer utilities {
-  /* Top-right header glow — narrower (15%↓) and taller (30%↑), descended a
+  /* Top-right header glow - narrower (15%↓) and taller (30%↑), descended a
      touch so it sits closer to the page top. Visibly drifts. */
   .arc-header-glow {
     position: fixed;
@@ -55,7 +55,7 @@
     will-change: transform;
   }
 
-  /* Button glow — same gradient as the active-nav page underline glow.
+  /* Button glow - same gradient as the active-nav page underline glow.
      Rendered with z-index above the parent card so it isn't clipped by the
      card's stacking context. */
   .arc-cta-button-glow {
@@ -133,6 +133,63 @@
     @apply inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium
            bg-arc-surface-2 border border-arc-border text-arc-text-muted;
   }
+
+  /* Branded range slider. The filled portion is applied inline via a
+     `background: linear-gradient(...)` whose stop is the current value %. */
+  .arc-slider {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 100%;
+    height: 6px;
+    border-radius: 9999px;
+    background: #1e4264;
+    cursor: pointer;
+    outline: none;
+  }
+  .arc-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    height: 18px;
+    width: 18px;
+    border-radius: 9999px;
+    background: #15508f;
+    border: 2px solid #e5eef8;
+    box-shadow: 0 0 0 4px rgba(21, 80, 143, 0.25);
+    transition: transform 0.1s ease, box-shadow 0.1s ease;
+  }
+  .arc-slider::-webkit-slider-thumb:hover {
+    transform: scale(1.12);
+    box-shadow: 0 0 0 6px rgba(21, 80, 143, 0.35);
+  }
+  .arc-slider:active::-webkit-slider-thumb {
+    transform: scale(1.18);
+  }
+  .arc-slider::-moz-range-thumb {
+    height: 18px;
+    width: 18px;
+    border-radius: 9999px;
+    background: #15508f;
+    border: 2px solid #e5eef8;
+    box-shadow: 0 0 0 4px rgba(21, 80, 143, 0.25);
+    cursor: pointer;
+  }
+
+  /* Disclosure chevron: points down by default, flips up when the <details>
+     is open. Reliable across browsers (no group-open variant needed). */
+  .arc-disclosure {
+    transition: transform 0.2s ease;
+  }
+  details[open] > summary .arc-disclosure {
+    transform: rotate(180deg);
+  }
+}
+
+/* Hide the native <summary> disclosure triangle. */
+summary::-webkit-details-marker {
+  display: none;
+}
+summary {
+  list-style: none;
 }
 
 /* RainbowKit overrides to blend with Arc palette */

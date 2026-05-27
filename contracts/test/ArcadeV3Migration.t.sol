@@ -3,6 +3,7 @@ pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
 import {MockUSDC} from "../src/mocks/MockUSDC.sol";
+import {MockWETH} from "../src/mocks/MockWETH.sol";
 import {ArcadeV2Factory} from "../src/dex/ArcadeV2Factory.sol";
 import {ArcadeV2Router} from "../src/dex/ArcadeV2Router.sol";
 import {ArcadeLaunchpad} from "../src/launchpad/ArcadeLaunchpad.sol";
@@ -47,33 +48,41 @@ contract ArcadeV3MigrationTest is Test {
     address v3Router;
     address v3Quoter;
     ArcadeTokenVault tokenVault;
+    MockWETH weth;
 
-    /// @dev ABI-encoded ClankerOptions with no vault / no sniper tax.
+    /// @dev ABI-encoded ClankerOptions with no vault / no sniper tax (Standard pool).
     function _opts(uint24 fee, uint256 creatorBuy) internal pure returns (bytes memory) {
         return abi.encode(
-            ArcadeLaunchpad.ClankerOptions(fee, creatorBuy, 0, 0, 0, address(0), 0, 0)
+            ArcadeLaunchpad.ClankerOptions(fee, creatorBuy, 0, 0, 0, address(0), 0, 0, 0, 0)
         );
     }
 
-    /// @dev ClankerOptions carrying a vault carve-out.
+    /// @dev ClankerOptions carrying a vault carve-out (Standard pool).
     function _optsVault(uint24 fee, uint16 vaultPct, uint64 lockup, uint64 vesting, address recipient)
         internal
         pure
         returns (bytes memory)
     {
         return abi.encode(
-            ArcadeLaunchpad.ClankerOptions(fee, 0, vaultPct, lockup, vesting, recipient, 0, 0)
+            ArcadeLaunchpad.ClankerOptions(fee, 0, vaultPct, lockup, vesting, recipient, 0, 0, 0, 0)
         );
     }
 
-    /// @dev ClankerOptions carrying an anti-sniper tax.
+    /// @dev ClankerOptions carrying an anti-sniper tax (Standard pool).
     function _optsSnipe(uint24 fee, uint16 snipeStartBps, uint32 snipeDecaySeconds)
         internal
         pure
         returns (bytes memory)
     {
         return abi.encode(
-            ArcadeLaunchpad.ClankerOptions(fee, 0, 0, 0, 0, address(0), snipeStartBps, snipeDecaySeconds)
+            ArcadeLaunchpad.ClankerOptions(fee, 0, 0, 0, 0, address(0), snipeStartBps, snipeDecaySeconds, 0, 0)
+        );
+    }
+
+    /// @dev ClankerOptions selecting a specific pool type (+ legacy mcap).
+    function _optsPool(uint24 fee, uint8 poolType, uint256 legacyMcap) internal pure returns (bytes memory) {
+        return abi.encode(
+            ArcadeLaunchpad.ClankerOptions(fee, 0, 0, 0, 0, address(0), 0, 0, poolType, legacyMcap)
         );
     }
 
@@ -85,12 +94,13 @@ contract ArcadeV3MigrationTest is Test {
 
     function setUp() public {
         usdc = new MockUSDC();
+        weth = new MockWETH();
         v2Factory = new ArcadeV2Factory(address(this));
         v2Router = new ArcadeV2Router(address(v2Factory));
 
         v3Factory = _deploy("out-v3/UniswapV3Factory.sol/UniswapV3Factory.json", "");
         launchpad = new ArcadeLaunchpad(
-            IERC20(address(usdc)), v2Factory, address(v2Router), treasury, IArcadeV3Factory(v3Factory)
+            IERC20(address(usdc)), v2Factory, address(v2Router), treasury, IArcadeV3Factory(v3Factory), address(weth)
         );
         v3Locker = _deploy(
             "out-v3/ArcadeV3Locker.sol/ArcadeV3Locker.json", abi.encode(address(launchpad), v3Factory)
@@ -449,6 +459,69 @@ contract ArcadeV3MigrationTest is Test {
         IV3Router(v3Router).exactInputSingle(address(usdc), token, FEE, alice, amountIn, 0, block.timestamp + 60);
         vm.stopPrank();
         assertEq(usdc.balanceOf(treasury) - tBefore2, 0, "no skim after window");
+    }
+
+    // ====================== Pool types (Clanker-style) ======================
+
+    function _launchPool(uint8 poolType, uint256 legacyMcap) internal returns (address token) {
+        IArcadeV3Locker.Recipient[] memory rs = _defaultRecipients();
+        vm.startPrank(creator);
+        usdc.approve(address(launchpad), type(uint256).max);
+        token = launchpad.createClankerV3("Pool Cat", "POOL", "ipfs://x", rs, _optsPool(FEE, poolType, legacyMcap));
+        vm.stopPrank();
+    }
+
+    function test_poolType_standard_has3Positions() public {
+        address token = _launchPool(0, 0); // POOL_STANDARD
+        uint256 id = IArcadeV3Locker(v3Locker).positionIdByToken(token);
+        assertEq(IArcadeV3Locker(v3Locker).rangeCount(id), 3, "3 positions");
+        address pool = IArcadeV3Factory(v3Factory).getPool(address(usdc), token, FEE);
+        assertGt(IERC20(token).balanceOf(pool), 900_000_000e18, "pool holds the supply across ranges");
+        // Tradeable.
+        vm.startPrank(alice);
+        usdc.approve(v3Router, type(uint256).max);
+        uint256 got = IV3Router(v3Router).exactInputSingle(address(usdc), token, FEE, alice, 5_000e6, 0, block.timestamp + 60);
+        vm.stopPrank();
+        assertGt(got, 0, "received tokens");
+    }
+
+    function test_poolType_legacy_singlePosition() public {
+        address token = _launchPool(1, 100_000e6); // POOL_LEGACY, 100k start
+        uint256 id = IArcadeV3Locker(v3Locker).positionIdByToken(token);
+        assertEq(IArcadeV3Locker(v3Locker).rangeCount(id), 1, "single position");
+        address pool = IArcadeV3Factory(v3Factory).getPool(address(usdc), token, FEE);
+        assertGt(IERC20(token).balanceOf(pool), 900_000_000e18, "pool holds the supply");
+    }
+
+    function test_poolType_legacy_badMcap_reverts() public {
+        IArcadeV3Locker.Recipient[] memory rs = _defaultRecipients();
+        vm.startPrank(creator);
+        usdc.approve(address(launchpad), type(uint256).max);
+        vm.expectRevert(ArcadeLaunchpad.BadPoolType.selector);
+        launchpad.createClankerV3("X", "X", "ipfs://x", rs, _optsPool(FEE, 1, 2_000_000e6)); // > 1M
+        vm.stopPrank();
+    }
+
+    function test_poolType_deep_has3Positions() public {
+        address token = _launchPool(2, 0); // POOL_DEEP, 50k start
+        uint256 id = IArcadeV3Locker(v3Locker).positionIdByToken(token);
+        assertEq(IArcadeV3Locker(v3Locker).rangeCount(id), 3, "3 positions");
+    }
+
+    function test_poolType_weth_pairsWithWeth() public {
+        address token = _launchPool(3, 0); // POOL_WETH, 10 WETH start
+        uint256 id = IArcadeV3Locker(v3Locker).positionIdByToken(token);
+        assertEq(IArcadeV3Locker(v3Locker).rangeCount(id), 3, "3 positions");
+        // The pool is WETH/token (not USDC/token).
+        assertTrue(IArcadeV3Factory(v3Factory).getPool(address(weth), token, FEE) != address(0), "WETH pool exists");
+        assertEq(IArcadeV3Factory(v3Factory).getPool(address(usdc), token, FEE), address(0), "no USDC pool");
+        // Tradeable in WETH via the router.
+        weth.mint(alice, 100e18);
+        vm.startPrank(alice);
+        weth.approve(v3Router, type(uint256).max);
+        uint256 got = IV3Router(v3Router).exactInputSingle(address(weth), token, FEE, alice, 1e18, 0, block.timestamp + 60);
+        vm.stopPrank();
+        assertGt(got, 0, "received tokens for WETH");
     }
 
     /// @dev A direct pool swap (not via the Arcade router) bypasses the soft tax.

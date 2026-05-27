@@ -1,7 +1,7 @@
 import { BridgeCard } from "@/components/bridge/BridgeCard";
 
 export const metadata = {
-  title: "Bridge — Arcade",
+  title: "Bridge - Arcade",
 };
 
 export default function BridgePage() {

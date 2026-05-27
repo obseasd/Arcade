@@ -29,6 +29,8 @@ contract DeployTestnet is Script {
         address deployer = vm.addr(pk);
         address usdc = vm.envAddress("ARC_USDC_ADDRESS");
         address treasury = vm.envOr("TREASURY_ADDRESS", deployer);
+        // WETH on Arc for POOL_WETH launches (non-official for now). Overridable.
+        address weth = vm.envOr("ARC_WETH_ADDRESS", address(0x9570EBA9eE39Aa4933f64d6add280faAB289a847));
 
         vm.startBroadcast(pk);
 
@@ -40,7 +42,7 @@ contract DeployTestnet is Script {
         address v3Factory = _deployV3Factory();
 
         ArcadeLaunchpad launchpad = new ArcadeLaunchpad(
-            IERC20(usdc), factory, address(router), treasury, IArcadeV3Factory(v3Factory)
+            IERC20(usdc), factory, address(router), treasury, IArcadeV3Factory(v3Factory), weth
         );
         ArcadeMultiSwap multiSwap = new ArcadeMultiSwap(
             IERC20(usdc), factory, router, IArcadeLaunchpad(address(launchpad))

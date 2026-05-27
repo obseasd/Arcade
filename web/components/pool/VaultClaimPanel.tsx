@@ -133,7 +133,7 @@ export function VaultClaimPanel() {
             <div className="flex items-center gap-3">
               <TokenIcon symbol={row.symbol} size={36} />
               <div>
-                <div className="text-sm font-semibold">{row.symbol ?? "—"}</div>
+                <div className="text-sm font-semibold">{row.symbol ?? "-"}</div>
                 <div className="text-xs text-arc-text-muted tabular-nums">
                   {formatToken(row.claimed, 18, 2)} / {formatToken(row.total, 18, 2)} claimed ·{" "}
                   {locked

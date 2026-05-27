@@ -1,7 +1,7 @@
 /**
  * Persists the CCTP burn -> attest -> mint flow across page refreshes.
  *
- * After the burn confirms, the destination mint can happen at any time —
+ * After the burn confirms, the destination mint can happen at any time -
  * Circle keeps the message indefinitely until someone calls receiveMessage.
  * If the user refreshes the page (or the tab crashes) before claiming, the
  * in-memory step machine is wiped and they'd lose the "Mint" button.
@@ -22,7 +22,7 @@ export interface PendingBridge {
   /** USDC amount in raw 6dp units, serialised as a string since bigint
    * isn't JSON-serialisable. */
   amountRaw6: string;
-  /** Resolved recipient — override or connected wallet at burn time. */
+  /** Resolved recipient - override or connected wallet at burn time. */
   recipient: string;
   createdAt: number;
 }
@@ -37,7 +37,7 @@ export function loadPendingBridge(): PendingBridge | null {
     const raw = window.localStorage.getItem(KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as PendingBridge;
-    // Soft sanity check — ignore obviously malformed entries.
+    // Soft sanity check - ignore obviously malformed entries.
     if (!parsed?.burnTxHash || typeof parsed.srcDomain !== "number") return null;
     return parsed;
   } catch {
@@ -50,7 +50,7 @@ export function savePendingBridge(p: PendingBridge): void {
   try {
     window.localStorage.setItem(KEY, JSON.stringify(p));
   } catch {
-    /* quota or privacy mode — silently ignore */
+    /* quota or privacy mode - silently ignore */
   }
 }
 

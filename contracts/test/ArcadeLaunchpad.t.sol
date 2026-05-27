@@ -29,7 +29,7 @@ contract ArcadeLaunchpadTest is Test {
         factory = new ArcadeV2Factory(address(this));
         router = new ArcadeV2Router(address(factory));
         launchpad = new ArcadeLaunchpad(
-            IERC20(address(usdc)), factory, address(router), treasury, IArcadeV3Factory(address(0))
+            IERC20(address(usdc)), factory, address(router), treasury, IArcadeV3Factory(address(0)), address(0)
         );
 
         // Fund users

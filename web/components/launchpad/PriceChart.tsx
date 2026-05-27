@@ -89,7 +89,7 @@ export function PriceChart({ token }: { token: Address }) {
   if (data.length === 0) {
     return (
       <div className="flex h-64 items-center justify-center text-arc-text-muted">
-        No trades yet — be the first.
+        No trades yet - be the first.
       </div>
     );
   }

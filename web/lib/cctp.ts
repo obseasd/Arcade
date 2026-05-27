@@ -4,7 +4,7 @@ import { Address } from "viem";
  * Circle Cross-Chain Transfer Protocol (CCTP V2) configuration.
  *
  * All CCTP V2 EVM contracts share the same addresses across every supported
- * testnet — Circle deploys them deterministically. The only per-chain values
+ * testnet - Circle deploys them deterministically. The only per-chain values
  * are the chain ID, the USDC ERC20 address, and the CCTP "domain" (an
  * integer that uniquely identifies the chain inside CCTP messages).
  *

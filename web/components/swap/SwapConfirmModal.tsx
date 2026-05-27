@@ -92,7 +92,7 @@ export function SwapConfirmModal({
           )}
         </button>
 
-        {/* Show only error/success below — pending state is already in the button */}
+        {/* Show only error/success below - pending state is already in the button */}
         {(tx.status === "error" || tx.status === "success") && <TxStatus state={tx} />}
       </div>
       </div>

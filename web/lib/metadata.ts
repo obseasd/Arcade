@@ -48,7 +48,7 @@ export function resolveIpfs(uri: string): string {
 
 /**
  * Best-effort: returns just the image URL given the on-chain metadataURI.
- * Doesn't make network calls — for inline metadata it parses synchronously,
+ * Doesn't make network calls - for inline metadata it parses synchronously,
  * for URI-based metadata it returns the URI itself (caller can fetch).
  */
 export function getImageUrl(metadataURI: string): string | undefined {

@@ -45,8 +45,9 @@ contract DeployLocal is Script {
         // Requires the out-v3 artifacts: run `FOUNDRY_PROFILE=v3 forge build` first.
         address v3Factory = _deployV3Factory();
 
+        // No WETH on local anvil - POOL_WETH launches are unavailable locally.
         ArcadeLaunchpad launchpad = new ArcadeLaunchpad(
-            IERC20(address(usdc)), factory, address(router), deployer, IArcadeV3Factory(v3Factory)
+            IERC20(address(usdc)), factory, address(router), deployer, IArcadeV3Factory(v3Factory), address(0)
         );
         ArcadeMultiSwap multiSwap = new ArcadeMultiSwap(
             IERC20(address(usdc)), factory, router, IArcadeLaunchpad(address(launchpad))

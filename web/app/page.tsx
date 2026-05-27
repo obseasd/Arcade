@@ -16,7 +16,7 @@ export default function Home() {
           </span>
         </h1>
         <p className="mt-6 max-w-2xl text-lg text-arc-text-muted">
-          Arcade is a USDC-native DEX and bonding-curve launchpad built on Arc — Circle&apos;s EVM L1
+          Arcade is a USDC-native DEX and bonding-curve launchpad built on Arc - Circle&apos;s EVM L1
           for stablecoin-first finance.
         </p>
         <div className="mt-10 flex flex-wrap items-center justify-center gap-3">

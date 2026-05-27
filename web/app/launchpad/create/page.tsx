@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, X } from "lucide-react";
+import { ArrowLeft, X, Image as ImageIcon, Upload, ChevronDown } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
@@ -20,13 +20,29 @@ function modeLabel(mode: LaunchMode): string {
   return "Clanker"; // CLANKER_V3
 }
 
+/** Filled-track gradient for `.arc-slider`, given the value as a 0-100 %. */
+function sliderFill(pct: number): string {
+  const p = Math.max(0, Math.min(100, pct));
+  return `linear-gradient(to right, #15508f 0%, #15508f ${p}%, #1e4264 ${p}%, #1e4264 100%)`;
+}
+
+/** Pool-type presets (mirror the launchpad's POOL_* constants). */
+const POOL_TYPES = [
+  { id: 0 as const, label: "Standard", sub: "USDC · 35k · 3 positions" },
+  { id: 1 as const, label: "Legacy", sub: "USDC · custom · 1 position" },
+  { id: 2 as const, label: "Deep", sub: "USDC · 50k · 3 positions" },
+  { id: 3 as const, label: "WETH", sub: "WETH · 10 ETH · 3 positions" },
+];
+
 /** Reward-token preference (matches the locker's RewardToken enum). */
 type RewardPref = 0 | 1 | 2; // 0 = Both, 1 = USDC (Paired), 2 = Token (Clanker)
 
 interface RecipientRow {
   recipient: string;
-  admin: string; // who can later rotate this slot; defaults to the recipient
-  pct: number; // 0–100, all rows sum to 100
+  // checked = this recipient manages its own slot (admin = recipient);
+  // unchecked = the creator (connected wallet) stays admin of the slot.
+  isAdmin: boolean;
+  pct: number; // 0–100, all rows auto-balance to 100
   pref: RewardPref;
 }
 
@@ -65,9 +81,13 @@ function CreateTokenInner() {
 
   // CLANKER_V3 fee recipients (up to 3). Defaults to the connected wallet 100%.
   const [recipients, setRecipients] = useState<RecipientRow[]>([
-    { recipient: "", admin: "", pct: 100, pref: 0 },
+    { recipient: "", isAdmin: true, pct: 100, pref: 0 },
   ]);
   const [feeTier, setFeeTier] = useState<10_000 | 20_000 | 30_000>(10_000); // 1% / 2% / 3%
+  // Pool type (Clanker-style presets): 0 Standard (USDC 35k, 3 pos), 1 Legacy
+  // (USDC custom, 1 pos), 2 Deep (USDC 50k, 3 pos), 3 WETH (10 ETH, 3 pos).
+  const [poolType, setPoolType] = useState<0 | 1 | 2 | 3>(0);
+  const [legacyMcapStr, setLegacyMcapStr] = useState("35000"); // USDC, Legacy only
   const [creatorBuyStr, setCreatorBuyStr] = useState(""); // USDC to spend buying at launch
   // Optional team vault (locked/vesting allocation).
   const [vaultPct, setVaultPct] = useState(0); // 0–90% of supply
@@ -75,12 +95,12 @@ function CreateTokenInner() {
   const [vaultVestingDays, setVaultVestingDays] = useState(0);
   const [vaultRecipientStr, setVaultRecipientStr] = useState("");
   // Optional anti-sniper tax (soft, router-enforced): a starting % of each buy
-  // skimmed to the treasury, decaying linearly to 0 over the window.
-  const [snipeStartPct, setSnipeStartPct] = useState(0); // 0–50%
-  const [snipeDecayMinutes, setSnipeDecayMinutes] = useState(10);
+  // skimmed to the treasury, decaying linearly to 0 over the window (seconds).
+  const [snipeStartPct, setSnipeStartPct] = useState(0); // 0-50%
+  const [snipeDecaySeconds, setSnipeDecaySeconds] = useState(10);
   const isV3 = mode === LaunchMode.CLANKER_V3;
 
-  const snipeValid = !isV3 || snipeStartPct === 0 || (snipeStartPct <= 50 && snipeDecayMinutes >= 1);
+  const snipeValid = !isV3 || snipeStartPct === 0 || (snipeStartPct <= 50 && snipeDecaySeconds >= 1);
 
   const vaultValid =
     !isV3 ||
@@ -89,12 +109,30 @@ function CreateTokenInner() {
       vaultLockupDays >= 7 &&
       (vaultRecipientStr.trim() === "" || isAddress(vaultRecipientStr.trim())));
 
+  const isWethPool = poolType === 3;
+  const legacyMcapNum = Number(legacyMcapStr);
+  const poolValid =
+    !isV3 ||
+    poolType !== 1 ||
+    (Number.isFinite(legacyMcapNum) && legacyMcapNum >= 1 && legacyMcapNum <= 1_000_000);
+  // Preview helpers.
+  const pairedSymbol = isWethPool ? "WETH" : "USDC";
+  const positionsCount = poolType === 1 ? 1 : 3;
+  const startMcapLabel =
+    poolType === 0
+      ? "35,000 USDC"
+      : poolType === 1
+        ? `${legacyMcapStr || "0"} USDC`
+        : poolType === 2
+          ? "50,000 USDC"
+          : "10 WETH";
+
   // Prefill the first recipient with the connected wallet.
   useEffect(() => {
     if (!account) return;
     setRecipients((prev) =>
       prev[0] && prev[0].recipient === ""
-        ? [{ ...prev[0], recipient: account, admin: account }, ...prev.slice(1)]
+        ? [{ ...prev[0], recipient: account }, ...prev.slice(1)]
         : prev,
     );
   }, [account]);
@@ -107,8 +145,6 @@ function CreateTokenInner() {
     let hasClanker = false;
     for (const r of recipients) {
       if (!isAddress(r.recipient.trim())) return false;
-      const adm = r.admin.trim() || r.recipient.trim();
-      if (!isAddress(adm)) return false;
       if (r.pct <= 0) return false;
       sum += r.pct;
       if (r.pref !== 2) hasPaired = true;
@@ -119,11 +155,81 @@ function CreateTokenInner() {
 
   const setRecipient = (i: number, patch: Partial<RecipientRow>) =>
     setRecipients((prev) => prev.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
+
+  // Set one row's % and auto-balance the remainder across the other rows
+  // (proportional to their current weights; equal split if they're all 0).
+  const setRecipientPct = (i: number, raw: number) =>
+    setRecipients((prev) => {
+      if (prev.length === 1) return prev.map((r) => ({ ...r, pct: 100 }));
+      const v = Math.max(0, Math.min(100, Math.round(Number.isFinite(raw) ? raw : 0)));
+      const remaining = 100 - v;
+      const otherIdx = prev.map((_, idx) => idx).filter((idx) => idx !== i);
+      const otherSum = otherIdx.reduce((a, idx) => a + (prev[idx].pct || 0), 0);
+      const shares: Record<number, number> = {};
+      let acc = 0;
+      otherIdx.forEach((idx) => {
+        const s = otherSum > 0
+          ? Math.round((prev[idx].pct / otherSum) * remaining)
+          : Math.round(remaining / otherIdx.length);
+        shares[idx] = s;
+        acc += s;
+      });
+      // Absorb rounding drift on the last "other" row.
+      if (otherIdx.length > 0) shares[otherIdx[otherIdx.length - 1]] += remaining - acc;
+      return prev.map((r, idx) =>
+        idx === i ? { ...r, pct: v } : { ...r, pct: Math.max(0, shares[idx]) },
+      );
+    });
+
+  // Add a row and re-split everything evenly so the total stays at 100.
   const addRecipient = () =>
-    setRecipients((prev) => (prev.length >= 3 ? prev : [...prev, { recipient: "", admin: "", pct: 0, pref: 0 }]));
+    setRecipients((prev) => {
+      if (prev.length >= 3) return prev;
+      const next = [...prev, { recipient: "", isAdmin: true, pct: 0, pref: 0 as RewardPref }];
+      const base = Math.floor(100 / next.length);
+      return next.map((r, idx) => ({ ...r, pct: idx === 0 ? 100 - base * (next.length - 1) : base }));
+    });
+
+  // Remove a row and give its share back to the first remaining row.
   const removeRecipient = (i: number) =>
-    setRecipients((prev) => prev.filter((_, idx) => idx !== i));
+    setRecipients((prev) => {
+      const next = prev.filter((_, idx) => idx !== i);
+      if (next.length === 0) return prev;
+      const sum = next.reduce((a, r) => a + (r.pct || 0), 0);
+      next[0] = { ...next[0], pct: Math.max(0, next[0].pct + (100 - sum)) };
+      return next;
+    });
   const recipientsSum = recipients.reduce((a, r) => a + (r.pct || 0), 0);
+
+  // Read an uploaded image, downscale to 256px (keeps the on-chain metadata
+  // string small), and store it as a data: URL so no external hosting is needed.
+  const onImageFile = (file: File | undefined) => {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = reader.result as string;
+      const img = new window.Image();
+      img.onload = () => {
+        const max = 256;
+        const scale = Math.min(1, max / Math.max(img.width, img.height));
+        const w = Math.max(1, Math.round(img.width * scale));
+        const h = Math.max(1, Math.round(img.height * scale));
+        const canvas = document.createElement("canvas");
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) {
+          setImage(dataUrl);
+          return;
+        }
+        ctx.drawImage(img, 0, 0, w, h);
+        setImage(canvas.toDataURL("image/png"));
+      };
+      img.onerror = () => setImage(dataUrl);
+      img.src = dataUrl;
+    };
+    reader.readAsDataURL(file);
+  };
 
   const usdcBalance = useReadContract({
     address: ADDRESSES.usdc,
@@ -148,7 +254,7 @@ function CreateTokenInner() {
     try {
       // Creator buy (V3 only): the launchpad pulls this USDC on top of the fee.
       let creatorBuyUsdc = 0n;
-      if (isV3 && creatorBuyStr.trim()) {
+      if (isV3 && !isWethPool && creatorBuyStr.trim()) {
         try {
           creatorBuyUsdc = parseUnits(creatorBuyStr.trim(), 6);
         } catch {
@@ -173,7 +279,9 @@ function CreateTokenInner() {
         // Clanker mode: custom fee recipients (up to 3) with admin + token pref.
         const rs = recipients.map((r) => {
           const rec = r.recipient.trim() as Address;
-          const adm = (r.admin.trim() || r.recipient.trim()) as Address;
+          // Admin must be non-zero (the locker rejects address(0)): the slot's
+          // admin is the recipient itself when "Admin" is checked, else the creator.
+          const adm = (r.isAdmin ? rec : (account as string)) as Address;
           return { recipient: rec, admin: adm, bps: Math.round(r.pct * 100), tokenPref: r.pref };
         });
         // Bundled ClankerOptions, ABI-encoded as bytes (the contract takes
@@ -192,6 +300,8 @@ function CreateTokenInner() {
                 { name: "vaultRecipient", type: "address" },
                 { name: "snipeStartBps", type: "uint16" },
                 { name: "snipeDecaySeconds", type: "uint32" },
+                { name: "poolType", type: "uint8" },
+                { name: "legacyMcapUsdc", type: "uint256" },
               ],
             },
           ],
@@ -204,7 +314,10 @@ function CreateTokenInner() {
               vaultVestingDuration: BigInt((vaultVestingDays || 0) * 86_400),
               vaultRecipient: (vaultRecipientStr.trim() || account) as Address,
               snipeStartBps: Math.round(snipeStartPct * 100),
-              snipeDecaySeconds: (snipeDecayMinutes || 0) * 60,
+              snipeDecaySeconds: snipeDecaySeconds || 0,
+              poolType,
+              // Legacy custom start mcap (USDC, 6dp); 0 for the fixed presets.
+              legacyMcapUsdc: poolType === 1 ? parseUnits(legacyMcapStr.trim() || "0", 6) : 0n,
             },
           ],
         );
@@ -259,33 +372,29 @@ function CreateTokenInner() {
   };
 
   return (
-    <div className="mx-auto max-w-2xl px-4 py-10 sm:px-6">
+    <div className="mx-auto max-w-5xl px-4 py-10 sm:px-6">
       <Link
         href="/launchpad"
         className="mb-6 inline-flex items-center gap-2 text-sm text-arc-text-muted transition-colors hover:text-arc-text"
       >
         <ArrowLeft className="h-4 w-4" /> Launchpad
       </Link>
-      <h1 className="mb-2 text-3xl font-semibold">Launch a token</h1>
-      <p className="mb-8 text-sm text-arc-text-muted">
-        Mint a new token with a fixed 1B supply.{" "}
-        {mode === LaunchMode.CLANKER_V3 ? (
-          <>
-            The full supply is locked single-sided in a Uniswap V3 pool at launch — tradeable
-            instantly, no bonding curve, LP can never be rugged, and the swap fees flow to the
-            recipients you configure below.
-          </>
-        ) : (
-          <>
-            Trading starts immediately on a bonding curve. Migration to the DEX happens automatically
-            when the curve fills.
-          </>
-        )}{" "}
-        Creation fee:{" "}
-        <span className="tabular-nums text-arc-text">{formatUSDC(CREATION_FEE_USDC, 6, 0)} USDC</span>.
-      </p>
+      <div className="mb-8 text-center">
+        <h1 className="text-3xl font-semibold sm:text-4xl">
+          Launch a{" "}
+          <span className="bg-gradient-to-r from-arc-cta-hover to-arc-primary-hover bg-clip-text text-transparent">
+            {modeLabel(mode)}
+          </span>
+        </h1>
+        <p className="mx-auto mt-2 max-w-lg text-sm text-arc-text-muted">
+          {mode === LaunchMode.CLANKER_V3
+            ? "Deploy instantly. Full supply locked single-sided in a V3 pool, tradeable right away, LP un-ruggable, fees to you."
+            : "Trading starts on a bonding curve and migrates to the DEX automatically when it fills."}
+        </p>
+      </div>
 
-      <div className="arc-card space-y-5 p-6">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
+        <div className="arc-card space-y-5 p-6">
         {/* Chosen launch mode (picked in the modal) */}
         <div className="flex items-center justify-between rounded-xl border border-arc-border bg-arc-bg-elevated px-4 py-3">
           <div>
@@ -305,7 +414,7 @@ function CreateTokenInner() {
             className="arc-input rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2"
           />
         </Field>
-        <Field label="Symbol" hint="Ticker — uppercase letters, up to 12 chars.">
+        <Field label="Symbol" hint="Ticker - uppercase letters, up to 12 chars.">
           <input
             value={symbol}
             onChange={(e) => setSymbol(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 12))}
@@ -313,14 +422,34 @@ function CreateTokenInner() {
             className="arc-input rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2 tabular-nums"
           />
         </Field>
-        <Field label="Image URL" hint="Hosted image (Imgur, IPFS, etc.). Recommended 512×512.">
-          <input
-            value={image}
-            onChange={(e) => setImage(e.target.value)}
-            placeholder="https://..."
-            className="arc-input rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2"
-          />
-        </Field>
+        <div className="space-y-1.5">
+          <div className="flex items-center justify-between">
+            <span className="text-sm font-medium text-arc-text">Image</span>
+            <span className="text-xs text-arc-text-faint">PNG / JPEG - downscaled to 256px</span>
+          </div>
+          <div className="flex items-center gap-3">
+            <label className="flex h-16 w-16 shrink-0 cursor-pointer items-center justify-center overflow-hidden rounded-xl border border-dashed border-arc-border bg-arc-bg-elevated transition-colors hover:border-arc-cta-hover">
+              {image.trim() ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={image.trim()} alt="" className="h-full w-full object-cover" />
+              ) : (
+                <Upload className="h-5 w-5 text-arc-text-faint" />
+              )}
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                className="hidden"
+                onChange={(e) => onImageFile(e.target.files?.[0])}
+              />
+            </label>
+            <input
+              value={image.startsWith("data:") ? "" : image}
+              onChange={(e) => setImage(e.target.value)}
+              placeholder="…or paste an image URL"
+              className="arc-input flex-1 rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2"
+            />
+          </div>
+        </div>
         <Field label="Description" hint="Pitch your token in a few lines.">
           <textarea
             value={description}
@@ -333,6 +462,58 @@ function CreateTokenInner() {
 
         {isV3 && (
           <div className="space-y-3 rounded-xl border border-arc-border bg-arc-bg-elevated p-4">
+            <div className="flex items-center gap-2">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src="/safe.png" alt="" className="h-4 w-4" />
+              <span className="text-sm font-medium text-arc-text">Pool type</span>
+            </div>
+            <p className="text-xs text-arc-text-faint">
+              How the locked liquidity is shaped. Standard/Deep spread the supply across 3 positions;
+              Legacy is a single position with a custom starting market cap.
+            </p>
+            <div className="grid grid-cols-2 gap-2">
+              {POOL_TYPES.map((pt) => (
+                <button
+                  key={pt.id}
+                  type="button"
+                  onClick={() => setPoolType(pt.id)}
+                  className={cn(
+                    "rounded-xl border p-3 text-left transition-all",
+                    poolType === pt.id
+                      ? "border-arc-cta-hover bg-arc-cta-hover/15"
+                      : "border-arc-border bg-white/[0.03] hover:bg-white/[0.05]",
+                  )}
+                >
+                  <div className="text-sm font-semibold text-arc-text">{pt.label}</div>
+                  <div className="text-[11px] text-arc-text-faint">{pt.sub}</div>
+                </button>
+              ))}
+            </div>
+            {poolType === 1 && (
+              <Field label="Starting market cap (USDC)" hint="1 to 1,000,000.">
+                <input
+                  inputMode="numeric"
+                  value={legacyMcapStr}
+                  onChange={(e) => setLegacyMcapStr(e.target.value.replace(/[^0-9]/g, ""))}
+                  placeholder="35000"
+                  className="arc-input rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2 tabular-nums"
+                />
+              </Field>
+            )}
+            {!poolValid && (
+              <div className="text-xs text-arc-danger">Starting market cap must be 1 to 1,000,000 USDC.</div>
+            )}
+            {isWethPool && (
+              <div className="text-xs text-arc-text-faint">
+                WETH pool: the token pairs with WETH (10 ETH start) and trades in WETH. Creator buy is
+                disabled (it spends USDC).
+              </div>
+            )}
+          </div>
+        )}
+
+        {isV3 && (
+          <div className="space-y-3 rounded-xl border border-arc-border bg-arc-bg-elevated p-4">
             <div className="flex items-center justify-between">
               <span className="text-sm font-medium text-arc-text">Fee recipients</span>
               <span className={cn("text-xs tabular-nums", recipientsSum === 100 ? "text-arc-text-faint" : "text-arc-danger")}>
@@ -340,12 +521,12 @@ function CreateTokenInner() {
               </span>
             </div>
             <p className="text-xs text-arc-text-faint">
-              Split the LP swap fees across up to 3 addresses. Each address can be its own admin
-              (able to rotate its payout later). Token: <b>Both</b> = USDC + token, or USDC-only /
-              token-only.
+              Split the LP swap fees across up to 3 addresses - percentages auto-balance to 100%.
+              <b>Admin</b> lets that recipient rotate its own payout later (otherwise you stay admin
+              of the slot). Token: <b>Both</b> = USDC + token, or USDC-only / token-only.
             </p>
             {recipients.map((r, i) => (
-              <div key={i} className="space-y-2 rounded-lg border border-arc-border bg-arc-bg p-3">
+              <div key={i} className="space-y-2 rounded-lg border border-arc-border bg-white/[0.03] p-3">
                 <div className="flex items-center gap-2">
                   <input
                     value={r.recipient}
@@ -354,12 +535,11 @@ function CreateTokenInner() {
                     className="arc-input flex-1 rounded-lg border border-arc-border bg-arc-bg-elevated px-2 py-1.5 text-sm tabular-nums"
                   />
                   <input
-                    type="number"
-                    min={0}
-                    max={100}
+                    inputMode="numeric"
                     value={r.pct}
-                    onChange={(e) => setRecipient(i, { pct: Number(e.target.value) })}
-                    className="arc-input w-16 rounded-lg border border-arc-border bg-arc-bg-elevated px-2 py-1.5 text-right text-sm tabular-nums"
+                    readOnly={recipients.length === 1}
+                    onChange={(e) => setRecipientPct(i, parseInt(e.target.value.replace(/[^0-9]/g, "") || "0", 10))}
+                    className="arc-input w-14 rounded-lg border border-arc-border bg-arc-bg-elevated px-2 py-1.5 text-right text-sm tabular-nums"
                   />
                   <span className="text-xs text-arc-text-muted">%</span>
                   {recipients.length > 1 && (
@@ -371,7 +551,7 @@ function CreateTokenInner() {
                     </button>
                   )}
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-3">
                   <select
                     value={r.pref}
                     onChange={(e) => setRecipient(i, { pref: Number(e.target.value) as RewardPref })}
@@ -381,12 +561,18 @@ function CreateTokenInner() {
                     <option value={1}>USDC only</option>
                     <option value={2}>Token only</option>
                   </select>
-                  <input
-                    value={r.admin}
-                    onChange={(e) => setRecipient(i, { admin: e.target.value })}
-                    placeholder="admin (defaults to recipient)"
-                    className="arc-input flex-1 rounded-lg border border-arc-border bg-arc-bg-elevated px-2 py-1.5 text-xs tabular-nums"
-                  />
+                  <label
+                    className="flex cursor-pointer select-none items-center gap-1.5 text-xs text-arc-text-muted"
+                    title="Checked: this recipient can rotate its own payout later. Unchecked: you (the creator) stay admin of this slot."
+                  >
+                    <input
+                      type="checkbox"
+                      checked={r.isAdmin}
+                      onChange={(e) => setRecipient(i, { isAdmin: e.target.checked })}
+                      className="h-4 w-4 accent-arc-cta-hover"
+                    />
+                    Admin
+                  </label>
                 </div>
               </div>
             ))}
@@ -429,31 +615,42 @@ function CreateTokenInner() {
               <div className="mt-1 text-xs text-arc-text-faint">Swap fee that accrues to your recipients.</div>
             </div>
 
-            {/* Creator buy */}
+            {/* Creator buy (USDC pools only) */}
             <div>
               <div className="mb-1.5 text-sm font-medium text-arc-text">Creator buy (optional)</div>
-              <div className="flex items-center gap-2 rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2">
+              <div
+                className={cn(
+                  "flex items-center gap-2 rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2",
+                  isWethPool && "opacity-50",
+                )}
+              >
                 <input
-                  value={creatorBuyStr}
+                  value={isWethPool ? "" : creatorBuyStr}
                   onChange={(e) => setCreatorBuyStr(e.target.value.replace(/[^0-9.]/g, ""))}
                   placeholder="0"
                   inputMode="decimal"
+                  disabled={isWethPool}
                   className="arc-input flex-1 bg-transparent text-sm tabular-nums"
                 />
                 <span className="text-xs text-arc-text-muted">USDC</span>
               </div>
-              <div className="mt-1 text-xs text-arc-text-faint">Buy your own token at launch (first buyer).</div>
+              <div className="mt-1 text-xs text-arc-text-faint">
+                {isWethPool ? "Unavailable on WETH pools." : "Buy your own token at launch (first buyer)."}
+              </div>
             </div>
           </div>
         )}
 
         {isV3 && (
           <details className="rounded-xl border border-arc-border bg-arc-bg-elevated open:bg-arc-surface">
-            <summary className="cursor-pointer select-none px-4 py-3 text-sm text-arc-text-muted hover:text-arc-text">
-              Team vault — lock &amp; vest a share of supply (optional)
+            <summary className="flex cursor-pointer select-none items-center gap-2 px-4 py-3 text-sm text-arc-text-muted hover:text-arc-text">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src="/safe.png" alt="" className="h-4 w-4 shrink-0" />
+              <span>Team vault - lock &amp; vest a share of supply (optional)</span>
+              <ChevronDown className="arc-disclosure ml-auto h-4 w-4 shrink-0 text-arc-text-faint" />
             </summary>
             <div className="space-y-3 px-4 pb-4">
-              <Field
+              <RangeField
                 label={`Vaulted supply: ${vaultPct}%`}
                 hint="Locked then vested to a recipient. Max 90% (rest goes to the LP)."
               >
@@ -464,9 +661,10 @@ function CreateTokenInner() {
                   step={1}
                   value={vaultPct}
                   onChange={(e) => setVaultPct(Number(e.target.value))}
-                  className="w-full accent-arc-cta-hover"
+                  className="arc-slider"
+                  style={{ background: sliderFill((vaultPct / 90) * 100) }}
                 />
-              </Field>
+              </RangeField>
               {vaultPct > 0 && (
                 <>
                   <div className="grid grid-cols-2 gap-3">
@@ -476,7 +674,7 @@ function CreateTokenInner() {
                         min={7}
                         value={vaultLockupDays}
                         onChange={(e) => setVaultLockupDays(Number(e.target.value))}
-                        className="arc-input rounded-xl border border-arc-border bg-arc-bg px-3 py-2 tabular-nums"
+                        className="arc-input rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2 tabular-nums"
                       />
                     </Field>
                     <Field label="Vesting (days)" hint="Linear after lockup. 0 = cliff.">
@@ -485,7 +683,7 @@ function CreateTokenInner() {
                         min={0}
                         value={vaultVestingDays}
                         onChange={(e) => setVaultVestingDays(Number(e.target.value))}
-                        className="arc-input rounded-xl border border-arc-border bg-arc-bg px-3 py-2 tabular-nums"
+                        className="arc-input rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2 tabular-nums"
                       />
                     </Field>
                   </div>
@@ -494,7 +692,7 @@ function CreateTokenInner() {
                       value={vaultRecipientStr}
                       onChange={(e) => setVaultRecipientStr(e.target.value)}
                       placeholder="0x… (defaults to you)"
-                      className="arc-input rounded-xl border border-arc-border bg-arc-bg px-3 py-2 tabular-nums"
+                      className="arc-input rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2 tabular-nums"
                     />
                   </Field>
                   {!vaultValid && (
@@ -510,8 +708,11 @@ function CreateTokenInner() {
 
         {isV3 && (
           <details className="rounded-xl border border-arc-border bg-arc-bg-elevated open:bg-arc-surface">
-            <summary className="cursor-pointer select-none px-4 py-3 text-sm text-arc-text-muted hover:text-arc-text">
-              Anti-sniper tax — tax early buys, decaying to zero (optional)
+            <summary className="flex cursor-pointer select-none items-center gap-2 px-4 py-3 text-sm text-arc-text-muted hover:text-arc-text">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src="/target.png" alt="" className="h-4 w-4 shrink-0" />
+              <span>Anti-sniper tax - tax early buys, decaying to zero (optional)</span>
+              <ChevronDown className="arc-disclosure ml-auto h-4 w-4 shrink-0 text-arc-text-faint" />
             </summary>
             <div className="space-y-3 px-4 pb-4">
               <p className="text-xs text-arc-text-faint">
@@ -519,7 +720,7 @@ function CreateTokenInner() {
                 decaying linearly to 0 over the window. Soft protection: a direct pool swap can bypass
                 it, but most buyers route through the app.
               </p>
-              <Field
+              <RangeField
                 label={`Starting tax: ${snipeStartPct}%`}
                 hint="Max 50%. 0 disables the tax."
               >
@@ -530,23 +731,23 @@ function CreateTokenInner() {
                   step={1}
                   value={snipeStartPct}
                   onChange={(e) => setSnipeStartPct(Number(e.target.value))}
-                  className="w-full accent-arc-cta-hover"
+                  className="arc-slider"
+                  style={{ background: sliderFill((snipeStartPct / 50) * 100) }}
                 />
-              </Field>
+              </RangeField>
               {snipeStartPct > 0 && (
-                <Field label="Decay window (minutes)" hint="Tax reaches 0 after this many minutes.">
+                <Field label="Decay window (seconds)" hint="Tax reaches 0 after this many seconds.">
                   <input
-                    type="number"
-                    min={1}
-                    value={snipeDecayMinutes}
-                    onChange={(e) => setSnipeDecayMinutes(Number(e.target.value))}
-                    className="arc-input rounded-xl border border-arc-border bg-arc-bg px-3 py-2 tabular-nums"
+                    inputMode="numeric"
+                    value={snipeDecaySeconds}
+                    onChange={(e) => setSnipeDecaySeconds(parseInt(e.target.value.replace(/[^0-9]/g, "") || "0", 10))}
+                    className="arc-input rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2 tabular-nums"
                   />
                 </Field>
               )}
               {!snipeValid && (
                 <div className="text-xs text-arc-danger">
-                  Starting tax must be ≤ 50% and the decay window at least 1 minute.
+                  Starting tax must be ≤ 50% and the decay window at least 1 second.
                 </div>
               )}
             </div>
@@ -555,8 +756,11 @@ function CreateTokenInner() {
 
         {mode === LaunchMode.CLANKER && (
           <details className="rounded-xl border border-arc-border bg-arc-bg-elevated open:bg-arc-surface">
-            <summary className="cursor-pointer select-none px-4 py-3 text-sm text-arc-text-muted hover:text-arc-text">
-              Secondary creator fee receiver (optional)
+            <summary className="flex cursor-pointer select-none items-center gap-2 px-4 py-3 text-sm text-arc-text-muted hover:text-arc-text">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src="/social.png" alt="" className="h-4 w-4 shrink-0" />
+              <span>Secondary creator fee receiver (optional)</span>
+              <ChevronDown className="arc-disclosure ml-auto h-4 w-4 shrink-0 text-arc-text-faint" />
             </summary>
             <div className="space-y-3 px-4 pb-4">
               <Field
@@ -567,13 +771,13 @@ function CreateTokenInner() {
                   value={creator2}
                   onChange={(e) => setCreator2(e.target.value)}
                   placeholder="0x…"
-                  className="arc-input rounded-xl border border-arc-border bg-arc-bg px-3 py-2 tabular-nums"
+                  className="arc-input rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2 tabular-nums"
                 />
               </Field>
               {creator2 && !isAddress(creator2.trim()) && (
                 <div className="text-xs text-arc-danger">Invalid address.</div>
               )}
-              <Field
+              <RangeField
                 label={`Share to second receiver: ${creator2SharePct}%`}
                 hint="Of the creator portion (the other half goes to the launcher wallet)."
               >
@@ -584,16 +788,20 @@ function CreateTokenInner() {
                   step={5}
                   value={creator2SharePct}
                   onChange={(e) => setCreator2SharePct(Number(e.target.value))}
-                  className="w-full accent-arc-cta-hover"
+                  className="arc-slider"
+                  style={{ background: sliderFill(creator2SharePct) }}
                 />
-              </Field>
+              </RangeField>
             </div>
           </details>
         )}
 
         <details className="rounded-xl border border-arc-border bg-arc-bg-elevated open:bg-arc-surface">
-          <summary className="cursor-pointer select-none px-4 py-3 text-sm text-arc-text-muted hover:text-arc-text">
-            Socials (optional)
+          <summary className="flex cursor-pointer select-none items-center gap-2 px-4 py-3 text-sm text-arc-text-muted hover:text-arc-text">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/social.png" alt="" className="h-4 w-4 shrink-0" />
+            <span>Socials (optional)</span>
+            <ChevronDown className="arc-disclosure ml-auto h-4 w-4 shrink-0 text-arc-text-faint" />
           </summary>
           <div className="space-y-3 px-4 pb-4">
             <Field label="Twitter / X">
@@ -601,7 +809,7 @@ function CreateTokenInner() {
                 value={twitter}
                 onChange={(e) => setTwitter(e.target.value)}
                 placeholder="https://twitter.com/..."
-                className="arc-input rounded-xl border border-arc-border bg-arc-bg px-3 py-2"
+                className="arc-input rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2"
               />
             </Field>
             <Field label="Telegram">
@@ -609,7 +817,7 @@ function CreateTokenInner() {
                 value={telegram}
                 onChange={(e) => setTelegram(e.target.value)}
                 placeholder="https://t.me/..."
-                className="arc-input rounded-xl border border-arc-border bg-arc-bg px-3 py-2"
+                className="arc-input rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2"
               />
             </Field>
             <Field label="Website">
@@ -617,37 +825,134 @@ function CreateTokenInner() {
                 value={website}
                 onChange={(e) => setWebsite(e.target.value)}
                 placeholder="https://..."
-                className="arc-input rounded-xl border border-arc-border bg-arc-bg px-3 py-2"
+                className="arc-input rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2"
               />
             </Field>
           </div>
         </details>
+        </div>
+        {/* End form card */}
 
-        <button
-          onClick={onSubmit}
-          disabled={
-            !account ||
-            !valid ||
-            (isV3 && (!recipientsValid || !vaultValid || !snipeValid)) ||
-            tx.status === "pending" ||
-            !hasFee
-          }
-          className="arc-button-primary w-full py-3 text-base"
-        >
-          {!account
-            ? "Connect wallet"
-            : !hasFee
-              ? `Need ${formatUSDC(CREATION_FEE_USDC, 6, 0)} USDC to launch`
-              : !valid
-                ? "Fill in name and symbol"
-                : isV3 && !recipientsValid
-                  ? "Fix fee recipients"
-                  : tx.status === "pending"
-                    ? "Launching…"
-                    : "Launch token"}
-        </button>
-        <TxStatus state={tx} />
+        {/* Live preview - mirrors Clanker's right-hand summary. */}
+        <aside className="space-y-4 lg:sticky lg:top-6 lg:self-start">
+          <div className="arc-card space-y-4 p-5">
+            <div className="flex items-center gap-3">
+              {image.trim() ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={image.trim()}
+                  alt=""
+                  className="h-12 w-12 rounded-xl object-cover ring-1 ring-arc-border"
+                />
+              ) : (
+                <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-white/[0.04] ring-1 ring-arc-border">
+                  <ImageIcon className="h-5 w-5 text-arc-text-faint" />
+                </div>
+              )}
+              <div className="min-w-0">
+                <div className="truncate font-semibold text-arc-text">{name.trim() || "Token name"}</div>
+                <div className="flex items-center gap-1.5 text-sm text-arc-text-muted">
+                  <span className="truncate">${symbol.trim() || "SYMBOL"}</span>
+                  <span className="text-arc-text-faint">·</span>
+                  <span className="rounded-full bg-white/[0.06] px-2 py-0.5 text-[11px] font-medium text-arc-text">
+                    Arc
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {isV3 ? (
+              <>
+                <div>
+                  <div className="mb-1 flex items-center justify-between text-xs">
+                    <span className="text-arc-text-muted">Liquidity Pool</span>
+                    <span className="tabular-nums text-arc-text">{100 - vaultPct}%</span>
+                  </div>
+                  <div className="h-2 overflow-hidden rounded-full bg-white/[0.06]">
+                    <div
+                      className="h-full rounded-full bg-gradient-to-r from-arc-cta-hover to-arc-primary-hover transition-all"
+                      style={{ width: `${100 - vaultPct}%` }}
+                    />
+                  </div>
+                  {vaultPct > 0 && (
+                    <div className="mt-1 flex items-center justify-between text-[11px] text-arc-text-faint">
+                      <span>Team vault (locked)</span>
+                      <span className="tabular-nums">{vaultPct}%</span>
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-arc-text-muted">Fees</span>
+                  <span className="tabular-nums text-arc-text">
+                    {feeTier / 10_000}% static
+                    {snipeStartPct > 0 ? ` · ${snipeDecaySeconds}s sniper tax` : ""}
+                  </span>
+                </div>
+
+                <div className="space-y-2 border-t border-arc-border pt-3 text-sm">
+                  <PreviewRow label="Pool type" value={POOL_TYPES[poolType].label} />
+                  <PreviewRow label="Paired with" value={pairedSymbol} />
+                  <PreviewRow label="Starting mcap" value={startMcapLabel} />
+                  <PreviewRow label="Positions" value={`${positionsCount} (locked)`} />
+                  <PreviewRow label="Fee recipients" value={String(recipients.length)} />
+                  {!isWethPool && Number(creatorBuyStr) > 0 && (
+                    <PreviewRow label="Creator buy" value={`${creatorBuyStr} USDC`} />
+                  )}
+                </div>
+              </>
+            ) : (
+              <div className="space-y-2 border-t border-arc-border pt-3 text-sm">
+                <PreviewRow label="Type" value="Bonding curve" />
+                <PreviewRow
+                  label="Fee split"
+                  value={mode === LaunchMode.PUMP ? "50% you / 50% platform" : "30% you / 70% platform"}
+                />
+                <PreviewRow label="Migrates to" value="Arcade V2 (LP burned)" />
+              </div>
+            )}
+
+            <div className="flex items-center justify-between border-t border-arc-border pt-3 text-xs">
+              <span className="text-arc-text-faint">Creation fee</span>
+              <span className="tabular-nums text-arc-text-muted">{formatUSDC(CREATION_FEE_USDC, 6, 0)} USDC</span>
+            </div>
+          </div>
+
+          <button
+            onClick={onSubmit}
+            disabled={
+              !account ||
+              !valid ||
+              (isV3 && (!recipientsValid || !vaultValid || !snipeValid || !poolValid)) ||
+              tx.status === "pending" ||
+              !hasFee
+            }
+            className="arc-button-primary w-full py-3 text-base"
+          >
+            {!account
+              ? "Connect wallet"
+              : !hasFee
+                ? `Need ${formatUSDC(CREATION_FEE_USDC, 6, 0)} USDC to launch`
+                : !valid
+                  ? "Fill in name and symbol"
+                  : isV3 && !recipientsValid
+                    ? "Fix fee recipients"
+                    : tx.status === "pending"
+                      ? "Launching…"
+                      : `Launch ${modeLabel(mode)}`}
+          </button>
+          <TxStatus state={tx} />
+        </aside>
       </div>
+    </div>
+  );
+}
+
+function PreviewRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <span className="text-arc-text-muted">{label}</span>
+      <span className="truncate text-right text-arc-text">{value}</span>
     </div>
   );
 }
@@ -661,6 +966,22 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
       </div>
       {children}
     </label>
+  );
+}
+
+/**
+ * Like Field but renders a <div> (not a <label>): wrapping a range slider in a
+ * <label> breaks click-to-drag in Chromium, so sliders must not be inside one.
+ */
+function RangeField({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between">
+        <span className="text-sm font-medium text-arc-text">{label}</span>
+        {hint && <span className="text-xs text-arc-text-faint">{hint}</span>}
+      </div>
+      {children}
+    </div>
   );
 }
 

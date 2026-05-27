@@ -52,7 +52,7 @@ export function TokenSelectModal({ open, onClose, tokens, onSelect, selectedAddr
     [],
   );
 
-  // Detect a pasted address that isn't already in the list — fetch metadata
+  // Detect a pasted address that isn't already in the list - fetch metadata
   // and surface it as an importable token.
   const trimmedQ = q.trim();
   const pastedAddress = useMemo<Address | undefined>(() => {
@@ -125,7 +125,7 @@ export function TokenSelectModal({ open, onClose, tokens, onSelect, selectedAddr
       </div>
 
       <div className="space-y-4 px-6 pt-5">
-        {/* Search bar — accepts symbols, names, or any token address */}
+        {/* Search bar - accepts symbols, names, or any token address */}
         <div className="flex items-center gap-2 rounded-xl border border-arc-border bg-black/40 px-3 py-2.5">
           <Search className="h-4 w-4 text-arc-text-faint" />
           <input
@@ -231,7 +231,7 @@ export function TokenSelectModal({ open, onClose, tokens, onSelect, selectedAddr
               >
                 <TokenIcon symbol={t.symbol} size={36} />
                 <div className="min-w-0 flex-1">
-                  <div className="text-sm font-medium">{t.symbol ?? "—"}</div>
+                  <div className="text-sm font-medium">{t.symbol ?? "-"}</div>
                   <div className="truncate text-xs text-arc-text-muted">{t.name ?? t.address}</div>
                 </div>
                 {active && <Check className="h-4 w-4 text-arc-cta-hover" />}

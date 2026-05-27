@@ -199,12 +199,12 @@ export function AddLiquidityCard() {
 
       {!pair || pair === "0x0000000000000000000000000000000000000000" ? (
         <div className="mt-3 rounded-xl border border-arc-warn/30 bg-arc-warn/10 p-3 text-xs text-arc-warn">
-          No pool exists yet — you&apos;ll be the first liquidity provider. The ratio you set defines the initial
+          No pool exists yet - you&apos;ll be the first liquidity provider. The ratio you set defines the initial
           price.
         </div>
       ) : (
         <div className="mt-3 text-xs text-arc-text-muted">
-          Existing pool — amount B is computed from current reserves to avoid swap-on-add.
+          Existing pool - amount B is computed from current reserves to avoid swap-on-add.
         </div>
       )}
 

@@ -22,7 +22,7 @@ export function Footer() {
           </span>
         </div>
 
-        {/* Center: social/doc icons — centered on viewport axis */}
+        {/* Center: social/doc icons - centered on viewport axis */}
         <div className="flex items-center justify-center gap-5 text-arc-gray">
           <a
             href="https://arcade.example/"

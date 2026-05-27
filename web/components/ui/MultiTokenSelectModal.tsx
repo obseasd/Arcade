@@ -19,7 +19,7 @@ interface PinnedTemplate {
 interface Props {
   open: boolean;
   onClose: () => void;
-  /** All addable tokens — typically all V2 tokens + USDC. */
+  /** All addable tokens - typically all V2 tokens + USDC. */
   tokens: TokenOption[];
   /** Already-selected token addresses (current state of the multi-swap inputs). */
   initialSelected: Address[];
@@ -49,7 +49,7 @@ export function MultiTokenSelectModal({
   onConfirm,
 }: Props) {
   const [q, setQ] = useState("");
-  // Working selection (lowercased addresses) — staged client-side until Confirm.
+  // Working selection (lowercased addresses) - staged client-side until Confirm.
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
   useEffect(() => {
@@ -281,7 +281,7 @@ export function MultiTokenSelectModal({
               >
                 <TokenIcon symbol={t.symbol} size={36} />
                 <div className="min-w-0 flex-1">
-                  <div className="text-sm font-medium">{t.symbol ?? "—"}</div>
+                  <div className="text-sm font-medium">{t.symbol ?? "-"}</div>
                   <div className="truncate text-xs text-arc-text-muted">{t.name ?? t.address}</div>
                 </div>
                 {active && <Check className="h-4 w-4 text-arc-cta-hover" />}
