@@ -50,14 +50,13 @@ locked forever** (un-ruggable — only fees can be collected).
 
 - **Creation fee:** 3 USDC (treasury).
 - **Swap fee tier:** 1% / 2% / 3% (creator picks).
-- **Fee split (LP swap fees):**
-  - **Default** (simple launch): creator **80%** / treasury **20%**.
+- **Fee split (LP swap fees):** the platform **always keeps 20%**; the creator
+  side gets **80%**.
+  - **Default** (simple launch): creator 80% / treasury 20%.
   - **Custom** (`createClankerV3`): up to **3 recipients** with admin + reward
-    preference (Both / USDC-only / Token-only). ⚠️ **Currently the custom
-    recipients' bps must sum to 100% and they receive 100% of the LP fees —
-    there is no forced platform cut in the custom path.** (Open decision: enforce
-    a mandatory 20% platform cut so custom recipients split only the 80%; this
-    needs a contract change — `MAX_RECIPIENTS` 3 → 4 — and a redeploy.)
+    preference (Both / USDC-only / Token-only) split the **80%** creator share
+    (their bps sum to 100% of that share); the contract rescales them to 80% and
+    appends the treasury at 20% (so up to 4 on-chain recipients).
 - **Pool types** (liquidity shape & start mcap):
   | Type | Paired | Start mcap | Positions |
   |------|--------|-----------|-----------|
@@ -119,6 +118,6 @@ loss-leader, fast is monetized (0.05%) once the fee router ships.
 | Pump curve | 0.5% of curve volume |
 | Arcade curve | 0.7% of curve volume |
 | Post-migration | 0.20% of routed volume |
-| Clanker | 20% of LP fees in the default split (≈0.20% of volume on a 1% pool); 0% if a creator sets fully-custom recipients (see open decision) + anti-sniper skim |
+| Clanker | 20% of LP fees, always (≈0.20% of volume on a 1% pool) + anti-sniper skim |
 | Fast bridge | 0.05% (once the fee router ships) |
 | Creation | 3 USDC per token, all modes |

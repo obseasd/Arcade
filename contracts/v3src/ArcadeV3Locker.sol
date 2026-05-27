@@ -34,7 +34,7 @@ contract ArcadeV3Locker is IUniswapV3MintCallback {
     address public immutable factory;
 
     uint256 internal constant BPS = 10_000;
-    uint8 public constant MAX_RECIPIENTS = 3;
+    uint8 public constant MAX_RECIPIENTS = 4; // up to 3 creator recipients + the platform
     uint8 public constant MAX_RANGES = 3;
 
     // Tick offsets (from the launch tick) delimiting the 3-position liquidity

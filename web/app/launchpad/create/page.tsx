@@ -141,16 +141,12 @@ function CreateTokenInner() {
     if (!isV3) return true;
     if (recipients.length < 1 || recipients.length > 3) return false;
     let sum = 0;
-    let hasPaired = false;
-    let hasClanker = false;
     for (const r of recipients) {
       if (!isAddress(r.recipient.trim())) return false;
       if (r.pct <= 0) return false;
       sum += r.pct;
-      if (r.pref !== 2) hasPaired = true;
-      if (r.pref !== 1) hasClanker = true;
     }
-    return sum === 100 && hasPaired && hasClanker;
+    return sum === 100;
   })();
 
   const setRecipient = (i: number, patch: Partial<RecipientRow>) =>
@@ -199,7 +195,6 @@ function CreateTokenInner() {
       next[0] = { ...next[0], pct: Math.max(0, next[0].pct + (100 - sum)) };
       return next;
     });
-  const recipientsSum = recipients.reduce((a, r) => a + (r.pct || 0), 0);
 
   // Read an uploaded image, downscale to 256px (keeps the on-chain metadata
   // string small), and store it as a data: URL so no external hosting is needed.
@@ -406,7 +401,7 @@ function CreateTokenInner() {
           </Link>
         </div>
 
-        <Field label="Name" hint="Display name shown on the discovery page.">
+        <Field label="Name">
           <input
             value={name}
             onChange={(e) => setName(e.target.value.slice(0, 32))}
@@ -414,7 +409,7 @@ function CreateTokenInner() {
             className="arc-input rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2"
           />
         </Field>
-        <Field label="Symbol" hint="Ticker - uppercase letters, up to 12 chars.">
+        <Field label="Symbol">
           <input
             value={symbol}
             onChange={(e) => setSymbol(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 12))}
@@ -423,17 +418,17 @@ function CreateTokenInner() {
           />
         </Field>
         <div className="space-y-1.5">
-          <div className="flex items-center justify-between">
-            <span className="text-sm font-medium text-arc-text">Image</span>
-            <span className="text-xs text-arc-text-faint">PNG / JPEG - downscaled to 256px</span>
-          </div>
+          <span className="text-sm font-medium text-arc-text">Image</span>
           <div className="flex items-center gap-3">
-            <label className="flex h-16 w-16 shrink-0 cursor-pointer items-center justify-center overflow-hidden rounded-xl border border-dashed border-arc-border bg-arc-bg-elevated transition-colors hover:border-arc-cta-hover">
+            <label className="flex h-16 w-16 shrink-0 cursor-pointer flex-col items-center justify-center gap-0.5 overflow-hidden rounded-xl border border-dashed border-arc-border bg-arc-bg-elevated transition-colors hover:border-arc-cta-hover">
               {image.trim() ? (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img src={image.trim()} alt="" className="h-full w-full object-cover" />
               ) : (
-                <Upload className="h-5 w-5 text-arc-text-faint" />
+                <>
+                  <Upload className="h-4 w-4 text-arc-text-faint" />
+                  <span className="text-[9px] leading-none text-arc-text-faint">PNG / JPEG</span>
+                </>
               )}
               <input
                 type="file"
@@ -450,7 +445,7 @@ function CreateTokenInner() {
             />
           </div>
         </div>
-        <Field label="Description" hint="Pitch your token in a few lines.">
+        <Field label="Description">
           <textarea
             value={description}
             onChange={(e) => setDescription(e.target.value.slice(0, 500))}
@@ -462,15 +457,7 @@ function CreateTokenInner() {
 
         {isV3 && (
           <div className="space-y-3 rounded-xl border border-arc-border bg-arc-bg-elevated p-4">
-            <div className="flex items-center gap-2">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src="/safe.png" alt="" className="h-4 w-4" />
-              <span className="text-sm font-medium text-arc-text">Pool type</span>
-            </div>
-            <p className="text-xs text-arc-text-faint">
-              How the locked liquidity is shaped. Standard/Deep spread the supply across 3 positions;
-              Legacy is a single position with a custom starting market cap.
-            </p>
+            <span className="text-sm font-medium text-arc-text">Pool type</span>
             <div className="grid grid-cols-2 gap-2">
               {POOL_TYPES.map((pt) => (
                 <button
@@ -503,27 +490,16 @@ function CreateTokenInner() {
             {!poolValid && (
               <div className="text-xs text-arc-danger">Starting market cap must be 1 to 1,000,000 USDC.</div>
             )}
-            {isWethPool && (
-              <div className="text-xs text-arc-text-faint">
-                WETH pool: the token pairs with WETH (10 ETH start) and trades in WETH. Creator buy is
-                disabled (it spends USDC).
-              </div>
-            )}
           </div>
         )}
 
         {isV3 && (
           <div className="space-y-3 rounded-xl border border-arc-border bg-arc-bg-elevated p-4">
-            <div className="flex items-center justify-between">
-              <span className="text-sm font-medium text-arc-text">Fee recipients</span>
-              <span className={cn("text-xs tabular-nums", recipientsSum === 100 ? "text-arc-text-faint" : "text-arc-danger")}>
-                {recipientsSum}% / 100%
-              </span>
-            </div>
+            <span className="text-sm font-medium text-arc-text">Fee recipients</span>
             <p className="text-xs text-arc-text-faint">
-              Split the LP swap fees across up to 3 addresses - percentages auto-balance to 100%.
-              <b>Admin</b> lets that recipient rotate its own payout later (otherwise you stay admin
-              of the slot). Token: <b>Both</b> = USDC + token, or USDC-only / token-only.
+              The platform keeps <b>20%</b>; your recipients split the remaining <b>80%</b>
+              (auto-balanced to 100%). <b>Admin</b> lets a recipient rotate its own payout. Token:
+              <b>Both</b> = USDC + token, or USDC-only / token-only.
             </p>
             {recipients.map((r, i) => (
               <div key={i} className="space-y-2 rounded-lg border border-arc-border bg-white/[0.03] p-3">
@@ -552,15 +528,7 @@ function CreateTokenInner() {
                   )}
                 </div>
                 <div className="flex items-center gap-3">
-                  <select
-                    value={r.pref}
-                    onChange={(e) => setRecipient(i, { pref: Number(e.target.value) as RewardPref })}
-                    className="rounded-lg border border-arc-border bg-arc-bg-elevated px-2 py-1.5 text-xs text-arc-text"
-                  >
-                    <option value={0}>Both</option>
-                    <option value={1}>USDC only</option>
-                    <option value={2}>Token only</option>
-                  </select>
+                  <PrefSelect value={r.pref} onChange={(v) => setRecipient(i, { pref: v })} />
                   <label
                     className="flex cursor-pointer select-none items-center gap-1.5 text-xs text-arc-text-muted"
                     title="Checked: this recipient can rotate its own payout later. Unchecked: you (the creator) stay admin of this slot."
@@ -582,10 +550,7 @@ function CreateTokenInner() {
               </button>
             )}
             {!recipientsValid && (
-              <div className="text-xs text-arc-danger">
-                Recipients must be valid addresses, sum to 100%, and cover both fee sides (at least
-                one Both/USDC and one Both/Token).
-              </div>
+              <div className="text-xs text-arc-danger">Recipients must be valid addresses summing to 100%.</div>
             )}
           </div>
         )}
@@ -627,16 +592,16 @@ function CreateTokenInner() {
                 <input
                   value={isWethPool ? "" : creatorBuyStr}
                   onChange={(e) => setCreatorBuyStr(e.target.value.replace(/[^0-9.]/g, ""))}
-                  placeholder="0"
+                  placeholder={isWethPool ? "Unavailable on WETH pools" : "0"}
                   inputMode="decimal"
                   disabled={isWethPool}
                   className="arc-input flex-1 bg-transparent text-sm tabular-nums"
                 />
-                <span className="text-xs text-arc-text-muted">USDC</span>
+                {!isWethPool && <span className="text-xs text-arc-text-muted">USDC</span>}
               </div>
-              <div className="mt-1 text-xs text-arc-text-faint">
-                {isWethPool ? "Unavailable on WETH pools." : "Buy your own token at launch (first buyer)."}
-              </div>
+              {!isWethPool && (
+                <div className="mt-1 text-xs text-arc-text-faint">Buy your own token at launch (first buyer).</div>
+              )}
             </div>
           </div>
         )}
@@ -890,16 +855,22 @@ function CreateTokenInner() {
                   </span>
                 </div>
 
-                <div className="space-y-2 border-t border-arc-border pt-3 text-sm">
-                  <PreviewRow label="Pool type" value={POOL_TYPES[poolType].label} />
-                  <PreviewRow label="Paired with" value={pairedSymbol} />
-                  <PreviewRow label="Starting mcap" value={startMcapLabel} />
-                  <PreviewRow label="Positions" value={`${positionsCount} (locked)`} />
-                  <PreviewRow label="Fee recipients" value={String(recipients.length)} />
-                  {!isWethPool && Number(creatorBuyStr) > 0 && (
-                    <PreviewRow label="Creator buy" value={`${creatorBuyStr} USDC`} />
-                  )}
-                </div>
+                <details className="border-t border-arc-border pt-3">
+                  <summary className="flex cursor-pointer select-none items-center justify-between text-sm text-arc-text-muted hover:text-arc-text">
+                    <span>Liquidity details</span>
+                    <ChevronDown className="arc-disclosure h-4 w-4 text-arc-text-faint" />
+                  </summary>
+                  <div className="mt-2 space-y-2 text-sm">
+                    <PreviewRow label="Pool type" value={POOL_TYPES[poolType].label} />
+                    <PreviewRow label="Paired with" value={pairedSymbol} />
+                    <PreviewRow label="Starting mcap" value={startMcapLabel} />
+                    <PreviewRow label="Positions" value={`${positionsCount} (locked)`} />
+                    <PreviewRow label="Fee recipients" value={String(recipients.length)} />
+                    {!isWethPool && Number(creatorBuyStr) > 0 && (
+                      <PreviewRow label="Creator buy" value={`${creatorBuyStr} USDC`} />
+                    )}
+                  </div>
+                </details>
               </>
             ) : (
               <div className="space-y-2 border-t border-arc-border pt-3 text-sm">
@@ -911,11 +882,6 @@ function CreateTokenInner() {
                 <PreviewRow label="Migrates to" value="Arcade V2 (LP burned)" />
               </div>
             )}
-
-            <div className="flex items-center justify-between border-t border-arc-border pt-3 text-xs">
-              <span className="text-arc-text-faint">Creation fee</span>
-              <span className="tabular-nums text-arc-text-muted">{formatUSDC(CREATION_FEE_USDC, 6, 0)} USDC</span>
-            </div>
           </div>
 
           <button
@@ -944,6 +910,58 @@ function CreateTokenInner() {
           <TxStatus state={tx} />
         </aside>
       </div>
+    </div>
+  );
+}
+
+/** Dark-themed dropdown for a recipient's reward-token preference. */
+function PrefSelect({ value, onChange }: { value: RewardPref; onChange: (v: RewardPref) => void }) {
+  const [open, setOpen] = useState(false);
+  const opts: { v: RewardPref; label: string }[] = [
+    { v: 0, label: "Both" },
+    { v: 1, label: "USDC only" },
+    { v: 2, label: "Token only" },
+  ];
+  const current = opts.find((o) => o.v === value)?.label ?? "Both";
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="flex items-center gap-1.5 rounded-lg border border-arc-border bg-arc-bg-elevated px-2 py-1.5 text-xs text-arc-text"
+      >
+        {current}
+        <ChevronDown className={cn("h-3.5 w-3.5 text-arc-text-faint transition-transform", open && "rotate-180")} />
+      </button>
+      {open && (
+        <>
+          <button
+            type="button"
+            aria-hidden
+            tabIndex={-1}
+            className="fixed inset-0 z-10 cursor-default"
+            onClick={() => setOpen(false)}
+          />
+          <div className="absolute left-0 z-20 mt-1 min-w-[8rem] overflow-hidden rounded-lg border border-arc-border bg-arc-bg-elevated shadow-arc-card">
+            {opts.map((o) => (
+              <button
+                key={o.v}
+                type="button"
+                onClick={() => {
+                  onChange(o.v);
+                  setOpen(false);
+                }}
+                className={cn(
+                  "block w-full px-3 py-1.5 text-left text-xs transition-colors hover:bg-white/[0.06]",
+                  o.v === value ? "text-arc-text" : "text-arc-text-muted",
+                )}
+              >
+                {o.label}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
     </div>
   );
 }

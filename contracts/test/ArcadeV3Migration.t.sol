@@ -271,13 +271,17 @@ contract ArcadeV3MigrationTest is Test {
     }
 
     function test_createClankerV3_customRecipients_perPotSplit() public {
-        // creator 60% Both, partner 30% Paired-only (USDC), treasury 10% Both.
-        IArcadeV3Locker.Recipient[] memory rs = new IArcadeV3Locker.Recipient[](3);
+        // The platform ALWAYS keeps 20%; the creator's recipients split the 80%.
+        // Creator inputs (sum to 100% of their share): creator 60% Both, partner
+        // 40% Paired-only. After the 20% platform cut: creator 4800, partner 3200,
+        // platform(treasury) 2000.
+        IArcadeV3Locker.Recipient[] memory rs = new IArcadeV3Locker.Recipient[](2);
         rs[0] = IArcadeV3Locker.Recipient(creator, creator, 6000, IArcadeV3Locker.RewardToken.Both);
-        rs[1] = IArcadeV3Locker.Recipient(partner, partner, 3000, IArcadeV3Locker.RewardToken.Paired);
-        rs[2] = IArcadeV3Locker.Recipient(treasury, treasury, 1000, IArcadeV3Locker.RewardToken.Both);
+        rs[1] = IArcadeV3Locker.Recipient(partner, partner, 4000, IArcadeV3Locker.RewardToken.Paired);
         (address token, address pool) = _createClankerV3(rs);
         uint256 positionId = IArcadeV3Locker(v3Locker).positionIdByToken(token);
+        // 3 creator-side entries become 3 (creator+partner) + 1 platform = 3 total here.
+        assertEq(IArcadeV3Locker(v3Locker).recipientsCount(positionId), 3, "platform appended");
 
         _genFeesBothSides(token, pool);
 
@@ -292,15 +296,15 @@ contract ArcadeV3MigrationTest is Test {
         assertGt(paid, 0, "usdc fees");
         assertGt(clank, 0, "token fees");
 
-        // USDC pot: weights 6000/3000/1000 = 10000 → 60/30/10.
-        assertApproxEqAbs(usdc.balanceOf(creator) - cU0, (paid * 6000) / 10000, 2, "creator 60% USDC");
-        assertApproxEqAbs(usdc.balanceOf(partner) - pU0, (paid * 3000) / 10000, 2, "partner 30% USDC");
-        assertApproxEqAbs(usdc.balanceOf(treasury) - tU0, (paid * 1000) / 10000, 2, "treasury 10% USDC");
+        // USDC pot: weights 4800/3200/2000 = 10000 → 48/32/20.
+        assertApproxEqAbs(usdc.balanceOf(creator) - cU0, (paid * 4800) / 10000, 2, "creator 48% USDC");
+        assertApproxEqAbs(usdc.balanceOf(partner) - pU0, (paid * 3200) / 10000, 2, "partner 32% USDC");
+        assertApproxEqAbs(usdc.balanceOf(treasury) - tU0, (paid * 2000) / 10000, 2, "platform 20% USDC");
 
-        // Token pot: partner is Paired-only → excluded. Weights creator 6000 + treasury 1000 = 7000.
+        // Token pot: partner is Paired-only → excluded. Weights creator 4800 + platform 2000 = 6800.
         assertEq(IERC20(token).balanceOf(partner) - pT0, 0, "partner gets NO token");
-        assertApproxEqAbs(IERC20(token).balanceOf(creator) - cT0, (clank * 6000) / 7000, 2, "creator 6/7 token");
-        assertApproxEqAbs(IERC20(token).balanceOf(treasury) - tT0, (clank * 1000) / 7000, 2, "treasury 1/7 token");
+        assertApproxEqAbs(IERC20(token).balanceOf(creator) - cT0, (clank * 4800) / 6800, 2, "creator 48/68 token");
+        assertApproxEqAbs(IERC20(token).balanceOf(treasury) - tT0, (clank * 2000) / 6800, 2, "platform 20/68 token");
     }
 
     function test_createClankerV3_badBps_reverts() public {
@@ -309,9 +313,22 @@ contract ArcadeV3MigrationTest is Test {
         rs[1] = IArcadeV3Locker.Recipient(partner, partner, 3000, IArcadeV3Locker.RewardToken.Both); // sums to 9000
         vm.startPrank(creator);
         usdc.approve(address(launchpad), type(uint256).max);
-        vm.expectRevert(bytes("BPS_SUM"));
+        vm.expectRevert(ArcadeLaunchpad.InvalidShare.selector);
         launchpad.createClankerV3("X", "X", "ipfs://x", rs, _opts(FEE, 0));
         vm.stopPrank();
+    }
+
+    function test_createClankerV3_platformKeeps20_singleRecipient() public {
+        // Single recipient at 100% → creator 80%, platform 20%.
+        IArcadeV3Locker.Recipient[] memory rs = _defaultRecipients();
+        (address token, address pool) = _createClankerV3(rs);
+        uint256 positionId = IArcadeV3Locker(v3Locker).positionIdByToken(token);
+        _genFeesBothSides(token, pool);
+        uint256 cU0 = usdc.balanceOf(creator);
+        uint256 tU0 = usdc.balanceOf(treasury);
+        (uint256 paid,) = IArcadeV3Locker(v3Locker).collectFees(positionId);
+        assertApproxEqAbs(usdc.balanceOf(creator) - cU0, (paid * 8000) / 10000, 2, "creator 80%");
+        assertApproxEqAbs(usdc.balanceOf(treasury) - tU0, (paid * 2000) / 10000, 2, "platform 20%");
     }
 
     function _defaultRecipients() internal view returns (IArcadeV3Locker.Recipient[] memory rs) {

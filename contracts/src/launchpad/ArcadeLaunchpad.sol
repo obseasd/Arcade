@@ -46,36 +46,36 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
     uint256 public constant TOTAL_SUPPLY = 1_000_000_000e18;
     uint256 public constant CURVE_SUPPLY = 800_000_000e18;
     uint256 public constant MIGRATION_LP_TOKENS = TOTAL_SUPPLY - CURVE_SUPPLY; // 200M
-    uint256 public constant VIRTUAL_USDC_RESERVE = 5_000e6;
-    uint256 public constant VIRTUAL_TOKEN_RESERVE = 1_000_000_000e18;
-    uint256 public constant K_CONSTANT = VIRTUAL_USDC_RESERVE * VIRTUAL_TOKEN_RESERVE;
-    uint256 public constant MIGRATION_USDC_TARGET = 20_000e6; // 20,000 USDC raised
+    uint256 internal constant VIRTUAL_USDC_RESERVE = 5_000e6;
+    uint256 internal constant VIRTUAL_TOKEN_RESERVE = 1_000_000_000e18;
+    uint256 internal constant K_CONSTANT = VIRTUAL_USDC_RESERVE * VIRTUAL_TOKEN_RESERVE;
+    uint256 internal constant MIGRATION_USDC_TARGET = 20_000e6; // 20,000 USDC raised
 
     uint256 public constant CREATION_FEE = 3e6; // 3 USDC
-    uint256 public constant TRADE_FEE_BPS = 100; // 1% total
-    uint256 public constant FEE_DENOMINATOR = 10_000;
+    uint256 internal constant TRADE_FEE_BPS = 100; // 1% total
+    uint256 internal constant FEE_DENOMINATOR = 10_000;
 
     // PUMP mode: 50% platform / 50% creator(s)
-    uint256 public constant PUMP_PLATFORM_BPS = 5_000; // 50% of the trade fee
+    uint256 internal constant PUMP_PLATFORM_BPS = 5_000; // 50% of the trade fee
     // CLANKER mode: 70% platform / 30% creator(s)
-    uint256 public constant CLANKER_PLATFORM_BPS = 7_000; // 70% of the trade fee
+    uint256 internal constant CLANKER_PLATFORM_BPS = 7_000; // 70% of the trade fee
 
     /// @notice Post-migration royalty taken on top of V2 LP fees when the
     /// swap is routed through `buyMigrated` / `sellMigrated`. Uniform split
     /// across both launch modes (the bonding-curve split logic only applies
     /// while the curve is active).
-    uint256 public constant MIGRATED_PLATFORM_BPS = 20; // 0.20% to platform
-    uint256 public constant MIGRATED_CREATOR_BPS = 10; // 0.10% to creator(s)
-    uint256 public constant MIGRATED_ROYALTY_BPS = MIGRATED_PLATFORM_BPS + MIGRATED_CREATOR_BPS; // 0.30% total
+    uint256 internal constant MIGRATED_PLATFORM_BPS = 20; // 0.20% to platform
+    uint256 internal constant MIGRATED_CREATOR_BPS = 10; // 0.10% to creator(s)
+    uint256 internal constant MIGRATED_ROYALTY_BPS = MIGRATED_PLATFORM_BPS + MIGRATED_CREATOR_BPS; // 0.30% total
 
     // --- V3 vault (CLANKER_V3) migration params ---
     /// @notice V3 pool fee tier used for vault migrations: 1% (matches the
     /// high-fee, creator-friendly Clanker model).
-    uint24 public constant V3_FEE = 10_000;
+    uint24 internal constant V3_FEE = 10_000;
     /// @notice Tick spacing for the 1% fee tier.
-    int24 public constant V3_TICK_SPACING = 200;
+    int24 internal constant V3_TICK_SPACING = 200;
     /// @notice Creator's share of V3 LP fees in the locker (80%); platform gets 20%.
-    uint16 public constant V3_CREATOR_BPS = 8_000;
+    uint16 internal constant V3_CREATOR_BPS = 8_000;
     /// @notice Starting fully-diluted valuation for a CLANKER_V3 single-sided
     /// launch, in USDC (6dp). The whole supply is placed single-sided at this
     /// FDV; price rises as the token is bought. Tunable.
@@ -93,9 +93,9 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
     uint256 internal constant LEGACY_MAX_MCAP = 1_000_000e6; // 1,000,000 USDC
     /// @notice Max share of supply that can be vaulted (locked/vesting) for the
     /// creator; the rest must go to the LP. 90%.
-    uint16 public constant MAX_VAULT_BPS = 9_000;
+    uint16 internal constant MAX_VAULT_BPS = 9_000;
     /// @notice Max starting sniper-tax rate (50%). Decays linearly to 0.
-    uint16 public constant MAX_SNIPE_BPS = 5_000;
+    uint16 internal constant MAX_SNIPE_BPS = 5_000;
 
     address public constant DEAD = 0x000000000000000000000000000000000000dEaD;
 
@@ -334,9 +334,48 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         }
 
         uint256 lpSupply = _applyVault(tokenAddr, opts);
+        // Platform always keeps 20% of the LP fees; the creator's recipients
+        // split the other 80%.
+        IArcadeV3Locker.Recipient[] memory rs = _withPlatformCut(recipients);
         _launchClankerV3(
-            s, tokenAddr, recipients, opts.fee, opts.creatorBuyUsdc, lpSupply, opts.poolType, opts.legacyMcapUsdc
+            s, tokenAddr, rs, opts.fee, opts.creatorBuyUsdc, lpSupply, opts.poolType, opts.legacyMcapUsdc
         );
+    }
+
+    /// @dev Rescales the creator's recipients (bps must sum to 10000) down to the
+    /// creator share (V3_CREATOR_BPS = 80%) and appends the platform (treasury)
+    /// at the remaining 20%, eligible for both fee pots.
+    function _withPlatformCut(IArcadeV3Locker.Recipient[] calldata rs)
+        internal
+        view
+        returns (IArcadeV3Locker.Recipient[] memory out)
+    {
+        uint256 n = rs.length;
+        if (n < 1 || n > 3) revert InvalidShare();
+        uint256 sum;
+        for (uint256 i; i < n; ++i) sum += rs[i].bps;
+        if (sum != FEE_DENOMINATOR) revert InvalidShare();
+
+        out = new IArcadeV3Locker.Recipient[](n + 1);
+        uint256 scaledSum;
+        for (uint256 i; i < n; ++i) {
+            uint16 scaled = uint16((uint256(rs[i].bps) * V3_CREATOR_BPS) / FEE_DENOMINATOR);
+            out[i] = IArcadeV3Locker.Recipient({
+                recipient: rs[i].recipient,
+                admin: rs[i].admin,
+                bps: scaled,
+                tokenPref: rs[i].tokenPref
+            });
+            scaledSum += scaled;
+        }
+        // Rounding dust goes to the first recipient so the creator share is exactly 80%.
+        out[0].bps = uint16(uint256(out[0].bps) + (V3_CREATOR_BPS - scaledSum));
+        out[n] = IArcadeV3Locker.Recipient({
+            recipient: treasury,
+            admin: treasury,
+            bps: uint16(FEE_DENOMINATOR - V3_CREATOR_BPS),
+            tokenPref: IArcadeV3Locker.RewardToken.Both
+        });
     }
 
     /// @dev Carves the optional vaulted allocation; returns the LP supply.
