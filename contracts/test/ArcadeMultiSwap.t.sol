@@ -8,6 +8,7 @@ import {ArcadeV2Router} from "../src/dex/ArcadeV2Router.sol";
 import {ArcadeLaunchpad} from "../src/launchpad/ArcadeLaunchpad.sol";
 import {IArcadeLaunchpad} from "../src/launchpad/interfaces/IArcadeLaunchpad.sol";
 import {ArcadeMultiSwap} from "../src/swap/ArcadeMultiSwap.sol";
+import {IArcadeV3Factory} from "../src/v3/interfaces/IArcadeV3Minimal.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 /// @notice Tests for ArcadeMultiSwap. To work around `via_ir` stack-too-deep
@@ -36,7 +37,9 @@ contract ArcadeMultiSwapTest is Test {
         usdc = new MockUSDC();
         factory = new ArcadeV2Factory(address(this));
         router = new ArcadeV2Router(address(factory));
-        launchpad = new ArcadeLaunchpad(IERC20(address(usdc)), factory, address(router), treasury);
+        launchpad = new ArcadeLaunchpad(
+            IERC20(address(usdc)), factory, address(router), treasury, IArcadeV3Factory(address(0))
+        );
         multiSwap =
             new ArcadeMultiSwap(IERC20(address(usdc)), factory, router, IArcadeLaunchpad(address(launchpad)));
         usdc.mint(alice, 1_000_000e6);

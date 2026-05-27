@@ -10,6 +10,7 @@ import {IArcadeV2Pair} from "../src/dex/interfaces/IArcadeV2Pair.sol";
 import {ArcadeLaunchpad} from "../src/launchpad/ArcadeLaunchpad.sol";
 import {IArcadeLaunchpad} from "../src/launchpad/interfaces/IArcadeLaunchpad.sol";
 import {ArcadeLaunchToken} from "../src/launchpad/ArcadeLaunchToken.sol";
+import {IArcadeV3Factory} from "../src/v3/interfaces/IArcadeV3Minimal.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 contract ArcadeLaunchpadTest is Test {
@@ -27,7 +28,9 @@ contract ArcadeLaunchpadTest is Test {
         usdc = new MockUSDC();
         factory = new ArcadeV2Factory(address(this));
         router = new ArcadeV2Router(address(factory));
-        launchpad = new ArcadeLaunchpad(IERC20(address(usdc)), factory, address(router), treasury);
+        launchpad = new ArcadeLaunchpad(
+            IERC20(address(usdc)), factory, address(router), treasury, IArcadeV3Factory(address(0))
+        );
 
         // Fund users
         usdc.mint(creator, 100 * 10 ** 6);

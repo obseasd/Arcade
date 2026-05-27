@@ -2,12 +2,17 @@
 pragma solidity ^0.8.24;
 
 interface IArcadeLaunchpad {
-    /// @notice Launch mode determines the fee split between platform and creator(s).
-    /// PUMP   = 50% platform / 50% creator(s)   — pump.fun style
-    /// CLANKER = 70% platform / 30% creator(s)   — Clanker style, supports two creator receivers
+    /// @notice Launch mode determines the curve fee split AND the migration style.
+    /// PUMP      = 50% platform / 50% creator(s), migrates to a V2 pool with LP burned
+    /// CLANKER   = 70% platform / 30% creator(s), migrates to a V2 pool with LP burned
+    /// CLANKER_V3 = 70% platform / 30% creator(s) on the curve; migrates to a LOCKED
+    ///             Uniswap V3 full-range position held by ArcadeV3Locker, where the
+    ///             creator earns 80% of perpetual LP fees (platform 20%) and the
+    ///             principal can never be withdrawn.
     enum LaunchMode {
         PUMP,
-        CLANKER
+        CLANKER,
+        CLANKER_V3
     }
 
     struct TokenState {

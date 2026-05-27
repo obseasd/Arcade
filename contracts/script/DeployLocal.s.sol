@@ -8,6 +8,7 @@ import {ArcadeV2Router} from "../src/dex/ArcadeV2Router.sol";
 import {ArcadeLaunchpad} from "../src/launchpad/ArcadeLaunchpad.sol";
 import {IArcadeLaunchpad} from "../src/launchpad/interfaces/IArcadeLaunchpad.sol";
 import {ArcadeMultiSwap} from "../src/swap/ArcadeMultiSwap.sol";
+import {IArcadeV3Factory} from "../src/v3/interfaces/IArcadeV3Minimal.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 /**
@@ -38,10 +39,24 @@ contract DeployLocal is Script {
         MockUSDC usdc = new MockUSDC();
         ArcadeV2Factory factory = new ArcadeV2Factory(deployer);
         ArcadeV2Router router = new ArcadeV2Router(address(factory));
-        ArcadeLaunchpad launchpad = new ArcadeLaunchpad(IERC20(address(usdc)), factory, address(router), deployer);
+
+        // ---- Uniswap V3 fork (for CLANKER_V3 locked-LP vault) ----
+        // Requires the out-v3 artifacts: run `FOUNDRY_PROFILE=v3 forge build` first.
+        address v3Factory = _deployV3Factory();
+
+        ArcadeLaunchpad launchpad = new ArcadeLaunchpad(
+            IERC20(address(usdc)), factory, address(router), deployer, IArcadeV3Factory(v3Factory)
+        );
         ArcadeMultiSwap multiSwap = new ArcadeMultiSwap(
             IERC20(address(usdc)), factory, router, IArcadeLaunchpad(address(launchpad))
         );
+
+        // Locker needs the launchpad address; wire it back via the one-time setter.
+        address v3Locker = _deployV3Locker(address(launchpad), v3Factory);
+        launchpad.setV3Locker(v3Locker);
+        // V3 swap router + quoter so CLANKER_V3 tokens are tradeable.
+        address v3Router = _deployV3Aux("out-v3/ArcadeV3SwapRouter.sol/ArcadeV3SwapRouter.json", v3Factory, address(usdc));
+        address v3Quoter = _deployV3Aux("out-v3/ArcadeV3Quoter.sol/ArcadeV3Quoter.json", v3Factory, address(usdc));
 
         // Activate Uniswap V2 `feeTo` — routes 1/6 of all LP fees to the treasury
         // (= 0.05% of swap volume). Treasury is the deployer here for the local demo;
@@ -80,16 +95,28 @@ contract DeployLocal is Script {
         );
         launchpad.buy(satoshi, 100_000e6, 0); // forces migration
 
+        // Token #5: CLANKER_V3 — TRUE Clanker launch. No bonding curve: the full
+        // supply is locked single-sided in a V3 pool at creation, tradeable
+        // immediately, creator earns 80% of perpetual LP fees.
+        address vaultCat = launchpad.createToken(
+            "Vault Cat", "VCAT", "ipfs://demo-vault", IArcadeLaunchpad.LaunchMode.CLANKER_V3, address(0), 0
+        );
+
         // ---- Console summary ----
         console2.log("USDC:        ", address(usdc));
         console2.log("V2 Factory:  ", address(factory));
         console2.log("V2 Router:   ", address(router));
+        console2.log("V3 Factory:  ", v3Factory);
+        console2.log("V3 Locker:   ", v3Locker);
+        console2.log("V3 Router:   ", v3Router);
+        console2.log("V3 Quoter:   ", v3Quoter);
         console2.log("Launchpad:   ", address(launchpad));
         console2.log("MultiSwap:   ", address(multiSwap));
         console2.log("APEPE:       ", pepe);
         console2.log("ADOGE:       ", dog);
         console2.log("ROCKET:      ", rocket);
         console2.log("SCAT (migr): ", satoshi);
+        console2.log("VCAT (V3):   ", vaultCat);
 
         vm.stopBroadcast();
 
@@ -112,6 +139,18 @@ contract DeployLocal is Script {
             '"multiSwap":"',
             vm.toString(address(multiSwap)),
             '",',
+            '"v3Factory":"',
+            vm.toString(v3Factory),
+            '",',
+            '"v3Locker":"',
+            vm.toString(v3Locker),
+            '",',
+            '"v3Router":"',
+            vm.toString(v3Router),
+            '",',
+            '"v3Quoter":"',
+            vm.toString(v3Quoter),
+            '",',
             '"sampleTokens":[',
             '"',
             vm.toString(pepe),
@@ -124,10 +163,43 @@ contract DeployLocal is Script {
             '",',
             '"',
             vm.toString(satoshi),
+            '",',
+            '"',
+            vm.toString(vaultCat),
             '"',
             "]",
             "}"
         );
         vm.writeFile("./deployments/local.json", json);
+    }
+
+    // ---- V3 deployment helpers (from the out-v3 0.7.6 artifacts) ----
+
+    function _deployV3Factory() internal returns (address factory) {
+        bytes memory code = vm.getCode("out-v3/UniswapV3Factory.sol/UniswapV3Factory.json");
+        assembly {
+            factory := create(0, add(code, 0x20), mload(code))
+        }
+        require(factory != address(0), "v3 factory deploy failed");
+    }
+
+    function _deployV3Locker(address launchpad_, address factory_) internal returns (address locker) {
+        bytes memory code = abi.encodePacked(
+            vm.getCode("out-v3/ArcadeV3Locker.sol/ArcadeV3Locker.json"),
+            abi.encode(launchpad_, factory_)
+        );
+        assembly {
+            locker := create(0, add(code, 0x20), mload(code))
+        }
+        require(locker != address(0), "v3 locker deploy failed");
+    }
+
+    /// @dev Deploys an aux V3 contract whose constructor is (factory, usdc).
+    function _deployV3Aux(string memory path, address factory_, address usdc_) internal returns (address addr) {
+        bytes memory code = abi.encodePacked(vm.getCode(path), abi.encode(factory_, usdc_));
+        assembly {
+            addr := create(0, add(code, 0x20), mload(code))
+        }
+        require(addr != address(0), "v3 aux deploy failed");
     }
 }

@@ -7,6 +7,7 @@ import {ArcadeV2Router} from "../src/dex/ArcadeV2Router.sol";
 import {ArcadeLaunchpad} from "../src/launchpad/ArcadeLaunchpad.sol";
 import {IArcadeLaunchpad} from "../src/launchpad/interfaces/IArcadeLaunchpad.sol";
 import {ArcadeMultiSwap} from "../src/swap/ArcadeMultiSwap.sol";
+import {IArcadeV3Factory} from "../src/v3/interfaces/IArcadeV3Minimal.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 /**
@@ -32,10 +33,22 @@ contract DeployTestnet is Script {
 
         ArcadeV2Factory factory = new ArcadeV2Factory(deployer);
         ArcadeV2Router router = new ArcadeV2Router(address(factory));
-        ArcadeLaunchpad launchpad = new ArcadeLaunchpad(IERC20(usdc), factory, address(router), treasury);
+
+        // Uniswap V3 fork for CLANKER_V3 locked-LP vaults.
+        // Requires out-v3 artifacts: run `FOUNDRY_PROFILE=v3 forge build` first.
+        address v3Factory = _deployV3Factory();
+
+        ArcadeLaunchpad launchpad = new ArcadeLaunchpad(
+            IERC20(usdc), factory, address(router), treasury, IArcadeV3Factory(v3Factory)
+        );
         ArcadeMultiSwap multiSwap = new ArcadeMultiSwap(
             IERC20(usdc), factory, router, IArcadeLaunchpad(address(launchpad))
         );
+
+        address v3Locker = _deployV3Locker(address(launchpad), v3Factory);
+        launchpad.setV3Locker(v3Locker);
+        address v3Router = _deployV3Aux("out-v3/ArcadeV3SwapRouter.sol/ArcadeV3SwapRouter.json", v3Factory, usdc);
+        address v3Quoter = _deployV3Aux("out-v3/ArcadeV3Quoter.sol/ArcadeV3Quoter.json", v3Factory, usdc);
 
         // Activate `feeTo` so 1/6 of all V2 LP fees route to the treasury
         // (= 0.05% of swap volume) instead of all going to LPs.
@@ -46,9 +59,43 @@ contract DeployTestnet is Script {
         console2.log("Treasury:    ", treasury);
         console2.log("V2 Factory:  ", address(factory));
         console2.log("V2 Router:   ", address(router));
+        console2.log("V3 Factory:  ", v3Factory);
+        console2.log("V3 Locker:   ", v3Locker);
+        console2.log("V3 Router:   ", v3Router);
+        console2.log("V3 Quoter:   ", v3Quoter);
         console2.log("Launchpad:   ", address(launchpad));
         console2.log("MultiSwap:   ", address(multiSwap));
 
         vm.stopBroadcast();
+    }
+
+    // ---- V3 deployment helpers (from the out-v3 0.7.6 artifacts) ----
+
+    function _deployV3Factory() internal returns (address factory) {
+        bytes memory code = vm.getCode("out-v3/UniswapV3Factory.sol/UniswapV3Factory.json");
+        assembly {
+            factory := create(0, add(code, 0x20), mload(code))
+        }
+        require(factory != address(0), "v3 factory deploy failed");
+    }
+
+    function _deployV3Locker(address launchpad_, address factory_) internal returns (address locker) {
+        bytes memory code = abi.encodePacked(
+            vm.getCode("out-v3/ArcadeV3Locker.sol/ArcadeV3Locker.json"),
+            abi.encode(launchpad_, factory_)
+        );
+        assembly {
+            locker := create(0, add(code, 0x20), mload(code))
+        }
+        require(locker != address(0), "v3 locker deploy failed");
+    }
+
+    /// @dev Deploys an aux V3 contract whose constructor is (factory, usdc).
+    function _deployV3Aux(string memory path, address factory_, address usdc_) internal returns (address addr) {
+        bytes memory code = abi.encodePacked(vm.getCode(path), abi.encode(factory_, usdc_));
+        assembly {
+            addr := create(0, add(code, 0x20), mload(code))
+        }
+        require(addr != address(0), "v3 aux deploy failed");
     }
 }

@@ -8,9 +8,11 @@ import { erc20Abi, formatUnits, parseUnits } from "viem";
 import { useAccount, useReadContract, useWriteContract, usePublicClient } from "wagmi";
 import { ROUTER_ABI } from "@/lib/abis/dex";
 import { LAUNCHPAD_ABI } from "@/lib/abis/launchpad";
-import { ADDRESSES, USDC_DECIMALS } from "@/lib/constants";
+import { V3_QUOTER_ABI, V3_ROUTER_ABI } from "@/lib/abis/v3";
+import { ADDRESSES, USDC_DECIMALS, V3_FEE } from "@/lib/constants";
 import { useApproveIfNeeded } from "@/lib/hooks/useApproveIfNeeded";
 import { useV2Tokens } from "@/lib/hooks/useV2Tokens";
+import { useV3Tokens } from "@/lib/hooks/useV3Tokens";
 import { useUsdValue } from "@/lib/hooks/useTokenUsdPrice";
 import { useSwapRoute } from "@/lib/hooks/useSwapRoute";
 import { pushToast } from "@/lib/toast";
@@ -44,9 +46,20 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
   const { address: account } = useAccount();
   const publicClient = usePublicClient();
   const { tokens: v2Tokens } = useV2Tokens();
+  const { tokens: v3Tokens, isV3Token } = useV3Tokens();
   const { writeContractAsync } = useWriteContract();
 
-  const allTokens: TokenOption[] = useMemo(() => [USDC_TOKEN, ...v2Tokens], [v2Tokens]);
+  const allTokens: TokenOption[] = useMemo(() => {
+    const seen = new Set<string>();
+    const out: TokenOption[] = [];
+    for (const t of [USDC_TOKEN, ...v2Tokens, ...v3Tokens]) {
+      const k = t.address.toLowerCase();
+      if (seen.has(k)) continue;
+      seen.add(k);
+      out.push(t);
+    }
+    return out;
+  }, [v2Tokens, v3Tokens]);
 
   const [tokenIn, setTokenIn] = useState<TokenOption>(USDC_TOKEN);
   const [tokenOut, setTokenOut] = useState<TokenOption | null>(null);
@@ -86,12 +99,36 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
   const route = useSwapRoute(tokenIn.address, tokenOut?.address);
   const path = route.path;
 
-  // Exact-out via the launchpad router isn't implemented (would need to
-  // invert the royalty client-side on each leg). When at least one side is
-  // a migrated launchpad token and the route is multi-hop, force exact-in.
+  // --- V3 (CLANKER_V3) classification ---
+  // A token launched single-sided into a locked V3 pool trades on V3, not V2.
+  const isUsdcIn = tokenIn.address.toLowerCase() === ADDRESSES.usdc.toLowerCase();
+  const isUsdcOut = tokenOut?.address.toLowerCase() === ADDRESSES.usdc.toLowerCase();
+  const inIsV3 = isV3Token(tokenIn.address);
+  const outIsV3 = isV3Token(tokenOut?.address);
+  const isV3Swap = inIsV3 || outIsV3;
+  // Single V3 hop when exactly one side is USDC; 2-hop via USDC when both are V3.
+  const v3DoubleHop = inIsV3 && outIsV3;
+  const v3SingleHop = isV3Swap && !v3DoubleHop && (isUsdcIn || isUsdcOut);
+  // V3<->V2 (non-USDC) can't route in one router call — flag as unsupported.
+  const v3Unsupported = isV3Swap && !v3DoubleHop && !v3SingleHop;
+
+  // V3 router is exact-in only — force exact-in when this is a V3 swap.
   useEffect(() => {
-    if (route.useLaunchpadRouter && lastEdited === "out") setLastEdited("in");
-  }, [route.useLaunchpadRouter, lastEdited]);
+    if ((route.useLaunchpadRouter || isV3Swap) && lastEdited === "out") setLastEdited("in");
+  }, [route.useLaunchpadRouter, isV3Swap, lastEdited]);
+
+  // V3 quote (exact-in). Single-hop or 2-hop-through-USDC depending on the pair.
+  const quoteV3 = useReadContract({
+    address: ADDRESSES.v3Quoter,
+    abi: V3_QUOTER_ABI,
+    functionName: v3DoubleHop ? "quoteExactInputThroughUsdc" : "quoteExactInputSingle",
+    args:
+      isV3Swap && !v3Unsupported && tokenOut && amountInRaw > 0n
+        ? [tokenIn.address, tokenOut.address, V3_FEE, amountInRaw]
+        : undefined,
+    query: { enabled: isV3Swap && !v3Unsupported && !!tokenOut && amountInRaw > 0n },
+  });
+  const v3AmountOut = quoteV3.data as bigint | undefined;
 
   // V2 router quotes — used for direct routes and as the input estimator for
   // multi-hop routes that DON'T touch a migrated launchpad token.
@@ -102,7 +139,7 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
     args: amountInRaw > 0n && path.length >= 2 ? [amountInRaw, path] : undefined,
     query: {
       enabled:
-        !route.useLaunchpadRouter && lastEdited === "in" && amountInRaw > 0n && path.length >= 2,
+        !isV3Swap && !route.useLaunchpadRouter && lastEdited === "in" && amountInRaw > 0n && path.length >= 2,
     },
   });
   const quoteIn = useReadContract({
@@ -112,7 +149,7 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
     args: amountOutRawTyped > 0n && path.length >= 2 ? [amountOutRawTyped, path] : undefined,
     query: {
       enabled:
-        !route.useLaunchpadRouter && lastEdited === "out" && amountOutRawTyped > 0n && path.length >= 2,
+        !isV3Swap && !route.useLaunchpadRouter && lastEdited === "out" && amountOutRawTyped > 0n && path.length >= 2,
     },
   });
 
@@ -136,9 +173,11 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
   const amountsOut = quoteOut.data as bigint[] | undefined;
   const amountsIn = quoteIn.data as bigint[] | undefined;
   const migratedQuote = quoteMigratedOut.data as readonly [bigint, bigint] | undefined;
-  const computedAmountOut = route.useLaunchpadRouter
-    ? migratedQuote?.[0]
-    : amountsOut?.[amountsOut.length - 1];
+  const computedAmountOut = isV3Swap
+    ? v3AmountOut
+    : route.useLaunchpadRouter
+      ? migratedQuote?.[0]
+      : amountsOut?.[amountsOut.length - 1];
   const computedAmountIn = amountsIn?.[0];
   /** USDC amount taken as royalty across both legs (0 when not via launchpad). */
   const totalRoyaltyUsdc: bigint = migratedQuote?.[1] ?? 0n;
@@ -195,9 +234,13 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
       ? ((outUsd.usd - inUsd.usd) / inUsd.usd) * 100
       : undefined;
 
-  // When the route requires the launchpad's own router (for royalty-aware
-  // multi-hop), approve the launchpad as the spender instead of the V2 router.
-  const swapSpender = route.useLaunchpadRouter ? ADDRESSES.launchpad : ADDRESSES.router;
+  // Pick the spender to approve based on the route: V3 router for CLANKER_V3
+  // tokens, launchpad for royalty-aware multi-hop, else the V2 router.
+  const swapSpender = isV3Swap
+    ? ADDRESSES.v3Router
+    : route.useLaunchpadRouter
+      ? ADDRESSES.launchpad
+      : ADDRESSES.router;
   const { ensureAllowance } = useApproveIfNeeded(tokenIn.address, swapSpender);
 
   // Slippage helpers
@@ -228,9 +271,16 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
     ? `${formatTokenAmount(minOut, decimalsOut, 6)} ${symOut}`
     : `${formatTokenAmount(maxIn, decimalsIn, 6)} ${symIn}`;
 
-  const fetching = quoteOut.isFetching || quoteIn.isFetching || quoteMigratedOut.isFetching;
+  const fetching =
+    quoteOut.isFetching || quoteIn.isFetching || quoteMigratedOut.isFetching || quoteV3.isFetching;
   const canSwap =
-    !!account && !!tokenOut && finalAmountIn > 0n && finalAmountOut > 0n && !fetching && tx.status !== "pending";
+    !!account &&
+    !!tokenOut &&
+    !v3Unsupported &&
+    finalAmountIn > 0n &&
+    finalAmountOut > 0n &&
+    !fetching &&
+    tx.status !== "pending";
 
   const flipTokens = () => {
     if (!tokenOut) return;
@@ -249,7 +299,17 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
       setTx({ status: "pending", message: "Submitting swap…" });
       const deadline = BigInt(Math.floor(Date.now() / 1000) + 600);
       let hash: `0x${string}`;
-      if (route.useLaunchpadRouter) {
+      if (isV3Swap) {
+        // CLANKER_V3 token: trade on the V3 pool via our V3 router. Exact-in
+        // only (the effect above forces lastEdited="in"). Single hop if one
+        // side is USDC, else 2-hop through USDC.
+        hash = await writeContractAsync({
+          address: ADDRESSES.v3Router,
+          abi: V3_ROUTER_ABI,
+          functionName: v3DoubleHop ? "exactInputThroughUsdc" : "exactInputSingle",
+          args: [tokenIn.address, tokenOut.address, V3_FEE, account, finalAmountIn, minOut, deadline],
+        });
+      } else if (route.useLaunchpadRouter) {
         // Multi-hop through the launchpad's router so post-migration royalties
         // are charged on each leg whose token is a migrated launchpad token.
         // Only exact-in is supported; the effect above forces lastEdited="in".
@@ -369,14 +429,32 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
         feeLabel={feeRaw > 0n ? `Fee ${feeFormatted} ${tokenIn.symbol ?? "TOKEN"}` : undefined}
       />
 
+      {/* Cross-protocol (V3<->V2) routes can't execute in one tx. */}
+      {v3Unsupported && (
+        <div className="mt-3 rounded-xl border border-arc-warn/30 bg-arc-warn/10 p-2 text-xs text-arc-warn">
+          Route through USDC: swap {symIn} → USDC, then USDC → {symOut} separately. Direct{" "}
+          {symIn}→{symOut} mixes a V3 and a V2 pool, which isn&apos;t supported in one swap yet.
+        </div>
+      )}
+
       {/* Route + rate row (between For box and Swap button) */}
       {finalAmountIn > 0n && finalAmountOut > 0n && tokenOut && (
         <div className="mt-4 flex items-center justify-between text-xs">
           <div className="flex items-center gap-1.5 text-arc-text-muted">
             <Image src="/route.png" alt="" width={14} height={14} className="h-3.5 w-3.5 opacity-75" />
             <span>via</span>
-            <span className="font-medium text-arc-text">Arcade V2</span>
-            {route.viaUsdc && (
+            <span className="font-medium text-arc-text">{isV3Swap ? "Arcade V3" : "Arcade V2"}</span>
+            {isV3Swap && v3DoubleHop && (
+              <span className="ml-1 rounded-full border border-arc-cta-hover/40 bg-arc-cta-hover/10 px-1.5 py-0.5 text-[10px] font-medium text-arc-cta-hover">
+                {symIn} → USDC → {symOut}
+              </span>
+            )}
+            {isV3Swap && !v3DoubleHop && (
+              <span className="ml-1 rounded-full border border-arc-success/40 bg-arc-success/10 px-1.5 py-0.5 text-[10px] font-medium text-arc-success">
+                locked-LP pool
+              </span>
+            )}
+            {!isV3Swap && route.viaUsdc && (
               <span className="ml-1 rounded-full border border-arc-cta-hover/40 bg-arc-cta-hover/10 px-1.5 py-0.5 text-[10px] font-medium text-arc-cta-hover">
                 {symIn} → USDC → {symOut}
               </span>

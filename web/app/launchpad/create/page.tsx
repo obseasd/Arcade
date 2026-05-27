@@ -110,8 +110,19 @@ export default function CreateTokenPage() {
     <div className="mx-auto max-w-2xl px-4 py-10 sm:px-6">
       <h1 className="mb-2 text-3xl font-semibold">Launch a token</h1>
       <p className="mb-8 text-sm text-arc-text-muted">
-        Mint a new token with a fixed 1B supply. Trading starts immediately on a bonding curve.
-        Migration to the DEX happens automatically when the curve fills. Creation fee:{" "}
+        Mint a new token with a fixed 1B supply.{" "}
+        {mode === LaunchMode.CLANKER_V3 ? (
+          <>
+            The full supply is locked single-sided in a Uniswap V3 pool at launch — tradeable
+            instantly, no bonding curve, LP can never be rugged, and you earn 80% of all swap fees.
+          </>
+        ) : (
+          <>
+            Trading starts immediately on a bonding curve. Migration to the DEX happens automatically
+            when the curve fills.
+          </>
+        )}{" "}
+        Creation fee:{" "}
         <span className="tabular-nums text-arc-text">{formatUSDC(CREATION_FEE_USDC, 6, 0)} USDC</span>.
       </p>
 
@@ -119,20 +130,27 @@ export default function CreateTokenPage() {
         {/* Launch mode selector */}
         <div>
           <div className="mb-2 text-sm font-medium text-arc-text">Launch mode</div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             <ModeCard
               active={mode === LaunchMode.PUMP}
               onClick={() => setMode(LaunchMode.PUMP)}
               title="Pump"
               subtitle="50% Arcade · 50% creator"
-              description="pump.fun-style memecoin launch — single creator wallet."
+              description="pump.fun-style bonding curve. LP burned at migration. Single creator wallet."
             />
             <ModeCard
               active={mode === LaunchMode.CLANKER}
               onClick={() => setMode(LaunchMode.CLANKER)}
               title="Clanker"
               subtitle="70% Arcade · 30% creator(s)"
-              description="Project-style launch — optionally split creator fees across two wallets."
+              description="Bonding curve, LP burned at migration. Optionally split creator fees across two wallets."
+            />
+            <ModeCard
+              active={mode === LaunchMode.CLANKER_V3}
+              onClick={() => setMode(LaunchMode.CLANKER_V3)}
+              title="Clanker V3"
+              subtitle="Creator earns 80% LP fees"
+              description="No curve — full supply locked single-sided in a V3 pool. Tradeable instantly, un-ruggable."
             />
           </div>
         </div>

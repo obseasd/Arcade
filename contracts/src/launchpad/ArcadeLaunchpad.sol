@@ -10,6 +10,8 @@ import {IArcadeLaunchpad} from "./interfaces/IArcadeLaunchpad.sol";
 import {IArcadeV2Factory} from "../dex/interfaces/IArcadeV2Factory.sol";
 import {IArcadeV2Pair} from "../dex/interfaces/IArcadeV2Pair.sol";
 import {IArcadeV2Router} from "../dex/interfaces/IArcadeV2Router.sol";
+import {IArcadeV3Factory, IArcadeV3Pool, IArcadeV3Locker} from "../v3/interfaces/IArcadeV3Minimal.sol";
+import {ArcadeV3PriceMath} from "../v3/ArcadeV3PriceMath.sol";
 
 /**
  * @title ArcadeLaunchpad
@@ -60,6 +62,19 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
     uint256 public constant MIGRATED_CREATOR_BPS = 10; // 0.10% to creator(s)
     uint256 public constant MIGRATED_ROYALTY_BPS = MIGRATED_PLATFORM_BPS + MIGRATED_CREATOR_BPS; // 0.30% total
 
+    // --- V3 vault (CLANKER_V3) migration params ---
+    /// @notice V3 pool fee tier used for vault migrations: 1% (matches the
+    /// high-fee, creator-friendly Clanker model).
+    uint24 public constant V3_FEE = 10_000;
+    /// @notice Tick spacing for the 1% fee tier.
+    int24 public constant V3_TICK_SPACING = 200;
+    /// @notice Creator's share of V3 LP fees in the locker (80%); platform gets 20%.
+    uint16 public constant V3_CREATOR_BPS = 8_000;
+    /// @notice Starting fully-diluted valuation for a CLANKER_V3 single-sided
+    /// launch, in USDC (6dp). The whole supply is placed single-sided at this
+    /// FDV; price rises as the token is bought. Tunable.
+    uint256 public constant CLANKER_V3_START_FDV = 5_000e6; // 5,000 USDC
+
     address public constant DEAD = 0x000000000000000000000000000000000000dEaD;
 
     // --- Immutables ---
@@ -68,6 +83,15 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
     IArcadeV2Factory public immutable v2Factory;
     address public immutable v2Router;
     address public immutable treasury;
+    /// @notice Uniswap V3 factory (for CLANKER_V3 vault migrations). May be the
+    /// zero address on deployments that don't use V3 vaults.
+    IArcadeV3Factory public immutable v3Factory;
+    /// @notice Deployer, allowed to wire the V3 locker exactly once.
+    address public immutable deployer;
+    /// @notice ArcadeV3Locker that permanently holds CLANKER_V3 LP positions.
+    /// Set once post-deploy (the locker needs this contract's address at its
+    /// own construction, so the wiring is circular and resolved via a setter).
+    address public v3Locker;
 
     // --- State ---
 
@@ -95,12 +119,31 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
     error InvalidMode();
     error InvalidShare();
     error NoRouter();
+    error V3NotConfigured();
+    error NotDeployer();
+    error LockerAlreadySet();
 
-    constructor(IERC20 usdc_, IArcadeV2Factory v2Factory_, address v2Router_, address treasury_) {
+    constructor(
+        IERC20 usdc_,
+        IArcadeV2Factory v2Factory_,
+        address v2Router_,
+        address treasury_,
+        IArcadeV3Factory v3Factory_
+    ) {
         USDC = usdc_;
         v2Factory = v2Factory_;
         v2Router = v2Router_;
         treasury = treasury_;
+        v3Factory = v3Factory_;
+        deployer = msg.sender;
+    }
+
+    /// @notice One-time wiring of the V3 locker (resolves the launchpad<->locker
+    /// circular constructor dependency). Callable once by the deployer.
+    function setV3Locker(address locker) external {
+        if (msg.sender != deployer) revert NotDeployer();
+        if (v3Locker != address(0)) revert LockerAlreadySet();
+        v3Locker = locker;
     }
 
     // ====================== Token creation ======================
@@ -124,7 +167,11 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         uint16 creator2ShareBps
     ) external nonReentrant returns (address tokenAddr) {
         if (bytes(name_).length == 0 || bytes(symbol_).length == 0) revert EmptyName();
-        if (uint8(mode) > 1) revert InvalidMode();
+        if (uint8(mode) > 2) revert InvalidMode();
+        // CLANKER_V3 requires the V3 factory + locker to be wired.
+        if (mode == LaunchMode.CLANKER_V3 && (address(v3Factory) == address(0) || v3Locker == address(0))) {
+            revert V3NotConfigured();
+        }
         if (creator2ShareBps > 10_000) revert InvalidShare();
 
         // Pull creation fee → treasury
@@ -145,6 +192,14 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         allTokens.push(tokenAddr);
 
         emit TokenCreated(tokenAddr, msg.sender, mode, creator2, s.creator2ShareBps, name_, symbol_, metadataURI);
+
+        // CLANKER_V3 is a true Clanker-style launch: NO bonding curve. The
+        // token goes straight into a locked single-sided V3 position and is
+        // tradeable immediately. `buy`/`sell` (curve ops) revert for it since
+        // it's flagged migrated from birth.
+        if (mode == LaunchMode.CLANKER_V3) {
+            _launchClankerV3(s, tokenAddr);
+        }
     }
 
     /**
@@ -509,32 +564,68 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
     // ====================== Migration ======================
 
     function _migrate(address tokenAddr) internal {
+        // Only curve-based modes (PUMP / CLANKER) ever reach here. CLANKER_V3
+        // launches immediately at creation and is flagged migrated from birth,
+        // so its buys revert before any curve fill.
         TokenState storage s = tokens[tokenAddr];
         s.migrated = true;
         s.migratedAt = uint64(block.timestamp);
 
         uint256 usdcForLP = s.realUsdcReserve;
-        // The launchpad currently holds (TOTAL_SUPPLY - tokensSold) = MIGRATION_LP_TOKENS tokens
         uint256 tokensForLP = MIGRATION_LP_TOKENS;
+        s.realUsdcReserve = 0;
 
-        // Find or create the V2 pair
         address pair = v2Factory.getPair(address(USDC), tokenAddr);
         if (pair == address(0)) {
             pair = v2Factory.createPair(address(USDC), tokenAddr);
         }
-
-        // Push the liquidity directly to the pair
         USDC.safeTransfer(pair, usdcForLP);
         IERC20(tokenAddr).safeTransfer(pair, tokensForLP);
-
-        // Mint LP tokens to the dead address (permanent lock)
         IArcadeV2Pair(pair).mint(DEAD);
-
-        // Zero out the curve reserves (now in the pool)
-        s.realUsdcReserve = 0;
         s.v2Pair = pair;
-
         emit Migrated(tokenAddr, pair, usdcForLP, tokensForLP);
+    }
+
+    /// @dev Clanker-style immediate launch (no bonding curve): deploy a Uniswap
+    /// V3 pool initialized at CLANKER_V3_START_FDV, then lock the ENTIRE supply
+    /// single-sided in ArcadeV3Locker. The token is tradeable immediately; price
+    /// rises as it's bought and USDC accumulates in the locked position. The
+    /// creator earns 80% of perpetual LP fees (platform 20%); principal is
+    /// locked forever. Called from `createToken` for CLANKER_V3.
+    function _launchClankerV3(TokenState storage s, address tokenAddr) internal {
+        uint256 supply = TOTAL_SUPPLY; // 100% single-sided, like Clanker
+
+        // Sort tokens (token0 < token1) and pick the start-price amounts so that
+        // FDV == CLANKER_V3_START_FDV at the bottom of the range.
+        (address token0, address token1, uint256 amount0, uint256 amount1) = address(USDC) < tokenAddr
+            ? (address(USDC), tokenAddr, CLANKER_V3_START_FDV, supply)
+            : (tokenAddr, address(USDC), supply, CLANKER_V3_START_FDV);
+
+        address pool = v3Factory.getPool(token0, token1, V3_FEE);
+        if (pool == address(0)) {
+            pool = v3Factory.createPool(token0, token1, V3_FEE);
+        }
+        uint160 sqrtPriceX96 = ArcadeV3PriceMath.encodeSqrtPriceX96(amount1, amount0);
+        IArcadeV3Pool(pool).initialize(sqrtPriceX96);
+
+        // Hand the full supply to the locker for the single-sided position.
+        IERC20(tokenAddr).safeTransfer(v3Locker, supply);
+        IArcadeV3Locker(v3Locker).lockSingleSided(
+            IArcadeV3Locker.SingleSidedParams({
+                pool: pool,
+                token: tokenAddr,
+                sqrtPriceX96: sqrtPriceX96,
+                tokenAmount: supply,
+                creator: s.creator,
+                platform: treasury,
+                creatorBps: V3_CREATOR_BPS
+            })
+        );
+
+        s.migrated = true;
+        s.migratedAt = uint64(block.timestamp);
+        s.v2Pair = pool; // reuse the field to store the (V3) pool address
+        emit Migrated(tokenAddr, pool, 0, supply);
     }
 
     // ====================== Views ======================

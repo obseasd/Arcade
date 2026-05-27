@@ -10,7 +10,15 @@ export const ADDRESSES = {
   router: safeAddress(process.env.NEXT_PUBLIC_V2_ROUTER_ADDRESS),
   launchpad: safeAddress(process.env.NEXT_PUBLIC_LAUNCHPAD_ADDRESS),
   multiSwap: safeAddress(process.env.NEXT_PUBLIC_MULTISWAP_ADDRESS),
+  // Uniswap V3 fork (CLANKER_V3 locked-LP tokens)
+  v3Factory: safeAddress(process.env.NEXT_PUBLIC_V3_FACTORY_ADDRESS),
+  v3Router: safeAddress(process.env.NEXT_PUBLIC_V3_ROUTER_ADDRESS),
+  v3Quoter: safeAddress(process.env.NEXT_PUBLIC_V3_QUOTER_ADDRESS),
+  v3Locker: safeAddress(process.env.NEXT_PUBLIC_V3_LOCKER_ADDRESS),
 } as const;
+
+/** V3 fee tier used for all CLANKER_V3 pools (1%). */
+export const V3_FEE = 10_000;
 
 /** Hard cap on inputs to the multi-token swap UI. The on-chain contract
  * caps at MAX_INPUTS=8; the UI uses a lower cap (5) for ergonomic reasons. */
@@ -23,6 +31,7 @@ export const TRADE_FEE_BPS = 100; // 1% total — split 0.5% platform + 0.5% cre
 export const CREATION_FEE_USDC = 3_000_000n; // 3 USDC (6 decimals)
 
 export enum LaunchMode {
-  PUMP = 0, // 50% Arcade / 50% creator(s)
-  CLANKER = 1, // 70% Arcade / 30% creator(s), supports a secondary creator address
+  PUMP = 0, // 50% Arcade / 50% creator(s), bonding curve -> V2 burn
+  CLANKER = 1, // 70% Arcade / 30% creator(s), bonding curve -> V2 burn
+  CLANKER_V3 = 2, // no curve: full supply locked single-sided in V3, creator earns 80% LP fees
 }
