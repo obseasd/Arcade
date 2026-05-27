@@ -84,7 +84,7 @@ export default function PositionsPage() {
         open={newOpen}
         onClose={() => setNewOpen(false)}
         widthClassName="max-w-md"
-        backdropClassName="bg-black/40 backdrop-blur-sm"
+        backdropClassName="bg-black/30"
         className="border-arc-border bg-black/15 backdrop-blur-xl shadow-arc-card"
       >
         <div className="flex items-center justify-between border-b border-arc-border px-5 py-4">

@@ -43,8 +43,8 @@ export function LaunchModeModal({ open, onClose }: Props) {
       open={open}
       onClose={onClose}
       widthClassName="max-w-3xl"
-      backdropClassName="bg-black/30 backdrop-blur-sm"
-      className="border-arc-border bg-black/45 backdrop-blur-2xl"
+      backdropClassName="bg-black/30"
+      className="border-arc-border bg-black/15 backdrop-blur-xl shadow-arc-card"
     >
       <div className="flex items-center justify-between border-b border-arc-border px-6 py-4">
         <h3 className="text-lg font-semibold">Launch mode</h3>
