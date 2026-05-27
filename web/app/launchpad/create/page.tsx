@@ -401,7 +401,7 @@ function CreateTokenInner() {
         <div className="arc-card space-y-5 p-6">
         {/* Image (left, square — spans the 3 fields) + launch mode / name / symbol */}
         <div className="flex gap-2">
-          <label className="flex h-36 w-36 shrink-0 cursor-pointer flex-col items-center justify-center gap-1.5 overflow-hidden rounded-xl border border-dashed border-arc-border bg-arc-bg-elevated transition-colors hover:border-arc-cta-hover">
+          <label className="flex w-32 shrink-0 cursor-pointer flex-col items-center justify-center gap-1.5 self-stretch overflow-hidden rounded-xl border border-dashed border-arc-border bg-arc-bg-elevated transition-colors hover:border-arc-cta-hover">
             {image.trim() ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img src={image.trim()} alt="" className="h-full w-full object-cover" />
@@ -418,7 +418,7 @@ function CreateTokenInner() {
               onChange={(e) => onImageFile(e.target.files?.[0])}
             />
           </label>
-          <div className="flex flex-1 flex-col justify-between">
+          <div className="flex flex-1 flex-col gap-2">
             {/* Launch mode — background = the mode's illustration */}
             <div
               className="relative flex items-center justify-between overflow-hidden rounded-xl border border-arc-border bg-cover bg-center px-4 py-2"
