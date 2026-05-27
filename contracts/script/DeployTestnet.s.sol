@@ -47,7 +47,7 @@ contract DeployTestnet is Script {
         );
 
         address v3Locker = _deployV3Locker(address(launchpad), v3Factory);
-        address v3Router = _deployV3Aux("out-v3/ArcadeV3SwapRouter.sol/ArcadeV3SwapRouter.json", v3Factory, usdc);
+        address v3Router = _deployV3Router(v3Factory, usdc, address(launchpad));
         address v3Quoter = _deployV3Aux("out-v3/ArcadeV3Quoter.sol/ArcadeV3Quoter.json", v3Factory, usdc);
         ArcadeTokenVault tokenVault = new ArcadeTokenVault(address(launchpad));
         launchpad.setV3Infra(v3Locker, v3Router, address(tokenVault));
@@ -103,5 +103,18 @@ contract DeployTestnet is Script {
             addr := create(0, add(code, 0x20), mload(code))
         }
         require(addr != address(0), "v3 aux deploy failed");
+    }
+
+    /// @dev Deploys the V3 swap router: constructor is (factory, usdc, launchpad).
+    /// The launchpad arg lets the router read & apply the anti-sniper tax.
+    function _deployV3Router(address factory_, address usdc_, address launchpad_) internal returns (address addr) {
+        bytes memory code = abi.encodePacked(
+            vm.getCode("out-v3/ArcadeV3SwapRouter.sol/ArcadeV3SwapRouter.json"),
+            abi.encode(factory_, usdc_, launchpad_)
+        );
+        assembly {
+            addr := create(0, add(code, 0x20), mload(code))
+        }
+        require(addr != address(0), "v3 router deploy failed");
     }
 }

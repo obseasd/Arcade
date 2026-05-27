@@ -54,7 +54,7 @@ contract DeployLocal is Script {
 
         // V3 locker + swap router + quoter so CLANKER_V3 tokens are tradeable.
         address v3Locker = _deployV3Locker(address(launchpad), v3Factory);
-        address v3Router = _deployV3Aux("out-v3/ArcadeV3SwapRouter.sol/ArcadeV3SwapRouter.json", v3Factory, address(usdc));
+        address v3Router = _deployV3Router(v3Factory, address(usdc), address(launchpad));
         address v3Quoter = _deployV3Aux("out-v3/ArcadeV3Quoter.sol/ArcadeV3Quoter.json", v3Factory, address(usdc));
         ArcadeTokenVault tokenVault = new ArcadeTokenVault(address(launchpad));
         // Wire locker + router + vault into the launchpad (one-time).
@@ -127,59 +127,31 @@ contract DeployLocal is Script {
         vm.stopBroadcast();
 
         // ---- Write addresses to a JSON file for the frontend ----
-        string memory json = string.concat(
-            "{",
-            '"chainId":31337,',
-            '"usdc":"',
-            vm.toString(address(usdc)),
-            '",',
-            '"factory":"',
-            vm.toString(address(factory)),
-            '",',
-            '"router":"',
-            vm.toString(address(router)),
-            '",',
-            '"launchpad":"',
-            vm.toString(address(launchpad)),
-            '",',
-            '"multiSwap":"',
-            vm.toString(address(multiSwap)),
-            '",',
-            '"v3Factory":"',
-            vm.toString(v3Factory),
-            '",',
-            '"v3Locker":"',
-            vm.toString(v3Locker),
-            '",',
-            '"v3Router":"',
-            vm.toString(v3Router),
-            '",',
-            '"v3Quoter":"',
-            vm.toString(v3Quoter),
-            '",',
-            '"tokenVault":"',
-            vm.toString(address(tokenVault)),
-            '",',
-            '"sampleTokens":[',
-            '"',
-            vm.toString(pepe),
-            '",',
-            '"',
-            vm.toString(dog),
-            '",',
-            '"',
-            vm.toString(rocket),
-            '",',
-            '"',
-            vm.toString(satoshi),
-            '",',
-            '"',
-            vm.toString(vaultCat),
-            '"',
-            "]",
-            "}"
-        );
-        vm.writeFile("./deployments/local.json", json);
+        // Use forge's JSON serializer (vm.serializeAddress) rather than one
+        // giant `string.concat(...)`: each cheatcode call is opaque to the
+        // via_ir optimizer, so it materialises and consumes one address at a
+        // time instead of keeping all ~15 live (which overflows the stack).
+        string memory obj = "arcadeDeploy";
+        vm.serializeUint(obj, "chainId", uint256(31337));
+        vm.serializeAddress(obj, "usdc", address(usdc));
+        vm.serializeAddress(obj, "factory", address(factory));
+        vm.serializeAddress(obj, "router", address(router));
+        vm.serializeAddress(obj, "launchpad", address(launchpad));
+        vm.serializeAddress(obj, "multiSwap", address(multiSwap));
+        vm.serializeAddress(obj, "v3Factory", v3Factory);
+        vm.serializeAddress(obj, "v3Locker", v3Locker);
+        vm.serializeAddress(obj, "v3Router", v3Router);
+        vm.serializeAddress(obj, "v3Quoter", v3Quoter);
+        vm.serializeAddress(obj, "tokenVault", address(tokenVault));
+
+        address[] memory samples = new address[](5);
+        samples[0] = pepe;
+        samples[1] = dog;
+        samples[2] = rocket;
+        samples[3] = satoshi;
+        samples[4] = vaultCat;
+        string memory json = vm.serializeAddress(obj, "sampleTokens", samples);
+        vm.writeJson(json, "./deployments/local.json");
     }
 
     // ---- V3 deployment helpers (from the out-v3 0.7.6 artifacts) ----
@@ -210,5 +182,18 @@ contract DeployLocal is Script {
             addr := create(0, add(code, 0x20), mload(code))
         }
         require(addr != address(0), "v3 aux deploy failed");
+    }
+
+    /// @dev Deploys the V3 swap router: constructor is (factory, usdc, launchpad).
+    /// The launchpad arg lets the router read & apply the anti-sniper tax.
+    function _deployV3Router(address factory_, address usdc_, address launchpad_) internal returns (address addr) {
+        bytes memory code = abi.encodePacked(
+            vm.getCode("out-v3/ArcadeV3SwapRouter.sol/ArcadeV3SwapRouter.json"),
+            abi.encode(factory_, usdc_, launchpad_)
+        );
+        assembly {
+            addr := create(0, add(code, 0x20), mload(code))
+        }
+        require(addr != address(0), "v3 router deploy failed");
     }
 }

@@ -4,7 +4,7 @@ import { ArrowLeft, X } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
-import { decodeEventLog, erc20Abi, isAddress, parseUnits, zeroAddress, type Address } from "viem";
+import { decodeEventLog, encodeAbiParameters, erc20Abi, isAddress, parseUnits, zeroAddress, type Address } from "viem";
 import { useAccount, usePublicClient, useReadContract, useWriteContract } from "wagmi";
 import { LAUNCHPAD_ABI } from "@/lib/abis/launchpad";
 import { ADDRESSES, CREATION_FEE_USDC, LaunchMode } from "@/lib/constants";
@@ -74,7 +74,13 @@ function CreateTokenInner() {
   const [vaultLockupDays, setVaultLockupDays] = useState(30);
   const [vaultVestingDays, setVaultVestingDays] = useState(0);
   const [vaultRecipientStr, setVaultRecipientStr] = useState("");
+  // Optional anti-sniper tax (soft, router-enforced): a starting % of each buy
+  // skimmed to the treasury, decaying linearly to 0 over the window.
+  const [snipeStartPct, setSnipeStartPct] = useState(0); // 0–50%
+  const [snipeDecayMinutes, setSnipeDecayMinutes] = useState(10);
   const isV3 = mode === LaunchMode.CLANKER_V3;
+
+  const snipeValid = !isV3 || snipeStartPct === 0 || (snipeStartPct <= 50 && snipeDecayMinutes >= 1);
 
   const vaultValid =
     !isV3 ||
@@ -170,17 +176,43 @@ function CreateTokenInner() {
           const adm = (r.admin.trim() || r.recipient.trim()) as Address;
           return { recipient: rec, admin: adm, bps: Math.round(r.pct * 100), tokenPref: r.pref };
         });
-        const vaultCfg = {
-          pct: Math.round(vaultPct * 100),
-          lockupDuration: BigInt((vaultLockupDays || 0) * 86_400),
-          vestingDuration: BigInt((vaultVestingDays || 0) * 86_400),
-          recipient: (vaultRecipientStr.trim() || account) as Address,
-        };
+        // Bundled ClankerOptions, ABI-encoded as bytes (the contract takes
+        // `bytes optsData` so its calldata decoder stays within via_ir's
+        // stack budget). Tuple order must match the on-chain struct.
+        const optsData = encodeAbiParameters(
+          [
+            {
+              type: "tuple",
+              components: [
+                { name: "fee", type: "uint24" },
+                { name: "creatorBuyUsdc", type: "uint256" },
+                { name: "vaultPct", type: "uint16" },
+                { name: "vaultLockupDuration", type: "uint64" },
+                { name: "vaultVestingDuration", type: "uint64" },
+                { name: "vaultRecipient", type: "address" },
+                { name: "snipeStartBps", type: "uint16" },
+                { name: "snipeDecaySeconds", type: "uint32" },
+              ],
+            },
+          ],
+          [
+            {
+              fee: feeTier,
+              creatorBuyUsdc,
+              vaultPct: Math.round(vaultPct * 100),
+              vaultLockupDuration: BigInt((vaultLockupDays || 0) * 86_400),
+              vaultVestingDuration: BigInt((vaultVestingDays || 0) * 86_400),
+              vaultRecipient: (vaultRecipientStr.trim() || account) as Address,
+              snipeStartBps: Math.round(snipeStartPct * 100),
+              snipeDecaySeconds: (snipeDecayMinutes || 0) * 60,
+            },
+          ],
+        );
         hash = await writeContractAsync({
           address: ADDRESSES.launchpad,
           abi: LAUNCHPAD_ABI,
           functionName: "createClankerV3",
-          args: [name.trim(), symbol.trim(), metadataURI, rs, feeTier, creatorBuyUsdc, vaultCfg],
+          args: [name.trim(), symbol.trim(), metadataURI, rs, optsData],
         });
       } else {
         // PUMP / Arcade (CLANKER): bonding curve. Arcade allows an optional
@@ -476,6 +508,51 @@ function CreateTokenInner() {
           </details>
         )}
 
+        {isV3 && (
+          <details className="rounded-xl border border-arc-border bg-arc-bg-elevated open:bg-arc-surface">
+            <summary className="cursor-pointer select-none px-4 py-3 text-sm text-arc-text-muted hover:text-arc-text">
+              Anti-sniper tax — tax early buys, decaying to zero (optional)
+            </summary>
+            <div className="space-y-3 px-4 pb-4">
+              <p className="text-xs text-arc-text-faint">
+                Skims a starting % from each buy routed through Arcade and sends it to the treasury,
+                decaying linearly to 0 over the window. Soft protection: a direct pool swap can bypass
+                it, but most buyers route through the app.
+              </p>
+              <Field
+                label={`Starting tax: ${snipeStartPct}%`}
+                hint="Max 50%. 0 disables the tax."
+              >
+                <input
+                  type="range"
+                  min={0}
+                  max={50}
+                  step={1}
+                  value={snipeStartPct}
+                  onChange={(e) => setSnipeStartPct(Number(e.target.value))}
+                  className="w-full accent-arc-cta-hover"
+                />
+              </Field>
+              {snipeStartPct > 0 && (
+                <Field label="Decay window (minutes)" hint="Tax reaches 0 after this many minutes.">
+                  <input
+                    type="number"
+                    min={1}
+                    value={snipeDecayMinutes}
+                    onChange={(e) => setSnipeDecayMinutes(Number(e.target.value))}
+                    className="arc-input rounded-xl border border-arc-border bg-arc-bg px-3 py-2 tabular-nums"
+                  />
+                </Field>
+              )}
+              {!snipeValid && (
+                <div className="text-xs text-arc-danger">
+                  Starting tax must be ≤ 50% and the decay window at least 1 minute.
+                </div>
+              )}
+            </div>
+          </details>
+        )}
+
         {mode === LaunchMode.CLANKER && (
           <details className="rounded-xl border border-arc-border bg-arc-bg-elevated open:bg-arc-surface">
             <summary className="cursor-pointer select-none px-4 py-3 text-sm text-arc-text-muted hover:text-arc-text">
@@ -551,7 +628,7 @@ function CreateTokenInner() {
           disabled={
             !account ||
             !valid ||
-            (isV3 && (!recipientsValid || !vaultValid)) ||
+            (isV3 && (!recipientsValid || !vaultValid || !snipeValid)) ||
             tx.status === "pending" ||
             !hasFee
           }

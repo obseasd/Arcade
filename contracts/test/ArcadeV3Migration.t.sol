@@ -48,8 +48,33 @@ contract ArcadeV3MigrationTest is Test {
     address v3Quoter;
     ArcadeTokenVault tokenVault;
 
-    function _noVault() internal pure returns (ArcadeLaunchpad.VaultConfig memory) {
-        return ArcadeLaunchpad.VaultConfig(0, 0, 0, address(0));
+    /// @dev ABI-encoded ClankerOptions with no vault / no sniper tax.
+    function _opts(uint24 fee, uint256 creatorBuy) internal pure returns (bytes memory) {
+        return abi.encode(
+            ArcadeLaunchpad.ClankerOptions(fee, creatorBuy, 0, 0, 0, address(0), 0, 0)
+        );
+    }
+
+    /// @dev ClankerOptions carrying a vault carve-out.
+    function _optsVault(uint24 fee, uint16 vaultPct, uint64 lockup, uint64 vesting, address recipient)
+        internal
+        pure
+        returns (bytes memory)
+    {
+        return abi.encode(
+            ArcadeLaunchpad.ClankerOptions(fee, 0, vaultPct, lockup, vesting, recipient, 0, 0)
+        );
+    }
+
+    /// @dev ClankerOptions carrying an anti-sniper tax.
+    function _optsSnipe(uint24 fee, uint16 snipeStartBps, uint32 snipeDecaySeconds)
+        internal
+        pure
+        returns (bytes memory)
+    {
+        return abi.encode(
+            ArcadeLaunchpad.ClankerOptions(fee, 0, 0, 0, 0, address(0), snipeStartBps, snipeDecaySeconds)
+        );
     }
 
     address treasury = address(0xBEEF);
@@ -71,7 +96,8 @@ contract ArcadeV3MigrationTest is Test {
             "out-v3/ArcadeV3Locker.sol/ArcadeV3Locker.json", abi.encode(address(launchpad), v3Factory)
         );
         v3Router = _deploy(
-            "out-v3/ArcadeV3SwapRouter.sol/ArcadeV3SwapRouter.json", abi.encode(v3Factory, address(usdc))
+            "out-v3/ArcadeV3SwapRouter.sol/ArcadeV3SwapRouter.json",
+            abi.encode(v3Factory, address(usdc), address(launchpad))
         );
         v3Quoter = _deploy(
             "out-v3/ArcadeV3Quoter.sol/ArcadeV3Quoter.json", abi.encode(v3Factory, address(usdc))
@@ -229,7 +255,7 @@ contract ArcadeV3MigrationTest is Test {
     function _createClankerV3(IArcadeV3Locker.Recipient[] memory rs) internal returns (address token, address pool) {
         vm.startPrank(creator);
         usdc.approve(address(launchpad), type(uint256).max);
-        token = launchpad.createClankerV3("Multi Cat", "MCAT", "ipfs://x", rs, FEE, 0, _noVault());
+        token = launchpad.createClankerV3("Multi Cat", "MCAT", "ipfs://x", rs, _opts(FEE, 0));
         vm.stopPrank();
         pool = IArcadeV3Factory(v3Factory).getPool(address(usdc), token, FEE);
     }
@@ -274,7 +300,7 @@ contract ArcadeV3MigrationTest is Test {
         vm.startPrank(creator);
         usdc.approve(address(launchpad), type(uint256).max);
         vm.expectRevert(bytes("BPS_SUM"));
-        launchpad.createClankerV3("X", "X", "ipfs://x", rs, FEE, 0, _noVault());
+        launchpad.createClankerV3("X", "X", "ipfs://x", rs, _opts(FEE, 0));
         vm.stopPrank();
     }
 
@@ -287,7 +313,7 @@ contract ArcadeV3MigrationTest is Test {
         IArcadeV3Locker.Recipient[] memory rs = _defaultRecipients();
         vm.startPrank(creator);
         usdc.approve(address(launchpad), type(uint256).max);
-        address token = launchpad.createClankerV3("Two Pct", "TWO", "ipfs://x", rs, 20_000, 0, _noVault());
+        address token = launchpad.createClankerV3("Two Pct", "TWO", "ipfs://x", rs, _opts(20_000, 0));
         vm.stopPrank();
         // Pool exists at the 2% tier, not at 1%.
         assertTrue(IArcadeV3Factory(v3Factory).getPool(address(usdc), token, 20_000) != address(0), "2% pool");
@@ -299,7 +325,7 @@ contract ArcadeV3MigrationTest is Test {
         vm.startPrank(creator);
         usdc.approve(address(launchpad), type(uint256).max);
         vm.expectRevert(ArcadeLaunchpad.BadFeeTier.selector);
-        launchpad.createClankerV3("X", "X", "ipfs://x", rs, 3000, 0, _noVault()); // 0.3% not allowed
+        launchpad.createClankerV3("X", "X", "ipfs://x", rs, _opts(3000, 0)); // 0.3% not allowed
         vm.stopPrank();
     }
 
@@ -308,7 +334,7 @@ contract ArcadeV3MigrationTest is Test {
         vm.startPrank(creator);
         usdc.approve(address(launchpad), type(uint256).max);
         uint256 cBefore = usdc.balanceOf(creator);
-        address token = launchpad.createClankerV3("Buy Cat", "BUY", "ipfs://x", rs, FEE, 5_000e6, _noVault());
+        address token = launchpad.createClankerV3("Buy Cat", "BUY", "ipfs://x", rs, _opts(FEE, 5_000e6));
         vm.stopPrank();
         // Creator received tokens from the launch buy, and spent 3 USDC fee + 5000 buy.
         assertGt(IERC20(token).balanceOf(creator), 0, "creator got tokens from buy");
@@ -338,10 +364,10 @@ contract ArcadeV3MigrationTest is Test {
     function test_vault_carvesSupply_lockupThenLinearVesting() public {
         IArcadeV3Locker.Recipient[] memory rs = _defaultRecipients();
         // 20% vaulted, 7-day lockup, 30-day linear vesting, to the creator.
-        ArcadeLaunchpad.VaultConfig memory v = ArcadeLaunchpad.VaultConfig(2000, 7 days, 30 days, creator);
         vm.startPrank(creator);
         usdc.approve(address(launchpad), type(uint256).max);
-        address token = launchpad.createClankerV3("Vault Cat", "VLT", "ipfs://x", rs, FEE, 0, v);
+        address token =
+            launchpad.createClankerV3("Vault Cat", "VLT", "ipfs://x", rs, _optsVault(FEE, 2000, 7 days, 30 days, creator));
         vm.stopPrank();
 
         uint256 vestId = tokenVault.vestIdByToken(token);
@@ -373,21 +399,69 @@ contract ArcadeV3MigrationTest is Test {
 
     function test_vault_shortLockup_reverts() public {
         IArcadeV3Locker.Recipient[] memory rs = _defaultRecipients();
-        ArcadeLaunchpad.VaultConfig memory v = ArcadeLaunchpad.VaultConfig(1000, 1 days, 0, creator); // < 7d
         vm.startPrank(creator);
         usdc.approve(address(launchpad), type(uint256).max);
         vm.expectRevert(ArcadeTokenVault.BadDuration.selector);
-        launchpad.createClankerV3("X", "X", "ipfs://x", rs, FEE, 0, v);
+        launchpad.createClankerV3("X", "X", "ipfs://x", rs, _optsVault(FEE, 1000, 1 days, 0, creator)); // < 7d lockup
         vm.stopPrank();
     }
 
     function test_vault_tooMuch_reverts() public {
         IArcadeV3Locker.Recipient[] memory rs = _defaultRecipients();
-        ArcadeLaunchpad.VaultConfig memory v = ArcadeLaunchpad.VaultConfig(9500, 7 days, 0, creator); // > 90%
         vm.startPrank(creator);
         usdc.approve(address(launchpad), type(uint256).max);
         vm.expectRevert(ArcadeLaunchpad.BadVault.selector);
-        launchpad.createClankerV3("X", "X", "ipfs://x", rs, FEE, 0, v);
+        launchpad.createClankerV3("X", "X", "ipfs://x", rs, _optsVault(FEE, 9500, 7 days, 0, creator)); // > 90%
         vm.stopPrank();
+    }
+
+    // ====================== Anti-sniper tax (soft router) ======================
+
+    function test_sniperTax_skimsDecayingThenExpires() public {
+        IArcadeV3Locker.Recipient[] memory rs = _defaultRecipients();
+        vm.startPrank(creator);
+        usdc.approve(address(launchpad), type(uint256).max);
+        // 50% starting tax, decaying linearly to 0 over one hour.
+        address token = launchpad.createClankerV3("Snipe Cat", "SNP", "ipfs://x", rs, _optsSnipe(FEE, 5_000, 3600));
+        vm.stopPrank();
+
+        // At launch the full 50% applies.
+        assertEq(launchpad.currentSnipeBps(token), 5_000, "50% at launch");
+
+        // A buy through the router skims ~50% of the input to the treasury.
+        uint256 amountIn = 10_000e6;
+        uint256 tBefore = usdc.balanceOf(treasury);
+        vm.startPrank(alice);
+        usdc.approve(v3Router, type(uint256).max);
+        IV3Router(v3Router).exactInputSingle(address(usdc), token, FEE, alice, amountIn, 0, block.timestamp + 60);
+        vm.stopPrank();
+        assertEq(usdc.balanceOf(treasury) - tBefore, amountIn / 2, "50% skimmed to treasury");
+
+        // Halfway through the window the rate is ~25%.
+        vm.warp(block.timestamp + 1800);
+        assertApproxEqAbs(launchpad.currentSnipeBps(token), 2_500, 2, "~25% halfway");
+
+        // After the window the tax is gone — no skim on the next buy.
+        vm.warp(block.timestamp + 1801);
+        assertEq(launchpad.currentSnipeBps(token), 0, "tax expired");
+        uint256 tBefore2 = usdc.balanceOf(treasury);
+        vm.startPrank(alice);
+        IV3Router(v3Router).exactInputSingle(address(usdc), token, FEE, alice, amountIn, 0, block.timestamp + 60);
+        vm.stopPrank();
+        assertEq(usdc.balanceOf(treasury) - tBefore2, 0, "no skim after window");
+    }
+
+    /// @dev A direct pool swap (not via the Arcade router) bypasses the soft tax.
+    function test_sniperTax_directPoolSwapBypasses() public {
+        IArcadeV3Locker.Recipient[] memory rs = _defaultRecipients();
+        vm.startPrank(creator);
+        usdc.approve(address(launchpad), type(uint256).max);
+        address token = launchpad.createClankerV3("Snipe Cat2", "SNP2", "ipfs://x", rs, _optsSnipe(FEE, 5_000, 3600));
+        vm.stopPrank();
+        // The router is the only enforcement point; the tax is "soft" by design.
+        assertEq(launchpad.currentSnipeBps(token), 5_000, "tax live");
+        // Treasury is untouched until someone routes a buy through our router.
+        uint256 tBefore = usdc.balanceOf(treasury);
+        assertEq(usdc.balanceOf(treasury), tBefore, "no passive skim");
     }
 }

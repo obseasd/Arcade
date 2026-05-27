@@ -120,16 +120,32 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
   // Fee tier of the V3 leg (the non-USDC side's pool). Both-V3 uses tokenIn's.
   const v3Fee = inIsV3 ? feeOf(tokenIn.address) : feeOf(tokenOut?.address);
 
+  // Anti-sniper tax: on a USDC→V3-token buy the router skims a decaying % of
+  // the input before swapping. Read the live rate so the quote reflects the
+  // post-tax amount (otherwise the displayed output overshoots and the swap
+  // trips slippage). Only buys (USDC in, single hop) are taxed.
+  const isSnipeBuy = isUsdcIn && outIsV3 && !v3DoubleHop;
+  const snipeBpsQ = useReadContract({
+    address: ADDRESSES.launchpad,
+    abi: LAUNCHPAD_ABI,
+    functionName: "currentSnipeBps",
+    args: isSnipeBuy && tokenOut ? [tokenOut.address] : undefined,
+    query: { enabled: isSnipeBuy && !!tokenOut },
+  });
+  const snipeBps: bigint = (isSnipeBuy ? (snipeBpsQ.data as bigint | undefined) : undefined) ?? 0n;
+  // Amount the router actually swaps after the skim.
+  const v3NetAmountIn = amountInRaw - (amountInRaw * snipeBps) / 10_000n;
+
   // V3 quote (exact-in). Single-hop or 2-hop-through-USDC depending on the pair.
   const quoteV3 = useReadContract({
     address: ADDRESSES.v3Quoter,
     abi: V3_QUOTER_ABI,
     functionName: v3DoubleHop ? "quoteExactInputThroughUsdc" : "quoteExactInputSingle",
     args:
-      isV3Swap && !v3Unsupported && tokenOut && amountInRaw > 0n
-        ? [tokenIn.address, tokenOut.address, v3Fee, amountInRaw]
+      isV3Swap && !v3Unsupported && tokenOut && v3NetAmountIn > 0n
+        ? [tokenIn.address, tokenOut.address, v3Fee, v3NetAmountIn]
         : undefined,
-    query: { enabled: isV3Swap && !v3Unsupported && !!tokenOut && amountInRaw > 0n },
+    query: { enabled: isV3Swap && !v3Unsupported && !!tokenOut && v3NetAmountIn > 0n },
   });
   const v3AmountOut = quoteV3.data as bigint | undefined;
 
@@ -437,6 +453,15 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
         <div className="mt-3 rounded-xl border border-arc-warn/30 bg-arc-warn/10 p-2 text-xs text-arc-warn">
           Route through USDC: swap {symIn} → USDC, then USDC → {symOut} separately. Direct{" "}
           {symIn}→{symOut} mixes a V3 and a V2 pool, which isn&apos;t supported in one swap yet.
+        </div>
+      )}
+
+      {/* Active anti-sniper tax on this buy (decays to 0 shortly after launch). */}
+      {snipeBps > 0n && amountInRaw > 0n && (
+        <div className="mt-3 rounded-xl border border-arc-warn/30 bg-arc-warn/10 p-2 text-xs text-arc-warn">
+          Anti-sniper tax active: {(Number(snipeBps) / 100).toFixed(1)}% (
+          {formatUSDC((amountInRaw * snipeBps) / 10_000n, USDC_DECIMALS, 2)} USDC) is skimmed from this
+          buy and decays to 0 shortly after launch.
         </div>
       )}
 

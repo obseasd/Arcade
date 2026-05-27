@@ -11,6 +11,11 @@ interface IERC20Min {
     function transferFrom(address from, address to, uint256 amount) external returns (bool);
 }
 
+interface ILaunchpadSnipe {
+    function currentSnipeBps(address token) external view returns (uint256);
+    function treasury() external view returns (address);
+}
+
 /**
  * @title ArcadeV3SwapRouter
  * @notice Minimal exact-input swap router for Arcade's Uniswap V3 pools. Built
@@ -26,6 +31,8 @@ interface IERC20Min {
 contract ArcadeV3SwapRouter is IUniswapV3SwapCallback {
     address public immutable factory;
     address public immutable USDC;
+    /// @notice Arcade launchpad — read for the anti-sniper tax (0 to disable).
+    address public immutable launchpad;
 
     uint160 internal constant MIN_SQRT_RATIO = 4295128739;
     uint160 internal constant MAX_SQRT_RATIO = 1461446703485210103287273052203988822378723970342;
@@ -37,10 +44,26 @@ contract ArcadeV3SwapRouter is IUniswapV3SwapCallback {
         address payer;
     }
 
-    constructor(address factory_, address usdc_) {
+    constructor(address factory_, address usdc_, address launchpad_) {
         require(factory_ != address(0) && usdc_ != address(0), "ZERO");
         factory = factory_;
         USDC = usdc_;
+        launchpad = launchpad_; // may be 0 to disable the sniper tax
+    }
+
+    /// @dev Anti-sniper skim on a USDC→token buy: pulls a decaying % of the
+    /// USDC input from the payer to the launchpad treasury, returns the skim so
+    /// the caller swaps the remainder. No-op outside the launch window or when
+    /// the launchpad isn't wired.
+    function _snipeSkim(address tokenIn, address tokenOut, uint256 amountIn, address payer)
+        internal
+        returns (uint256 skim)
+    {
+        if (launchpad == address(0) || tokenIn != USDC) return 0;
+        uint256 bps = ILaunchpadSnipe(launchpad).currentSnipeBps(tokenOut);
+        if (bps == 0) return 0;
+        skim = (amountIn * bps) / 10000;
+        if (skim > 0) _pay(USDC, payer, ILaunchpadSnipe(launchpad).treasury(), skim);
     }
 
     /// @notice Swap an exact `amountIn` of `tokenIn` for `tokenOut` in a single
@@ -55,9 +78,10 @@ contract ArcadeV3SwapRouter is IUniswapV3SwapCallback {
         uint256 deadline
     ) external returns (uint256 amountOut) {
         require(block.timestamp <= deadline, "EXPIRED");
+        uint256 skim = _snipeSkim(tokenIn, tokenOut, amountIn, msg.sender);
         amountOut = _swap(
             SwapCallbackData({tokenIn: tokenIn, tokenOut: tokenOut, fee: fee, payer: msg.sender}),
-            amountIn,
+            amountIn - skim,
             recipient
         );
         require(amountOut >= amountOutMinimum, "INSUFFICIENT_OUTPUT");

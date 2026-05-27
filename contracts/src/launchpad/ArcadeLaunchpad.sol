@@ -83,6 +83,8 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
     /// @notice Max share of supply that can be vaulted (locked/vesting) for the
     /// creator; the rest must go to the LP. 90%.
     uint16 public constant MAX_VAULT_BPS = 9_000;
+    /// @notice Max starting sniper-tax rate (50%). Decays linearly to 0.
+    uint16 public constant MAX_SNIPE_BPS = 5_000;
 
     address public constant DEAD = 0x000000000000000000000000000000000000dEaD;
 
@@ -137,14 +139,31 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
     error LockerAlreadySet();
     error BadFeeTier();
     error BadVault();
+    error BadSnipe();
 
-    /// @notice Optional locked/vesting creator allocation for a CLANKER_V3 launch.
-    struct VaultConfig {
-        uint16 pct; // bps of supply to vault (0 = none, max MAX_VAULT_BPS)
-        uint64 lockupDuration; // ≥ vault MIN_LOCKUP when pct > 0
-        uint64 vestingDuration; // linear vesting after lockup (0 = clean cliff)
-        address recipient;
+    /// @notice Sniper config stored per token. The Arcade V3 router skims
+    /// `startBps` from buys at launch, decaying linearly to 0 over
+    /// `decaySeconds`. Soft protection — a direct pool swap bypasses it.
+    struct SnipeConfig {
+        uint16 startBps;
+        uint32 decaySeconds;
     }
+
+    /// @notice Bundled CLANKER_V3 launch options. FLAT (no nested structs) so
+    /// the ABI decoder stays within stack limits.
+    struct ClankerOptions {
+        uint24 fee; // 1% / 2% / 3%
+        uint256 creatorBuyUsdc;
+        uint16 vaultPct; // bps of supply to vault (0 = none, max MAX_VAULT_BPS)
+        uint64 vaultLockupDuration; // ≥ vault MIN_LOCKUP when vaultPct > 0
+        uint64 vaultVestingDuration; // linear vesting after lockup (0 = cliff)
+        address vaultRecipient;
+        uint16 snipeStartBps; // 0 = no sniper tax
+        uint32 snipeDecaySeconds;
+    }
+
+    /// token => sniper config (set at CLANKER_V3 launch).
+    mapping(address => SnipeConfig) public snipeConfig;
 
     constructor(
         IERC20 usdc_,
@@ -257,21 +276,22 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
      * (validated by the locker). Each recipient carries an admin that can later
      * rotate its payout address / admin.
      */
+    /// @param optsData ABI-encoded `ClankerOptions` (passed as bytes to keep the
+    /// external function's calldata decoder within stack limits).
     function createClankerV3(
         string calldata name_,
         string calldata symbol_,
         string calldata metadataURI,
         IArcadeV3Locker.Recipient[] calldata recipients,
-        uint24 fee,
-        uint256 creatorBuyUsdc,
-        VaultConfig calldata vault
+        bytes calldata optsData
     ) external nonReentrant returns (address tokenAddr) {
+        ClankerOptions memory opts = abi.decode(optsData, (ClankerOptions));
         if (bytes(name_).length == 0 || bytes(symbol_).length == 0) revert EmptyName();
         if (address(v3Factory) == address(0) || v3Locker == address(0)) revert V3NotConfigured();
-        // Static fee tier: 1% / 2% / 3%.
-        if (fee != 10_000 && fee != 20_000 && fee != 30_000) revert BadFeeTier();
-        if (creatorBuyUsdc > 0 && v3Router == address(0)) revert NoRouter();
-        if (vault.pct > 0 && (vault.pct > MAX_VAULT_BPS || tokenVault == address(0))) revert BadVault();
+        if (opts.fee != 10_000 && opts.fee != 20_000 && opts.fee != 30_000) revert BadFeeTier();
+        if (opts.creatorBuyUsdc > 0 && v3Router == address(0)) revert NoRouter();
+        if (opts.vaultPct > 0 && (opts.vaultPct > MAX_VAULT_BPS || tokenVault == address(0))) revert BadVault();
+        if (opts.snipeStartBps > MAX_SNIPE_BPS) revert BadSnipe();
 
         USDC.safeTransferFrom(msg.sender, treasury, CREATION_FEE);
 
@@ -288,20 +308,25 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
 
         emit TokenCreated(tokenAddr, msg.sender, LaunchMode.CLANKER_V3, address(0), 0, name_, symbol_, metadataURI);
 
-        // Carve out the optional vaulted (locked/vesting) allocation; the rest
-        // is the single-sided LP supply.
-        uint256 lpSupply = TOTAL_SUPPLY;
-        if (vault.pct > 0) {
-            uint256 vaultAmount = (TOTAL_SUPPLY * vault.pct) / FEE_DENOMINATOR;
+        if (opts.snipeStartBps > 0 && opts.snipeDecaySeconds > 0) {
+            snipeConfig[tokenAddr] = SnipeConfig(opts.snipeStartBps, opts.snipeDecaySeconds);
+        }
+
+        uint256 lpSupply = _applyVault(tokenAddr, opts);
+        _launchClankerV3(s, tokenAddr, recipients, opts.fee, opts.creatorBuyUsdc, lpSupply);
+    }
+
+    /// @dev Carves the optional vaulted allocation; returns the LP supply.
+    function _applyVault(address tokenAddr, ClankerOptions memory opts) internal returns (uint256 lpSupply) {
+        lpSupply = TOTAL_SUPPLY;
+        if (opts.vaultPct > 0) {
+            uint256 vaultAmount = (TOTAL_SUPPLY * opts.vaultPct) / FEE_DENOMINATOR;
             lpSupply = TOTAL_SUPPLY - vaultAmount;
             IERC20(tokenAddr).safeTransfer(tokenVault, vaultAmount);
             IArcadeTokenVault(tokenVault).createVest(
-                tokenAddr, vault.recipient, vaultAmount, vault.lockupDuration, vault.vestingDuration
+                tokenAddr, opts.vaultRecipient, vaultAmount, opts.vaultLockupDuration, opts.vaultVestingDuration
             );
         }
-
-        IArcadeV3Locker.Recipient[] memory rs = recipients; // calldata -> memory
-        _launchClankerV3(s, tokenAddr, rs, fee, creatorBuyUsdc, lpSupply);
     }
 
     /**
@@ -768,6 +793,19 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
     function isMigrated(address tokenAddr) external view returns (bool) {
         TokenState storage s = tokens[tokenAddr];
         return s.token != address(0) && s.migrated;
+    }
+
+    /// @notice Current anti-sniper tax rate (bps) for `tokenAddr`, decaying
+    /// linearly from `startBps` at launch to 0 over `decaySeconds`. Read by the
+    /// Arcade V3 router to skim buys. Returns 0 once the window has elapsed.
+    function currentSnipeBps(address tokenAddr) external view returns (uint256) {
+        SnipeConfig memory c = snipeConfig[tokenAddr];
+        if (c.startBps == 0 || c.decaySeconds == 0) return 0;
+        uint64 launchedAt = tokens[tokenAddr].migratedAt;
+        if (launchedAt == 0) return 0;
+        uint256 elapsed = block.timestamp - launchedAt;
+        if (elapsed >= c.decaySeconds) return 0;
+        return (uint256(c.startBps) * (c.decaySeconds - elapsed)) / c.decaySeconds;
     }
 
     /// @notice Returns the implied market cap of `tokenAddr` in USDC raw units (6 dp).

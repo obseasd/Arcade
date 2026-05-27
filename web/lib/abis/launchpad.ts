@@ -155,20 +155,21 @@ export const LAUNCHPAD_ABI = [
           { name: "tokenPref", type: "uint8" },
         ],
       },
-      { name: "fee", type: "uint24" },
-      { name: "creatorBuyUsdc", type: "uint256" },
-      {
-        name: "vault",
-        type: "tuple",
-        components: [
-          { name: "pct", type: "uint16" },
-          { name: "lockupDuration", type: "uint64" },
-          { name: "vestingDuration", type: "uint64" },
-          { name: "recipient", type: "address" },
-        ],
-      },
+      // ABI-encoded ClankerOptions (passed as bytes to keep the external
+      // calldata decoder within via_ir's stack budget):
+      //   (uint24 fee, uint256 creatorBuyUsdc, uint16 vaultPct,
+      //    uint64 vaultLockupDuration, uint64 vaultVestingDuration,
+      //    address vaultRecipient, uint16 snipeStartBps, uint32 snipeDecaySeconds)
+      { name: "optsData", type: "bytes" },
     ],
     outputs: [{ type: "address" }],
+  },
+  {
+    type: "function",
+    name: "currentSnipeBps",
+    stateMutability: "view",
+    inputs: [{ name: "token", type: "address" }],
+    outputs: [{ type: "uint256" }],
   },
   {
     type: "function",
