@@ -142,9 +142,7 @@ export function AddLiquidityCard() {
     b !== undefined ? (dec === USDC_DECIMALS ? formatUSDC(b, dec, 2) : formatToken(b, dec, 4)) : "0";
 
   return (
-    <div className="arc-card p-5">
-      <h3 className="mb-4 text-base font-semibold">Add liquidity</h3>
-
+    <div>
       <AmountInput
         label="Token A"
         value={amountA}

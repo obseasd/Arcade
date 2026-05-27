@@ -30,7 +30,7 @@ export function AmountInput({
   return (
     <div
       className={cn(
-        "rounded-2xl border border-arc-border bg-arc-bg-elevated p-4 transition-colors focus-within:border-arc-border-strong",
+        "rounded-2xl border border-arc-border bg-white/[0.015] p-4 transition-colors focus-within:border-arc-border-strong",
         className,
       )}
     >

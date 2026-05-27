@@ -77,8 +77,14 @@ export default function PositionsPage() {
       {tab === "burned" && <BurnedPositions />}
       {tab === "creator" && <CreatorFeesPanel />}
 
-      {/* New-position modal */}
-      <Modal open={newOpen} onClose={() => setNewOpen(false)} widthClassName="max-w-md">
+      {/* New-position modal — same backdrop + translucent panel as the swap token picker */}
+      <Modal
+        open={newOpen}
+        onClose={() => setNewOpen(false)}
+        widthClassName="max-w-md"
+        backdropClassName="bg-black/30 backdrop-blur-sm"
+        className="border-arc-border bg-black/45 backdrop-blur-2xl"
+      >
         <div className="flex items-center justify-between border-b border-arc-border px-5 py-4">
           <h3 className="text-base font-semibold">New position</h3>
           <button
