@@ -119,7 +119,6 @@ export const LAUNCHPAD_ABI = [
   // ===== Constants (exposed by `public constant`) =====
   { type: "function", name: "TOTAL_SUPPLY", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] },
   { type: "function", name: "CURVE_SUPPLY", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] },
-  { type: "function", name: "MIGRATION_USDC_TARGET", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] },
   { type: "function", name: "CREATION_FEE", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] },
 
   // ===== Writes =====
@@ -245,7 +244,6 @@ export const LAUNCHPAD_ABI = [
       { name: "totalRoyaltyUsdc", type: "uint256" },
     ],
   },
-  { type: "function", name: "MIGRATED_ROYALTY_BPS", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] },
   {
     type: "function",
     name: "postComment",

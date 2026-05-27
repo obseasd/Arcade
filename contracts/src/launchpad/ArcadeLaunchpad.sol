@@ -21,20 +21,23 @@ import {ArcadeV3PriceMath} from "../v3/ArcadeV3PriceMath.sol";
 
 /**
  * @title ArcadeLaunchpad
- * @notice Bonding-curve launchpad with two launch modes:
- *         - PUMP   : pump.fun-style — 50% platform / 50% creator(s)
- *         - CLANKER: Clanker-style  — 70% platform / 30% creator(s), with the
- *                    option to split the creator share between two addresses
+ * @notice Launchpad with three launch modes:
+ *         - PUMP      : pump.fun-style bonding curve, 50% platform / 50% creator(s)
+ *         - CLANKER   : bonding curve, 70% platform / 30% creator(s), with the
+ *                       option to split the creator share between two addresses
+ *         - CLANKER_V3: true Clanker-style, NO curve — the full supply is locked
+ *                       single-sided in a Uniswap V3 pool at creation (1 or 3
+ *                       ranges per pool type), tradeable instantly, LP locked
+ *                       forever; LP fees split 80% creator(s) / 20% platform.
  *
- *         Each new token is a fixed-supply ERC20 (1B, 18 decimals) minted
- *         entirely into this contract. Trading happens against virtual USDC
- *         reserves on a constant-product curve. When the curve sells out
- *         (800M tokens), the contract seeds a Uniswap V2 pool with the
- *         collected USDC + the 200M unsold tokens, then burns the LP tokens
- *         to a dead address.
+ *         PUMP/CLANKER tokens are fixed-supply ERC20s (1B, 18 decimals) minted
+ *         into this contract and traded against virtual USDC reserves on a
+ *         constant-product curve. When the curve sells out (800M tokens), the
+ *         contract seeds a Uniswap V2 pool with the collected USDC + the 200M
+ *         unsold tokens, then burns the LP tokens to a dead address.
  *
- * Trade fee: 1% of every swap, taken in USDC; split per mode as above.
- * Creation fee: 2 USDC, paid to treasury at launch.
+ * Curve trade fee: 1% of every swap, taken in USDC; split per mode as above.
+ * Creation fee: 3 USDC, paid to treasury at launch (all modes).
  *
  * USDC has 6 decimals on Arc. Token has 18 decimals.
  */
@@ -76,9 +79,7 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
     int24 internal constant V3_TICK_SPACING = 200;
     /// @notice Creator's share of V3 LP fees in the locker (80%); platform gets 20%.
     uint16 internal constant V3_CREATOR_BPS = 8_000;
-    /// @notice Starting fully-diluted valuation for a CLANKER_V3 single-sided
-    /// launch, in USDC (6dp). The whole supply is placed single-sided at this
-    /// FDV; price rises as the token is bought. Tunable.
+
     // --- Pool types (Clanker-style presets) ---
     // Kept `internal` (no public getters) to stay under the EIP-170 size limit;
     // the frontend uses literal pool-type ids, not these getters.
@@ -329,10 +330,6 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
 
         emit TokenCreated(tokenAddr, msg.sender, LaunchMode.CLANKER_V3, address(0), 0, name_, symbol_, metadataURI);
 
-        if (opts.snipeStartBps > 0 && opts.snipeDecaySeconds > 0) {
-            snipeConfig[tokenAddr] = SnipeConfig(opts.snipeStartBps, opts.snipeDecaySeconds);
-        }
-
         uint256 lpSupply = _applyVault(tokenAddr, opts);
         // Platform always keeps 20% of the LP fees; the creator's recipients
         // split the other 80%.
@@ -340,6 +337,12 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         _launchClankerV3(
             s, tokenAddr, rs, opts.fee, opts.creatorBuyUsdc, lpSupply, opts.poolType, opts.legacyMcapUsdc
         );
+
+        // Arm the anti-sniper tax AFTER the optional creator buy above, so the
+        // creator's own launch buy isn't taxed by their own config.
+        if (opts.snipeStartBps > 0 && opts.snipeDecaySeconds > 0) {
+            snipeConfig[tokenAddr] = SnipeConfig(opts.snipeStartBps, opts.snipeDecaySeconds);
+        }
     }
 
     /// @dev Rescales the creator's recipients (bps must sum to 10000) down to the
@@ -360,6 +363,8 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         uint256 scaledSum;
         for (uint256 i; i < n; ++i) {
             uint16 scaled = uint16((uint256(rs[i].bps) * V3_CREATOR_BPS) / FEE_DENOMINATOR);
+            // A share so small it scales to 0 would make the locker revert; reject early.
+            if (scaled == 0) revert InvalidShare();
             out[i] = IArcadeV3Locker.Recipient({
                 recipient: rs[i].recipient,
                 admin: rs[i].admin,

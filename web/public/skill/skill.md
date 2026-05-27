@@ -5,7 +5,8 @@ Deploy and trade tokens on **Arcade** — a USDC-native DEX + launchpad on **Arc
 creator fees programmatically with a funded wallet.
 
 > **Chain:** Arc Testnet · chainId **5042002** · RPC `https://5042002.rpc.thirdweb.com`
-> · explorer `https://testnet.arcscan.app` · gas + quote token is **USDC** (no WETH).
+> · explorer `https://testnet.arcscan.app` · gas + default quote token is **USDC**.
+> A (non-official) **WETH** at `A.WETH` is also available as a Clanker pool pairing.
 >
 > **Addresses (source of truth):** fetch `https://arcade.trading/deployments.json`.
 > Always read addresses from there — they change on redeploy. Below, `A.*` refers
@@ -47,16 +48,31 @@ First approve `A.USDC` to `A.launchpad` for `constants.creationFeeUsdc`. Emits
 
 ## 1b. Launch — Clanker (single-sided locked V3)
 
-`launchpad.createClankerV3(name, symbol, metadataURI, recipients, fee, creatorBuyUsdc)`
+`launchpad.createClankerV3(name, symbol, metadataURI, recipients, optsData)`
 
 | param | type | notes |
 |---|---|---|
 | `recipients` | tuple[] | up to **3**: `{ address recipient, address admin, uint16 bps, uint8 tokenPref }` |
-| `fee` | uint24 | fee tier: `10000` (1%), `20000` (2%), or `30000` (3%) |
-| `creatorBuyUsdc` | uint256 | optional USDC to buy your own token at launch (atomic) |
+| `optsData` | bytes | ABI-encoded `ClankerOptions` (see below) |
 
-- `bps` must **sum to 10000**. `tokenPref`: `0` = Both, `1` = USDC-only (paired),
-  `2` = token-only (clanker). At least one recipient must cover each side.
+`optsData = abi.encode(ClankerOptions)` where the struct is, **in this exact order**:
+
+```
+(uint24 fee,              // 10000 (1%) / 20000 (2%) / 30000 (3%)
+ uint256 creatorBuyUsdc,  // optional USDC self-buy at launch (USDC pools only; must be 0 for WETH)
+ uint16 vaultPct,         // 0..9000 bps of supply to lock+vest (0 = none)
+ uint64 vaultLockupDuration, uint64 vaultVestingDuration,  // seconds; lockup ≥ 7 days if vaultPct>0
+ address vaultRecipient,
+ uint16 snipeStartBps,    // 0..5000 anti-sniper tax, decays to 0 (router-enforced, soft)
+ uint32 snipeDecaySeconds,
+ uint8 poolType,          // 0 Standard(USDC 35k,3pos) · 1 Legacy(USDC custom,1pos) · 2 Deep(USDC 50k,3pos) · 3 WETH(10 ETH,3pos)
+ uint256 legacyMcapUsdc)  // Legacy only: start mcap, 1e6..1_000_000e6 (1..1M USDC); 0 otherwise
+```
+
+- **Fee split:** the platform **always keeps 20%**; your `recipients` split the remaining **80%**
+  (the contract rescales them and appends the treasury at 20%). `bps` must **sum to 10000**.
+- `tokenPref`: `0` = Both, `1` = USDC-only (paired), `2` = token-only (clanker). You do NOT need to
+  cover both sides — the platform recipient (Both) always does.
 - Each recipient's `admin` can later call `locker.updateRecipient` / `updateAdmin`.
 - Approve `A.USDC` to `A.launchpad` for `creationFeeUsdc + creatorBuyUsdc`.
 
@@ -107,14 +123,26 @@ const wallet = createWalletClient({ account, chain, transport: http(cfg.chain.rp
 await wallet.writeContract({ address: A.USDC, abi: erc20Abi, functionName: "approve",
   args: [A.launchpad, BigInt(cfg.constants.creationFeeUsdc)] });
 
-// 2) launch — 100% of fees to you, in Both tokens, 1% tier, no creator buy
+// 2) launch — your recipients split 80% (platform keeps 20%), Standard pool, 1% tier
+import { encodeAbiParameters } from "viem";
+const optsData = encodeAbiParameters(
+  [{ type: "tuple", components: [
+    { name: "fee", type: "uint24" }, { name: "creatorBuyUsdc", type: "uint256" },
+    { name: "vaultPct", type: "uint16" }, { name: "vaultLockupDuration", type: "uint64" },
+    { name: "vaultVestingDuration", type: "uint64" }, { name: "vaultRecipient", type: "address" },
+    { name: "snipeStartBps", type: "uint16" }, { name: "snipeDecaySeconds", type: "uint32" },
+    { name: "poolType", type: "uint8" }, { name: "legacyMcapUsdc", type: "uint256" },
+  ]}],
+  [{ fee: 10000, creatorBuyUsdc: 0n, vaultPct: 0, vaultLockupDuration: 0n, vaultVestingDuration: 0n,
+     vaultRecipient: account.address, snipeStartBps: 0, snipeDecaySeconds: 0, poolType: 0, legacyMcapUsdc: 0n }],
+);
 await wallet.writeContract({
   address: A.launchpad,
-  abi: LAUNCHPAD_ABI, // createClankerV3(string,string,string,(address,address,uint16,uint8)[],uint24,uint256)
+  abi: LAUNCHPAD_ABI, // createClankerV3(string,string,string,(address,address,uint16,uint8)[],bytes)
   functionName: "createClankerV3",
   args: ["My Token", "MYT", "ipfs://...",
     [{ recipient: account.address, admin: account.address, bps: 10000, tokenPref: 0 }],
-    10000, 0n],
+    optsData],
 });
 ```
 

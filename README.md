@@ -2,7 +2,7 @@
 
 DEX (Uniswap V2 fork) + bonding-curve launchpad on **Arc testnet** (Circle's EVM L1, chain `5042002`).
 
-USDC is the native gas token on Arc and the canonical quote currency for all pools and curves — no WETH wrapper is needed.
+USDC is the native gas token on Arc and the default quote currency for all pools and curves. A (non-official) WETH is also wired in as an optional Clanker pool pairing.
 
 ## Layout
 
@@ -18,7 +18,7 @@ Arcade/
 |---|---|
 | Smart contracts | Solidity 0.8.24, Foundry, OpenZeppelin v5 |
 | DEX | Uniswap V2 fork (Factory / Pair / Router), USDC quote |
-| Launchpad | pump.fun-style bonding curve, fixed 1B supply, 1% trade fee (0.5% platform / 0.5% creator), 1 USDC creation fee, LP burn on migration |
+| Launchpad | 3 modes — Pump (curve 50/50), Arcade (curve 70/30), Clanker (locked single-sided V3 LP, 80/20). Fixed 1B supply, 1% curve trade fee, **3 USDC** creation fee, LP burned/locked |
 | Frontend | Next.js 14, wagmi v2, RainbowKit, Tailwind, dark theme |
 
 ## Quickstart

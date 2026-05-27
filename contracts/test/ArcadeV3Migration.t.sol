@@ -368,6 +368,24 @@ contract ArcadeV3MigrationTest is Test {
         assertEq(cBefore - usdc.balanceOf(creator), launchpad.CREATION_FEE() + 5_000e6, "spent fee + buy");
     }
 
+    function test_creatorBuy_notTaxedByOwnSniper() public {
+        // A creator who sets BOTH a creator buy and an anti-sniper tax must not
+        // tax their own launch buy (snipe is armed only after the buy).
+        IArcadeV3Locker.Recipient[] memory rs = _defaultRecipients();
+        bytes memory opts =
+            abi.encode(ArcadeLaunchpad.ClankerOptions(FEE, 5_000e6, 0, 0, 0, address(0), 5_000, 3600, 0, 0));
+        vm.startPrank(creator);
+        usdc.approve(address(launchpad), type(uint256).max);
+        uint256 tBefore = usdc.balanceOf(treasury);
+        address token = launchpad.createClankerV3("Snipe Buy", "SB", "ipfs://x", rs, opts);
+        vm.stopPrank();
+        // Treasury received ONLY the 3 USDC creation fee — no skim on the creator buy.
+        assertEq(usdc.balanceOf(treasury) - tBefore, launchpad.CREATION_FEE(), "no self-skim on creator buy");
+        assertGt(IERC20(token).balanceOf(creator), 0, "creator got tokens");
+        // But the sniper tax IS armed for later buyers.
+        assertEq(launchpad.currentSnipeBps(token), 5_000, "sniper armed after launch");
+    }
+
     function test_updateRecipient_onlyAdmin() public {
         (address token,) = _createV3Token(); // default: creator slot0 admin=creator, treasury slot1
         uint256 positionId = IArcadeV3Locker(v3Locker).positionIdByToken(token);
