@@ -252,12 +252,10 @@ export function CreatorTokenPanel({ token, symbol, pool, volumeRaw, slotHandles 
                   aria-disabled={!account}
                   title={account ? "" : "Connect a wallet first"}
                   className={cn(
-                    "inline-flex shrink-0 items-center gap-1 rounded-lg border border-arc-cta-hover/40 bg-arc-cta-hover/10 px-2 py-1 text-arc-text hover:bg-arc-cta-hover/20",
+                    "inline-flex shrink-0 items-center gap-1 rounded-lg px-2 py-1 font-medium text-arc-primary hover:text-arc-primary-hover",
                     !account && "pointer-events-none opacity-50",
                   )}
                 >
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src="/twitter.png" alt="" className="h-4 w-4 object-contain" />
                   Claim
                 </a>
               </div>
