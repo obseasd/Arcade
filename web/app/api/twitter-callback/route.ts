@@ -49,7 +49,9 @@ export async function GET(req: NextRequest) {
   const { searchParams } = req.nextUrl;
   const code = searchParams.get("code");
   const state = searchParams.get("state");
-  const origin = req.nextUrl.origin;
+  // Same canonicalization as twitter-login: strip `www.` so the redirect_uri
+  // sent at the token-exchange step matches what was sent at authorization.
+  const origin = req.nextUrl.origin.replace(/^(https?:\/\/)www\./, "$1");
 
   if (!code || !state) return redirectBackWithError(origin, "missing_params");
 

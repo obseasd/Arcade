@@ -42,7 +42,11 @@ export async function GET(req: NextRequest) {
   const verifier = crypto.randomBytes(32).toString("base64url");
   const challenge = crypto.createHash("sha256").update(verifier).digest("base64url");
 
-  const origin = req.nextUrl.origin;
+  // Canonicalize the origin: Twitter rejects any redirect_uri that doesn't
+  // exactly match a registered callback. We strip `www.` so both
+  // https://arcade.trading and https://www.arcade.trading produce the same
+  // callback URL, which then matches the single entry in the dev portal.
+  const origin = req.nextUrl.origin.replace(/^(https?:\/\/)www\./, "$1");
   const callbackUrl = `${origin}/api/twitter-callback`;
 
   const authUrl = new URL(TWITTER_AUTH_URL);
