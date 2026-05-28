@@ -18,11 +18,15 @@ export function TokenCard({ token, curveSupply }: Props) {
   const image = getImageUrl(token.metadataURI);
   const symbol = token.symbol ?? "?";
 
-  const status = token.migrated
-    ? { label: "Migrated", className: "bg-arc-success/10 text-arc-success border-arc-success/30" }
-    : progress > 95
-      ? { label: "About to migrate", className: "bg-arc-warn/10 text-arc-warn border-arc-warn/30" }
-      : { label: "Active", className: "bg-arc-primary-soft text-arc-primary border-arc-border-strong" };
+  // CLANKER_V3 = no bonding curve, locked single-sided V3 LP from birth.
+  const isClanker = token.mode === 2;
+  const status = isClanker
+    ? { label: "Clanker", className: "bg-arc-cta-hover/15 text-arc-text border-arc-cta-hover/40" }
+    : token.migrated
+      ? { label: "Migrated", className: "bg-arc-success/10 text-arc-success border-arc-success/30" }
+      : progress > 95
+        ? { label: "About to migrate", className: "bg-arc-warn/10 text-arc-warn border-arc-warn/30" }
+        : { label: "Active", className: "bg-arc-primary-soft text-arc-primary border-arc-border-strong" };
 
   const age = ageString(Number(token.createdAt));
 
@@ -57,7 +61,7 @@ export function TokenCard({ token, curveSupply }: Props) {
             <span className={cn("rounded-full border px-2 py-0.5 text-[10px] font-medium", status.className)}>
               {status.label}
             </span>
-            {token.marketCap !== undefined && (
+            {token.marketCap !== undefined && token.marketCap > 0n && (
               <span className="text-xs text-arc-text-muted">
                 MC <span className="tabular-nums text-arc-text">${formatUSDC(token.marketCap, 6, 0)}</span>
               </span>
@@ -66,18 +70,22 @@ export function TokenCard({ token, curveSupply }: Props) {
         </div>
       </div>
 
-      <div>
-        <div className="mb-1 flex justify-between text-xs text-arc-text-muted">
-          <span>Bonding progress</span>
-          <span className="tabular-nums text-arc-text">{progress.toFixed(1)}%</span>
+      {isClanker ? (
+        <div className="text-xs text-arc-text-faint">Locked single-sided V3 LP · tradeable from launch</div>
+      ) : (
+        <div>
+          <div className="mb-1 flex justify-between text-xs text-arc-text-muted">
+            <span>Bonding progress</span>
+            <span className="tabular-nums text-arc-text">{progress.toFixed(1)}%</span>
+          </div>
+          <div className="h-2 overflow-hidden rounded-full bg-arc-bg-elevated">
+            <div
+              className="h-full bg-gradient-to-r from-arc-primary to-arc-primary-hover transition-all"
+              style={{ width: `${Math.min(progress, 100)}%` }}
+            />
+          </div>
         </div>
-        <div className="h-2 overflow-hidden rounded-full bg-arc-bg-elevated">
-          <div
-            className="h-full bg-gradient-to-r from-arc-primary to-arc-primary-hover transition-all"
-            style={{ width: `${Math.min(progress, 100)}%` }}
-          />
-        </div>
-      </div>
+      )}
     </Link>
   );
 }

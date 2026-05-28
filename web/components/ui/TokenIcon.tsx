@@ -18,22 +18,24 @@ const PNG_LOGOS: Record<string, string> = {
 
 interface Props {
   symbol?: string | null;
+  /** Override URL (data: or http(s):) — takes precedence over the symbol-based lookup. */
+  image?: string;
   size?: number;
   className?: string;
 }
 
-export function TokenIcon({ symbol, size = 32, className }: Props) {
-  const knownLogo = symbol ? PNG_LOGOS[symbol.toUpperCase()] : undefined;
-  if (knownLogo) {
+export function TokenIcon({ symbol, image, size = 32, className }: Props) {
+  const src = image || (symbol ? PNG_LOGOS[symbol.toUpperCase()] : undefined);
+  if (src) {
     return (
       // eslint-disable-next-line @next/next/no-img-element
       <img
-        src={knownLogo}
+        src={src}
         alt={symbol ?? "token"}
         width={size}
         height={size}
         style={{ width: size, height: size }}
-        className={cn("shrink-0 rounded-full object-contain", className)}
+        className={cn("shrink-0 rounded-full object-cover", className)}
       />
     );
   }

@@ -7,6 +7,7 @@ import { LAUNCHPAD_ABI } from "@/lib/abis/launchpad";
 import { ROUTER_ABI } from "@/lib/abis/dex";
 import { ADDRESSES, LAUNCHPAD_TOKEN_DECIMALS, USDC_DECIMALS } from "@/lib/constants";
 import { AmountInput } from "@/components/ui/AmountInput";
+import { TokenIcon } from "@/components/ui/TokenIcon";
 import { TxStatus, type TxState } from "@/components/ui/TxStatus";
 import { useApproveIfNeeded } from "@/lib/hooks/useApproveIfNeeded";
 import { cn, formatToken, formatUSDC } from "@/lib/utils";
@@ -15,9 +16,11 @@ interface Props {
   token: Address;
   symbol: string;
   migrated: boolean;
+  /** Optional token logo (from metadata) for the buy/sell rows. */
+  image?: string;
 }
 
-export function TradePanel({ token, symbol, migrated }: Props) {
+export function TradePanel({ token, symbol, migrated, image }: Props) {
   const { address: account } = useAccount();
   const publicClient = usePublicClient();
   const [side, setSide] = useState<"buy" | "sell">("buy");
@@ -179,6 +182,7 @@ export function TradePanel({ token, symbol, migrated }: Props) {
         value={amount}
         onChange={setAmount}
         symbol={sideToken}
+        image={side === "sell" ? image : undefined}
         balanceLabel={account ? `Balance: ${inBalanceFmt}` : undefined}
         onMax={
           account && inBalance ? () => setAmount(formatUnits(inBalance, sideDecimals)) : undefined
@@ -188,10 +192,11 @@ export function TradePanel({ token, symbol, migrated }: Props) {
       <div className="mt-3 rounded-xl border border-arc-border bg-arc-bg-elevated p-3 text-sm">
         <div className="flex justify-between text-arc-text-muted">
           <span>You receive</span>
-          <span className="tabular-nums text-arc-text">
+          <span className="flex items-center gap-1.5 tabular-nums text-arc-text">
             {side === "buy"
               ? formatToken(estimatedOut, LAUNCHPAD_TOKEN_DECIMALS, 6)
-              : formatUSDC(estimatedOut, USDC_DECIMALS, 6)}{" "}
+              : formatUSDC(estimatedOut, USDC_DECIMALS, 6)}
+            <TokenIcon symbol={side === "buy" ? symbol : "USDC"} image={side === "buy" ? image : undefined} size={16} />
             <span className="text-arc-text-muted">{side === "buy" ? symbol : "USDC"}</span>
           </span>
         </div>

@@ -12,6 +12,8 @@ export interface LaunchpadTokenInfo {
   createdAt: bigint;
   migratedAt: bigint;
   migrated: boolean;
+  /** 0 = PUMP, 1 = CLANKER (curve), 2 = CLANKER_V3 (locked single-sided). */
+  mode: number;
   realUsdcReserve: bigint;
   tokensSold: bigint;
   v2Pair: Address;
@@ -73,6 +75,7 @@ export function useLaunchpadTokens(): { tokens: LaunchpadTokenInfo[]; isLoading:
         createdAt: state?.createdAt ?? 0n,
         migratedAt: state?.migratedAt ?? 0n,
         migrated: !!state?.migrated,
+        mode: Number(state?.mode ?? 0),
         realUsdcReserve: state?.realUsdcReserve ?? 0n,
         tokensSold: state?.tokensSold ?? 0n,
         v2Pair: state?.v2Pair ?? ("0x0" as Address),

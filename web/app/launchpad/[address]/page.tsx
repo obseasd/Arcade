@@ -132,10 +132,16 @@ export default function TokenDetailPage() {
                 <div className="flex flex-wrap items-baseline gap-2">
                   <h1 className="truncate text-2xl font-semibold">{name}</h1>
                   <span className="tabular-nums text-arc-text-muted">${symbol}</span>
-                  {migrated && (
-                    <span className="rounded-full border border-arc-success/30 bg-arc-success/10 px-2 py-0.5 text-xs font-medium text-arc-success">
-                      Migrated to DEX
+                  {Number(state?.mode ?? 0) === 2 ? (
+                    <span className="rounded-full border border-arc-cta-hover/40 bg-arc-cta-hover/15 px-2 py-0.5 text-xs font-medium text-arc-text">
+                      Clanker
                     </span>
+                  ) : (
+                    migrated && (
+                      <span className="rounded-full border border-arc-success/30 bg-arc-success/10 px-2 py-0.5 text-xs font-medium text-arc-success">
+                        Migrated to DEX
+                      </span>
+                    )
                   )}
                 </div>
                 <div className="mt-1 text-xs text-arc-text-muted">
@@ -168,25 +174,30 @@ export default function TokenDetailPage() {
               </div>
             </div>
 
-            {/* Stats row */}
+            {/* Stats row — bonding-curve modes show raised/progress/migration; Clanker
+                tokens show pool-type info (no curve, LP locked from launch). */}
             <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
-              <Stat
-                label="Market cap"
-                value={mcap ? `$${formatUSDC(mcap, 6, 0)}` : "-"}
-              />
-              <Stat
-                label="USDC raised"
-                value={migrated ? "Migrated" : `$${formatUSDC(realUsdc, 6, 0)}`}
-              />
-              <Stat label="Progress" value={`${progress.toFixed(1)}%`} />
-              <Stat
-                label={migrated ? "DEX pool" : "Migration at"}
-                value={
-                  migrated && state.v2Pair
-                    ? formatAddress(state.v2Pair)
-                    : `$${formatUSDC(MIGRATION_TARGET, 6, 0)}`
-                }
-              />
+              <Stat label="Market cap" value={mcap && mcap > 0n ? `$${formatUSDC(mcap, 6, 0)}` : "-"} />
+              {Number(state?.mode ?? 0) === 2 ? (
+                <>
+                  <Stat label="Type" value="Clanker (V3 locked)" />
+                  <Stat label="Liquidity" value="Single-sided" />
+                  <Stat label="V3 pool" value={state.v2Pair ? formatAddress(state.v2Pair) : "-"} />
+                </>
+              ) : (
+                <>
+                  <Stat label="USDC raised" value={migrated ? "Migrated" : `$${formatUSDC(realUsdc, 6, 0)}`} />
+                  <Stat label="Progress" value={`${progress.toFixed(1)}%`} />
+                  <Stat
+                    label={migrated ? "DEX pool" : "Migration at"}
+                    value={
+                      migrated && state.v2Pair
+                        ? formatAddress(state.v2Pair)
+                        : `$${formatUSDC(MIGRATION_TARGET, 6, 0)}`
+                    }
+                  />
+                </>
+              )}
             </div>
 
             {!migrated && (
@@ -214,9 +225,26 @@ export default function TokenDetailPage() {
           <Comments token={token} />
         </div>
 
-        {/* Right: trade panel */}
+        {/* Right: trade panel. CLANKER_V3 tokens have NO bonding curve and NO V2
+            pair — `launchpad.buy/buyMigrated` would revert. Route them to the
+            Swap page (which knows how to use the V3 router). */}
         <div className="space-y-6">
-          <TradePanel token={token} symbol={symbol} migrated={migrated} />
+          {Number(state?.mode ?? 0) === 2 ? (
+            <div className="arc-card space-y-3 p-5">
+              <div className="text-sm font-semibold">Trade {symbol}</div>
+              <p className="text-xs text-arc-text-muted">
+                This is a Clanker token — locked single-sided V3 LP. Trade it on the Swap page (V3 router).
+              </p>
+              <Link
+                href={`/swap?in=${ADDRESSES.usdc}&out=${token}`}
+                className="arc-button-primary block w-full py-2.5 text-center text-sm"
+              >
+                Open on Swap →
+              </Link>
+            </div>
+          ) : (
+            <TradePanel token={token} symbol={symbol} migrated={migrated} image={image} />
+          )}
         </div>
       </div>
     </div>

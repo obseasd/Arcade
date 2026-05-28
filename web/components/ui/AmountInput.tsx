@@ -1,5 +1,6 @@
 "use client";
 
+import { TokenIcon } from "@/components/ui/TokenIcon";
 import { cn } from "@/lib/utils";
 
 interface AmountInputProps {
@@ -7,6 +8,8 @@ interface AmountInputProps {
   value: string;
   onChange: (v: string) => void;
   symbol: string;
+  /** Optional logo URL (overrides symbol-based lookup). */
+  image?: string;
   balanceLabel?: string;
   onMax?: () => void;
   disabled?: boolean;
@@ -20,6 +23,7 @@ export function AmountInput({
   value,
   onChange,
   symbol,
+  image,
   balanceLabel,
   onMax,
   disabled,
@@ -65,7 +69,10 @@ export function AmountInput({
           className="arc-input flex-1 text-3xl font-medium"
         />
         {rightAccessory ?? (
-          <div className="rounded-xl bg-arc-surface-2 px-3 py-1.5 text-sm font-medium text-arc-text">{symbol}</div>
+          <div className="flex items-center gap-1.5 rounded-xl bg-arc-surface-2 px-3 py-1.5 text-sm font-medium text-arc-text">
+            <TokenIcon symbol={symbol} image={image} size={18} />
+            {symbol}
+          </div>
         )}
       </div>
     </div>
