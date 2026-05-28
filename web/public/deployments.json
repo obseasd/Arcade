@@ -19,7 +19,9 @@
     "v3Locker": "0x60b23CEeA70c3846AC5f9b32E1f8598136E3E569",
     "v3Router": "0xE4CaD091D2be82332688bCab444C1e394fD13Fb4",
     "v3Quoter": "0xca7f8700F032eF1Cdd0708bBAcDB23cDE43bd4c7",
-    "tokenVault": "0x4fE2A2EeB955bbA0A94D3b23970279d13F6CeE14"
+    "tokenVault": "0x4fE2A2EeB955bbA0A94D3b23970279d13F6CeE14",
+    "twitterEscrow": "0xB423702d06D7200766A91EBF6A2Ccc84505fa18D",
+    "twitterEscrowSigner": "0xa31437fC1C8E2723C5EB0D50A26A0bD0C8382Eda"
   },
   "constants": {
     "tokenDecimals": 18,
