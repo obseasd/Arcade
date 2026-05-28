@@ -12,12 +12,30 @@ const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
 const spaceGrotesk = Space_Grotesk({ subsets: ["latin"], variable: "--font-space-grotesk" });
 
 export const metadata: Metadata = {
-  title: "Arcade - DEX & Launchpad on Arc",
+  title: {
+    default: "Arcade",
+    template: "%s on Arcade",
+  },
   description:
-    "Swap stablecoins and launch tokens on Arc - Circle's EVM L1. Bonding-curve launchpad + Uniswap V2-style AMM, USDC-quoted.",
+    "Swap stablecoins and launch tokens on Arc, Circle's EVM L1. Bonding-curve launchpad and Uniswap V3 locked-LP launches, USDC-quoted.",
   icons: {
     icon: "/arcade.png",
     apple: "/arcade.png",
+  },
+  openGraph: {
+    title: "Arcade",
+    description: "DEX and token launchpad on Arc.",
+    url: "https://arcade.trading",
+    siteName: "Arcade",
+    images: ["/arcade.png"],
+    locale: "en_US",
+    type: "website",
+  },
+  twitter: {
+    card: "summary",
+    title: "Arcade",
+    description: "DEX and token launchpad on Arc.",
+    images: ["/arcade.png"],
   },
 };
 
