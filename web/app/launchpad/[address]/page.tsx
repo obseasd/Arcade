@@ -14,6 +14,7 @@ import { formatAddress, formatToken, formatUSDC } from "@/lib/utils";
 import { TokenIcon } from "@/components/ui/TokenIcon";
 import { PriceChart } from "@/components/launchpad/PriceChart";
 import { TradePanel } from "@/components/launchpad/TradePanel";
+import { ClankerTradePanel } from "@/components/launchpad/ClankerTradePanel";
 import { Comments } from "@/components/launchpad/Comments";
 
 const CURVE_SUPPLY = 800_000_000n * 10n ** 18n;
@@ -239,23 +240,17 @@ export default function TokenDetailPage() {
           <Comments token={token} />
         </div>
 
-        {/* Right: trade panel. CLANKER_V3 tokens have NO bonding curve and NO V2
-            pair — `launchpad.buy/buyMigrated` would revert. Route them to the
-            Swap page (which knows how to use the V3 router). */}
+        {/* Right: trade panel. CLANKER_V3 tokens trade through the V3 router on
+            their locked single-sided pool; bonding-curve modes use the curve until
+            migration, then the V2 router. */}
         <div className="space-y-6">
-          {Number(state?.mode ?? 0) === 2 ? (
-            <div className="arc-card space-y-3 p-5">
-              <div className="text-sm font-semibold">Trade {symbol}</div>
-              <p className="text-xs text-arc-text-muted">
-                This is a Clanker token — locked single-sided V3 LP. Trade it on the Swap page (V3 router).
-              </p>
-              <Link
-                href={`/swap?in=${ADDRESSES.usdc}&out=${token}`}
-                className="arc-button-primary block w-full py-2.5 text-center text-sm"
-              >
-                Open on Swap →
-              </Link>
-            </div>
+          {isClanker ? (
+            <ClankerTradePanel
+              token={token}
+              symbol={symbol}
+              pool={state.v2Pair as Address}
+              image={image}
+            />
           ) : (
             <TradePanel token={token} symbol={symbol} migrated={migrated} image={image} />
           )}

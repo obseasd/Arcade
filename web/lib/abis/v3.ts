@@ -163,4 +163,5 @@ export const V3_POOL_ABI = [
   { type: "function", name: "token0", stateMutability: "view", inputs: [], outputs: [{ type: "address" }] },
   { type: "function", name: "token1", stateMutability: "view", inputs: [], outputs: [{ type: "address" }] },
   { type: "function", name: "liquidity", stateMutability: "view", inputs: [], outputs: [{ type: "uint128" }] },
+  { type: "function", name: "fee", stateMutability: "view", inputs: [], outputs: [{ type: "uint24" }] },
 ] as const;
