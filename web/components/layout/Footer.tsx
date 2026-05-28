@@ -43,9 +43,7 @@ export function Footer() {
             <Github className="h-4 w-4" />
           </a>
           <a
-            href="https://docs.arc.io/"
-            target="_blank"
-            rel="noopener noreferrer"
+            href="/docs"
             className="transition-colors hover:text-arc-cta-hover"
             aria-label="Docs"
           >

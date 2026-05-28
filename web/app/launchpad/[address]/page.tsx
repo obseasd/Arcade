@@ -94,7 +94,7 @@ export default function TokenDetailPage() {
   const feePct = isClanker
     ? (Number((poolFeeQ.data as number | undefined) ?? 0) / 10_000)
     : 1; // PUMP/Arcade curve fee
-  const { volume: volumeRaw, isLoading: volLoading } = useLaunchpadVolume({
+  const { volume: volumeRaw, volumeToken: volumeTokenRaw, isLoading: volLoading } = useLaunchpadVolume({
     token: isValid ? token : undefined,
     mode: state ? Number(state.mode) : undefined,
     pool: isClanker ? (state?.v2Pair as Address | undefined) : undefined,
@@ -316,6 +316,7 @@ export default function TokenDetailPage() {
               symbol={symbol}
               pool={state.v2Pair as Address}
               volumeRaw={volumeRaw}
+              volumeTokenRaw={volumeTokenRaw}
               slotHandles={metadata.slotTwitterHandles}
             />
           )}

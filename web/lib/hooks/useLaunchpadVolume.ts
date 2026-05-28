@@ -67,6 +67,8 @@ async function getLogsChunked(
 export interface VolumeState {
   /** USDC volume in raw 6-dec units, or undefined while loading / unsupported. */
   volume: bigint | undefined;
+  /** Cumulative token-side volume in raw 18-dec units. */
+  volumeToken: bigint | undefined;
   /** True until the first scan completes (or errors). */
   isLoading: boolean;
 }
@@ -80,11 +82,13 @@ export function useLaunchpadVolume(args: {
   const { token, mode, pool, refreshKey } = args;
   const publicClient = usePublicClient();
   const [vol, setVol] = useState<bigint | undefined>(undefined);
+  const [volTok, setVolTok] = useState<bigint | undefined>(undefined);
   const [isLoading, setIsLoading] = useState(false);
 
   useEffect(() => {
     if (!publicClient || !token || mode === undefined) {
       setVol(undefined);
+      setVolTok(undefined);
       setIsLoading(false);
       return;
     }
@@ -120,15 +124,20 @@ export function useLaunchpadVolume(args: {
             latest,
             "v3.Swap",
           );
-          let sum = 0n;
+          let sumUsdc = 0n;
+          let sumTok = 0n;
           for (const log of swaps) {
             const a0 = log.args.amount0 as bigint;
             const a1 = log.args.amount1 as bigint;
             const usdcRaw = usdcIsToken0 ? a0 : a1;
-            const abs = usdcRaw < 0n ? -usdcRaw : usdcRaw;
-            sum += abs;
+            const tokRaw = usdcIsToken0 ? a1 : a0;
+            sumUsdc += usdcRaw < 0n ? -usdcRaw : usdcRaw;
+            sumTok += tokRaw < 0n ? -tokRaw : tokRaw;
           }
-          if (!cancelled) setVol(sum);
+          if (!cancelled) {
+            setVol(sumUsdc);
+            setVolTok(sumTok);
+          }
         } else {
           // PUMP / Arcade. Use indexed-arg filter so the RPC returns only this
           // token's events (smaller payload, less likely to time out).
@@ -146,15 +155,28 @@ export function useLaunchpadVolume(args: {
               "lp.Sell",
             ),
           ]);
-          let sum = 0n;
-          for (const log of buys) sum += log.args.usdcIn as bigint;
-          for (const log of sells) sum += log.args.usdcOut as bigint;
-          if (!cancelled) setVol(sum);
+          let sumUsdc = 0n;
+          let sumTok = 0n;
+          for (const log of buys) {
+            sumUsdc += log.args.usdcIn as bigint;
+            sumTok += log.args.tokensOut as bigint;
+          }
+          for (const log of sells) {
+            sumUsdc += log.args.usdcOut as bigint;
+            sumTok += log.args.tokensIn as bigint;
+          }
+          if (!cancelled) {
+            setVol(sumUsdc);
+            setVolTok(sumTok);
+          }
         }
       } catch (err) {
         // eslint-disable-next-line no-console
         console.warn("[volume] top-level error:", err);
-        if (!cancelled) setVol(undefined);
+        if (!cancelled) {
+          setVol(undefined);
+          setVolTok(undefined);
+        }
       } finally {
         if (!cancelled) setIsLoading(false);
       }
@@ -164,5 +186,5 @@ export function useLaunchpadVolume(args: {
     };
   }, [publicClient, token, mode, pool, refreshKey]);
 
-  return { volume: vol, isLoading };
+  return { volume: vol, volumeToken: volTok, isLoading };
 }

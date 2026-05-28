@@ -19,6 +19,8 @@ interface Props {
   pool: Address;
   /** Cumulative USDC volume from useLaunchpadVolume; used to estimate earnings. */
   volumeRaw: bigint | undefined;
+  /** Cumulative token-side volume from useLaunchpadVolume. */
+  volumeTokenRaw?: bigint | undefined;
   /** Per-slot Twitter @handle from token metadata. Null/missing = not attributed. */
   slotHandles?: (string | null)[];
 }
@@ -39,7 +41,7 @@ interface Recipient {
  *
  * BPS splits are immutable post-launch (by contract design).
  */
-export function CreatorTokenPanel({ token, symbol, pool, volumeRaw, slotHandles }: Props) {
+export function CreatorTokenPanel({ token, symbol, pool, volumeRaw, volumeTokenRaw, slotHandles }: Props) {
   const { address: account } = useAccount();
   const publicClient = usePublicClient();
   const { writeContractAsync } = useWriteContract();
@@ -94,12 +96,18 @@ export function CreatorTokenPanel({ token, symbol, pool, volumeRaw, slotHandles 
     query: { enabled: !!pool && pool !== "0x0000000000000000000000000000000000000000" },
   });
   const poolFee = Number((feeQ.data as number | undefined) ?? 0);
-  // Lifetime estimated USDC earnings for the connected wallet's recipient slots:
-  //   volume × (poolFee / 1e6) × (myBps / 1e4)
+  // Lifetime estimated earnings for the connected wallet's recipient slots.
+  //   share = volume × (poolFee / 1e6) × (myBps / 1e4)
+  // We compute it on both pots (paired/USDC and clanker/token) since the
+  // V3 pool fee accrues on both sides of every swap.
   const myEarningsRaw = useMemo(() => {
     if (!volumeRaw || poolFee === 0 || myRecipientBps === 0) return 0n;
     return (volumeRaw * BigInt(poolFee) * BigInt(myRecipientBps)) / 10_000_000_000n;
   }, [volumeRaw, poolFee, myRecipientBps]);
+  const myEarningsTokenRaw = useMemo(() => {
+    if (!volumeTokenRaw || poolFee === 0 || myRecipientBps === 0) return 0n;
+    return (volumeTokenRaw * BigInt(poolFee) * BigInt(myRecipientBps)) / 10_000_000_000n;
+  }, [volumeTokenRaw, poolFee, myRecipientBps]);
 
   // 5) Precise unclaimed (= currently-claimable) preview via V3 fee growth math.
   const claimable = useClankerClaimable(token);
@@ -200,6 +208,17 @@ export function CreatorTokenPanel({ token, symbol, pool, volumeRaw, slotHandles 
               6,
               2,
             )}
+          </div>
+          <div className="mt-0.5 text-[10px] text-arc-text-faint">
+            + {formatToken(
+              isMine && myRecipientBps > 0
+                ? myEarningsTokenRaw
+                : volumeTokenRaw && poolFee > 0
+                  ? (volumeTokenRaw * BigInt(poolFee)) / 1_000_000n
+                  : 0n,
+              LAUNCHPAD_TOKEN_DECIMALS,
+              2,
+            )}{" "}{symbol}
           </div>
         </div>
       </div>
