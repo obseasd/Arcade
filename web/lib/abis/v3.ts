@@ -142,6 +142,16 @@ export const V3_LOCKER_ABI = [
       },
     ],
   },
+  {
+    type: "function",
+    name: "previewFees",
+    stateMutability: "view",
+    inputs: [{ name: "positionId", type: "uint256" }],
+    outputs: [
+      { name: "pairedAmount", type: "uint256" },
+      { name: "clankerAmount", type: "uint256" },
+    ],
+  },
 ] as const;
 
 export const V3_POOL_ABI = [

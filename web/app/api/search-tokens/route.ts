@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { Address, createPublicClient, erc20Abi, http, isAddress } from "viem";
+import { Address, createPublicClient, erc20Abi, http, isAddress, parseAbiItem } from "viem";
 import { LAUNCHPAD_ABI } from "@/lib/abis/launchpad";
+
+const TOKEN_CREATED_EVT = parseAbiItem(
+  "event TokenCreated(address indexed token, address indexed creator, uint8 mode, address creator2, uint16 creator2ShareBps, string name, string symbol, string metadataURI)",
+);
 import { arcTestnet } from "@/lib/chains";
 import { ADDRESSES, FEATURED_TOKENS } from "@/lib/constants";
 import { parseInlineMetadata } from "@/lib/metadata";
@@ -64,6 +68,37 @@ async function getAllTokens(): Promise<TokenRow[]> {
   ]);
   const detailRes = await client.multicall({ contracts: detailCalls, allowFailure: true });
 
+  // Batch-fetch all TokenCreated events to recover metadataURIs (no longer stored
+  // in state). Single pass over recent logs.
+  const metadataMap = new Map<string, string>();
+  try {
+    const latest = await client.getBlockNumber();
+    let end = latest;
+    let walked = 0n;
+    while (walked < 500_000n) {
+      const start = end > 999n ? end - 999n : 0n;
+      try {
+        const logs = await client.getLogs({
+          address: ADDRESSES.launchpad,
+          event: TOKEN_CREATED_EVT,
+          fromBlock: start,
+          toBlock: end,
+        });
+        for (const log of logs) {
+          const addr = (log.args.token as string).toLowerCase();
+          if (!metadataMap.has(addr)) metadataMap.set(addr, (log.args.metadataURI as string) ?? "");
+        }
+      } catch {
+        break;
+      }
+      if (start === 0n) break;
+      walked += end - start + 1n;
+      end = start - 1n;
+    }
+  } catch {
+    /* swallow */
+  }
+
   const rows: TokenRow[] = [];
   for (let i = 0; i < addresses.length; i++) {
     const base = i * 3;
@@ -72,7 +107,8 @@ async function getAllTokens(): Promise<TokenRow[]> {
     const s = stateRes.result as any;
     const name = detailRes[base + 1]?.status === "success" ? (detailRes[base + 1].result as string) : null;
     const symbol = detailRes[base + 2]?.status === "success" ? (detailRes[base + 2].result as string) : null;
-    const meta = parseInlineMetadata(s.metadataURI ?? "") ?? null;
+    const metadataURI = metadataMap.get(addresses[i].toLowerCase()) ?? "";
+    const meta = parseInlineMetadata(metadataURI) ?? null;
     rows.push({
       address: addresses[i],
       name,

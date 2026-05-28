@@ -11,6 +11,7 @@ import { V3_POOL_ABI } from "@/lib/abis/v3";
 import { ADDRESSES } from "@/lib/constants";
 import { useClankerMcap } from "@/lib/hooks/useClankerMcap";
 import { useLaunchpadVolume } from "@/lib/hooks/useLaunchpadVolume";
+import { useTokenMetadataURI } from "@/lib/hooks/useTokenMetadataURI";
 import { parseInlineMetadata, getImageUrl, type TokenMetadata } from "@/lib/metadata";
 import { formatAddress, formatToken, formatUSDC } from "@/lib/utils";
 import { TokenIcon } from "@/components/ui/TokenIcon";
@@ -21,7 +22,7 @@ import { CreatorTokenPanel } from "@/components/launchpad/CreatorTokenPanel";
 import { Comments } from "@/components/launchpad/Comments";
 
 const CURVE_SUPPLY = 800_000_000n * 10n ** 18n;
-const MIGRATION_TARGET = 20_000n * 10n ** 6n;
+const MIGRATION_TARGET_FALLBACK = 20_000n * 10n ** 6n;
 
 export default function TokenDetailPage() {
   const params = useParams();
@@ -58,16 +59,25 @@ export default function TokenDetailPage() {
     query: { enabled: isValid },
   });
 
+  const migrationTargetQ = useReadContract({
+    address: ADDRESSES.launchpad,
+    abi: LAUNCHPAD_ABI,
+    functionName: "MIGRATION_USDC_TARGET",
+  });
+  const migrationTarget =
+    (migrationTargetQ.data as bigint | undefined) ?? MIGRATION_TARGET_FALLBACK;
+
   const state = tokenState.data as any;
   const symbol = (symbolQ.data as string | undefined) ?? "?";
   const name = (nameQ.data as string | undefined) ?? "Unnamed";
   const mcap = mcapQ.data as bigint | undefined;
 
+  const { metadataURI } = useTokenMetadataURI(isValid ? token : undefined);
   const metadata: TokenMetadata = useMemo(() => {
-    if (!state?.metadataURI) return {};
-    return parseInlineMetadata(state.metadataURI) ?? {};
-  }, [state?.metadataURI]);
-  const image = state?.metadataURI ? getImageUrl(state.metadataURI) : undefined;
+    if (!metadataURI) return {};
+    return parseInlineMetadata(metadataURI) ?? {};
+  }, [metadataURI]);
+  const image = metadataURI ? getImageUrl(metadataURI) : undefined;
 
   const tokensSold = (state?.tokensSold as bigint | undefined) ?? 0n;
   const migrated = !!state?.migrated;
@@ -247,7 +257,7 @@ export default function TokenDetailPage() {
                     value={
                       migrated && state.v2Pair
                         ? formatAddress(state.v2Pair)
-                        : `$${formatUSDC(MIGRATION_TARGET, 6, 0)}`
+                        : `$${formatUSDC(migrationTarget, 6, 0)}`
                     }
                   />
                 </>

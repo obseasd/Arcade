@@ -1,10 +1,17 @@
 "use client";
 
-import { useMemo } from "react";
-import { Address, erc20Abi } from "viem";
-import { useReadContract, useReadContracts } from "wagmi";
+import { useEffect, useMemo, useState } from "react";
+import { Address, erc20Abi, parseAbiItem } from "viem";
+import { usePublicClient, useReadContract, useReadContracts } from "wagmi";
 import { LAUNCHPAD_ABI } from "@/lib/abis/launchpad";
 import { ADDRESSES } from "@/lib/constants";
+
+const TOKEN_CREATED_EVT = parseAbiItem(
+  "event TokenCreated(address indexed token, address indexed creator, uint8 mode, address creator2, uint16 creator2ShareBps, string name, string symbol, string metadataURI)",
+);
+
+const CHUNK = 1_000n;
+const MAX_BACK = 500_000n;
 
 export interface LaunchpadTokenInfo {
   address: Address;
@@ -24,6 +31,7 @@ export interface LaunchpadTokenInfo {
 }
 
 export function useLaunchpadTokens(): { tokens: LaunchpadTokenInfo[]; isLoading: boolean } {
+  const publicClient = usePublicClient();
   const countQ = useReadContract({
     address: ADDRESSES.launchpad,
     abi: LAUNCHPAD_ABI,
@@ -32,7 +40,6 @@ export function useLaunchpadTokens(): { tokens: LaunchpadTokenInfo[]; isLoading:
   });
   const count = Number((countQ.data as bigint | undefined) ?? 0n);
 
-  // Read all token addresses
   const addrCalls = useReadContracts({
     contracts: Array.from({ length: count }, (_, i) => ({
       address: ADDRESSES.launchpad,
@@ -51,7 +58,6 @@ export function useLaunchpadTokens(): { tokens: LaunchpadTokenInfo[]; isLoading:
     [addrCalls.data],
   );
 
-  // Read token state + name/symbol + mcap for each address
   const stateCalls = useReadContracts({
     contracts: addresses.flatMap((addr) => [
       { address: ADDRESSES.launchpad, abi: LAUNCHPAD_ABI, functionName: "getTokenState", args: [addr] },
@@ -61,6 +67,49 @@ export function useLaunchpadTokens(): { tokens: LaunchpadTokenInfo[]; isLoading:
     ]),
     query: { enabled: addresses.length > 0 },
   });
+
+  // Batch-fetch all TokenCreated events once; build a single address → metadataURI
+  // map. metadataURI is no longer stored in state; it lives in the event only.
+  const [metadataMap, setMetadataMap] = useState<Map<string, string>>(new Map());
+  useEffect(() => {
+    if (!publicClient || addresses.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const latest = await publicClient.getBlockNumber();
+        const map = new Map<string, string>();
+        let end = latest;
+        let walked = 0n;
+        while (walked < MAX_BACK) {
+          const start = end > CHUNK - 1n ? end - (CHUNK - 1n) : 0n;
+          try {
+            const logs = await publicClient.getLogs({
+              address: ADDRESSES.launchpad,
+              event: TOKEN_CREATED_EVT,
+              fromBlock: start,
+              toBlock: end,
+            });
+            for (const log of logs) {
+              const tokenAddr = (log.args.token as string).toLowerCase();
+              const uri = (log.args.metadataURI as string) ?? "";
+              if (!map.has(tokenAddr)) map.set(tokenAddr, uri);
+            }
+          } catch {
+            break;
+          }
+          if (start === 0n) break;
+          walked += end - start + 1n;
+          end = start - 1n;
+        }
+        if (!cancelled) setMetadataMap(map);
+      } catch {
+        /* swallow */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [publicClient, addresses.length]);
 
   const tokens: LaunchpadTokenInfo[] = useMemo(() => {
     if (!stateCalls.data) return [];
@@ -79,13 +128,13 @@ export function useLaunchpadTokens(): { tokens: LaunchpadTokenInfo[]; isLoading:
         realUsdcReserve: state?.realUsdcReserve ?? 0n,
         tokensSold: state?.tokensSold ?? 0n,
         v2Pair: state?.v2Pair ?? ("0x0" as Address),
-        metadataURI: state?.metadataURI ?? "",
+        metadataURI: metadataMap.get(addr.toLowerCase()) ?? "",
         marketCap: mcap,
         name,
         symbol,
       };
     });
-  }, [addresses, stateCalls.data]);
+  }, [addresses, stateCalls.data, metadataMap]);
 
   return {
     tokens,

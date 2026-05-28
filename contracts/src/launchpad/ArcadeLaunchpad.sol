@@ -52,7 +52,7 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
     uint256 internal constant VIRTUAL_USDC_RESERVE = 5_000e6;
     uint256 internal constant VIRTUAL_TOKEN_RESERVE = 1_000_000_000e18;
     uint256 internal constant K_CONSTANT = VIRTUAL_USDC_RESERVE * VIRTUAL_TOKEN_RESERVE;
-    uint256 internal constant MIGRATION_USDC_TARGET = 20_000e6; // 20,000 USDC raised
+    uint256 public constant MIGRATION_USDC_TARGET = 20_000e6; // 20,000 USDC raised
 
     uint256 public constant CREATION_FEE = 3e6; // 3 USDC
     uint256 internal constant TRADE_FEE_BPS = 100; // 1% total
@@ -260,7 +260,6 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         s.creator2ShareBps = creator2 == address(0) ? 0 : creator2ShareBps;
         s.mode = mode;
         s.createdAt = uint64(block.timestamp);
-        s.metadataURI = metadataURI;
         allTokens.push(tokenAddr);
 
         emit TokenCreated(tokenAddr, msg.sender, mode, creator2, s.creator2ShareBps, name_, symbol_, metadataURI);
@@ -325,7 +324,6 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         s.creator = msg.sender;
         s.mode = LaunchMode.CLANKER_V3;
         s.createdAt = uint64(block.timestamp);
-        s.metadataURI = metadataURI;
         allTokens.push(tokenAddr);
 
         emit TokenCreated(tokenAddr, msg.sender, LaunchMode.CLANKER_V3, address(0), 0, name_, symbol_, metadataURI);

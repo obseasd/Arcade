@@ -298,6 +298,107 @@ contract ArcadeV3Locker is IUniswapV3MintCallback {
         emit FeesCollected(positionId, pairedAmount, clankerAmount);
     }
 
+    /// @notice Off-chain helper: estimates the LP fees that `collectFees` would
+    ///         distribute right now, in (paired, clanker) totals. Sums pending
+    ///         per range via the standard Uniswap V3 fee growth math.
+    function previewFees(uint256 positionId)
+        external
+        view
+        returns (uint256 pairedAmount, uint256 clankerAmount)
+    {
+        Position storage pos = positions[positionId];
+        if (!pos.exists) return (0, 0);
+
+        (uint256 pending0, uint256 pending1) = _previewSumByPool(pos);
+
+        pairedAmount = pos.pairedToken == pos.token0 ? pending0 : pending1;
+        clankerAmount = pos.clankerToken == pos.token0 ? pending0 : pending1;
+    }
+
+    /// @dev Holds the per-range computation locals in memory to keep the outer
+    ///      function below the 0.7.6 stack limit.
+    struct PreviewCtx {
+        address pool;
+        uint256 fg0;
+        uint256 fg1;
+        int24 tickCurrent;
+    }
+
+    function _previewSumByPool(Position storage pos)
+        internal
+        view
+        returns (uint256 sum0, uint256 sum1)
+    {
+        PreviewCtx memory c;
+        c.pool = pos.pool;
+        c.fg0 = IUniswapV3Pool(c.pool).feeGrowthGlobal0X128();
+        c.fg1 = IUniswapV3Pool(c.pool).feeGrowthGlobal1X128();
+        (, c.tickCurrent, , , , , ) = IUniswapV3Pool(c.pool).slot0();
+
+        for (uint8 i = 0; i < pos.numRanges; i++) {
+            (uint256 p0, uint256 p1) = _previewRange(c, pos.tickLowers[i], pos.tickUppers[i]);
+            sum0 += p0;
+            sum1 += p1;
+        }
+    }
+
+    function _previewRange(PreviewCtx memory c, int24 tickLower, int24 tickUpper)
+        internal
+        view
+        returns (uint256 pending0, uint256 pending1)
+    {
+        bytes32 key = keccak256(abi.encodePacked(address(this), tickLower, tickUpper));
+        (uint128 liq, uint256 fgi0Last, uint256 fgi1Last, uint128 owed0, uint128 owed1) =
+            IUniswapV3Pool(c.pool).positions(key);
+        (uint256 fgi0, uint256 fgi1) = _feeGrowthInside(c, tickLower, tickUpper);
+        // 256-bit wraparound subtraction; Solidity 0.7.6 underflows silently.
+        uint256 d0 = fgi0 - fgi0Last;
+        uint256 d1 = fgi1 - fgi1Last;
+        pending0 = uint256(owed0) + (uint256(liq) * d0) / (uint256(1) << 128);
+        pending1 = uint256(owed1) + (uint256(liq) * d1) / (uint256(1) << 128);
+    }
+
+    function _feeGrowthInside(PreviewCtx memory c, int24 tickLower, int24 tickUpper)
+        internal
+        view
+        returns (uint256 fgi0, uint256 fgi1)
+    {
+        (uint256 below0, uint256 below1) = _below(c, tickLower);
+        (uint256 above0, uint256 above1) = _above(c, tickUpper);
+        fgi0 = c.fg0 - below0 - above0;
+        fgi1 = c.fg1 - below1 - above1;
+    }
+
+    function _below(PreviewCtx memory c, int24 tickLower)
+        internal
+        view
+        returns (uint256 below0, uint256 below1)
+    {
+        (, , uint256 lower0, uint256 lower1, , , , ) = IUniswapV3Pool(c.pool).ticks(tickLower);
+        if (c.tickCurrent >= tickLower) {
+            below0 = lower0;
+            below1 = lower1;
+        } else {
+            below0 = c.fg0 - lower0;
+            below1 = c.fg1 - lower1;
+        }
+    }
+
+    function _above(PreviewCtx memory c, int24 tickUpper)
+        internal
+        view
+        returns (uint256 above0, uint256 above1)
+    {
+        (, , uint256 upper0, uint256 upper1, , , , ) = IUniswapV3Pool(c.pool).ticks(tickUpper);
+        if (c.tickCurrent < tickUpper) {
+            above0 = upper0;
+            above1 = upper1;
+        } else {
+            above0 = c.fg0 - upper0;
+            above1 = c.fg1 - upper1;
+        }
+    }
+
     /// @dev Distributes `amount` of `token` to the recipients eligible for this
     /// pot, weighted by bps. `forPaired` selects the pot (paired vs clanker).
     function _distributePot(uint256 positionId, address token, uint256 amount, bool forPaired) internal {

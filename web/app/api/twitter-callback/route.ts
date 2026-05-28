@@ -22,6 +22,9 @@ const TWITTER_ME_URL = "https://api.twitter.com/2/users/me";
 const FEES_COLLECTED_EVT = parseAbiItem(
   "event FeesCollected(uint256 indexed positionId, uint256 pairedAmount, uint256 clankerAmount)",
 );
+const TOKEN_CREATED_EVT = parseAbiItem(
+  "event TokenCreated(address indexed token, address indexed creator, uint8 mode, address creator2, uint16 creator2ShareBps, string name, string symbol, string metadataURI)",
+);
 
 const client = createPublicClient({
   chain: arcTestnet,
@@ -117,9 +120,38 @@ export async function GET(req: NextRequest) {
       abi: LAUNCHPAD_ABI,
       functionName: "getTokenState",
       args: [token as Address],
-    })) as { metadataURI: string; v2Pair: Address };
+    })) as { v2Pair: Address };
 
-    const metadata = parseInlineMetadata(tokenState.metadataURI ?? "");
+    // metadataURI lives in the TokenCreated event, not in state. Scan back to
+    // find this token's emission. Chunked to stay friendly with RPC limits.
+    const latestBlock = await client.getBlockNumber();
+    let metadataURI = "";
+    {
+      let end = latestBlock;
+      let walked = 0n;
+      while (walked < 500_000n) {
+        const start = end > 999n ? end - 999n : 0n;
+        try {
+          const logs = await client.getLogs({
+            address: ADDRESSES.launchpad,
+            event: TOKEN_CREATED_EVT,
+            args: { token: token as Address },
+            fromBlock: start,
+            toBlock: end,
+          });
+          if (logs.length > 0) {
+            metadataURI = (logs[0].args.metadataURI as string) ?? "";
+            break;
+          }
+        } catch {
+          break;
+        }
+        if (start === 0n) break;
+        walked += end - start + 1n;
+        end = start - 1n;
+      }
+    }
+    const metadata = parseInlineMetadata(metadataURI);
     const expectedHandle = metadata?.slotTwitterHandles?.[slotIndex]?.toLowerCase();
     if (!expectedHandle) {
       return redirectBackWithError(origin, "slot_not_attributed");

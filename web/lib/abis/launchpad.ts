@@ -31,8 +31,14 @@ export const LAUNCHPAD_ABI = [
       { name: "realUsdcReserve", type: "uint256" },
       { name: "tokensSold", type: "uint256" },
       { name: "v2Pair", type: "address" },
-      { name: "metadataURI", type: "string" },
     ],
+  },
+  {
+    type: "function",
+    name: "MIGRATION_USDC_TARGET",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ type: "uint256" }],
   },
   {
     type: "function",
@@ -54,7 +60,6 @@ export const LAUNCHPAD_ABI = [
           { name: "realUsdcReserve", type: "uint256" },
           { name: "tokensSold", type: "uint256" },
           { name: "v2Pair", type: "address" },
-          { name: "metadataURI", type: "string" },
         ],
       },
     ],

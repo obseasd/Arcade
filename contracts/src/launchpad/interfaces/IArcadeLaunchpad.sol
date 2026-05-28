@@ -15,11 +15,16 @@ interface IArcadeLaunchpad {
         CLANKER_V3
     }
 
+    /// @notice On-chain state for a launched token. `metadataURI` is intentionally
+    ///         NOT stored here. It is emitted in `TokenCreated` only; the frontend
+    ///         reads it from the event log. Storing rich metadata in state
+    ///         would cost ~5M+ gas per launch in cold SSTORE on Arc, which
+    ///         pushes Standard Clanker launches over the per-tx ceiling.
     struct TokenState {
         address token;
-        address creator; // primary fee receiver
-        address creator2; // optional secondary receiver (CLANKER mode); zero address = none
-        uint16 creator2ShareBps; // share of CREATOR portion that goes to creator2, in bps (0–10000)
+        address creator;
+        address creator2;
+        uint16 creator2ShareBps;
         LaunchMode mode;
         uint64 createdAt;
         uint64 migratedAt;
@@ -27,7 +32,6 @@ interface IArcadeLaunchpad {
         uint256 realUsdcReserve;
         uint256 tokensSold;
         address v2Pair;
-        string metadataURI;
     }
 
     event TokenCreated(
