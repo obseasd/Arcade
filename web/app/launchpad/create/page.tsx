@@ -230,11 +230,12 @@ function CreateTokenInner() {
       return next;
     });
 
-  // Read an uploaded image, downscale and re-encode as JPEG (much smaller than
-  // PNG for photos). The whole metadata JSON is base64-embedded in calldata and
-  // the thirdweb RPC caps tx data at 131KB, so we target ≤50KB raw image bytes
-  // (≈70-80KB after the double base64 encoding) by stepping down quality if
-  // needed.
+  // Read an uploaded image, downscale to 192px and re-encode as JPEG. The
+  // launchpad stores the full metadata URI on-chain as a string; each 32-byte
+  // word of that string costs ~22.1K gas in cold SSTORE on Arc, and Arc has a
+  // per-tx ceiling of ~15M. So we have to keep the image small: target ≤8KB
+  // data-URL by stepping quality down. 8KB at 192px gives a recognizable token
+  // logo; bigger images push the launch over the gas cap.
   const onImageFile = (file: File | undefined) => {
     if (!file) return;
     const reader = new FileReader();
@@ -242,7 +243,7 @@ function CreateTokenInner() {
       const dataUrl = reader.result as string;
       const img = new window.Image();
       img.onload = () => {
-        const max = 256;
+        const max = 192;
         const scale = Math.min(1, max / Math.max(img.width, img.height));
         const w = Math.max(1, Math.round(img.width * scale));
         const h = Math.max(1, Math.round(img.height * scale));
@@ -257,10 +258,10 @@ function CreateTokenInner() {
         ctx.fillStyle = "#0b1220";
         ctx.fillRect(0, 0, w, h);
         ctx.drawImage(img, 0, 0, w, h);
-        // Step quality down until the data URL is small enough.
-        const MAX_BYTES = 50_000;
-        let out = canvas.toDataURL("image/jpeg", 0.82);
-        for (const q of [0.7, 0.6, 0.5, 0.4]) {
+        // Step quality down until the data URL is under 8KB.
+        const MAX_BYTES = 8_000;
+        let out = canvas.toDataURL("image/jpeg", 0.75);
+        for (const q of [0.6, 0.5, 0.4, 0.3, 0.2]) {
           if (out.length <= MAX_BYTES) break;
           out = canvas.toDataURL("image/jpeg", q);
         }
