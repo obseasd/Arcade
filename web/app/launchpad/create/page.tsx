@@ -371,16 +371,17 @@ function CreateTokenInner() {
             },
           ],
         );
-        // Explicit gas limit. A Standard/Deep/WETH Clanker (3 V3 ranges) plus
-        // optional creator buy and vault needs roughly 14-17M gas. Previous
-        // 14M caps caused mainnet-style out-of-gas reverts at gasUsed = gasLimit.
-        // wagmi passes our `gas` field through to the wallet as the explicit
-        // gas limit; Rabby and similar respect it (no multiplier when an
-        // explicit value is set). Arc RPC observed to accept up to at least
-        // 19M; 18M cap leaves a small margin.
+        // Explicit gas limit. The Arc RPC has an empirically-observed per-tx
+        // ceiling around 15-16M: 14M passes (and can run out of gas inside the
+        // call), 17M is rejected pre-flight with "gas limit too high".
+        // We cap at 15M, the largest value we have ever seen accepted, and use
+        // it as the fallback when estimation fails. Note: a Standard/Deep/WETH
+        // Clanker launch with creator buy + vault can need ~14-16M; users who
+        // hit out-of-gas should drop the optional features or pick the Legacy
+        // pool type (1 V3 position instead of 3, saves ~5M).
         const clankerArgs = [name.trim(), symbol.trim(), metadataURI, rs, optsData] as const;
-        const GAS_CAP = 18_000_000n;
-        let gas = 17_000_000n;
+        const GAS_CAP = 15_000_000n;
+        let gas = GAS_CAP;
         if (publicClient) {
           try {
             const est = await publicClient.estimateContractGas({
@@ -390,11 +391,11 @@ function CreateTokenInner() {
               args: clankerArgs,
               account,
             });
-            const buffered = (est * 115n) / 100n;
+            const buffered = (est * 110n) / 100n;
             gas = buffered > GAS_CAP ? GAS_CAP : buffered;
           } catch (err) {
             // eslint-disable-next-line no-console
-            console.warn("[launch] gas estimate failed, using 17M fallback:", err);
+            console.warn("[launch] gas estimate failed, using 15M fallback:", err);
           }
         }
         hash = await writeContractAsync({
@@ -582,6 +583,13 @@ function CreateTokenInner() {
                 </button>
               ))}
             </div>
+            {poolType !== 1 && (parseFloat(creatorBuyStr || "0") > 0 || vaultPct > 0) && (
+              <div className="rounded-lg border border-arc-warn/30 bg-arc-warn/5 p-2.5 text-[11px] text-arc-warn">
+                Heads up: Standard, Deep and WETH pools (3 V3 positions) plus a creator buy or vault
+                can exceed Arc&apos;s per-tx gas ceiling (~15M). If the launch fails with out-of-gas,
+                drop the creator buy / vault or pick the Legacy pool (1 position).
+              </div>
+            )}
             {poolType === 1 && (
               <Field label="Starting market cap (USDC)" hint="1 to 1,000,000.">
                 <input
