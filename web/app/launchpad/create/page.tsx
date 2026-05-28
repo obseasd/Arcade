@@ -373,12 +373,14 @@ function CreateTokenInner() {
         );
         // Explicit gas limit. Wallets can't simulate on a custom chain (Arc)
         // and fall back to a bogus low estimate. A Clanker launch needs roughly
-        // 11-14M (3 V3 mints + locker setup + optional creator buy/vault).
-        // Arc block limit is 30M; we cap at 25M to leave room for the wallet's
-        // own buffer and any per-tx ceiling on the RPC.
+        // 11-13M (3 V3 mints + locker setup + optional creator buy/vault).
+        // The Arc RPC rejects per-tx gas above some threshold (empirically
+        // ~20M). Rabby and similar wallets apply a ~1.5x buffer on what we
+        // pass, so our cap must stay well below that threshold:
+        //   13M passed * 1.5 = 19.5M sent to RPC → fits.
         const clankerArgs = [name.trim(), symbol.trim(), metadataURI, rs, optsData] as const;
-        const GAS_CAP = 25_000_000n;
-        let gas = 18_000_000n; // conservative fallback if estimate fails
+        const GAS_CAP = 13_000_000n;
+        let gas = 12_500_000n;
         if (publicClient) {
           try {
             const est = await publicClient.estimateContractGas({
@@ -388,7 +390,7 @@ function CreateTokenInner() {
               args: clankerArgs,
               account,
             });
-            const buffered = (est * 120n) / 100n;
+            const buffered = (est * 110n) / 100n;
             gas = buffered > GAS_CAP ? GAS_CAP : buffered;
           } catch (err) {
             // eslint-disable-next-line no-console
@@ -412,9 +414,9 @@ function CreateTokenInner() {
         const creator2ShareBps = useCreator2 ? Math.round(creator2SharePct * 100) : 0;
         const args = [name.trim(), symbol.trim(), metadataURI, mode, creator2Addr, creator2ShareBps] as const;
         // Explicit gas (wallet sim doesn't work on Arc): a curve launch needs ~1.5M.
-        // Generous cap; Arc block limit is 30M.
-        const PUMP_GAS_CAP = 25_000_000n;
-        let gas = 5_000_000n;
+        // Cap and wallet-buffer reasoning: same as createClankerV3 above.
+        const PUMP_GAS_CAP = 13_000_000n;
+        let gas = 3_000_000n;
         if (publicClient) {
           try {
             const est = await publicClient.estimateContractGas({
