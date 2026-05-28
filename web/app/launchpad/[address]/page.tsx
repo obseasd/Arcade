@@ -8,8 +8,9 @@ import { Address, erc20Abi, isAddress } from "viem";
 import { useReadContract } from "wagmi";
 import { LAUNCHPAD_ABI } from "@/lib/abis/launchpad";
 import { ADDRESSES } from "@/lib/constants";
+import { useClankerMcap } from "@/lib/hooks/useClankerMcap";
 import { parseInlineMetadata, getImageUrl, type TokenMetadata } from "@/lib/metadata";
-import { formatAddress, formatUSDC } from "@/lib/utils";
+import { formatAddress, formatToken, formatUSDC } from "@/lib/utils";
 import { TokenIcon } from "@/components/ui/TokenIcon";
 import { PriceChart } from "@/components/launchpad/PriceChart";
 import { TradePanel } from "@/components/launchpad/TradePanel";
@@ -66,6 +67,19 @@ export default function TokenDetailPage() {
   const tokensSold = (state?.tokensSold as bigint | undefined) ?? 0n;
   const realUsdc = (state?.realUsdcReserve as bigint | undefined) ?? 0n;
   const migrated = !!state?.migrated;
+  const isClanker = Number(state?.mode ?? 0) === 2;
+  // Clanker FDV: the contract's `marketCap()` reads V2 reserves on what is
+  // actually a V3 pool → reverts. We compute it client-side from slot0.
+  const clankerMcap = useClankerMcap(isClanker && isValid ? token : undefined, isClanker ? (state?.v2Pair as Address | undefined) : undefined);
+  const mcapLabel = isClanker
+    ? clankerMcap
+      ? clankerMcap.pairedSymbol === "USDC"
+        ? `$${formatUSDC(clankerMcap.fdvRaw, 6, 0)}`
+        : `${formatToken(clankerMcap.fdvRaw, clankerMcap.pairedDecimals, 2)} ${clankerMcap.pairedSymbol}`
+      : "-"
+    : mcap && mcap > 0n
+      ? `$${formatUSDC(mcap, 6, 0)}`
+      : "-";
   const progress = !migrated && CURVE_SUPPLY > 0n
     ? Number((tokensSold * 10_000n) / CURVE_SUPPLY) / 100
     : migrated
@@ -177,7 +191,7 @@ export default function TokenDetailPage() {
             {/* Stats row — bonding-curve modes show raised/progress/migration; Clanker
                 tokens show pool-type info (no curve, LP locked from launch). */}
             <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
-              <Stat label="Market cap" value={mcap && mcap > 0n ? `$${formatUSDC(mcap, 6, 0)}` : "-"} />
+              <Stat label="Market cap" value={mcapLabel} />
               {Number(state?.mode ?? 0) === 2 ? (
                 <>
                   <Stat label="Type" value="Clanker (V3 locked)" />

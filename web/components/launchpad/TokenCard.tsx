@@ -4,7 +4,8 @@ import Link from "next/link";
 import { Address } from "viem";
 import { TokenIcon } from "@/components/ui/TokenIcon";
 import { LaunchpadTokenInfo } from "@/lib/hooks/useLaunchpadTokens";
-import { formatUSDC, formatAddress } from "@/lib/utils";
+import { useClankerMcap } from "@/lib/hooks/useClankerMcap";
+import { formatToken, formatUSDC, formatAddress } from "@/lib/utils";
 import { getImageUrl } from "@/lib/metadata";
 import { cn } from "@/lib/utils";
 
@@ -20,6 +21,18 @@ export function TokenCard({ token, curveSupply }: Props) {
 
   // CLANKER_V3 = no bonding curve, locked single-sided V3 LP from birth.
   const isClanker = token.mode === 2;
+  // Contract's marketCap() reads V2 reserves on a V3 pool for Clankers → reverts;
+  // compute it client-side from slot0 instead.
+  const clankerMcap = useClankerMcap(isClanker ? token.address : undefined, isClanker ? token.v2Pair : undefined);
+  const mcapNode = isClanker
+    ? clankerMcap
+      ? clankerMcap.pairedSymbol === "USDC"
+        ? `$${formatUSDC(clankerMcap.fdvRaw, 6, 0)}`
+        : `${formatToken(clankerMcap.fdvRaw, clankerMcap.pairedDecimals, 2)} ${clankerMcap.pairedSymbol}`
+      : null
+    : token.marketCap && token.marketCap > 0n
+      ? `$${formatUSDC(token.marketCap, 6, 0)}`
+      : null;
   const status = isClanker
     ? { label: "Clanker", className: "bg-arc-cta-hover/15 text-arc-text border-arc-cta-hover/40" }
     : token.migrated
@@ -61,9 +74,9 @@ export function TokenCard({ token, curveSupply }: Props) {
             <span className={cn("rounded-full border px-2 py-0.5 text-[10px] font-medium", status.className)}>
               {status.label}
             </span>
-            {token.marketCap !== undefined && token.marketCap > 0n && (
+            {mcapNode && (
               <span className="text-xs text-arc-text-muted">
-                MC <span className="tabular-nums text-arc-text">${formatUSDC(token.marketCap, 6, 0)}</span>
+                MC <span className="tabular-nums text-arc-text">{mcapNode}</span>
               </span>
             )}
           </div>

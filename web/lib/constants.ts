@@ -16,6 +16,8 @@ export const ADDRESSES = {
   v3Quoter: safeAddress(process.env.NEXT_PUBLIC_V3_QUOTER_ADDRESS),
   v3Locker: safeAddress(process.env.NEXT_PUBLIC_V3_LOCKER_ADDRESS),
   tokenVault: safeAddress(process.env.NEXT_PUBLIC_TOKEN_VAULT_ADDRESS),
+  /** WETH on Arc, used as the paired token for POOL_WETH Clanker launches. */
+  weth: safeAddress(process.env.NEXT_PUBLIC_WETH_ADDRESS),
 } as const;
 
 /** V3 fee tier used for all CLANKER_V3 pools (1%). */
