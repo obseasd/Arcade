@@ -166,11 +166,11 @@ export function CreatorTokenPanel({ token, symbol, pool, volumeRaw, slotHandles 
     <div className="arc-card p-5">
       {/* Earnings stats. For recipients we show their share; for visitors we
           show the pool-wide totals so they can see what the creator is making. */}
-      <div className="mb-4 grid gap-2 sm:grid-cols-2">
-        <div className="rounded-xl border border-arc-cta-hover/30 bg-arc-cta-hover/5 px-3 py-2.5 text-xs">
+      <div className="mb-1 grid gap-1 sm:grid-cols-2">
+        <div className="rounded-xl border border-arc-cta-hover/30 bg-arc-cta-hover/5 px-3 py-2 text-xs">
           <div className="flex items-center gap-1.5 text-arc-text-muted">
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/fees.png" alt="" className="h-3 w-3 object-contain" />
+            <img src="/fees.png" alt="" className="h-4 w-4 object-contain" />
             {isMine && myRecipientBps > 0 ? "Your share, claimable" : "LP fees pending"}
           </div>
           <div className="mt-0.5 text-base font-semibold tabular-nums text-arc-text">
@@ -184,10 +184,10 @@ export function CreatorTokenPanel({ token, symbol, pool, volumeRaw, slotHandles 
             + {formatToken(isMine && myRecipientBps > 0 ? myClankerRaw : claimable.clankerRaw, LAUNCHPAD_TOKEN_DECIMALS, 2)} {symbol} (token side)
           </div>
         </div>
-        <div className="rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2.5 text-xs">
+        <div className="rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2 text-xs">
           <div className="flex items-center gap-1.5 text-arc-text-muted">
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/lifetimefees.png" alt="" className="h-3 w-3 object-contain" />
+            <img src="/lifetimefees.png" alt="" className="h-4 w-4 object-contain" />
             {isMine && myRecipientBps > 0 ? "Lifetime earnings" : "Lifetime fees earned"}
           </div>
           <div className="mt-0.5 text-base font-semibold tabular-nums text-arc-text">
@@ -204,7 +204,7 @@ export function CreatorTokenPanel({ token, symbol, pool, volumeRaw, slotHandles 
         </div>
       </div>
 
-      <div className="space-y-2">
+      <div className="space-y-1">
         {recipients.map((r, i) => {
           const isMineSlot = mySlots.includes(i);
           const acc = account?.toLowerCase() ?? "";
@@ -230,7 +230,7 @@ export function CreatorTokenPanel({ token, symbol, pool, volumeRaw, slotHandles 
             return (
               <div
                 key={i}
-                className="flex items-center justify-between gap-2 p-3 text-xs"
+                className="flex items-center justify-between gap-2 px-3 py-1 text-xs"
               >
                 <div className="flex min-w-0 items-center gap-1.5 truncate">
                   <span className="text-arc-text">Fee recipient:</span>
@@ -257,7 +257,7 @@ export function CreatorTokenPanel({ token, symbol, pool, volumeRaw, slotHandles 
                   )}
                 >
                   {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src="/twitter.png" alt="" className="h-3 w-3 object-contain" />
+                  <img src="/twitter.png" alt="" className="h-4 w-4 object-contain" />
                   Claim
                 </a>
               </div>
@@ -334,7 +334,7 @@ export function CreatorTokenPanel({ token, symbol, pool, volumeRaw, slotHandles 
         onClick={claim}
         disabled={claiming}
         className={cn(
-          "mt-4 inline-flex w-full items-center justify-center gap-2 py-2.5 text-sm",
+          "mt-1 inline-flex w-full items-center justify-center gap-2 py-2.5 text-sm",
           "arc-button-primary",
           claiming && "opacity-60",
         )}
