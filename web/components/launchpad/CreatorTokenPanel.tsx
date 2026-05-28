@@ -75,9 +75,13 @@ export function CreatorTokenPanel({ token, symbol }: Props) {
     return { isMine: slots.length > 0, mySlots: slots };
   }, [account, recipients]);
 
-  if (!account || !isMine || positionId === 0n) return null;
+  if (positionId === 0n) return null;
 
   const claim = async () => {
+    if (!account) {
+      pushToast({ kind: "error", title: "Connect a wallet to claim" });
+      return;
+    }
     setClaiming(true);
     try {
       const hash = await writeContractAsync({
@@ -134,16 +138,17 @@ export function CreatorTokenPanel({ token, symbol }: Props) {
         <h3 className="text-base font-semibold">Creator panel</h3>
       </div>
       <p className="mb-4 text-xs text-arc-text-muted">
-        You&apos;re a recipient on this Clanker&apos;s locked V3 position. Claim accrued LP fees;
-        rotate your payout/admin address per slot (BPS splits are immutable on-chain).
+        {isMine
+          ? "You're a recipient on this Clanker's locked V3 position. Claim accrued LP fees; rotate your payout/admin address per slot (BPS splits are immutable on-chain)."
+          : "Anyone can trigger a claim — LP fees always route to the registered recipients below, never to the caller."}
       </p>
 
       <div className="space-y-2">
         {recipients.map((r, i) => {
           const isMineSlot = mySlots.includes(i);
-          const acc = account.toLowerCase();
-          const iAmAdmin = r.admin.toLowerCase() === acc;
-          const iAmRecipient = r.recipient.toLowerCase() === acc;
+          const acc = account?.toLowerCase() ?? "";
+          const iAmAdmin = acc.length > 0 && r.admin.toLowerCase() === acc;
+          const iAmRecipient = acc.length > 0 && r.recipient.toLowerCase() === acc;
           const isTreasury = r.recipient.toLowerCase() === ADDRESSES.usdc.toLowerCase()
             ? false
             : i === recipients.length - 1 && r.bps === 2000;
