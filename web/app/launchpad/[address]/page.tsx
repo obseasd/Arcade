@@ -168,8 +168,8 @@ export default function TokenDetailPage() {
                     )
                   )}
                 </div>
-                <div className="mt-1 text-xs text-arc-text-muted">
-                  {token} · created by{" "}
+                <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-arc-text-muted">
+                  <span>{token} · created by</span>
                   <a
                     href={`https://testnet.arcscan.app/address/${state.creator}`}
                     target="_blank"
@@ -178,6 +178,17 @@ export default function TokenDetailPage() {
                   >
                     {formatAddress(state.creator)}
                   </a>
+                  {metadata.creatorTwitter && (
+                    <a
+                      href={`https://x.com/${metadata.creatorTwitter}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      title="Creator-claimed Twitter / X handle (unverified)"
+                      className="inline-flex items-center gap-1 rounded-full border border-arc-border bg-arc-surface-2 px-1.5 py-0.5 text-[10px] text-arc-text transition-colors hover:bg-arc-surface-3"
+                    >
+                      <Twitter className="h-3 w-3" />@{metadata.creatorTwitter}
+                    </a>
+                  )}
                 </div>
                 {metadata.description && (
                   <p className="mt-3 max-w-2xl text-sm text-arc-text-muted">{metadata.description}</p>

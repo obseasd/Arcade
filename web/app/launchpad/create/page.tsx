@@ -22,6 +22,18 @@ function modeLabel(mode: LaunchMode): string {
   return "Clanker"; // CLANKER_V3
 }
 
+/** Normalize a Twitter / X handle: strip @, URL prefixes, lowercase. Returns
+ * undefined if the input is empty after trimming. */
+function normalizeTwitterHandle(raw: string): string | undefined {
+  const s = raw.trim();
+  if (!s) return undefined;
+  const m = s
+    .replace(/^https?:\/\/(www\.)?(twitter|x)\.com\//i, "")
+    .replace(/^@/, "")
+    .replace(/\/$/, "");
+  return m.length > 0 && /^[a-zA-Z0-9_]{1,15}$/.test(m) ? m.toLowerCase() : undefined;
+}
+
 /** Filled-track gradient for `.arc-slider`, given the value as a 0-100 %.
  * Filled = the site's blue accent; unfilled = translucent white (stays legible,
  * never the page background) — same active/inactive contrast as a slider's dots. */
@@ -78,6 +90,7 @@ function CreateTokenInner() {
   const [twitter, setTwitter] = useState("");
   const [telegram, setTelegram] = useState("");
   const [website, setWebsite] = useState("");
+  const [creatorTwitter, setCreatorTwitter] = useState("");
   const [mode] = useState<LaunchMode>(initialMode);
   const [creator2, setCreator2] = useState("");
   const [creator2SharePct, setCreator2SharePct] = useState(50); // 0–100
@@ -287,6 +300,7 @@ function CreateTokenInner() {
         twitter: twitter.trim() || undefined,
         telegram: telegram.trim() || undefined,
         website: website.trim() || undefined,
+        creatorTwitter: normalizeTwitterHandle(creatorTwitter),
       });
 
       setTx({ status: "pending", message: "Launching token…" });
@@ -837,7 +851,18 @@ function CreateTokenInner() {
             <ChevronDown className="arc-disclosure ml-auto h-4 w-4 shrink-0 text-arc-text-faint" />
           </summary>
           <div className="space-y-3 px-4 pb-4">
-            <Field label="Twitter / X">
+            <Field label="Creator @handle (Twitter / X)">
+              <input
+                value={creatorTwitter}
+                onChange={(e) => setCreatorTwitter(e.target.value)}
+                placeholder="@yourhandle"
+                className="arc-input rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2"
+              />
+              <p className="mt-1 text-[11px] text-arc-text-faint">
+                Display attribution. Fees always go to the recipient address(es) — the handle is unverified metadata.
+              </p>
+            </Field>
+            <Field label="Token Twitter / X">
               <input
                 value={twitter}
                 onChange={(e) => setTwitter(e.target.value)}

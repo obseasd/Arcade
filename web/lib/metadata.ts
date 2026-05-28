@@ -12,6 +12,14 @@ export interface TokenMetadata {
   twitter?: string;
   telegram?: string;
   website?: string;
+  /**
+   * Creator attribution: the @handle the deployer claims on Twitter. The
+   * on-chain fee recipient is always an Ethereum address (see the V3 locker);
+   * this field is *display* attribution only. We don't verify it cryptographically
+   * — to spot impersonation, check the deployer's actual tweet announcing the
+   * launch (Clanker's same trust model).
+   */
+  creatorTwitter?: string;
 }
 
 export function encodeMetadataDataUri(m: TokenMetadata): string {
