@@ -557,7 +557,7 @@ function CreateTokenInner() {
                 + Add recipient
               </button>
             )}
-            {!recipientsValid && (
+            {!recipientsValid && recipients.some((r) => r.recipient.trim() !== "") && (
               <div className="text-xs text-arc-danger">Recipients must be valid addresses summing to 100%.</div>
             )}
           </div>
