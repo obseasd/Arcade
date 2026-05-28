@@ -1,7 +1,6 @@
 "use client";
 
 import { Crown, Pencil, Coins, TrendingUp, Twitter } from "lucide-react";
-import Link from "next/link";
 import { useMemo, useState } from "react";
 import { Address, isAddress } from "viem";
 import { useAccount, usePublicClient, useReadContract, useReadContracts, useWriteContract } from "wagmi";
@@ -298,14 +297,24 @@ export function CreatorTokenPanel({ token, symbol, pool, volumeRaw, slotHandles 
               {isTwitterPending && (
                 <div className="mt-2 flex items-center justify-between gap-2 text-[11px]">
                   <span className="text-arc-text-muted">
-                    Fees accumulate in the escrow. Connect Twitter to claim them.
+                    {account
+                      ? "Login with Twitter to claim into your wallet."
+                      : "Connect a wallet first to claim."}
                   </span>
-                  <Link
-                    href={`/claim?token=${token}&slot=${i}&handle=${handle}`}
-                    className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-arc-cta-hover/40 bg-arc-cta-hover/10 px-2 py-1 text-arc-text hover:bg-arc-cta-hover/20"
+                  <a
+                    href={
+                      account
+                        ? `/api/twitter-login?token=${token}&slotIndex=${i}&recipient=${account}`
+                        : "#"
+                    }
+                    aria-disabled={!account}
+                    className={cn(
+                      "inline-flex shrink-0 items-center gap-1 rounded-lg border border-arc-cta-hover/40 bg-arc-cta-hover/10 px-2 py-1 text-arc-text hover:bg-arc-cta-hover/20",
+                      !account && "pointer-events-none opacity-50",
+                    )}
                   >
                     <Twitter className="h-3 w-3" /> Claim as @{handle}
-                  </Link>
+                  </a>
                 </div>
               )}
               {iAmAdmin && !isTreasury && !isTwitterPending && (
