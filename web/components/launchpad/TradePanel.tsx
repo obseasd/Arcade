@@ -19,9 +19,11 @@ interface Props {
   migrated: boolean;
   /** Optional token logo (from metadata) for the buy/sell rows. */
   image?: string;
+  /** Fired after a successful buy/sell so the parent can refetch derived state (volume, etc.). */
+  onTradeSuccess?: () => void;
 }
 
-export function TradePanel({ token, symbol, migrated, image }: Props) {
+export function TradePanel({ token, symbol, migrated, image, onTradeSuccess }: Props) {
   const { address: account } = useAccount();
   const publicClient = usePublicClient();
   const [side, setSide] = useState<"buy" | "sell">("buy");
@@ -135,6 +137,7 @@ export function TradePanel({ token, symbol, migrated, image }: Props) {
       setAmount("");
       usdcBalance.refetch();
       tokenBalance.refetch();
+      onTradeSuccess?.();
       pushToast({
         kind: "swap",
         tokenAddress: side === "buy" ? token : ADDRESSES.usdc,

@@ -33,13 +33,19 @@ export function TokenCard({ token, curveSupply }: Props) {
     : token.marketCap && token.marketCap > 0n
       ? `$${formatUSDC(token.marketCap, 6, 0)}`
       : null;
+  const isPump = token.mode === 0;
+  const isArcade = token.mode === 1;
   const status = isClanker
     ? { label: "Clanker", className: "bg-arc-cta-hover/15 text-arc-text border-arc-cta-hover/40" }
     : token.migrated
       ? { label: "Migrated", className: "bg-arc-success/10 text-arc-success border-arc-success/30" }
       : progress > 95
         ? { label: "About to migrate", className: "bg-arc-warn/10 text-arc-warn border-arc-warn/30" }
-        : { label: "Active", className: "bg-arc-primary-soft text-arc-primary border-arc-border-strong" };
+        : isPump
+          ? { label: "Pump", className: "bg-arc-cta-hover/15 text-arc-text border-arc-cta-hover/40" }
+          : isArcade
+            ? { label: "Arcade", className: "bg-arc-cta-hover/15 text-arc-text border-arc-cta-hover/40" }
+            : { label: "Active", className: "bg-arc-primary-soft text-arc-primary border-arc-border-strong" };
 
   const age = ageString(Number(token.createdAt));
 

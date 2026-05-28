@@ -21,6 +21,8 @@ interface Props {
   /** V3 pool address (stored in state.v2Pair for Clanker tokens). */
   pool: Address;
   image?: string;
+  /** Fired after a successful trade so the parent can refetch derived state. */
+  onTradeSuccess?: () => void;
 }
 
 /**
@@ -28,7 +30,7 @@ interface Props {
  * Falls back to a "Open on Swap" link for WETH-paired pools (we don't expose
  * WETH balance/approve flows in this focused panel — the Swap page does).
  */
-export function ClankerTradePanel({ token, symbol, pool, image }: Props) {
+export function ClankerTradePanel({ token, symbol, pool, image, onTradeSuccess }: Props) {
   const { address: account } = useAccount();
   const publicClient = usePublicClient();
   const [side, setSide] = useState<"buy" | "sell">("buy");
@@ -131,6 +133,7 @@ export function ClankerTradePanel({ token, symbol, pool, image }: Props) {
       setAmount("");
       usdcBalance.refetch();
       tokenBalance.refetch();
+      onTradeSuccess?.();
       const outTokenSymbol = side === "buy" ? symbol : "USDC";
       const outDecimals = side === "buy" ? LAUNCHPAD_TOKEN_DECIMALS : USDC_DECIMALS;
       pushToast({

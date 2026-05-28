@@ -206,8 +206,11 @@ function CreateTokenInner() {
       return next;
     });
 
-  // Read an uploaded image, downscale to 256px (keeps the on-chain metadata
-  // string small), and store it as a data: URL so no external hosting is needed.
+  // Read an uploaded image, downscale and re-encode as JPEG (much smaller than
+  // PNG for photos). The whole metadata JSON is base64-embedded in calldata and
+  // the thirdweb RPC caps tx data at 131KB, so we target ≤50KB raw image bytes
+  // (≈70-80KB after the double base64 encoding) by stepping down quality if
+  // needed.
   const onImageFile = (file: File | undefined) => {
     if (!file) return;
     const reader = new FileReader();
@@ -227,8 +230,17 @@ function CreateTokenInner() {
           setImage(dataUrl);
           return;
         }
+        ctx.fillStyle = "#0b1220";
+        ctx.fillRect(0, 0, w, h);
         ctx.drawImage(img, 0, 0, w, h);
-        setImage(canvas.toDataURL("image/png"));
+        // Step quality down until the data URL is small enough.
+        const MAX_BYTES = 50_000;
+        let out = canvas.toDataURL("image/jpeg", 0.82);
+        for (const q of [0.7, 0.6, 0.5, 0.4]) {
+          if (out.length <= MAX_BYTES) break;
+          out = canvas.toDataURL("image/jpeg", q);
+        }
+        setImage(out);
       };
       img.onerror = () => setImage(dataUrl);
       img.src = dataUrl;

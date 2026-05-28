@@ -3,7 +3,7 @@
 import { ExternalLink, Twitter, MessageSquare, Globe, ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { Address, erc20Abi, isAddress } from "viem";
 import { useReadContract } from "wagmi";
 import { LAUNCHPAD_ABI } from "@/lib/abis/launchpad";
@@ -26,6 +26,7 @@ export default function TokenDetailPage() {
   const addressParam = params.address as string;
   const isValid = isAddress(addressParam);
   const token = addressParam as Address;
+  const [refreshKey, setRefreshKey] = useState(0);
 
   const tokenState = useReadContract({
     address: ADDRESSES.launchpad,
@@ -76,6 +77,7 @@ export default function TokenDetailPage() {
     token: isValid ? token : undefined,
     mode: state ? Number(state.mode) : undefined,
     pool: isClanker ? (state?.v2Pair as Address | undefined) : undefined,
+    refreshKey,
   });
   const volumeLabel = volumeRaw !== undefined ? `$${formatUSDC(volumeRaw, 6, 0)}` : "-";
   const mcapLabel = isClanker
@@ -256,9 +258,16 @@ export default function TokenDetailPage() {
               symbol={symbol}
               pool={state.v2Pair as Address}
               image={image}
+              onTradeSuccess={() => setRefreshKey((k) => k + 1)}
             />
           ) : (
-            <TradePanel token={token} symbol={symbol} migrated={migrated} image={image} />
+            <TradePanel
+              token={token}
+              symbol={symbol}
+              migrated={migrated}
+              image={image}
+              onTradeSuccess={() => setRefreshKey((k) => k + 1)}
+            />
           )}
         </div>
       </div>
