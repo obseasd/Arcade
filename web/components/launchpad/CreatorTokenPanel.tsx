@@ -1,19 +1,23 @@
 "use client";
 
-import { Crown, Pencil, Coins } from "lucide-react";
+import { Crown, Pencil, Coins, TrendingUp } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Address, isAddress } from "viem";
 import { useAccount, usePublicClient, useReadContract, useReadContracts, useWriteContract } from "wagmi";
-import { V3_LOCKER_ABI } from "@/lib/abis/v3";
+import { V3_LOCKER_ABI, V3_POOL_ABI } from "@/lib/abis/v3";
 import { ADDRESSES } from "@/lib/constants";
 import { pushToast } from "@/lib/toast";
 import { Modal } from "@/components/ui/Modal";
-import { cn, formatAddress } from "@/lib/utils";
+import { cn, formatAddress, formatUSDC } from "@/lib/utils";
 
 interface Props {
   /** Clanker token (mode=2). */
   token: Address;
   symbol: string;
+  /** Locked V3 pool address (state.v2Pair on Clanker tokens). */
+  pool: Address;
+  /** Cumulative USDC volume from useLaunchpadVolume; used to estimate earnings. */
+  volumeRaw: bigint | undefined;
 }
 
 interface Recipient {
@@ -32,7 +36,7 @@ interface Recipient {
  *
  * BPS splits are immutable post-launch (by contract design).
  */
-export function CreatorTokenPanel({ token, symbol }: Props) {
+export function CreatorTokenPanel({ token, symbol, pool, volumeRaw }: Props) {
   const { address: account } = useAccount();
   const publicClient = usePublicClient();
   const { writeContractAsync } = useWriteContract();
@@ -64,16 +68,37 @@ export function CreatorTokenPanel({ token, symbol }: Props) {
   const recipients = (recsQ.data as Recipient[] | undefined) ?? [];
 
   // 3) My membership.
-  const { isMine, mySlots } = useMemo(() => {
-    if (!account) return { isMine: false, mySlots: [] as number[] };
+  const { isMine, mySlots, myRecipientBps } = useMemo(() => {
+    if (!account) return { isMine: false, mySlots: [] as number[], myRecipientBps: 0 };
     const acc = account.toLowerCase();
     const slots: number[] = [];
+    let bps = 0;
     for (let i = 0; i < recipients.length; i++) {
       const r = recipients[i];
-      if (r.recipient.toLowerCase() === acc || r.admin.toLowerCase() === acc) slots.push(i);
+      const iAmAdmin = r.admin.toLowerCase() === acc;
+      const iAmRecipient = r.recipient.toLowerCase() === acc;
+      if (iAmAdmin || iAmRecipient) slots.push(i);
+      if (iAmRecipient) bps += r.bps;
     }
-    return { isMine: slots.length > 0, mySlots: slots };
+    return { isMine: slots.length > 0, mySlots: slots, myRecipientBps: bps };
   }, [account, recipients]);
+
+  // 4) Pool fee tier (V3 unit: 10000 = 1%). Used to estimate accrued earnings.
+  const feeQ = useReadContract({
+    address: pool,
+    abi: V3_POOL_ABI,
+    functionName: "fee",
+    query: { enabled: !!pool && pool !== "0x0000000000000000000000000000000000000000" },
+  });
+  const poolFee = Number((feeQ.data as number | undefined) ?? 0);
+  // Lifetime estimated USDC earnings for the connected wallet's recipient slots:
+  //   volume × (poolFee / 1e6) × (myBps / 1e4)
+  // myBps lives in the locker's full bps space (treasury holds 2000), so the
+  // ratio gives the wallet's true share of the LP fee.
+  const myEarningsRaw = useMemo(() => {
+    if (!volumeRaw || poolFee === 0 || myRecipientBps === 0) return 0n;
+    return (volumeRaw * BigInt(poolFee) * BigInt(myRecipientBps)) / 10_000_000_000n;
+  }, [volumeRaw, poolFee, myRecipientBps]);
 
   if (positionId === 0n) return null;
 
@@ -142,6 +167,22 @@ export function CreatorTokenPanel({ token, symbol }: Props) {
           ? "You're a recipient on this Clanker's locked V3 position. Claim accrued LP fees; rotate your payout/admin address per slot (BPS splits are immutable on-chain)."
           : "Anyone can trigger a claim — LP fees always route to the registered recipients below, never to the caller."}
       </p>
+
+      {isMine && myRecipientBps > 0 && (
+        <div className="mb-4 rounded-xl border border-arc-cta-hover/30 bg-arc-cta-hover/5 px-3 py-2.5 text-xs">
+          <div className="flex items-center gap-1.5 text-arc-text-muted">
+            <TrendingUp className="h-3 w-3" />
+            Your estimated earnings (all-time)
+          </div>
+          <div className="mt-0.5 text-base font-semibold tabular-nums text-arc-text">
+            ${formatUSDC(myEarningsRaw, 6, 2)}
+          </div>
+          <div className="mt-0.5 text-[10px] text-arc-text-faint">
+            Rough estimate from on-chain volume × pool fee × your bps. Actual claimable may differ
+            depending on already-claimed amounts.
+          </div>
+        </div>
+      )}
 
       <div className="space-y-2">
         {recipients.map((r, i) => {

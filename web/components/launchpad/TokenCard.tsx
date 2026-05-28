@@ -1,10 +1,12 @@
 "use client";
 
 import Link from "next/link";
+import { Star } from "lucide-react";
 import { Address } from "viem";
 import { TokenIcon } from "@/components/ui/TokenIcon";
 import { LaunchpadTokenInfo } from "@/lib/hooks/useLaunchpadTokens";
 import { useClankerMcap } from "@/lib/hooks/useClankerMcap";
+import { FEATURED_TOKENS } from "@/lib/constants";
 import { formatToken, formatUSDC, formatAddress } from "@/lib/utils";
 import { getImageUrl } from "@/lib/metadata";
 import { cn } from "@/lib/utils";
@@ -35,6 +37,7 @@ export function TokenCard({ token, curveSupply }: Props) {
       : null;
   const isPump = token.mode === 0;
   const isArcade = token.mode === 1;
+  const isFeatured = FEATURED_TOKENS.has(token.address.toLowerCase());
   const status = isClanker
     ? { label: "Clanker", className: "bg-arc-cta-hover/15 text-arc-text border-arc-cta-hover/40" }
     : token.migrated
@@ -52,7 +55,10 @@ export function TokenCard({ token, curveSupply }: Props) {
   return (
     <Link
       href={`/launchpad/${token.address}`}
-      className="arc-card group flex flex-col gap-3 p-4 transition-colors hover:border-arc-border-strong"
+      className={cn(
+        "arc-card group flex flex-col gap-3 p-4 transition-colors hover:border-arc-border-strong",
+        isFeatured && "ring-1 ring-arc-cta-hover/40",
+      )}
     >
       <div className="flex items-start gap-3">
         {image ? (
@@ -77,6 +83,11 @@ export function TokenCard({ token, curveSupply }: Props) {
             by {formatAddress(token.creator)} · {age}
           </div>
           <div className="mt-2 flex items-center gap-2">
+            {isFeatured && (
+              <span className="inline-flex items-center gap-1 rounded-full border border-arc-cta-hover/40 bg-arc-cta-hover/20 px-2 py-0.5 text-[10px] font-medium text-arc-text">
+                <Star className="h-2.5 w-2.5 fill-current" /> Featured
+              </span>
+            )}
             <span className={cn("rounded-full border px-2 py-0.5 text-[10px] font-medium", status.className)}>
               {status.label}
             </span>

@@ -1,9 +1,10 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Plus, Search } from "lucide-react";
-import { LAUNCHPAD_TOTAL_SUPPLY } from "@/lib/constants";
+import { Plus, Search, Star } from "lucide-react";
+import { FEATURED_TOKENS, LAUNCHPAD_TOTAL_SUPPLY } from "@/lib/constants";
 import { useLaunchpadTokens, LaunchpadTokenInfo } from "@/lib/hooks/useLaunchpadTokens";
+import { parseInlineMetadata } from "@/lib/metadata";
 import { TokenCard } from "@/components/launchpad/TokenCard";
 import { LaunchModeModal } from "@/components/launchpad/LaunchModeModal";
 import { cn } from "@/lib/utils";
@@ -37,15 +38,25 @@ export default function LaunchpadIndexPage() {
       list = list.sort((a, b) => Number(b.createdAt - a.createdAt));
     }
 
-    // Search
-    const term = q.trim().toLowerCase();
+    // Search (name, symbol, address, creator @handle).
+    const term = q.trim().toLowerCase().replace(/^@/, "");
     if (term) {
-      list = list.filter(
-        (t) =>
-          (t.name ?? "").toLowerCase().includes(term) ||
-          (t.symbol ?? "").toLowerCase().includes(term) ||
-          t.address.toLowerCase().includes(term),
-      );
+      list = list.filter((t) => {
+        if ((t.name ?? "").toLowerCase().includes(term)) return true;
+        if ((t.symbol ?? "").toLowerCase().includes(term)) return true;
+        if (t.address.toLowerCase().includes(term)) return true;
+        const m = parseInlineMetadata(t.metadataURI);
+        const handle = m?.creatorTwitter?.toLowerCase();
+        if (handle && handle.includes(term)) return true;
+        return false;
+      });
+    }
+
+    // Featured tokens always surface at the top (unless filtered out by status).
+    if (FEATURED_TOKENS.size > 0) {
+      const featured = list.filter((t) => FEATURED_TOKENS.has(t.address.toLowerCase()));
+      const others = list.filter((t) => !FEATURED_TOKENS.has(t.address.toLowerCase()));
+      list = [...featured, ...others];
     }
     return list;
   }, [tokens, filter, q]);

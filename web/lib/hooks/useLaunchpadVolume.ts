@@ -64,22 +64,32 @@ async function getLogsChunked(
  *
  * Bump `refreshKey` to repoll (the inline trade panel does this after a swap).
  */
+export interface VolumeState {
+  /** USDC volume in raw 6-dec units, or undefined while loading / unsupported. */
+  volume: bigint | undefined;
+  /** True until the first scan completes (or errors). */
+  isLoading: boolean;
+}
+
 export function useLaunchpadVolume(args: {
   token: Address | undefined;
   mode: number | undefined;
   pool?: Address | undefined;
   refreshKey?: number;
-}): bigint | undefined {
+}): VolumeState {
   const { token, mode, pool, refreshKey } = args;
   const publicClient = usePublicClient();
   const [vol, setVol] = useState<bigint | undefined>(undefined);
+  const [isLoading, setIsLoading] = useState(false);
 
   useEffect(() => {
     if (!publicClient || !token || mode === undefined) {
       setVol(undefined);
+      setIsLoading(false);
       return;
     }
     let cancelled = false;
+    setIsLoading(true);
     (async () => {
       try {
         const latest = await publicClient.getBlockNumber();
@@ -145,6 +155,8 @@ export function useLaunchpadVolume(args: {
         // eslint-disable-next-line no-console
         console.warn("[volume] top-level error:", err);
         if (!cancelled) setVol(undefined);
+      } finally {
+        if (!cancelled) setIsLoading(false);
       }
     })();
     return () => {
@@ -152,5 +164,5 @@ export function useLaunchpadVolume(args: {
     };
   }, [publicClient, token, mode, pool, refreshKey]);
 
-  return vol;
+  return { volume: vol, isLoading };
 }

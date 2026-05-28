@@ -33,6 +33,16 @@ export const LAUNCHPAD_TOTAL_SUPPLY = 1_000_000_000n; // 1B fixed supply
 export const TRADE_FEE_BPS = 100; // 1% total - split 0.5% platform + 0.5% creator
 export const CREATION_FEE_USDC = 3_000_000n; // 3 USDC (6 decimals)
 
+/** Featured token addresses surfaced at the top of the launchpad list. Set via
+ * `NEXT_PUBLIC_FEATURED_TOKENS` (comma-separated lowercase addresses). Empty by
+ * default — admin-curated promotion only. */
+export const FEATURED_TOKENS: ReadonlySet<string> = new Set(
+  (process.env.NEXT_PUBLIC_FEATURED_TOKENS ?? "")
+    .split(",")
+    .map((s) => s.trim().toLowerCase())
+    .filter((s) => /^0x[0-9a-f]{40}$/.test(s)),
+);
+
 export enum LaunchMode {
   PUMP = 0, // 50% Arcade / 50% creator(s), bonding curve -> V2 burn
   CLANKER = 1, // 70% Arcade / 30% creator(s), bonding curve -> V2 burn

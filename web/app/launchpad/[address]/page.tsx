@@ -74,13 +74,17 @@ export default function TokenDetailPage() {
   // Clanker FDV: the contract's `marketCap()` reads V2 reserves on what is
   // actually a V3 pool → reverts. We compute it client-side from slot0.
   const clankerMcap = useClankerMcap(isClanker && isValid ? token : undefined, isClanker ? (state?.v2Pair as Address | undefined) : undefined);
-  const volumeRaw = useLaunchpadVolume({
+  const { volume: volumeRaw, isLoading: volLoading } = useLaunchpadVolume({
     token: isValid ? token : undefined,
     mode: state ? Number(state.mode) : undefined,
     pool: isClanker ? (state?.v2Pair as Address | undefined) : undefined,
     refreshKey,
   });
-  const volumeLabel = volumeRaw !== undefined ? `$${formatUSDC(volumeRaw, 6, 0)}` : "-";
+  const volumeLabel = volumeRaw !== undefined
+    ? `$${formatUSDC(volumeRaw, 6, 0)}`
+    : volLoading
+      ? "Indexing…"
+      : "-";
   const mcapLabel = isClanker
     ? clankerMcap
       ? clankerMcap.pairedSymbol === "USDC"
@@ -281,7 +285,14 @@ export default function TokenDetailPage() {
               onTradeSuccess={() => setRefreshKey((k) => k + 1)}
             />
           )}
-          {isClanker && <CreatorTokenPanel token={token} symbol={symbol} />}
+          {isClanker && (
+            <CreatorTokenPanel
+              token={token}
+              symbol={symbol}
+              pool={state.v2Pair as Address}
+              volumeRaw={volumeRaw}
+            />
+          )}
         </div>
       </div>
     </div>
