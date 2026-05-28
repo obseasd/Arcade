@@ -325,11 +325,32 @@ function CreateTokenInner() {
             },
           ],
         );
+        // Explicit gas limit: wallets that can't simulate on a custom chain
+        // (Arc) fall back to a bogus low estimate and reject the tx. The
+        // createClankerV3 launch (token + V3 pool + 1/3 single-sided positions
+        // + optional creator buy) typically uses ~6-7M gas.
+        const clankerArgs = [name.trim(), symbol.trim(), metadataURI, rs, optsData] as const;
+        let gas = 8_000_000n;
+        if (publicClient) {
+          try {
+            const est = await publicClient.estimateContractGas({
+              address: ADDRESSES.launchpad,
+              abi: LAUNCHPAD_ABI,
+              functionName: "createClankerV3",
+              args: clankerArgs,
+              account,
+            });
+            gas = (est * 125n) / 100n;
+          } catch {
+            /* keep the 8M fallback */
+          }
+        }
         hash = await writeContractAsync({
           address: ADDRESSES.launchpad,
           abi: LAUNCHPAD_ABI,
           functionName: "createClankerV3",
-          args: [name.trim(), symbol.trim(), metadataURI, rs, optsData],
+          args: clankerArgs,
+          gas,
         });
       } else {
         // PUMP / Arcade (CLANKER): bonding curve. Arcade allows an optional
@@ -339,11 +360,29 @@ function CreateTokenInner() {
           mode === LaunchMode.CLANKER && trimmedC2.length > 0 && isAddress(trimmedC2);
         const creator2Addr: Address = useCreator2 ? (trimmedC2 as Address) : zeroAddress;
         const creator2ShareBps = useCreator2 ? Math.round(creator2SharePct * 100) : 0;
+        const args = [name.trim(), symbol.trim(), metadataURI, mode, creator2Addr, creator2ShareBps] as const;
+        // Explicit gas (wallet sim doesn't work on Arc): a curve launch needs ~1.5M.
+        let gas = 3_000_000n;
+        if (publicClient) {
+          try {
+            const est = await publicClient.estimateContractGas({
+              address: ADDRESSES.launchpad,
+              abi: LAUNCHPAD_ABI,
+              functionName: "createToken",
+              args,
+              account,
+            });
+            gas = (est * 125n) / 100n;
+          } catch {
+            /* keep the fallback */
+          }
+        }
         hash = await writeContractAsync({
           address: ADDRESSES.launchpad,
           abi: LAUNCHPAD_ABI,
           functionName: "createToken",
-          args: [name.trim(), symbol.trim(), metadataURI, mode, creator2Addr, creator2ShareBps],
+          args,
+          gas,
         });
       }
 
