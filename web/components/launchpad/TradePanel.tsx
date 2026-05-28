@@ -10,6 +10,7 @@ import { AmountInput } from "@/components/ui/AmountInput";
 import { TokenIcon } from "@/components/ui/TokenIcon";
 import { TxStatus, type TxState } from "@/components/ui/TxStatus";
 import { useApproveIfNeeded } from "@/lib/hooks/useApproveIfNeeded";
+import { pushToast } from "@/lib/toast";
 import { cn, formatToken, formatUSDC } from "@/lib/utils";
 
 interface Props {
@@ -130,10 +131,20 @@ export function TradePanel({ token, symbol, migrated, image }: Props) {
         args: [token, amountRaw, minOut],
       });
       if (publicClient) await publicClient.waitForTransactionReceipt({ hash });
-      setTx({ status: "success", message: "Trade confirmed" });
+      setTx({ status: "idle" });
       setAmount("");
       usdcBalance.refetch();
       tokenBalance.refetch();
+      pushToast({
+        kind: "swap",
+        tokenAddress: side === "buy" ? token : ADDRESSES.usdc,
+        tokenSymbol: side === "buy" ? symbol : "USDC",
+        tokenImage: side === "buy" ? image : undefined,
+        amountFormatted:
+          side === "buy"
+            ? formatToken(estimatedOut, LAUNCHPAD_TOKEN_DECIMALS, 6)
+            : formatUSDC(estimatedOut, USDC_DECIMALS, 6),
+      });
     } catch (e: any) {
       setTx({ status: "error", message: e?.shortMessage || e?.message || "Trade failed" });
     }

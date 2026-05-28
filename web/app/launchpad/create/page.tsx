@@ -10,6 +10,7 @@ import { LAUNCHPAD_ABI } from "@/lib/abis/launchpad";
 import { ADDRESSES, CREATION_FEE_USDC, LaunchMode } from "@/lib/constants";
 import { encodeMetadataDataUri } from "@/lib/metadata";
 import { useApproveIfNeeded } from "@/lib/hooks/useApproveIfNeeded";
+import { pushToast } from "@/lib/toast";
 import { TxStatus, type TxState } from "@/components/ui/TxStatus";
 import { RecipientEditModal } from "@/components/bridge/RecipientEditModal";
 import { cn, formatAddress, formatUSDC } from "@/lib/utils";
@@ -410,7 +411,14 @@ function CreateTokenInner() {
         }
       }
 
-      setTx({ status: "success", message: "Token launched!" });
+      setTx({ status: "idle" });
+      pushToast({
+        kind: "swap",
+        tokenAddress: newAddr ?? undefined,
+        tokenSymbol: `$${symbol.trim() || "TOKEN"}`,
+        tokenImage: image || undefined,
+        amountFormatted: "Launched",
+      });
       if (newAddr) {
         router.push(`/launchpad/${newAddr}`);
       } else {

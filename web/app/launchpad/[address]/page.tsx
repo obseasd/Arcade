@@ -9,6 +9,7 @@ import { useReadContract } from "wagmi";
 import { LAUNCHPAD_ABI } from "@/lib/abis/launchpad";
 import { ADDRESSES } from "@/lib/constants";
 import { useClankerMcap } from "@/lib/hooks/useClankerMcap";
+import { useLaunchpadVolume } from "@/lib/hooks/useLaunchpadVolume";
 import { parseInlineMetadata, getImageUrl, type TokenMetadata } from "@/lib/metadata";
 import { formatAddress, formatToken, formatUSDC } from "@/lib/utils";
 import { TokenIcon } from "@/components/ui/TokenIcon";
@@ -66,12 +67,17 @@ export default function TokenDetailPage() {
   const image = state?.metadataURI ? getImageUrl(state.metadataURI) : undefined;
 
   const tokensSold = (state?.tokensSold as bigint | undefined) ?? 0n;
-  const realUsdc = (state?.realUsdcReserve as bigint | undefined) ?? 0n;
   const migrated = !!state?.migrated;
   const isClanker = Number(state?.mode ?? 0) === 2;
   // Clanker FDV: the contract's `marketCap()` reads V2 reserves on what is
   // actually a V3 pool → reverts. We compute it client-side from slot0.
   const clankerMcap = useClankerMcap(isClanker && isValid ? token : undefined, isClanker ? (state?.v2Pair as Address | undefined) : undefined);
+  const volumeRaw = useLaunchpadVolume({
+    token: isValid ? token : undefined,
+    mode: state ? Number(state.mode) : undefined,
+    pool: isClanker ? (state?.v2Pair as Address | undefined) : undefined,
+  });
+  const volumeLabel = volumeRaw !== undefined ? `$${formatUSDC(volumeRaw, 6, 0)}` : "-";
   const mcapLabel = isClanker
     ? clankerMcap
       ? clankerMcap.pairedSymbol === "USDC"
@@ -195,13 +201,13 @@ export default function TokenDetailPage() {
               <Stat label="Market cap" value={mcapLabel} />
               {Number(state?.mode ?? 0) === 2 ? (
                 <>
-                  <Stat label="Type" value="Clanker (V3 locked)" />
+                  <Stat label="Volume" value={volumeLabel} />
                   <Stat label="Liquidity" value="Single-sided" />
-                  <Stat label="V3 pool" value={state.v2Pair ? formatAddress(state.v2Pair) : "-"} />
+                  <Stat label="Type" value="Clanker (V3 locked)" />
                 </>
               ) : (
                 <>
-                  <Stat label="USDC raised" value={migrated ? "Migrated" : `$${formatUSDC(realUsdc, 6, 0)}`} />
+                  <Stat label="Volume" value={volumeLabel} />
                   <Stat label="Progress" value={`${progress.toFixed(1)}%`} />
                   <Stat
                     label={migrated ? "DEX pool" : "Migration at"}
