@@ -165,23 +165,30 @@ function CreateTokenInner() {
     );
   }, [account]);
 
-  const recipientsValid = (() => {
-    if (!isV3) return true;
-    if (recipients.length < 1 || recipients.length > 3) return false;
+  const recipientsError = (() => {
+    if (!isV3) return null;
+    if (recipients.length < 1 || recipients.length > 3) return "Need 1 to 3 recipients.";
     const escrowSet = ADDRESSES.twitterEscrow !== "0x0000000000000000000000000000000000000000";
     let sum = 0;
-    for (const r of recipients) {
+    for (let i = 0; i < recipients.length; i++) {
+      const r = recipients[i];
       if (r.isTwitter) {
-        if (!escrowSet) return false; // env var missing on this deploy
-        if (!normalizeTwitterHandle(r.twitterHandle)) return false;
+        if (!escrowSet) {
+          return "Twitter escrow not configured on this deployment. Reach out to the team.";
+        }
+        if (!normalizeTwitterHandle(r.twitterHandle)) {
+          return `Recipient ${i + 1}: invalid Twitter @handle (letters, numbers, underscore, max 15 chars).`;
+        }
       } else if (!isAddress(r.recipient.trim())) {
-        return false;
+        return `Recipient ${i + 1}: invalid address.`;
       }
-      if (r.pct <= 0) return false;
+      if (r.pct <= 0) return `Recipient ${i + 1}: share must be greater than 0%.`;
       sum += r.pct;
     }
-    return sum === 100;
+    if (sum !== 100) return `Shares must sum to 100% (currently ${sum}%).`;
+    return null;
   })();
+  const recipientsValid = recipientsError === null;
 
   const setRecipient = (i: number, patch: Partial<RecipientRow>) =>
     setRecipients((prev) => prev.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
@@ -711,8 +718,8 @@ function CreateTokenInner() {
                 + Add recipient
               </button>
             )}
-            {!recipientsValid && recipients.some((r) => r.recipient.trim() !== "") && (
-              <div className="text-xs text-arc-danger">Recipients must be valid addresses summing to 100%.</div>
+            {recipientsError && recipients.some((r) => r.isTwitter || r.recipient.trim() !== "") && (
+              <div className="text-xs text-arc-danger">{recipientsError}</div>
             )}
           </div>
         )}
