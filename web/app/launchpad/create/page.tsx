@@ -60,6 +60,11 @@ interface RecipientRow {
   isAdmin: boolean;
   pct: number; // 0–100, all rows auto-balance to 100
   pref: RewardPref;
+  /** When true, this slot is escrowed: recipient and admin are forced to the
+   *  TwitterEscrow address, and the @handle below is stored in token metadata
+   *  so the verified Twitter owner can later claim via OAuth login. */
+  isTwitter: boolean;
+  twitterHandle: string;
 }
 
 export default function CreateTokenPage() {
@@ -98,7 +103,7 @@ function CreateTokenInner() {
 
   // CLANKER_V3 fee recipients (up to 3). Defaults to the connected wallet 100%.
   const [recipients, setRecipients] = useState<RecipientRow[]>([
-    { recipient: "", isAdmin: true, pct: 100, pref: 0 },
+    { recipient: "", isAdmin: true, pct: 100, pref: 0, isTwitter: false, twitterHandle: "" },
   ]);
   const [feeTier, setFeeTier] = useState<10_000 | 20_000 | 30_000>(10_000); // 1% / 2% / 3%
   // Pool type (Clanker-style presets): 0 Standard (USDC 35k, 3 pos), 1 Legacy
@@ -163,9 +168,15 @@ function CreateTokenInner() {
   const recipientsValid = (() => {
     if (!isV3) return true;
     if (recipients.length < 1 || recipients.length > 3) return false;
+    const escrowSet = ADDRESSES.twitterEscrow !== "0x0000000000000000000000000000000000000000";
     let sum = 0;
     for (const r of recipients) {
-      if (!isAddress(r.recipient.trim())) return false;
+      if (r.isTwitter) {
+        if (!escrowSet) return false; // env var missing on this deploy
+        if (!normalizeTwitterHandle(r.twitterHandle)) return false;
+      } else if (!isAddress(r.recipient.trim())) {
+        return false;
+      }
       if (r.pct <= 0) return false;
       sum += r.pct;
     }
@@ -204,7 +215,7 @@ function CreateTokenInner() {
   const addRecipient = () =>
     setRecipients((prev) => {
       if (prev.length >= 3) return prev;
-      const next = [...prev, { recipient: "", isAdmin: true, pct: 0, pref: 0 as RewardPref }];
+      const next = [...prev, { recipient: "", isAdmin: true, pct: 0, pref: 0 as RewardPref, isTwitter: false, twitterHandle: "" }];
       const base = Math.floor(100 / next.length);
       return next.map((r, idx) => ({ ...r, pct: idx === 0 ? 100 - base * (next.length - 1) : base }));
     });
@@ -294,6 +305,8 @@ function CreateTokenInner() {
       await ensureAllowance(CREATION_FEE_USDC + creatorBuyUsdc);
 
       setTx({ status: "pending", message: "Building metadata…" });
+      const slotHandles = recipients.map((r) => (r.isTwitter ? normalizeTwitterHandle(r.twitterHandle) ?? null : null));
+      const hasSlotHandle = slotHandles.some((h) => !!h);
       const metadataURI = encodeMetadataDataUri({
         image: image.trim() || undefined,
         description: description.trim() || undefined,
@@ -301,6 +314,7 @@ function CreateTokenInner() {
         telegram: telegram.trim() || undefined,
         website: website.trim() || undefined,
         creatorTwitter: normalizeTwitterHandle(creatorTwitter),
+        slotTwitterHandles: hasSlotHandle ? slotHandles : undefined,
       });
 
       setTx({ status: "pending", message: "Launching token…" });
@@ -308,10 +322,15 @@ function CreateTokenInner() {
       let hash: `0x${string}`;
       if (isV3) {
         // Clanker mode: custom fee recipients (up to 3) with admin + token pref.
+        // A slot can be "Twitter-attributed": recipient + admin are forced to
+        // the TwitterEscrow; the @handle goes into metadata so the verified
+        // Twitter owner can later claim via OAuth.
+        const escrow = ADDRESSES.twitterEscrow;
         const rs = recipients.map((r) => {
+          if (r.isTwitter) {
+            return { recipient: escrow, admin: escrow, bps: Math.round(r.pct * 100), tokenPref: r.pref };
+          }
           const rec = r.recipient.trim() as Address;
-          // Admin must be non-zero (the locker rejects address(0)): the slot's
-          // admin is the recipient itself when "Admin" is checked, else the creator.
           const adm = (r.isAdmin ? rec : (account as string)) as Address;
           return { recipient: rec, admin: adm, bps: Math.round(r.pct * 100), tokenPref: r.pref };
         });
@@ -580,15 +599,30 @@ function CreateTokenInner() {
         {isV3 && (
           <div className="space-y-3 rounded-xl border border-arc-border bg-arc-bg-elevated p-4">
             <span className="text-sm font-medium text-arc-text">Fee recipients</span>
-            {recipients.map((r, i) => (
+            {recipients.map((r, i) => {
+              return (
               <div key={i} className="space-y-2 rounded-lg border border-arc-border bg-white/[0.03] p-3">
                 <div className="flex items-center gap-2">
-                  <input
-                    value={r.recipient}
-                    onChange={(e) => setRecipient(i, { recipient: e.target.value })}
-                    placeholder="0x recipient"
-                    className="arc-input flex-1 rounded-lg border border-arc-border bg-arc-bg-elevated px-2 py-1.5 text-sm tabular-nums"
-                  />
+                  {r.isTwitter ? (
+                    <div className="flex flex-1 items-center gap-1 rounded-lg border border-arc-cta-hover/40 bg-arc-cta-hover/5 px-2 py-1.5">
+                      <span className="text-sm text-arc-text-muted">@</span>
+                      <input
+                        value={r.twitterHandle.replace(/^@/, "")}
+                        onChange={(e) =>
+                          setRecipient(i, { twitterHandle: e.target.value.replace(/[^a-zA-Z0-9_]/g, "") })
+                        }
+                        placeholder="twitterhandle"
+                        className="arc-input flex-1 bg-transparent text-sm"
+                      />
+                    </div>
+                  ) : (
+                    <input
+                      value={r.recipient}
+                      onChange={(e) => setRecipient(i, { recipient: e.target.value })}
+                      placeholder="0x recipient"
+                      className="arc-input flex-1 rounded-lg border border-arc-border bg-arc-bg-elevated px-2 py-1.5 text-sm tabular-nums"
+                    />
+                  )}
                   <input
                     inputMode="numeric"
                     value={r.pct}
@@ -606,15 +640,19 @@ function CreateTokenInner() {
                     </button>
                   )}
                 </div>
-                <div className="flex items-center gap-3">
+                <div className="flex flex-wrap items-center gap-2">
                   <PrefSelect value={r.pref} onChange={(v) => setRecipient(i, { pref: v })} />
                   <button
                     type="button"
-                    onClick={() => setRecipient(i, { isAdmin: !r.isAdmin })}
-                    title="On: this recipient can rotate its own payout later. Off: you (the creator) stay admin of this slot."
+                    onClick={() =>
+                      setRecipient(i, r.isTwitter
+                        ? { isTwitter: false, twitterHandle: "" }
+                        : { isTwitter: true, recipient: "" })
+                    }
+                    title="On: fees route to an escrow; the verified Twitter user claims them later via OAuth login."
                     className={cn(
                       "flex select-none items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-colors",
-                      r.isAdmin
+                      r.isTwitter
                         ? "border-arc-cta-hover bg-arc-cta-hover/15 text-arc-text"
                         : "border-arc-border bg-arc-bg-elevated text-arc-text-muted hover:text-arc-text",
                     )}
@@ -622,16 +660,40 @@ function CreateTokenInner() {
                     <span
                       className={cn(
                         "flex h-3.5 w-3.5 items-center justify-center rounded border transition-colors",
-                        r.isAdmin ? "border-arc-cta-hover bg-arc-cta-hover text-white" : "border-arc-border",
+                        r.isTwitter ? "border-arc-cta-hover bg-arc-cta-hover text-white" : "border-arc-border",
                       )}
                     >
-                      {r.isAdmin && <Check className="h-2.5 w-2.5" strokeWidth={3} />}
+                      {r.isTwitter && <Check className="h-2.5 w-2.5" strokeWidth={3} />}
                     </span>
-                    Admin
+                    Twitter
                   </button>
+                  {!r.isTwitter && (
+                    <button
+                      type="button"
+                      onClick={() => setRecipient(i, { isAdmin: !r.isAdmin })}
+                      title="On: this recipient can rotate its own payout later. Off: you (the creator) stay admin of this slot."
+                      className={cn(
+                        "flex select-none items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-colors",
+                        r.isAdmin
+                          ? "border-arc-cta-hover bg-arc-cta-hover/15 text-arc-text"
+                          : "border-arc-border bg-arc-bg-elevated text-arc-text-muted hover:text-arc-text",
+                      )}
+                    >
+                      <span
+                        className={cn(
+                          "flex h-3.5 w-3.5 items-center justify-center rounded border transition-colors",
+                          r.isAdmin ? "border-arc-cta-hover bg-arc-cta-hover text-white" : "border-arc-border",
+                        )}
+                      >
+                        {r.isAdmin && <Check className="h-2.5 w-2.5" strokeWidth={3} />}
+                      </span>
+                      Admin
+                    </button>
+                  )}
                 </div>
               </div>
-            ))}
+              );
+            })}
             {recipients.length < 3 && (
               <button onClick={addRecipient} className="text-xs font-medium text-arc-cta-hover hover:underline">
                 + Add recipient

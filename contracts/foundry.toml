@@ -45,5 +45,6 @@ quote_style = "double"
 number_underscore = "thousands"
 
 [rpc_endpoints]
-arc_testnet = "https://5042002.rpc.thirdweb.com"
+arc_testnet = "https://rpc.testnet.arc.network"
+arc_testnet_thirdweb = "https://5042002.rpc.thirdweb.com"
 anvil = "http://127.0.0.1:8545"

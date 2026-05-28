@@ -15,11 +15,18 @@ export interface TokenMetadata {
   /**
    * Creator attribution: the @handle the deployer claims on Twitter. The
    * on-chain fee recipient is always an Ethereum address (see the V3 locker);
-   * this field is *display* attribution only. We don't verify it cryptographically
-   * — to spot impersonation, check the deployer's actual tweet announcing the
+   * this field is *display* attribution only. We don't verify it cryptographically.
+   * To spot impersonation, check the deployer's actual tweet announcing the
    * launch (Clanker's same trust model).
    */
   creatorTwitter?: string;
+  /**
+   * Per-slot Twitter attribution for escrowed claims. Each index maps to a
+   * recipient slot. A non-undefined value means the slot's payouts route to
+   * the ArcadeTwitterEscrow; the verified owner of that @handle can later
+   * claim accumulated balances via OAuth login.
+   */
+  slotTwitterHandles?: (string | null)[];
 }
 
 export function encodeMetadataDataUri(m: TokenMetadata): string {

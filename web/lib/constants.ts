@@ -18,6 +18,8 @@ export const ADDRESSES = {
   tokenVault: safeAddress(process.env.NEXT_PUBLIC_TOKEN_VAULT_ADDRESS),
   /** WETH on Arc, used as the paired token for POOL_WETH Clanker launches. */
   weth: safeAddress(process.env.NEXT_PUBLIC_WETH_ADDRESS),
+  /** ArcadeTwitterEscrow: holds Clanker LP fees attributed to a Twitter @handle. */
+  twitterEscrow: safeAddress(process.env.NEXT_PUBLIC_TWITTER_ESCROW_ADDRESS),
 } as const;
 
 /** V3 fee tier used for all CLANKER_V3 pools (1%). */
