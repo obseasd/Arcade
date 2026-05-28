@@ -15,21 +15,24 @@ const V3_SWAP_EVT = parseAbiItem(
   "event Swap(address indexed sender, address indexed recipient, int256 amount0, int256 amount1, uint160 sqrtPriceX96, uint128 liquidity, int24 tick)",
 );
 
-/** Chunk size: thirdweb's Arc RPC caps eth_getLogs at a few thousand blocks. */
-const CHUNK = 5_000n;
-/** Hard cap on how far back we'll walk (≈ a few weeks of Arc blocks). */
-const MAX_BACK = 500_000n;
+/** Per-call block window. thirdweb's Arc RPC is finicky on log queries — 1000
+ * blocks per call works reliably. */
+const CHUNK = 1_000n;
+/** How far back we walk total. 200k blocks ≈ 2-3 days on a 1s-block chain. */
+const MAX_BACK = 200_000n;
 
 async function getLogsChunked(
   publicClient: any,
-  params: { address: Address; event: any },
+  params: { address: Address; event: any; args?: Record<string, unknown> },
   latest: bigint,
+  label: string,
 ): Promise<any[]> {
   const all: any[] = [];
   let end = latest;
   let walked = 0n;
+  let errors = 0;
   while (walked < MAX_BACK) {
-    const start = end > CHUNK ? end - CHUNK + 1n : 0n;
+    const start = end > CHUNK - 1n ? end - (CHUNK - 1n) : 0n;
     try {
       const logs = await publicClient.getLogs({
         ...params,
@@ -37,9 +40,13 @@ async function getLogsChunked(
         toBlock: end,
       });
       all.push(...logs);
-    } catch {
-      // Stop on RPC error — return what we have so far.
-      break;
+    } catch (err) {
+      errors += 1;
+      if (errors > 3) {
+        // eslint-disable-next-line no-console
+        console.warn(`[volume] ${label} getLogs failed (${errors} times), stopping. last err:`, err);
+        break;
+      }
     }
     if (start === 0n) break;
     walked += end - start + 1n;
@@ -77,7 +84,6 @@ export function useLaunchpadVolume(args: {
       try {
         const latest = await publicClient.getBlockNumber();
         if (mode === 2) {
-          // Clanker V3: read Swap events on the pool, sum the USDC side.
           if (!pool || pool === "0x0000000000000000000000000000000000000000") {
             if (!cancelled) setVol(0n);
             return;
@@ -96,23 +102,14 @@ export function useLaunchpadVolume(args: {
             functionName: "token0",
           });
           const t0 = (t0Raw as Address).toLowerCase();
-          const usdcIsToken0 = t0 === ADDRESSES.usdc.toLowerCase();
-          // If the pool isn't USDC-paired we can't price volume in USDC here.
-          // Heuristic: paired side != USDC → WETH or other.
+          const usdcLc = ADDRESSES.usdc.toLowerCase();
+          const usdcIsToken0 = t0 === usdcLc;
           const swaps = await getLogsChunked(
             publicClient,
             { address: pool, event: V3_SWAP_EVT },
             latest,
+            "v3.Swap",
           );
-          // Detect USDC pairing by checking either side matches USDC.
-          if (
-            t0 !== ADDRESSES.usdc.toLowerCase() &&
-            !usdcIsToken0
-          ) {
-            // token0 isn't USDC; check token1 by inferring from the data we have.
-            // Simplest: assume not-USDC pairing means we don't price it.
-            // (We could read token1 here but if it's USDC the usdcIsToken0 flag handles it.)
-          }
           let sum = 0n;
           for (const log of swaps) {
             const a0 = log.args.amount0 as bigint;
@@ -123,25 +120,30 @@ export function useLaunchpadVolume(args: {
           }
           if (!cancelled) setVol(sum);
         } else {
-          // PUMP / Arcade: scan recent launchpad logs and filter by token in-memory
-          // (some RPCs choke on indexed-arg filters; this is more compatible).
+          // PUMP / Arcade. Use indexed-arg filter so the RPC returns only this
+          // token's events (smaller payload, less likely to time out).
           const [buys, sells] = await Promise.all([
-            getLogsChunked(publicClient, { address: ADDRESSES.launchpad, event: BUY_EVT }, latest),
-            getLogsChunked(publicClient, { address: ADDRESSES.launchpad, event: SELL_EVT }, latest),
+            getLogsChunked(
+              publicClient,
+              { address: ADDRESSES.launchpad, event: BUY_EVT, args: { token } },
+              latest,
+              "lp.Buy",
+            ),
+            getLogsChunked(
+              publicClient,
+              { address: ADDRESSES.launchpad, event: SELL_EVT, args: { token } },
+              latest,
+              "lp.Sell",
+            ),
           ]);
-          const tokenLc = token.toLowerCase();
           let sum = 0n;
-          for (const log of buys) {
-            if ((log.args.token as string).toLowerCase() !== tokenLc) continue;
-            sum += log.args.usdcIn as bigint;
-          }
-          for (const log of sells) {
-            if ((log.args.token as string).toLowerCase() !== tokenLc) continue;
-            sum += log.args.usdcOut as bigint;
-          }
+          for (const log of buys) sum += log.args.usdcIn as bigint;
+          for (const log of sells) sum += log.args.usdcOut as bigint;
           if (!cancelled) setVol(sum);
         }
-      } catch {
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn("[volume] top-level error:", err);
         if (!cancelled) setVol(undefined);
       }
     })();

@@ -16,6 +16,7 @@ import { TokenIcon } from "@/components/ui/TokenIcon";
 import { PriceChart } from "@/components/launchpad/PriceChart";
 import { TradePanel } from "@/components/launchpad/TradePanel";
 import { ClankerTradePanel } from "@/components/launchpad/ClankerTradePanel";
+import { CreatorTokenPanel } from "@/components/launchpad/CreatorTokenPanel";
 import { Comments } from "@/components/launchpad/Comments";
 
 const CURVE_SUPPLY = 800_000_000n * 10n ** 18n;
@@ -269,6 +270,7 @@ export default function TokenDetailPage() {
               onTradeSuccess={() => setRefreshKey((k) => k + 1)}
             />
           )}
+          {isClanker && <CreatorTokenPanel token={token} symbol={symbol} />}
         </div>
       </div>
     </div>
