@@ -181,7 +181,7 @@ export function CreatorTokenPanel({ token, symbol, pool, volumeRaw, slotHandles 
             )}
           </div>
           <div className="mt-0.5 text-[10px] text-arc-text-faint">
-            + {formatToken(isMine && myRecipientBps > 0 ? myClankerRaw : claimable.clankerRaw, LAUNCHPAD_TOKEN_DECIMALS, 2)} {symbol} (token side)
+            + {formatToken(isMine && myRecipientBps > 0 ? myClankerRaw : claimable.clankerRaw, LAUNCHPAD_TOKEN_DECIMALS, 2)} {symbol}
           </div>
         </div>
         <div className="rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2 text-xs">
