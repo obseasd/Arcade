@@ -199,9 +199,6 @@ export function CreatorTokenPanel({ token, symbol, pool, volumeRaw, slotHandles 
               2,
             )}
           </div>
-          <div className="mt-0.5 text-[10px] text-arc-text-faint">
-            Estimate from total trading volume.
-          </div>
         </div>
       </div>
 
@@ -227,6 +224,41 @@ export function CreatorTokenPanel({ token, symbol, pool, volumeRaw, slotHandles 
             const accIsTreasury = acc.length > 0 && r.recipient.toLowerCase() === acc;
             if (!accIsTreasury) return null;
           }
+          if (isTwitterPending) {
+            return (
+              <div
+                key={i}
+                className="flex items-center justify-between gap-2 rounded-xl border border-arc-cta-hover/30 bg-arc-cta-hover/[0.03] p-3 text-xs"
+              >
+                <div className="flex min-w-0 items-center gap-1.5 truncate">
+                  <span className="font-semibold text-arc-text">Fee recipient:</span>
+                  <a
+                    href={`https://x.com/${handle}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="truncate text-arc-text hover:underline"
+                  >
+                    @{handle}
+                  </a>
+                </div>
+                <a
+                  href={
+                    account
+                      ? `/api/twitter-login?token=${token}&slotIndex=${i}&recipient=${account}`
+                      : "#"
+                  }
+                  aria-disabled={!account}
+                  title={account ? "" : "Connect a wallet first"}
+                  className={cn(
+                    "inline-flex shrink-0 items-center gap-1 rounded-lg border border-arc-cta-hover/40 bg-arc-cta-hover/10 px-2 py-1 text-arc-text hover:bg-arc-cta-hover/20",
+                    !account && "pointer-events-none opacity-50",
+                  )}
+                >
+                  <Twitter className="h-3 w-3" /> Claim
+                </a>
+              </div>
+            );
+          }
           return (
             <div
               key={i}
@@ -234,30 +266,13 @@ export function CreatorTokenPanel({ token, symbol, pool, volumeRaw, slotHandles 
                 "rounded-xl border p-3 text-xs",
                 isMineSlot
                   ? "border-arc-cta-hover/40 bg-arc-cta-hover/5"
-                  : isTwitterPending
-                    ? "border-arc-cta-hover/30 bg-arc-cta-hover/[0.03]"
-                    : "border-arc-border bg-arc-bg-elevated",
+                  : "border-arc-border bg-arc-bg-elevated",
               )}
             >
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   {isTreasury ? (
                     <span className="font-medium text-arc-text">Arcade Treasury</span>
-                  ) : isTwitterPending ? (
-                    <>
-                      <Twitter className="h-3 w-3 text-arc-cta-hover" />
-                      <a
-                        href={`https://x.com/${handle}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="font-medium text-arc-text hover:underline"
-                      >
-                        @{handle}
-                      </a>
-                      <span className="rounded-full bg-arc-warn/15 px-1.5 py-0.5 text-[10px] text-arc-warn">
-                        Unclaimed
-                      </span>
-                    </>
                   ) : (
                     <>
                       <span className="font-mono text-arc-text">{formatAddress(r.recipient)}</span>
@@ -269,13 +284,13 @@ export function CreatorTokenPanel({ token, symbol, pool, volumeRaw, slotHandles 
                     </>
                   )}
                 </div>
-                {!iAmRecipient && !isTwitterPending && (
+                {!iAmRecipient && (
                   <span className="tabular-nums font-medium text-arc-text">
                     {(r.bps / 100).toFixed(r.bps % 100 === 0 ? 0 : 1)}%
                   </span>
                 )}
               </div>
-              {!isTreasury && !isTwitterPending && (
+              {!isTreasury && (
                 <div className="mt-1.5 flex items-center justify-between text-arc-text-faint">
                   <span>
                     Admin: <span className="font-mono">{formatAddress(r.admin)}</span>
@@ -284,27 +299,7 @@ export function CreatorTokenPanel({ token, symbol, pool, volumeRaw, slotHandles 
                   <span>Pref: {tokenPrefLabel(r.tokenPref)}</span>
                 </div>
               )}
-              {isTwitterPending && (
-                <div className="mt-2 flex items-center justify-between gap-2 text-[11px]">
-                  <span className="text-arc-text-muted">Fee recipient</span>
-                  <a
-                    href={
-                      account
-                        ? `/api/twitter-login?token=${token}&slotIndex=${i}&recipient=${account}`
-                        : "#"
-                    }
-                    aria-disabled={!account}
-                    title={account ? "" : "Connect a wallet first"}
-                    className={cn(
-                      "inline-flex shrink-0 items-center gap-1 rounded-lg border border-arc-cta-hover/40 bg-arc-cta-hover/10 px-2 py-1 text-arc-text hover:bg-arc-cta-hover/20",
-                      !account && "pointer-events-none opacity-50",
-                    )}
-                  >
-                    <Twitter className="h-3 w-3" /> Claim
-                  </a>
-                </div>
-              )}
-              {iAmAdmin && !isTreasury && !isTwitterPending && (
+              {iAmAdmin && !isTreasury && (
                 <div className="mt-2 flex gap-2">
                   <button
                     onClick={() => {
