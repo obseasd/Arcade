@@ -326,11 +326,13 @@ function CreateTokenInner() {
           ],
         );
         // Explicit gas limit: wallets that can't simulate on a custom chain
-        // (Arc) fall back to a bogus low estimate and reject the tx. The
-        // createClankerV3 launch (token + V3 pool + 1/3 single-sided positions
-        // + optional creator buy) typically uses ~11-12M gas on Arc.
+        // (Arc) fall back to a bogus low estimate. createClankerV3 needs
+        // ~11-12M gas. We use a tight +10% buffer and cap at 14M because
+        // public RPCs (thirdweb) reject per-tx gas above ~15M even when the
+        // block limit is higher.
         const clankerArgs = [name.trim(), symbol.trim(), metadataURI, rs, optsData] as const;
-        let gas = 15_000_000n;
+        const GAS_CAP = 14_000_000n;
+        let gas = GAS_CAP;
         if (publicClient) {
           try {
             const est = await publicClient.estimateContractGas({
@@ -340,9 +342,10 @@ function CreateTokenInner() {
               args: clankerArgs,
               account,
             });
-            gas = (est * 125n) / 100n;
+            const buffered = (est * 110n) / 100n;
+            gas = buffered > GAS_CAP ? GAS_CAP : buffered;
           } catch {
-            /* keep the 8M fallback */
+            /* keep the cap fallback */
           }
         }
         hash = await writeContractAsync({
