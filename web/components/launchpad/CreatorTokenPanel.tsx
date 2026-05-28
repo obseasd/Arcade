@@ -169,7 +169,8 @@ export function CreatorTokenPanel({ token, symbol, pool, volumeRaw, slotHandles 
       <div className="mb-4 grid gap-2 sm:grid-cols-2">
         <div className="rounded-xl border border-arc-cta-hover/30 bg-arc-cta-hover/5 px-3 py-2.5 text-xs">
           <div className="flex items-center gap-1.5 text-arc-text-muted">
-            <Coins className="h-3 w-3" />
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/fees.png" alt="" className="h-3 w-3 object-contain" />
             {isMine && myRecipientBps > 0 ? "Your share, claimable" : "LP fees pending"}
           </div>
           <div className="mt-0.5 text-base font-semibold tabular-nums text-arc-text">
@@ -185,7 +186,8 @@ export function CreatorTokenPanel({ token, symbol, pool, volumeRaw, slotHandles 
         </div>
         <div className="rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2.5 text-xs">
           <div className="flex items-center gap-1.5 text-arc-text-muted">
-            <TrendingUp className="h-3 w-3" />
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/lifetimefees.png" alt="" className="h-3 w-3 object-contain" />
             {isMine && myRecipientBps > 0 ? "Lifetime earnings" : "Lifetime fees earned"}
           </div>
           <div className="mt-0.5 text-base font-semibold tabular-nums text-arc-text">
@@ -228,10 +230,10 @@ export function CreatorTokenPanel({ token, symbol, pool, volumeRaw, slotHandles 
             return (
               <div
                 key={i}
-                className="flex items-center justify-between gap-2 rounded-xl border border-arc-cta-hover/30 bg-arc-cta-hover/[0.03] p-3 text-xs"
+                className="flex items-center justify-between gap-2 p-3 text-xs"
               >
                 <div className="flex min-w-0 items-center gap-1.5 truncate">
-                  <span className="font-semibold text-arc-text">Fee recipient:</span>
+                  <span className="text-arc-text">Fee recipient:</span>
                   <a
                     href={`https://x.com/${handle}`}
                     target="_blank"
@@ -254,7 +256,9 @@ export function CreatorTokenPanel({ token, symbol, pool, volumeRaw, slotHandles 
                     !account && "pointer-events-none opacity-50",
                   )}
                 >
-                  <Twitter className="h-3 w-3" /> Claim
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src="/twitter.png" alt="" className="h-3 w-3 object-contain" />
+                  Claim
                 </a>
               </div>
             );
