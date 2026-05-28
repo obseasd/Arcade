@@ -74,6 +74,16 @@ contract ArcadeV3Locker is IUniswapV3MintCallback {
 
     event PositionLocked(uint256 indexed positionId, address indexed token, address pool, uint128 liquidity);
     event FeesCollected(uint256 indexed positionId, uint256 pairedAmount, uint256 clankerAmount);
+    /// @notice Emitted once per recipient per `collectFees` call. Lets indexers
+    ///         build exact per-slot earnings histories without estimating from
+    ///         pool volume + bps.
+    event RecipientPaid(
+        uint256 indexed positionId,
+        uint256 indexed slotIndex,
+        address indexed token,
+        address recipient,
+        uint256 amount
+    );
     event RecipientUpdated(uint256 indexed positionId, uint256 index, address indexed newRecipient);
     event AdminUpdated(uint256 indexed positionId, uint256 index, address indexed newAdmin);
 
@@ -401,6 +411,8 @@ contract ArcadeV3Locker is IUniswapV3MintCallback {
 
     /// @dev Distributes `amount` of `token` to the recipients eligible for this
     /// pot, weighted by bps. `forPaired` selects the pot (paired vs clanker).
+    /// Emits one `RecipientPaid` per slot that actually received funds, so
+    /// indexers can build accurate per-recipient lifetime earnings.
     function _distributePot(uint256 positionId, address token, uint256 amount, bool forPaired) internal {
         if (amount == 0) return;
         Recipient[] storage rs = _recipients[positionId];
@@ -420,7 +432,10 @@ contract ArcadeV3Locker is IUniswapV3MintCallback {
             // The last eligible recipient absorbs any rounding dust.
             uint256 share = i == lastIdx ? amount - distributed : (amount * rs[i].bps) / totalW;
             distributed += share;
-            if (share > 0) _pay(token, rs[i].recipient, share);
+            if (share > 0) {
+                _pay(token, rs[i].recipient, share);
+                emit RecipientPaid(positionId, i, token, rs[i].recipient, share);
+            }
         }
     }
 
