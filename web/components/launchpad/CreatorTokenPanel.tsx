@@ -1,6 +1,7 @@
 "use client";
 
-import { Crown, Pencil, Coins, TrendingUp } from "lucide-react";
+import { Crown, Pencil, Coins, TrendingUp, Twitter } from "lucide-react";
+import Link from "next/link";
 import { useMemo, useState } from "react";
 import { Address, isAddress } from "viem";
 import { useAccount, usePublicClient, useReadContract, useReadContracts, useWriteContract } from "wagmi";
@@ -19,6 +20,8 @@ interface Props {
   pool: Address;
   /** Cumulative USDC volume from useLaunchpadVolume; used to estimate earnings. */
   volumeRaw: bigint | undefined;
+  /** Per-slot Twitter @handle from token metadata. Null/missing = not attributed. */
+  slotHandles?: (string | null)[];
 }
 
 interface Recipient {
@@ -37,7 +40,7 @@ interface Recipient {
  *
  * BPS splits are immutable post-launch (by contract design).
  */
-export function CreatorTokenPanel({ token, symbol, pool, volumeRaw }: Props) {
+export function CreatorTokenPanel({ token, symbol, pool, volumeRaw, slotHandles }: Props) {
   const { address: account } = useAccount();
   const publicClient = usePublicClient();
   const { writeContractAsync } = useWriteContract();
@@ -222,9 +225,19 @@ export function CreatorTokenPanel({ token, symbol, pool, volumeRaw }: Props) {
           const isTreasury = r.recipient.toLowerCase() === ADDRESSES.usdc.toLowerCase()
             ? false
             : i === recipients.length - 1 && r.bps === 2000;
-          // Hide the Treasury slot when the connected wallet is a recipient or
-          // admin on this position. Visitors still see it for transparency.
-          if (isTreasury && isMine) return null;
+          const handle = slotHandles?.[i] ?? null;
+          // The slot is "Twitter-pending" when the recipient is still the escrow
+          // (a real claimer will rotate it to their own wallet at OAuth claim).
+          const isTwitterPending =
+            !!handle &&
+            ADDRESSES.twitterEscrow !== "0x0000000000000000000000000000000000000000" &&
+            r.recipient.toLowerCase() === ADDRESSES.twitterEscrow.toLowerCase();
+          // Always hide the Treasury slot for non-treasury viewers (noise).
+          // The on-chain payout still happens; this is just UI.
+          if (isTreasury) {
+            const accIsTreasury = acc.length > 0 && r.recipient.toLowerCase() === acc;
+            if (!accIsTreasury) return null;
+          }
           return (
             <div
               key={i}
@@ -232,13 +245,30 @@ export function CreatorTokenPanel({ token, symbol, pool, volumeRaw }: Props) {
                 "rounded-xl border p-3 text-xs",
                 isMineSlot
                   ? "border-arc-cta-hover/40 bg-arc-cta-hover/5"
-                  : "border-arc-border bg-arc-bg-elevated",
+                  : isTwitterPending
+                    ? "border-arc-cta-hover/30 bg-arc-cta-hover/[0.03]"
+                    : "border-arc-border bg-arc-bg-elevated",
               )}
             >
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   {isTreasury ? (
                     <span className="font-medium text-arc-text">Arcade Treasury</span>
+                  ) : isTwitterPending ? (
+                    <>
+                      <Twitter className="h-3 w-3 text-arc-cta-hover" />
+                      <a
+                        href={`https://x.com/${handle}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="font-medium text-arc-text hover:underline"
+                      >
+                        @{handle}
+                      </a>
+                      <span className="rounded-full bg-arc-warn/15 px-1.5 py-0.5 text-[10px] text-arc-warn">
+                        Unclaimed
+                      </span>
+                    </>
                   ) : (
                     <>
                       <span className="font-mono text-arc-text">{formatAddress(r.recipient)}</span>
@@ -250,22 +280,35 @@ export function CreatorTokenPanel({ token, symbol, pool, volumeRaw }: Props) {
                     </>
                   )}
                 </div>
-                {!iAmRecipient && (
+                {!iAmRecipient && !isTwitterPending && (
                   <span className="tabular-nums font-medium text-arc-text">
                     {(r.bps / 100).toFixed(r.bps % 100 === 0 ? 0 : 1)}%
                   </span>
                 )}
               </div>
-              {!isTreasury && (
-              <div className="mt-1.5 flex items-center justify-between text-arc-text-faint">
-                <span>
-                  Admin: <span className="font-mono">{formatAddress(r.admin)}</span>
-                  {iAmAdmin && <span className="ml-1 text-arc-cta-hover">(you)</span>}
-                </span>
-                <span>Pref: {tokenPrefLabel(r.tokenPref)}</span>
-              </div>
+              {!isTreasury && !isTwitterPending && (
+                <div className="mt-1.5 flex items-center justify-between text-arc-text-faint">
+                  <span>
+                    Admin: <span className="font-mono">{formatAddress(r.admin)}</span>
+                    {iAmAdmin && <span className="ml-1 text-arc-cta-hover">(you)</span>}
+                  </span>
+                  <span>Pref: {tokenPrefLabel(r.tokenPref)}</span>
+                </div>
               )}
-              {iAmAdmin && !isTreasury && (
+              {isTwitterPending && (
+                <div className="mt-2 flex items-center justify-between gap-2 text-[11px]">
+                  <span className="text-arc-text-muted">
+                    Fees accumulate in the escrow. Connect Twitter to claim them.
+                  </span>
+                  <Link
+                    href={`/claim?token=${token}&slot=${i}&handle=${handle}`}
+                    className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-arc-cta-hover/40 bg-arc-cta-hover/10 px-2 py-1 text-arc-text hover:bg-arc-cta-hover/20"
+                  >
+                    <Twitter className="h-3 w-3" /> Claim as @{handle}
+                  </Link>
+                </div>
+              )}
+              {iAmAdmin && !isTreasury && !isTwitterPending && (
                 <div className="mt-2 flex gap-2">
                   <button
                     onClick={() => {

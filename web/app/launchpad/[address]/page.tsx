@@ -316,6 +316,7 @@ export default function TokenDetailPage() {
               symbol={symbol}
               pool={state.v2Pair as Address}
               volumeRaw={volumeRaw}
+              slotHandles={metadata.slotTwitterHandles}
             />
           )}
         </div>

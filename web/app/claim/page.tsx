@@ -233,8 +233,12 @@ function Row({ label, value }: { label: string; value: string }) {
 }
 
 function Lobby() {
-  const [tokenInput, setTokenInput] = useState("");
-  const [slot, setSlot] = useState("0");
+  const params = useSearchParams();
+  const prefilledToken = params.get("token") ?? "";
+  const prefilledSlot = params.get("slot") ?? "0";
+  const prefilledHandle = params.get("handle") ?? "";
+  const [tokenInput, setTokenInput] = useState(prefilledToken);
+  const [slot, setSlot] = useState(prefilledSlot);
   const { address: account } = useAccount();
   const ready = isAddress(tokenInput.trim()) && account;
   return (
@@ -244,23 +248,40 @@ function Lobby() {
           <Twitter className="h-5 w-5 text-arc-cta-hover" />
           <h1 className="text-lg font-semibold">Twitter claim</h1>
         </div>
-        <p className="text-xs text-arc-text-muted">
-          Enter the token address and recipient slot you were attributed. You will be sent to Twitter
-          to verify ownership of the @handle, then come back here to confirm the claim.
-        </p>
-        <input
-          value={tokenInput}
-          onChange={(e) => setTokenInput(e.target.value)}
-          placeholder="0x token address"
-          className="arc-input w-full rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2 font-mono text-sm"
-        />
-        <input
-          value={slot}
-          onChange={(e) => setSlot(e.target.value.replace(/[^0-9]/g, "") || "0")}
-          placeholder="Slot index (usually 0)"
-          inputMode="numeric"
-          className="arc-input w-full rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2 font-mono text-sm"
-        />
+        {prefilledHandle ? (
+          <div className="rounded-xl border border-arc-cta-hover/30 bg-arc-cta-hover/5 p-3 text-xs">
+            <div className="text-arc-text-muted">Slot attributed to</div>
+            <div className="mt-0.5 flex items-center gap-1.5 text-base font-semibold text-arc-text">
+              <Twitter className="h-3.5 w-3.5 text-arc-cta-hover" />@{prefilledHandle}
+            </div>
+            <div className="mt-1.5 text-[11px] text-arc-text-faint">
+              Login with Twitter as @{prefilledHandle} to receive the accumulated LP fees and
+              redirect future fees to your wallet.
+            </div>
+          </div>
+        ) : (
+          <p className="text-xs text-arc-text-muted">
+            Enter the token address and recipient slot you were attributed. You will be sent to
+            Twitter to verify ownership of the @handle, then come back here to confirm the claim.
+          </p>
+        )}
+        {!prefilledToken && (
+          <input
+            value={tokenInput}
+            onChange={(e) => setTokenInput(e.target.value)}
+            placeholder="0x token address"
+            className="arc-input w-full rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2 font-mono text-sm"
+          />
+        )}
+        {!prefilledToken && (
+          <input
+            value={slot}
+            onChange={(e) => setSlot(e.target.value.replace(/[^0-9]/g, "") || "0")}
+            placeholder="Slot index (usually 0)"
+            inputMode="numeric"
+            className="arc-input w-full rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2 font-mono text-sm"
+          />
+        )}
         {!account && (
           <p className="text-xs text-arc-warn">Connect your wallet first; the claim will pay to the connected address.</p>
         )}
