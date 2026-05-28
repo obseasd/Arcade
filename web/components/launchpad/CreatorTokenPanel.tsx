@@ -170,7 +170,7 @@ export function CreatorTokenPanel({ token, symbol, pool, volumeRaw, slotHandles 
         <div className="rounded-xl border border-arc-cta-hover/30 bg-arc-cta-hover/5 px-3 py-2 text-xs">
           <div className="flex items-center gap-1.5 text-arc-text-muted">
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/fees.png" alt="" className="h-4 w-4 object-contain" />
+            <img src="/bill.png" alt="" className="h-4 w-4 object-contain" />
             {isMine && myRecipientBps > 0 ? "Your share, claimable" : "LP fees pending"}
           </div>
           <div className="mt-0.5 text-base font-semibold tabular-nums text-arc-text">
