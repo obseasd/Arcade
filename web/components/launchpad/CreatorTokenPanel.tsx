@@ -5,10 +5,11 @@ import { useMemo, useState } from "react";
 import { Address, isAddress } from "viem";
 import { useAccount, usePublicClient, useReadContract, useReadContracts, useWriteContract } from "wagmi";
 import { V3_LOCKER_ABI, V3_POOL_ABI } from "@/lib/abis/v3";
-import { ADDRESSES } from "@/lib/constants";
+import { ADDRESSES, LAUNCHPAD_TOKEN_DECIMALS } from "@/lib/constants";
+import { useClankerClaimable } from "@/lib/hooks/useClankerClaimable";
 import { pushToast } from "@/lib/toast";
 import { Modal } from "@/components/ui/Modal";
-import { cn, formatAddress, formatUSDC } from "@/lib/utils";
+import { cn, formatAddress, formatToken, formatUSDC } from "@/lib/utils";
 
 interface Props {
   /** Clanker token (mode=2). */
@@ -93,12 +94,15 @@ export function CreatorTokenPanel({ token, symbol, pool, volumeRaw }: Props) {
   const poolFee = Number((feeQ.data as number | undefined) ?? 0);
   // Lifetime estimated USDC earnings for the connected wallet's recipient slots:
   //   volume × (poolFee / 1e6) × (myBps / 1e4)
-  // myBps lives in the locker's full bps space (treasury holds 2000), so the
-  // ratio gives the wallet's true share of the LP fee.
   const myEarningsRaw = useMemo(() => {
     if (!volumeRaw || poolFee === 0 || myRecipientBps === 0) return 0n;
     return (volumeRaw * BigInt(poolFee) * BigInt(myRecipientBps)) / 10_000_000_000n;
   }, [volumeRaw, poolFee, myRecipientBps]);
+
+  // 5) Precise unclaimed (= currently-claimable) preview via V3 fee growth math.
+  const claimable = useClankerClaimable(token);
+  const myPairedRaw = (claimable.pairedRaw * BigInt(myRecipientBps)) / 10_000n;
+  const myClankerRaw = (claimable.clankerRaw * BigInt(myRecipientBps)) / 10_000n;
 
   if (positionId === 0n) return null;
 
@@ -169,17 +173,34 @@ export function CreatorTokenPanel({ token, symbol, pool, volumeRaw }: Props) {
       </p>
 
       {isMine && myRecipientBps > 0 && (
-        <div className="mb-4 rounded-xl border border-arc-cta-hover/30 bg-arc-cta-hover/5 px-3 py-2.5 text-xs">
-          <div className="flex items-center gap-1.5 text-arc-text-muted">
-            <TrendingUp className="h-3 w-3" />
-            Your estimated earnings (all-time)
+        <div className="mb-4 grid gap-2 sm:grid-cols-2">
+          <div className="rounded-xl border border-arc-cta-hover/30 bg-arc-cta-hover/5 px-3 py-2.5 text-xs">
+            <div className="flex items-center gap-1.5 text-arc-text-muted">
+              <Coins className="h-3 w-3" />
+              Claimable now
+            </div>
+            <div className="mt-0.5 text-base font-semibold tabular-nums text-arc-text">
+              {claimable.isLoading ? (
+                <span className="text-arc-text-muted">…</span>
+              ) : (
+                <>${formatUSDC(myPairedRaw, 6, 4)}</>
+              )}
+            </div>
+            <div className="mt-0.5 text-[10px] text-arc-text-faint">
+              + {formatToken(myClankerRaw, LAUNCHPAD_TOKEN_DECIMALS, 2)} {symbol} (token side)
+            </div>
           </div>
-          <div className="mt-0.5 text-base font-semibold tabular-nums text-arc-text">
-            ${formatUSDC(myEarningsRaw, 6, 2)}
-          </div>
-          <div className="mt-0.5 text-[10px] text-arc-text-faint">
-            Rough estimate from on-chain volume × pool fee × your bps. Actual claimable may differ
-            depending on already-claimed amounts.
+          <div className="rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2.5 text-xs">
+            <div className="flex items-center gap-1.5 text-arc-text-muted">
+              <TrendingUp className="h-3 w-3" />
+              All-time est.
+            </div>
+            <div className="mt-0.5 text-base font-semibold tabular-nums text-arc-text">
+              ${formatUSDC(myEarningsRaw, 6, 2)}
+            </div>
+            <div className="mt-0.5 text-[10px] text-arc-text-faint">
+              volume × fee × your bps (includes already-claimed)
+            </div>
           </div>
         </div>
       )}
