@@ -371,14 +371,14 @@ function CreateTokenInner() {
             },
           ],
         );
-        // Explicit gas limit: wallets that can't simulate on a custom chain
-        // (Arc) fall back to a bogus low estimate. createClankerV3 needs
-        // ~11-12M gas. We use a tight +10% buffer and cap at 14M because
-        // public RPCs (thirdweb) reject per-tx gas above ~15M even when the
-        // block limit is higher.
+        // Explicit gas limit. Wallets can't simulate on a custom chain (Arc)
+        // and fall back to a bogus low estimate. A Clanker launch needs roughly
+        // 11-14M (3 V3 mints + locker setup + optional creator buy/vault).
+        // Arc block limit is 30M; we cap at 25M to leave room for the wallet's
+        // own buffer and any per-tx ceiling on the RPC.
         const clankerArgs = [name.trim(), symbol.trim(), metadataURI, rs, optsData] as const;
-        const GAS_CAP = 14_000_000n;
-        let gas = GAS_CAP;
+        const GAS_CAP = 25_000_000n;
+        let gas = 18_000_000n; // conservative fallback if estimate fails
         if (publicClient) {
           try {
             const est = await publicClient.estimateContractGas({
@@ -388,10 +388,11 @@ function CreateTokenInner() {
               args: clankerArgs,
               account,
             });
-            const buffered = (est * 110n) / 100n;
+            const buffered = (est * 120n) / 100n;
             gas = buffered > GAS_CAP ? GAS_CAP : buffered;
-          } catch {
-            /* keep the cap fallback */
+          } catch (err) {
+            // eslint-disable-next-line no-console
+            console.warn("[launch] gas estimate failed, using fallback:", err);
           }
         }
         hash = await writeContractAsync({
@@ -411,10 +412,9 @@ function CreateTokenInner() {
         const creator2ShareBps = useCreator2 ? Math.round(creator2SharePct * 100) : 0;
         const args = [name.trim(), symbol.trim(), metadataURI, mode, creator2Addr, creator2ShareBps] as const;
         // Explicit gas (wallet sim doesn't work on Arc): a curve launch needs ~1.5M.
-        // Cap at 14M to stay below thirdweb RPC's ~15M per-tx limit (wallets may
-        // add their own buffer on top of what we pass).
-        const PUMP_GAS_CAP = 14_000_000n;
-        let gas = 3_000_000n;
+        // Generous cap; Arc block limit is 30M.
+        const PUMP_GAS_CAP = 25_000_000n;
+        let gas = 5_000_000n;
         if (publicClient) {
           try {
             const est = await publicClient.estimateContractGas({
@@ -424,10 +424,11 @@ function CreateTokenInner() {
               args,
               account,
             });
-            const buffered = (est * 110n) / 100n;
+            const buffered = (est * 120n) / 100n;
             gas = buffered > PUMP_GAS_CAP ? PUMP_GAS_CAP : buffered;
-          } catch {
-            /* keep the fallback */
+          } catch (err) {
+            // eslint-disable-next-line no-console
+            console.warn("[launch] PUMP gas estimate failed, using fallback:", err);
           }
         }
         hash = await writeContractAsync({
