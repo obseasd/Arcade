@@ -1,6 +1,6 @@
 "use client";
 
-import { Crown, Pencil, Coins, TrendingUp, Twitter } from "lucide-react";
+import { Pencil, Coins, TrendingUp, Twitter } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Address, isAddress } from "viem";
 import { useAccount, usePublicClient, useReadContract, useReadContracts, useWriteContract } from "wagmi";
@@ -164,16 +164,6 @@ export function CreatorTokenPanel({ token, symbol, pool, volumeRaw, slotHandles 
 
   return (
     <div className="arc-card p-5">
-      <div className="mb-3 flex items-center gap-2">
-        <Crown className="h-4 w-4 text-arc-cta-hover" />
-        <h3 className="text-base font-semibold">Creator panel</h3>
-      </div>
-      <p className="mb-4 text-xs text-arc-text-muted">
-        {isMine
-          ? "You're a recipient on this Clanker's locked V3 position. Claim accrued LP fees; rotate your payout/admin address per slot (BPS splits are immutable on-chain)."
-          : "Anyone can trigger a claim — LP fees always route to the registered recipients below, never to the caller."}
-      </p>
-
       {/* Earnings stats. For recipients we show their share; for visitors we
           show the pool-wide totals so they can see what the creator is making. */}
       <div className="mb-4 grid gap-2 sm:grid-cols-2">
@@ -296,11 +286,7 @@ export function CreatorTokenPanel({ token, symbol, pool, volumeRaw, slotHandles 
               )}
               {isTwitterPending && (
                 <div className="mt-2 flex items-center justify-between gap-2 text-[11px]">
-                  <span className="text-arc-text-muted">
-                    {account
-                      ? "Login with Twitter to claim into your wallet."
-                      : "Connect a wallet first to claim."}
-                  </span>
+                  <span className="text-arc-text-muted">Fee recipient</span>
                   <a
                     href={
                       account
@@ -308,12 +294,13 @@ export function CreatorTokenPanel({ token, symbol, pool, volumeRaw, slotHandles 
                         : "#"
                     }
                     aria-disabled={!account}
+                    title={account ? "" : "Connect a wallet first"}
                     className={cn(
                       "inline-flex shrink-0 items-center gap-1 rounded-lg border border-arc-cta-hover/40 bg-arc-cta-hover/10 px-2 py-1 text-arc-text hover:bg-arc-cta-hover/20",
                       !account && "pointer-events-none opacity-50",
                     )}
                   >
-                    <Twitter className="h-3 w-3" /> Claim as @{handle}
+                    <Twitter className="h-3 w-3" /> Claim
                   </a>
                 </div>
               )}
@@ -354,11 +341,8 @@ export function CreatorTokenPanel({ token, symbol, pool, volumeRaw, slotHandles 
         )}
       >
         <Coins className="h-4 w-4" />
-        {claiming ? "Claiming…" : "Claim LP fees"}
+        {claiming ? "Claiming…" : "Claim Fees"}
       </button>
-      <p className="mt-2 text-[10px] text-arc-text-faint">
-        Claiming is permissionless and pays every recipient their bps share.
-      </p>
 
       <Modal
         open={editing !== null}
