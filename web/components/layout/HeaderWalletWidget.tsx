@@ -1,7 +1,7 @@
 "use client";
 
 import { ConnectButton } from "@rainbow-me/rainbowkit";
-import { ChevronDown, Copy, ExternalLink, LogOut, Rocket } from "lucide-react";
+import { ChevronDown, Copy, ExternalLink, LineChart, LogOut, Rocket } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { erc20Abi } from "viem";
@@ -119,12 +119,23 @@ export function HeaderWalletWidget() {
             </div>
 
             {menuOpen && (
-              <div className="absolute right-0 top-[58px] z-50 w-60 overflow-hidden rounded-2xl border border-arc-gray/30 bg-black/85 backdrop-blur-xl shadow-arc-card">
-                <div className="border-b border-arc-border px-4 py-3">
+              <div className="absolute right-0 top-[58px] z-50 w-60 overflow-hidden rounded-2xl border border-arc-gray/20 bg-black/35 backdrop-blur-2xl shadow-arc-card">
+                <div className="border-b border-arc-border/60 px-4 py-3">
                   <div className="text-[10px] uppercase tracking-wider text-arc-text-faint">
                     Connected
                   </div>
-                  <div className="mt-0.5 truncate font-mono text-xs text-arc-text">{address}</div>
+                  <div className="mt-0.5 flex items-center gap-1.5">
+                    <span className="min-w-0 flex-1 truncate font-mono text-xs text-arc-text">
+                      {address}
+                    </span>
+                    <button
+                      onClick={copyAddress}
+                      title="Copy address"
+                      className="shrink-0 rounded p-1 text-arc-text-muted transition-colors hover:bg-white/5 hover:text-arc-text"
+                    >
+                      <Copy className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
                 </div>
                 <MenuItem
                   icon={<Rocket className="h-3.5 w-3.5" />}
@@ -134,10 +145,10 @@ export function HeaderWalletWidget() {
                   My tokens
                 </MenuItem>
                 <MenuItem
-                  icon={<Copy className="h-3.5 w-3.5" />}
-                  onClick={copyAddress}
+                  icon={<LineChart className="h-3.5 w-3.5" />}
+                  onClick={() => setMenuOpen(false)}
                 >
-                  Copy address
+                  LP Simulator
                 </MenuItem>
                 <MenuItem
                   icon={<ExternalLink className="h-3.5 w-3.5" />}
