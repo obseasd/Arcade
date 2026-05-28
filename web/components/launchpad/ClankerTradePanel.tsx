@@ -137,6 +137,7 @@ export function ClankerTradePanel({ token, symbol, pool, image }: Props) {
         kind: "swap",
         tokenAddress: side === "buy" ? token : ADDRESSES.usdc,
         tokenSymbol: outTokenSymbol,
+        tokenImage: side === "buy" ? image : undefined,
         amountFormatted:
           side === "buy"
             ? formatToken(estimatedOut, outDecimals, 6)

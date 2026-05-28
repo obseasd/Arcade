@@ -14,6 +14,8 @@ export interface SwapToastPayload {
   /** Address of the token the user received. */
   tokenAddress?: Address;
   tokenSymbol?: string;
+  /** Optional logo URL (data: or http(s):) — overrides the symbol-based lookup. */
+  tokenImage?: string;
   amountFormatted: string;
   /** Optional block-explorer URL for the receive/mint tx. */
   explorerUrl?: string;

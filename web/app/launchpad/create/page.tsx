@@ -365,6 +365,9 @@ function CreateTokenInner() {
         const creator2ShareBps = useCreator2 ? Math.round(creator2SharePct * 100) : 0;
         const args = [name.trim(), symbol.trim(), metadataURI, mode, creator2Addr, creator2ShareBps] as const;
         // Explicit gas (wallet sim doesn't work on Arc): a curve launch needs ~1.5M.
+        // Cap at 14M to stay below thirdweb RPC's ~15M per-tx limit (wallets may
+        // add their own buffer on top of what we pass).
+        const PUMP_GAS_CAP = 14_000_000n;
         let gas = 3_000_000n;
         if (publicClient) {
           try {
@@ -375,7 +378,8 @@ function CreateTokenInner() {
               args,
               account,
             });
-            gas = (est * 125n) / 100n;
+            const buffered = (est * 110n) / 100n;
+            gas = buffered > PUMP_GAS_CAP ? PUMP_GAS_CAP : buffered;
           } catch {
             /* keep the fallback */
           }
@@ -862,10 +866,6 @@ function CreateTokenInner() {
                 <div className="truncate font-semibold text-arc-text">{name.trim() || "Token name"}</div>
                 <div className="flex items-center gap-1.5 text-sm text-arc-text-muted">
                   <span className="truncate">${symbol.trim() || "SYMBOL"}</span>
-                  <span className="text-arc-text-faint">·</span>
-                  <span className="rounded-full bg-white/[0.06] px-2 py-0.5 text-[11px] font-medium text-arc-text">
-                    Arc
-                  </span>
                 </div>
               </div>
             </div>

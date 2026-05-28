@@ -41,15 +41,18 @@ export function AmountInput({
       <div className="flex items-center justify-between text-xs text-arc-text-muted">
         <span>{label}</span>
         {balanceLabel && (
-          <button
-            type="button"
-            onClick={onMax}
-            disabled={!onMax}
-            className={cn("transition-colors", onMax ? "hover:text-arc-text cursor-pointer" : "cursor-default")}
-          >
-            {balanceLabel}
-            {onMax && <span className="ml-1 text-arc-primary">MAX</span>}
-          </button>
+          <div className="flex items-center gap-1">
+            <span>{balanceLabel}</span>
+            {onMax && (
+              <button
+                type="button"
+                onClick={onMax}
+                className="rounded px-1 text-arc-primary transition-colors hover:text-arc-primary-hover"
+              >
+                MAX
+              </button>
+            )}
+          </div>
         )}
       </div>
       <div className="mt-2 flex items-center gap-3">

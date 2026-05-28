@@ -47,7 +47,7 @@ function ToastCard({ payload, onClose }: { payload: ToastPayload; onClose: () =>
   if (payload.kind === "swap") {
     return (
       <div className="pointer-events-auto flex w-72 items-center gap-3 rounded-2xl border border-arc-gray/40 bg-black/60 p-3 shadow-arc-card backdrop-blur-xl animate-in slide-in-from-right">
-        <TokenIcon symbol={payload.tokenSymbol} size={36} />
+        <TokenIcon symbol={payload.tokenSymbol} image={payload.tokenImage} size={36} />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5 text-xs text-arc-text-muted">
             <span>Confirmed</span>
