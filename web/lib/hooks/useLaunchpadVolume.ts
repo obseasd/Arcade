@@ -15,8 +15,8 @@ const V3_SWAP_EVT = parseAbiItem(
   "event Swap(address indexed sender, address indexed recipient, int256 amount0, int256 amount1, uint160 sqrtPriceX96, uint128 liquidity, int24 tick)",
 );
 
-/** Per-call block window. thirdweb's Arc RPC is finicky on log queries — 1000
- * blocks per call works reliably. */
+/** Per-call block window. Conservative size that works reliably across both
+ * the official Arc RPC and the thirdweb proxy. */
 const CHUNK = 1_000n;
 /** How far back we walk total. 200k blocks ≈ 2-3 days on a 1s-block chain. */
 const MAX_BACK = 200_000n;

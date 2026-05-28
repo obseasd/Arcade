@@ -172,38 +172,46 @@ export function CreatorTokenPanel({ token, symbol, pool, volumeRaw }: Props) {
           : "Anyone can trigger a claim — LP fees always route to the registered recipients below, never to the caller."}
       </p>
 
-      {isMine && myRecipientBps > 0 && (
-        <div className="mb-4 grid gap-2 sm:grid-cols-2">
-          <div className="rounded-xl border border-arc-cta-hover/30 bg-arc-cta-hover/5 px-3 py-2.5 text-xs">
-            <div className="flex items-center gap-1.5 text-arc-text-muted">
-              <Coins className="h-3 w-3" />
-              Claimable now
-            </div>
-            <div className="mt-0.5 text-base font-semibold tabular-nums text-arc-text">
-              {claimable.isLoading ? (
-                <span className="text-arc-text-muted">…</span>
-              ) : (
-                <>${formatUSDC(myPairedRaw, 6, 4)}</>
-              )}
-            </div>
-            <div className="mt-0.5 text-[10px] text-arc-text-faint">
-              + {formatToken(myClankerRaw, LAUNCHPAD_TOKEN_DECIMALS, 2)} {symbol} (token side)
-            </div>
+      {/* Earnings stats. For recipients we show their share; for visitors we
+          show the pool-wide totals so they can see what the creator is making. */}
+      <div className="mb-4 grid gap-2 sm:grid-cols-2">
+        <div className="rounded-xl border border-arc-cta-hover/30 bg-arc-cta-hover/5 px-3 py-2.5 text-xs">
+          <div className="flex items-center gap-1.5 text-arc-text-muted">
+            <Coins className="h-3 w-3" />
+            {isMine && myRecipientBps > 0 ? "Your share, claimable" : "LP fees pending"}
           </div>
-          <div className="rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2.5 text-xs">
-            <div className="flex items-center gap-1.5 text-arc-text-muted">
-              <TrendingUp className="h-3 w-3" />
-              All-time est.
-            </div>
-            <div className="mt-0.5 text-base font-semibold tabular-nums text-arc-text">
-              ${formatUSDC(myEarningsRaw, 6, 2)}
-            </div>
-            <div className="mt-0.5 text-[10px] text-arc-text-faint">
-              volume × fee × your bps (includes already-claimed)
-            </div>
+          <div className="mt-0.5 text-base font-semibold tabular-nums text-arc-text">
+            {claimable.isLoading ? (
+              <span className="text-arc-text-muted">…</span>
+            ) : (
+              <>${formatUSDC(isMine && myRecipientBps > 0 ? myPairedRaw : claimable.pairedRaw, 6, 4)}</>
+            )}
+          </div>
+          <div className="mt-0.5 text-[10px] text-arc-text-faint">
+            + {formatToken(isMine && myRecipientBps > 0 ? myClankerRaw : claimable.clankerRaw, LAUNCHPAD_TOKEN_DECIMALS, 2)} {symbol} (token side)
           </div>
         </div>
-      )}
+        <div className="rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2.5 text-xs">
+          <div className="flex items-center gap-1.5 text-arc-text-muted">
+            <TrendingUp className="h-3 w-3" />
+            {isMine && myRecipientBps > 0 ? "Lifetime earnings" : "Lifetime fees earned"}
+          </div>
+          <div className="mt-0.5 text-base font-semibold tabular-nums text-arc-text">
+            ${formatUSDC(
+              isMine && myRecipientBps > 0
+                ? myEarningsRaw
+                : volumeRaw && poolFee > 0
+                  ? (volumeRaw * BigInt(poolFee)) / 1_000_000n
+                  : 0n,
+              6,
+              2,
+            )}
+          </div>
+          <div className="mt-0.5 text-[10px] text-arc-text-faint">
+            Estimate from total trading volume.
+          </div>
+        </div>
+      </div>
 
       <div className="space-y-2">
         {recipients.map((r, i) => {
@@ -214,6 +222,9 @@ export function CreatorTokenPanel({ token, symbol, pool, volumeRaw }: Props) {
           const isTreasury = r.recipient.toLowerCase() === ADDRESSES.usdc.toLowerCase()
             ? false
             : i === recipients.length - 1 && r.bps === 2000;
+          // Hide the Treasury slot when the connected wallet is a recipient or
+          // admin on this position. Visitors still see it for transparency.
+          if (isTreasury && isMine) return null;
           return (
             <div
               key={i}

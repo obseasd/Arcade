@@ -3,7 +3,7 @@
   "chain": {
     "name": "Arc Testnet",
     "chainId": 5042002,
-    "rpcUrl": "https://5042002.rpc.thirdweb.com",
+    "rpcUrl": "https://rpc.testnet.arc.network",
     "explorer": "https://testnet.arcscan.app",
     "nativeGasToken": "USDC"
   },
