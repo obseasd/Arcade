@@ -328,9 +328,9 @@ function CreateTokenInner() {
         // Explicit gas limit: wallets that can't simulate on a custom chain
         // (Arc) fall back to a bogus low estimate and reject the tx. The
         // createClankerV3 launch (token + V3 pool + 1/3 single-sided positions
-        // + optional creator buy) typically uses ~6-7M gas.
+        // + optional creator buy) typically uses ~11-12M gas on Arc.
         const clankerArgs = [name.trim(), symbol.trim(), metadataURI, rs, optsData] as const;
-        let gas = 8_000_000n;
+        let gas = 15_000_000n;
         if (publicClient) {
           try {
             const est = await publicClient.estimateContractGas({
