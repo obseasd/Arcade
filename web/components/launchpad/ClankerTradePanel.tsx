@@ -256,11 +256,6 @@ export function ClankerTradePanel({ token, symbol, pool, image, onTradeSuccess }
             ))}
           </span>
         </div>
-        {fee > 0 && (
-          <div className="mt-2 text-[11px] text-arc-text-faint">
-            V3 fee: {fee / 10_000}% (creator 80% / platform 20%)
-          </div>
-        )}
       </div>
 
       <button

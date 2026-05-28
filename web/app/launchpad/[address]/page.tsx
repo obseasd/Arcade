@@ -7,6 +7,7 @@ import { useMemo, useState } from "react";
 import { Address, erc20Abi, isAddress } from "viem";
 import { useReadContract } from "wagmi";
 import { LAUNCHPAD_ABI } from "@/lib/abis/launchpad";
+import { V3_POOL_ABI } from "@/lib/abis/v3";
 import { ADDRESSES } from "@/lib/constants";
 import { useClankerMcap } from "@/lib/hooks/useClankerMcap";
 import { useLaunchpadVolume } from "@/lib/hooks/useLaunchpadVolume";
@@ -74,6 +75,15 @@ export default function TokenDetailPage() {
   // Clanker FDV: the contract's `marketCap()` reads V2 reserves on what is
   // actually a V3 pool → reverts. We compute it client-side from slot0.
   const clankerMcap = useClankerMcap(isClanker && isValid ? token : undefined, isClanker ? (state?.v2Pair as Address | undefined) : undefined);
+  const poolFeeQ = useReadContract({
+    address: isClanker ? (state?.v2Pair as Address | undefined) : undefined,
+    abi: V3_POOL_ABI,
+    functionName: "fee",
+    query: { enabled: isClanker && !!state?.v2Pair && state.v2Pair !== "0x0000000000000000000000000000000000000000" },
+  });
+  const feePct = isClanker
+    ? (Number((poolFeeQ.data as number | undefined) ?? 0) / 10_000)
+    : 1; // PUMP/Arcade curve fee
   const { volume: volumeRaw, isLoading: volLoading } = useLaunchpadVolume({
     token: isValid ? token : undefined,
     mode: state ? Number(state.mode) : undefined,
@@ -201,6 +211,11 @@ export default function TokenDetailPage() {
                   {metadata.twitter && <SocialLink href={metadata.twitter} icon={<Twitter className="h-3.5 w-3.5" />}>Twitter</SocialLink>}
                   {metadata.telegram && <SocialLink href={metadata.telegram} icon={<MessageSquare className="h-3.5 w-3.5" />}>Telegram</SocialLink>}
                   {metadata.website && <SocialLink href={metadata.website} icon={<Globe className="h-3.5 w-3.5" />}>Website</SocialLink>}
+                  {feePct > 0 && (
+                    <span className="arc-pill cursor-default">
+                      Fees: {feePct}%
+                    </span>
+                  )}
                   <a
                     href={`https://testnet.arcscan.app/address/${token}`}
                     target="_blank"

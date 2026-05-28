@@ -226,22 +226,26 @@ export function CreatorTokenPanel({ token, symbol, pool, volumeRaw }: Props) {
             >
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <span className="font-mono text-arc-text">{formatAddress(r.recipient)}</span>
-                  {iAmRecipient && (
-                    <span className="rounded-full bg-arc-cta-hover/15 px-1.5 py-0.5 text-[10px] font-medium text-arc-text">
-                      You
-                    </span>
-                  )}
-                  {isTreasury && (
-                    <span className="rounded-full bg-arc-surface-2 px-1.5 py-0.5 text-[10px] text-arc-text-muted">
-                      Platform
-                    </span>
+                  {isTreasury ? (
+                    <span className="font-medium text-arc-text">Arcade Treasury</span>
+                  ) : (
+                    <>
+                      <span className="font-mono text-arc-text">{formatAddress(r.recipient)}</span>
+                      {iAmRecipient && (
+                        <span className="rounded-full bg-arc-cta-hover/15 px-1.5 py-0.5 text-[10px] font-medium text-arc-text">
+                          You
+                        </span>
+                      )}
+                    </>
                   )}
                 </div>
-                <span className="tabular-nums font-medium text-arc-text">
-                  {(r.bps / 100).toFixed(r.bps % 100 === 0 ? 0 : 1)}%
-                </span>
+                {!iAmRecipient && (
+                  <span className="tabular-nums font-medium text-arc-text">
+                    {(r.bps / 100).toFixed(r.bps % 100 === 0 ? 0 : 1)}%
+                  </span>
+                )}
               </div>
+              {!isTreasury && (
               <div className="mt-1.5 flex items-center justify-between text-arc-text-faint">
                 <span>
                   Admin: <span className="font-mono">{formatAddress(r.admin)}</span>
@@ -249,6 +253,7 @@ export function CreatorTokenPanel({ token, symbol, pool, volumeRaw }: Props) {
                 </span>
                 <span>Pref: {tokenPrefLabel(r.tokenPref)}</span>
               </div>
+              )}
               {iAmAdmin && !isTreasury && (
                 <div className="mt-2 flex gap-2">
                   <button
