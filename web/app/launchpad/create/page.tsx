@@ -718,7 +718,9 @@ function CreateTokenInner() {
                 + Add recipient
               </button>
             )}
-            {recipientsError && recipients.some((r) => r.isTwitter || r.recipient.trim() !== "") && (
+            {recipientsError && recipients.some(
+              (r) => (r.isTwitter && r.twitterHandle.trim() !== "") || (!r.isTwitter && r.recipient.trim() !== ""),
+            ) && (
               <div className="text-xs text-arc-danger">{recipientsError}</div>
             )}
           </div>
@@ -1077,6 +1079,18 @@ function CreateTokenInner() {
                       ? "Launching…"
                       : `Launch ${modeLabel(mode)}`}
           </button>
+          {isV3 && (
+            <div className="rounded-xl border border-arc-warn/30 bg-arc-warn/5 p-3 text-[11px] text-arc-warn">
+              <div className="font-semibold">Gas tip (Rabby on Arc)</div>
+              <div className="mt-1 text-arc-text-muted">
+                If your wallet pops up with &ldquo;gas limit too high&rdquo;, click
+                <b className="text-arc-text"> Paramètres avancés</b>, then set
+                <b className="text-arc-text"> Limite de gaz</b> manually to
+                <b className="text-arc-text"> 14000000</b>. Rabby&apos;s default 1.5x buffer pushes
+                the gas above Arc&apos;s per-tx ceiling.
+              </div>
+            </div>
+          )}
           <TxStatus state={tx} />
         </aside>
       </div>
