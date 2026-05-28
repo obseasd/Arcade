@@ -3,8 +3,8 @@
 import { ExternalLink, Twitter, MessageSquare, Globe, ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useMemo, useState } from "react";
-import { Address, erc20Abi, isAddress } from "viem";
+import { useCallback, useMemo, useState } from "react";
+import { Address, erc20Abi, isAddress, parseAbiItem } from "viem";
 import { useReadContract } from "wagmi";
 import { LAUNCHPAD_ABI } from "@/lib/abis/launchpad";
 import { V3_POOL_ABI } from "@/lib/abis/v3";
@@ -12,6 +12,7 @@ import { ADDRESSES } from "@/lib/constants";
 import { useClankerMcap } from "@/lib/hooks/useClankerMcap";
 import { useLaunchpadVolume } from "@/lib/hooks/useLaunchpadVolume";
 import { useTokenMetadataURI } from "@/lib/hooks/useTokenMetadataURI";
+import { useWatchEvent } from "@/lib/hooks/useWatchEvent";
 import { parseInlineMetadata, getImageUrl, type TokenMetadata } from "@/lib/metadata";
 import { formatAddress, formatToken, formatUSDC } from "@/lib/utils";
 import { TokenIcon } from "@/components/ui/TokenIcon";
@@ -23,6 +24,16 @@ import { Comments } from "@/components/launchpad/Comments";
 
 const CURVE_SUPPLY = 800_000_000n * 10n ** 18n;
 const MIGRATION_TARGET_FALLBACK = 20_000n * 10n ** 6n;
+
+const V3_SWAP_EVT = parseAbiItem(
+  "event Swap(address indexed sender, address indexed recipient, int256 amount0, int256 amount1, uint160 sqrtPriceX96, uint128 liquidity, int24 tick)",
+);
+const BUY_EVT = parseAbiItem(
+  "event Buy(address indexed token, address indexed buyer, uint256 usdcIn, uint256 tokensOut, uint256 newPriceQ64)",
+);
+const SELL_EVT = parseAbiItem(
+  "event Sell(address indexed token, address indexed seller, uint256 tokensIn, uint256 usdcOut, uint256 newPriceQ64)",
+);
 
 export default function TokenDetailPage() {
   const params = useParams();
@@ -99,6 +110,30 @@ export default function TokenDetailPage() {
     mode: state ? Number(state.mode) : undefined,
     pool: isClanker ? (state?.v2Pair as Address | undefined) : undefined,
     refreshKey,
+  });
+
+  // Live updates via WebSocket: bump refreshKey whenever a trade happens on
+  // this token. The hooks downstream (volume, claimable, balances) refetch.
+  const bumpRefresh = useCallback(() => setRefreshKey((k) => k + 1), []);
+  useWatchEvent({
+    address: isClanker ? (state?.v2Pair as Address | undefined) : undefined,
+    event: V3_SWAP_EVT,
+    enabled: isClanker && !!state?.v2Pair,
+    onLogs: bumpRefresh,
+  });
+  useWatchEvent({
+    address: !isClanker ? ADDRESSES.launchpad : undefined,
+    event: BUY_EVT,
+    args: isValid ? { token } : undefined,
+    enabled: !isClanker && isValid,
+    onLogs: bumpRefresh,
+  });
+  useWatchEvent({
+    address: !isClanker ? ADDRESSES.launchpad : undefined,
+    event: SELL_EVT,
+    args: isValid ? { token } : undefined,
+    enabled: !isClanker && isValid,
+    onLogs: bumpRefresh,
   });
   const volumeLabel = volumeRaw !== undefined
     ? `$${formatUSDC(volumeRaw, 6, 0)}`

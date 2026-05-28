@@ -1,13 +1,18 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Address } from "viem";
+import { useCallback, useEffect, useState } from "react";
+import { Address, parseAbiItem } from "viem";
 import { useAccount, usePublicClient, useReadContract, useWriteContract } from "wagmi";
 import { LAUNCHPAD_ABI } from "@/lib/abis/launchpad";
 import { ADDRESSES } from "@/lib/constants";
 import { formatAddress } from "@/lib/utils";
+import { useWatchEvent } from "@/lib/hooks/useWatchEvent";
 import { pushToast } from "@/lib/toast";
 import { TxStatus, type TxState } from "@/components/ui/TxStatus";
+
+const COMMENT_POSTED_EVT = parseAbiItem(
+  "event CommentPosted(address indexed token, address indexed author, uint256 index, string text)",
+);
 
 interface Props {
   token: Address;
@@ -32,6 +37,18 @@ export function Comments({ token }: Props) {
     abi: LAUNCHPAD_ABI,
     functionName: "getCommentsCount",
     args: [token],
+  });
+
+  // Live: any new CommentPosted for this token triggers a refetch so other
+  // users' comments appear in real time without a manual refresh.
+  const refetchCount = useCallback(() => {
+    countQ.refetch();
+  }, [countQ]);
+  useWatchEvent({
+    address: ADDRESSES.launchpad,
+    event: COMMENT_POSTED_EVT,
+    args: { token },
+    onLogs: refetchCount,
   });
 
   const count = Number((countQ.data as bigint | undefined) ?? 0n);

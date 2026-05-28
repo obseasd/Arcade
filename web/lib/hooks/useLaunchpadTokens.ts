@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Address, erc20Abi, parseAbiItem } from "viem";
 import { usePublicClient, useReadContract, useReadContracts } from "wagmi";
 import { LAUNCHPAD_ABI } from "@/lib/abis/launchpad";
 import { ADDRESSES } from "@/lib/constants";
+import { useWatchEvent } from "./useWatchEvent";
 
 const TOKEN_CREATED_EVT = parseAbiItem(
   "event TokenCreated(address indexed token, address indexed creator, uint8 mode, address creator2, uint16 creator2ShareBps, string name, string symbol, string metadataURI)",
@@ -39,6 +40,17 @@ export function useLaunchpadTokens(): { tokens: LaunchpadTokenInfo[]; isLoading:
     query: { enabled: !!ADDRESSES.launchpad },
   });
   const count = Number((countQ.data as bigint | undefined) ?? 0n);
+
+  // Live: any TokenCreated event triggers a refetch so the list grows without
+  // a manual refresh.
+  const refetchAll = useCallback(() => {
+    countQ.refetch();
+  }, [countQ]);
+  useWatchEvent({
+    address: ADDRESSES.launchpad,
+    event: TOKEN_CREATED_EVT,
+    onLogs: refetchAll,
+  });
 
   const addrCalls = useReadContracts({
     contracts: Array.from({ length: count }, (_, i) => ({

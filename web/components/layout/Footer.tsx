@@ -51,10 +51,14 @@ export function Footer() {
           </a>
         </div>
 
-        {/* Right: copyright */}
-        <span className="justify-self-end font-display text-xs text-arc-gray">
-          © 2026 Arcade Labs. All rights reserved.
-        </span>
+        {/* Right: legal + copyright */}
+        <div className="flex flex-col items-end gap-1 font-display text-xs text-arc-gray">
+          <div className="flex items-center gap-3">
+            <a href="/terms" className="hover:text-arc-cta-hover">Terms</a>
+            <a href="/privacy" className="hover:text-arc-cta-hover">Privacy</a>
+          </div>
+          <span>© 2026 Arcade Labs. All rights reserved.</span>
+        </div>
       </div>
     </footer>
   );

@@ -20,7 +20,10 @@ export const arcTestnet = defineChain({
     decimals: 6,
   },
   rpcUrls: {
-    default: { http: ["https://rpc.testnet.arc.network"] },
+    default: {
+      http: ["https://rpc.testnet.arc.network"],
+      webSocket: ["wss://rpc.testnet.arc.network"],
+    },
   },
   blockExplorers: {
     default: { name: "Arc Scan", url: "https://testnet.arcscan.app" },
