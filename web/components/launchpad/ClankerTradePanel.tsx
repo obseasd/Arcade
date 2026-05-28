@@ -11,6 +11,7 @@ import { AmountInput } from "@/components/ui/AmountInput";
 import { TokenIcon } from "@/components/ui/TokenIcon";
 import { TxStatus, type TxState } from "@/components/ui/TxStatus";
 import { useApproveIfNeeded } from "@/lib/hooks/useApproveIfNeeded";
+import { pushToast } from "@/lib/toast";
 import { cn, formatToken, formatUSDC } from "@/lib/utils";
 
 interface Props {
@@ -126,10 +127,21 @@ export function ClankerTradePanel({ token, symbol, pool, image }: Props) {
         args,
       });
       if (publicClient) await publicClient.waitForTransactionReceipt({ hash });
-      setTx({ status: "success", message: "Trade confirmed" });
+      setTx({ status: "idle" });
       setAmount("");
       usdcBalance.refetch();
       tokenBalance.refetch();
+      const outTokenSymbol = side === "buy" ? symbol : "USDC";
+      const outDecimals = side === "buy" ? LAUNCHPAD_TOKEN_DECIMALS : USDC_DECIMALS;
+      pushToast({
+        kind: "swap",
+        tokenAddress: side === "buy" ? token : ADDRESSES.usdc,
+        tokenSymbol: outTokenSymbol,
+        amountFormatted:
+          side === "buy"
+            ? formatToken(estimatedOut, outDecimals, 6)
+            : formatUSDC(estimatedOut, outDecimals, 6),
+      });
     } catch (e: any) {
       setTx({ status: "error", message: e?.shortMessage || e?.message || "Trade failed" });
     }

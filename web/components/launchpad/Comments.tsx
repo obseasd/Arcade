@@ -6,6 +6,7 @@ import { useAccount, usePublicClient, useReadContract, useWriteContract } from "
 import { LAUNCHPAD_ABI } from "@/lib/abis/launchpad";
 import { ADDRESSES } from "@/lib/constants";
 import { formatAddress } from "@/lib/utils";
+import { pushToast } from "@/lib/toast";
 import { TxStatus, type TxState } from "@/components/ui/TxStatus";
 
 interface Props {
@@ -77,8 +78,9 @@ export function Comments({ token }: Props) {
       });
       if (publicClient) await publicClient.waitForTransactionReceipt({ hash });
       setText("");
-      setTx({ status: "success", message: "Comment posted" });
+      setTx({ status: "idle" });
       countQ.refetch();
+      pushToast({ kind: "info", title: "Comment posted" });
     } catch (e: any) {
       setTx({ status: "error", message: e?.shortMessage || e?.message || "Failed" });
     }
@@ -116,15 +118,20 @@ export function Comments({ token }: Props) {
             No comments yet. Be the first.
           </div>
         )}
-        {comments.map((c, i) => (
-          <div key={i} className="rounded-xl border border-arc-border bg-arc-bg-elevated p-3">
-            <div className="flex items-center justify-between text-xs text-arc-text-muted">
-              <span className="tabular-nums">{formatAddress(c.author)}</span>
-              <span>{new Date(Number(c.timestamp) * 1000).toLocaleString()}</span>
+        {comments.map((c, i) => {
+          const isSelf = account && c.author.toLowerCase() === account.toLowerCase();
+          return (
+            <div key={i} className="rounded-xl border border-arc-border bg-arc-bg-elevated p-3">
+              <div className="flex items-center justify-between text-xs text-arc-text-muted">
+                <span className={isSelf ? "font-medium text-arc-primary" : "tabular-nums"}>
+                  {isSelf ? "You" : formatAddress(c.author)}
+                </span>
+                <span>{new Date(Number(c.timestamp) * 1000).toLocaleString()}</span>
+              </div>
+              <div className="mt-1 whitespace-pre-wrap break-words text-sm">{c.text}</div>
             </div>
-            <div className="mt-1 whitespace-pre-wrap break-words text-sm">{c.text}</div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
