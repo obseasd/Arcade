@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Inter, Space_Grotesk } from "next/font/google";
 import { Navbar } from "@/components/layout/Navbar";
 import { Footer } from "@/components/layout/Footer";
+import { ChainGuard } from "@/components/layout/ChainGuard";
 import { Toaster } from "@/components/ui/Toaster";
 import { CustomScrollbar } from "@/components/ui/CustomScrollbar";
 import { Providers } from "./providers";
@@ -33,6 +34,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           </div>
           <Toaster />
           <CustomScrollbar />
+          <ChainGuard />
         </Providers>
       </body>
     </html>
