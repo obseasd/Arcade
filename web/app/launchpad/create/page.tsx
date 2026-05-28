@@ -371,16 +371,16 @@ function CreateTokenInner() {
             },
           ],
         );
-        // Explicit gas limit. Wallets can't simulate on a custom chain (Arc)
-        // and fall back to a bogus low estimate. A Clanker launch needs roughly
-        // 11-13M (3 V3 mints + locker setup + optional creator buy/vault).
-        // The Arc RPC rejects per-tx gas above some threshold (empirically
-        // ~20M). Rabby and similar wallets apply a ~1.5x buffer on what we
-        // pass, so our cap must stay well below that threshold:
-        //   13M passed * 1.5 = 19.5M sent to RPC → fits.
+        // Explicit gas limit. A Standard/Deep/WETH Clanker (3 V3 ranges) plus
+        // optional creator buy and vault needs roughly 14-17M gas. Previous
+        // 14M caps caused mainnet-style out-of-gas reverts at gasUsed = gasLimit.
+        // wagmi passes our `gas` field through to the wallet as the explicit
+        // gas limit; Rabby and similar respect it (no multiplier when an
+        // explicit value is set). Arc RPC observed to accept up to at least
+        // 19M; 18M cap leaves a small margin.
         const clankerArgs = [name.trim(), symbol.trim(), metadataURI, rs, optsData] as const;
-        const GAS_CAP = 13_000_000n;
-        let gas = 12_500_000n;
+        const GAS_CAP = 18_000_000n;
+        let gas = 17_000_000n;
         if (publicClient) {
           try {
             const est = await publicClient.estimateContractGas({
@@ -390,11 +390,11 @@ function CreateTokenInner() {
               args: clankerArgs,
               account,
             });
-            const buffered = (est * 110n) / 100n;
+            const buffered = (est * 115n) / 100n;
             gas = buffered > GAS_CAP ? GAS_CAP : buffered;
           } catch (err) {
             // eslint-disable-next-line no-console
-            console.warn("[launch] gas estimate failed, using fallback:", err);
+            console.warn("[launch] gas estimate failed, using 17M fallback:", err);
           }
         }
         hash = await writeContractAsync({
@@ -414,8 +414,8 @@ function CreateTokenInner() {
         const creator2ShareBps = useCreator2 ? Math.round(creator2SharePct * 100) : 0;
         const args = [name.trim(), symbol.trim(), metadataURI, mode, creator2Addr, creator2ShareBps] as const;
         // Explicit gas (wallet sim doesn't work on Arc): a curve launch needs ~1.5M.
-        // Cap and wallet-buffer reasoning: same as createClankerV3 above.
-        const PUMP_GAS_CAP = 13_000_000n;
+        // Conservative cap, way below the Arc RPC ceiling.
+        const PUMP_GAS_CAP = 8_000_000n;
         let gas = 3_000_000n;
         if (publicClient) {
           try {
