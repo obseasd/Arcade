@@ -30,6 +30,14 @@ const USDC_TOKEN: TokenOption = {
   pinned: true,
 };
 
+const EURC_TOKEN: TokenOption = {
+  address: "0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a",
+  symbol: "EURC",
+  name: "Euro Coin",
+  decimals: 6,
+  pinned: true,
+};
+
 const PRESETS_BPS = [10, 50, 100];
 const DEFAULT_BPS = 10;
 
@@ -50,7 +58,7 @@ export function MultiSwapCard({ tab, onTabChange }: MultiSwapCardProps) {
   const { tokens: v2Tokens } = useV2Tokens();
   const { writeContractAsync } = useWriteContract();
 
-  const allTokens: TokenOption[] = useMemo(() => [USDC_TOKEN, ...v2Tokens], [v2Tokens]);
+  const allTokens: TokenOption[] = useMemo(() => [USDC_TOKEN, EURC_TOKEN, ...v2Tokens], [v2Tokens]);
 
   const [inputs, setInputs] = useState<InputRow[]>([]);
   const [outputToken, setOutputToken] = useState<TokenOption | null>(null);

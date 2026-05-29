@@ -9,6 +9,7 @@ import { TokenLogo } from "./TokenLogo";
 const PNG_LOGOS: Record<string, string> = {
   USDC: "/usdc.png",
   WUSDC: "/usdc.png",
+  EURC: "/eurc.png",
   ETH: "/eth.png",
   WETH: "/eth.png",
   BTC: "/btc.png",
