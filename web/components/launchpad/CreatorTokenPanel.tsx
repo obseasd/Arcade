@@ -189,7 +189,7 @@ export function CreatorTokenPanel({ token, symbol, pool, volumeRaw, volumeTokenR
             )}
           </div>
           <div className="mt-0.5 text-[10px] text-arc-text-faint">
-            + {formatToken(isMine && myRecipientBps > 0 ? myClankerRaw : claimable.clankerRaw, LAUNCHPAD_TOKEN_DECIMALS, 2)} {symbol}
+            + {formatToken(isMine && myRecipientBps > 0 ? myClankerRaw : claimable.clankerRaw, LAUNCHPAD_TOKEN_DECIMALS, 2)} ${symbol}
           </div>
         </div>
         <div className="rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2 text-xs">
@@ -218,7 +218,7 @@ export function CreatorTokenPanel({ token, symbol, pool, volumeRaw, volumeTokenR
                   : 0n,
               LAUNCHPAD_TOKEN_DECIMALS,
               2,
-            )}{" "}{symbol}
+            )}{" "}${symbol}
           </div>
         </div>
       </div>
@@ -239,12 +239,9 @@ export function CreatorTokenPanel({ token, symbol, pool, volumeRaw, volumeTokenR
             !!handle &&
             ADDRESSES.twitterEscrow !== "0x0000000000000000000000000000000000000000" &&
             r.recipient.toLowerCase() === ADDRESSES.twitterEscrow.toLowerCase();
-          // Always hide the Treasury slot for non-treasury viewers (noise).
-          // The on-chain payout still happens; this is just UI.
-          if (isTreasury) {
-            const accIsTreasury = acc.length > 0 && r.recipient.toLowerCase() === acc;
-            if (!accIsTreasury) return null;
-          }
+          // Always hide the Treasury slot - the on-chain payout still happens,
+          // this is just UI noise.
+          if (isTreasury) return null;
           if (isTwitterPending) {
             return (
               <div
