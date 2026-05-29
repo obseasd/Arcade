@@ -64,10 +64,9 @@ export function PriceChart({ token, mode, pool }: Props) {
       rightPriceScale: {
         borderColor: "rgba(40, 60, 90, 0.5)",
         autoScale: true,
-        // Leave generous room above and below the candles so the chart never
-        // feels cropped, and the volume bars (which use the same area) sit at
-        // the bottom 15% with empty space between them and the candles.
-        scaleMargins: { top: 0.15, bottom: 0.35 },
+        // Tighter margins so candles fill more of the visible area. Volume
+        // bars sit in the bottom 20% via their own overlay scale.
+        scaleMargins: { top: 0.08, bottom: 0.25 },
       },
       timeScale: {
         borderColor: "rgba(40, 60, 90, 0.5)",
@@ -94,7 +93,8 @@ export function PriceChart({ token, mode, pool }: Props) {
       priceScaleId: "",
     });
     volumeSeriesRef.current.priceScale().applyOptions({
-      scaleMargins: { top: 0.85, bottom: 0 },
+      // Volume bars occupy the bottom 18% of the chart, separate from candles.
+      scaleMargins: { top: 0.82, bottom: 0 },
     });
 
     const ro = new ResizeObserver(() => {

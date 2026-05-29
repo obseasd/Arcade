@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Address, parseAbiItem } from "viem";
 import { usePublicClient } from "wagmi";
 import { ADDRESSES } from "@/lib/constants";
+import { useWatchEvent } from "./useWatchEvent";
 
 const BUY_EVT = parseAbiItem(
   "event Buy(address indexed token, address indexed buyer, uint256 usdcIn, uint256 tokensOut, uint256 newPriceQ64)",
@@ -84,6 +85,8 @@ export function useTokenCandles(args: {
   const publicClient = usePublicClient();
   const [candles, setCandles] = useState<Candle[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  // Invalidates the cache + retriggers the effect on new on-chain trades.
+  const [liveTick, setLiveTick] = useState(0);
 
   useEffect(() => {
     if (!publicClient || !token || mode === undefined) {
@@ -93,7 +96,8 @@ export function useTokenCandles(args: {
     let cancelled = false;
     const cacheKey = `${token.toLowerCase()}|${mode}|${(pool ?? "").toLowerCase()}`;
     const cached = tradesCache.get(cacheKey);
-    const isFresh = cached && Date.now() - cached.cachedAt < CACHE_TTL_MS;
+    // A `liveTick` bump means a new on-chain trade fired; refetch.
+    const isFresh = cached && Date.now() - cached.cachedAt < CACHE_TTL_MS && liveTick === 0;
     if (isFresh) {
       setCandles(bucketize(cached!.result.trades, BUCKET_SIZE[timeframe], cached!.result.initialPrice));
       setIsLoading(false);
@@ -116,7 +120,36 @@ export function useTokenCandles(args: {
     return () => {
       cancelled = true;
     };
-  }, [publicClient, token, mode, pool, timeframe, refreshKey]);
+  }, [publicClient, token, mode, pool, timeframe, refreshKey, liveTick]);
+
+  // Live trade subscription. Invalidates the cache + bumps liveTick whenever a
+  // new Swap (Clanker) or Buy/Sell (PUMP/Arcade) hits this token.
+  const bumpLive = useCallback(() => {
+    const cacheKey = `${(token ?? "").toLowerCase()}|${mode ?? 0}|${(pool ?? "").toLowerCase()}`;
+    tradesCache.delete(cacheKey);
+    setLiveTick((t) => t + 1);
+  }, [token, mode, pool]);
+
+  useWatchEvent({
+    address: mode === 2 ? pool : undefined,
+    event: V3_SWAP_EVT,
+    enabled: mode === 2 && !!pool,
+    onLogs: bumpLive,
+  });
+  useWatchEvent({
+    address: mode !== undefined && mode !== 2 ? ADDRESSES.launchpad : undefined,
+    event: BUY_EVT,
+    args: token ? { token } : undefined,
+    enabled: mode !== undefined && mode !== 2 && !!token,
+    onLogs: bumpLive,
+  });
+  useWatchEvent({
+    address: mode !== undefined && mode !== 2 ? ADDRESSES.launchpad : undefined,
+    event: SELL_EVT,
+    args: token ? { token } : undefined,
+    enabled: mode !== undefined && mode !== 2 && !!token,
+    onLogs: bumpLive,
+  });
 
   return { candles, isLoading };
 }
@@ -164,19 +197,34 @@ async function fetchTrades(
     }
     // Initial pool price: read the Initialize event so the first candle has a
     // meaningful open (otherwise it's a flat doji until the second trade).
+    // We chunk in 5k-block windows walking backwards from `latestN`. Arc RPC
+    // silently rejects wide ranges; chunked is the only reliable path.
     let initialPrice: number | undefined;
-    try {
-      const initLogs = await publicClient.getLogs({
-        address: pool,
-        event: V3_INITIALIZE_EVT,
-        fromBlock: latestN > 100_000n ? latestN - 100_000n : 0n,
-        toBlock: latestN,
-      });
-      if (initLogs.length > 0) {
-        initialPrice = priceFromSqrtX96(initLogs[0].args.sqrtPriceX96 as bigint, usdcIsToken0);
+    {
+      const INIT_CHUNK = 5_000n;
+      let end = latestN;
+      let walked = 0n;
+      const INIT_MAX_BACK = 200_000n;
+      while (walked < INIT_MAX_BACK && initialPrice === undefined) {
+        const start = end > INIT_CHUNK - 1n ? end - (INIT_CHUNK - 1n) : 0n;
+        try {
+          const initLogs = await publicClient.getLogs({
+            address: pool,
+            event: V3_INITIALIZE_EVT,
+            fromBlock: start,
+            toBlock: end,
+          });
+          if (initLogs.length > 0) {
+            initialPrice = priceFromSqrtX96(initLogs[0].args.sqrtPriceX96 as bigint, usdcIsToken0);
+            break;
+          }
+        } catch {
+          break;
+        }
+        if (start === 0n) break;
+        walked += end - start + 1n;
+        end = start - 1n;
       }
-    } catch {
-      /* skip */
     }
     const swaps = await getLogsChunked(
       publicClient,
