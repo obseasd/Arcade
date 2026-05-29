@@ -12,7 +12,10 @@ import {
   type Time,
 } from "lightweight-charts";
 import { useTokenCandles, type Timeframe } from "@/lib/hooks/useTokenCandles";
+import { LAUNCHPAD_TOTAL_SUPPLY } from "@/lib/constants";
 import { cn } from "@/lib/utils";
+
+const SUPPLY = Number(LAUNCHPAD_TOTAL_SUPPLY); // 1e9, all launches have 1B supply
 
 interface Props {
   token: Address;
@@ -32,6 +35,7 @@ export function PriceChart({ token, mode, pool }: Props) {
   const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const volumeSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
   const [timeframe, setTimeframe] = useState<Timeframe>("1m");
+  const [metric, setMetric] = useState<"price" | "mcap">("price");
 
   const { candles, isLoading } = useTokenCandles({
     token,
@@ -73,8 +77,7 @@ export function PriceChart({ token, mode, pool }: Props) {
       borderDownColor: "#ef4444",
       wickUpColor: "#22c55e",
       wickDownColor: "#ef4444",
-      // 12 decimal places handles Clanker micro-caps ($0.00000003) without
-      // showing trailing zeros for normal-priced tokens.
+      // High precision for micro-cap price mode; coarser for marketcap mode.
       priceFormat: { type: "price", precision: 12, minMove: 0.000000000001 },
     });
 
@@ -103,45 +106,71 @@ export function PriceChart({ token, mode, pool }: Props) {
     };
   }, []);
 
-  // Push candles into the chart whenever the data changes.
+  // Push candles into the chart whenever data or metric mode changes.
   useEffect(() => {
     if (!candleSeriesRef.current || !volumeSeriesRef.current) return;
+    const scale = metric === "mcap" ? SUPPLY : 1;
     const candleData: CandlestickData[] = candles.map((c) => ({
       time: c.time as Time,
-      open: c.open,
-      high: c.high,
-      low: c.low,
-      close: c.close,
+      open: c.open * scale,
+      high: c.high * scale,
+      low: c.low * scale,
+      close: c.close * scale,
     }));
     const volumeData: HistogramData[] = candles.map((c) => ({
       time: c.time as Time,
       value: c.volume,
       color: c.close >= c.open ? "rgba(34, 197, 94, 0.4)" : "rgba(239, 68, 68, 0.4)",
     }));
+    // Switch axis precision based on metric (micro-cap prices vs $ market caps).
+    candleSeriesRef.current.applyOptions({
+      priceFormat:
+        metric === "mcap"
+          ? { type: "price", precision: 0, minMove: 1 }
+          : { type: "price", precision: 12, minMove: 0.000000000001 },
+    });
     candleSeriesRef.current.setData(candleData);
     volumeSeriesRef.current.setData(volumeData);
     if (candles.length > 0 && chartRef.current) {
       chartRef.current.timeScale().fitContent();
     }
-  }, [candles]);
+  }, [candles, metric]);
 
   return (
     <div>
-      <div className="mb-2 flex items-center justify-end gap-1 text-xs">
-        {(["1s", "1m", "5m", "1h", "1d"] as Timeframe[]).map((tf) => (
-          <button
-            key={tf}
-            onClick={() => setTimeframe(tf)}
-            className={cn(
-              "rounded-md px-2 py-1 transition-colors",
-              timeframe === tf
-                ? "bg-arc-primary text-white"
-                : "text-arc-text-muted hover:bg-arc-surface-2 hover:text-arc-text",
-            )}
-          >
-            {tf}
-          </button>
-        ))}
+      <div className="mb-2 flex items-center justify-between gap-1 text-xs">
+        <div className="flex items-center gap-1 rounded-lg border border-arc-border bg-arc-bg-elevated p-0.5">
+          {(["price", "mcap"] as const).map((m) => (
+            <button
+              key={m}
+              onClick={() => setMetric(m)}
+              className={cn(
+                "rounded-md px-2 py-1 transition-colors",
+                metric === m
+                  ? "bg-arc-primary text-white"
+                  : "text-arc-text-muted hover:text-arc-text",
+              )}
+            >
+              {m === "price" ? "Price" : "Market cap"}
+            </button>
+          ))}
+        </div>
+        <div className="flex items-center gap-1">
+          {(["1s", "1m", "5m", "1h", "1d"] as Timeframe[]).map((tf) => (
+            <button
+              key={tf}
+              onClick={() => setTimeframe(tf)}
+              className={cn(
+                "rounded-md px-2 py-1 transition-colors",
+                timeframe === tf
+                  ? "bg-arc-primary text-white"
+                  : "text-arc-text-muted hover:bg-arc-surface-2 hover:text-arc-text",
+              )}
+            >
+              {tf}
+            </button>
+          ))}
+        </div>
       </div>
       <div ref={containerRef} className="relative h-80 w-full">
         {isLoading && candles.length === 0 && (

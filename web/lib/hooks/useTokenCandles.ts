@@ -14,6 +14,9 @@ const SELL_EVT = parseAbiItem(
 const V3_SWAP_EVT = parseAbiItem(
   "event Swap(address indexed sender, address indexed recipient, int256 amount0, int256 amount1, uint160 sqrtPriceX96, uint128 liquidity, int24 tick)",
 );
+const V3_INITIALIZE_EVT = parseAbiItem(
+  "event Initialize(uint160 sqrtPriceX96, int24 tick)",
+);
 
 // Wider chunks = fewer RPC round-trips. 10k blocks per call is well below the
 // per-tx ceiling of the official Arc RPC. We also stop early once we've walked
@@ -51,8 +54,15 @@ interface Trade {
   volumeUsdc: number;
 }
 
+interface FetchResult {
+  trades: Trade[];
+  /** Pre-trade pool / curve price. Used as the OPEN of the first candle so it
+   *  shows a meaningful body instead of a flat doji. */
+  initialPrice?: number;
+}
+
 /** Module-level cache so flipping between timeframes reuses the trade scan. */
-const tradesCache = new Map<string, { trades: Trade[]; cachedAt: number }>();
+const tradesCache = new Map<string, { result: FetchResult; cachedAt: number }>();
 const CACHE_TTL_MS = 30_000; // 30s
 
 /**
@@ -85,18 +95,17 @@ export function useTokenCandles(args: {
     const cached = tradesCache.get(cacheKey);
     const isFresh = cached && Date.now() - cached.cachedAt < CACHE_TTL_MS;
     if (isFresh) {
-      // Re-bucket the cached trades for the new timeframe; no RPC needed.
-      setCandles(bucketize(cached!.trades, BUCKET_SIZE[timeframe]));
+      setCandles(bucketize(cached!.result.trades, BUCKET_SIZE[timeframe], cached!.result.initialPrice));
       setIsLoading(false);
       return;
     }
     setIsLoading(true);
     (async () => {
       try {
-        const trades = await fetchTrades(publicClient, token, mode, pool);
+        const result = await fetchTrades(publicClient, token, mode, pool);
         if (cancelled) return;
-        tradesCache.set(cacheKey, { trades, cachedAt: Date.now() });
-        const buckets = bucketize(trades, BUCKET_SIZE[timeframe]);
+        tradesCache.set(cacheKey, { result, cachedAt: Date.now() });
+        const buckets = bucketize(result.trades, BUCKET_SIZE[timeframe], result.initialPrice);
         setCandles(buckets);
       } catch {
         if (!cancelled) setCandles([]);
@@ -112,12 +121,23 @@ export function useTokenCandles(args: {
   return { candles, isLoading };
 }
 
+function priceFromSqrtX96(sqrtPriceX96: bigint, usdcIsToken0: boolean): number {
+  const num = sqrtPriceX96 * sqrtPriceX96;
+  let ratioE24: bigint;
+  if (usdcIsToken0) {
+    ratioE24 = (Q192 * 10n ** 24n) / num;
+  } else {
+    ratioE24 = (num * 10n ** 24n) / Q192;
+  }
+  return Number(ratioE24) / 1e12;
+}
+
 async function fetchTrades(
   publicClient: any,
   token: Address,
   mode: number,
   pool?: Address,
-): Promise<Trade[]> {
+): Promise<FetchResult> {
   // Skip per-block getBlock calls: that would be O(N events) round trips and
   // is the dominant cost. Arc averages ~1s blocks, so we estimate timestamp
   // from latest block: t ≈ latestTs - (latestBlock - blockNumber).
@@ -128,7 +148,9 @@ async function fetchTrades(
 
   if (mode === 2) {
     // Clanker V3
-    if (!pool || pool === "0x0000000000000000000000000000000000000000") return [];
+    if (!pool || pool === "0x0000000000000000000000000000000000000000") {
+      return { trades: [] };
+    }
     const t0 = (await publicClient.readContract({
       address: pool,
       abi: [
@@ -138,7 +160,23 @@ async function fetchTrades(
     })) as Address;
     const usdcIsToken0 = t0.toLowerCase() === ADDRESSES.usdc.toLowerCase();
     if (!usdcIsToken0 && t0.toLowerCase() !== token.toLowerCase()) {
-      return [];
+      return { trades: [] };
+    }
+    // Initial pool price: read the Initialize event so the first candle has a
+    // meaningful open (otherwise it's a flat doji until the second trade).
+    let initialPrice: number | undefined;
+    try {
+      const initLogs = await publicClient.getLogs({
+        address: pool,
+        event: V3_INITIALIZE_EVT,
+        fromBlock: latestN > 100_000n ? latestN - 100_000n : 0n,
+        toBlock: latestN,
+      });
+      if (initLogs.length > 0) {
+        initialPrice = priceFromSqrtX96(initLogs[0].args.sqrtPriceX96 as bigint, usdcIsToken0);
+      }
+    } catch {
+      /* skip */
     }
     const swaps = await getLogsChunked(
       publicClient,
@@ -149,20 +187,7 @@ async function fetchTrades(
     for (const log of swaps) {
       const sqrtPriceX96 = log.args.sqrtPriceX96 as bigint;
       if (!sqrtPriceX96) continue;
-      const num = sqrtPriceX96 * sqrtPriceX96;
-      // Scale by 10^24 in BigInt first to preserve precision (10^18 truncates
-      // sub-unit moves on micro-caps; e.g. a $0.000035 token shifting 0.3% per
-      // trade rounds to the same integer at 10^18 scaling).
-      //   ratio_raw = USDC_raw / token_raw
-      //   USDC per whole token = ratio_raw * 10^12
-      //   ratioE24 = ratio_raw * 10^24 → price = Number(ratioE24) / 10^12
-      let ratioE24: bigint;
-      if (usdcIsToken0) {
-        ratioE24 = (Q192 * 10n ** 24n) / num;
-      } else {
-        ratioE24 = (num * 10n ** 24n) / Q192;
-      }
-      const price = Number(ratioE24) / 1e12;
+      const price = priceFromSqrtX96(sqrtPriceX96, usdcIsToken0);
       const a0 = log.args.amount0 as bigint;
       const a1 = log.args.amount1 as bigint;
       const usdcRaw = usdcIsToken0 ? a0 : a1;
@@ -171,7 +196,7 @@ async function fetchTrades(
       trades.push({ time: tsFor(log.blockNumber as bigint), price, volumeUsdc });
     }
     trades.sort((a, b) => a.time - b.time);
-    return trades;
+    return { trades, initialPrice };
   }
 
   // PUMP / Arcade. `newPriceQ64` is USDC-per-whole-token × 2^64.
@@ -201,7 +226,7 @@ async function fetchTrades(
     trades.push({ time: tsFor(log.blockNumber as bigint), price, volumeUsdc });
   }
   trades.sort((a, b) => a.time - b.time);
-  return trades;
+  return { trades };
 }
 
 async function getLogsChunked(
@@ -234,7 +259,7 @@ async function getLogsChunked(
   return all;
 }
 
-function bucketize(trades: Trade[], bucketSize: number): Candle[] {
+function bucketize(trades: Trade[], bucketSize: number, initialPrice?: number): Candle[] {
   if (trades.length === 0) return [];
   const candles: Candle[] = [];
   let currentBucket = Math.floor(trades[0].time / bucketSize) * bucketSize;
@@ -243,7 +268,7 @@ function bucketize(trades: Trade[], bucketSize: number): Candle[] {
   // onto it. Without chaining, every bucket would have `open == close` for
   // single-trade buckets and the chart shows flat dojis instead of colored
   // bodies that move with the price.
-  let prevClose: number | null = null;
+  let prevClose: number | null = initialPrice ?? null;
 
   for (const t of trades) {
     const bucket = Math.floor(t.time / bucketSize) * bucketSize;
