@@ -15,8 +15,13 @@ const V3_SWAP_EVT = parseAbiItem(
   "event Swap(address indexed sender, address indexed recipient, int256 amount0, int256 amount1, uint160 sqrtPriceX96, uint128 liquidity, int24 tick)",
 );
 
-const CHUNK = 1_000n;
-const MAX_BACK = 500_000n;
+// Wider chunks = fewer RPC round-trips. 10k blocks per call is well below the
+// per-tx ceiling of the official Arc RPC. We also stop early once we've walked
+// 100k blocks (~28h at 1s/block) which covers the relevant history for any
+// young token; the rest can be backfilled later by a backend indexer.
+const CHUNK = 10_000n;
+const MAX_BACK = 100_000n;
+const EARLY_EXIT_TRADES = 500;
 const Q192 = 2n ** 192n;
 
 export interface Candle {
@@ -217,9 +222,12 @@ async function getLogsChunked(
       });
       all.push(...logs);
     } catch {
-      break;
+      // If wide chunk fails on this RPC, fall back to narrower windows so the
+      // scan still progresses for the older history.
+      if (CHUNK > 1_000n) break;
     }
     if (start === 0n) break;
+    if (all.length >= EARLY_EXIT_TRADES) break;
     walked += end - start + 1n;
     end = start - 1n;
   }
@@ -231,17 +239,26 @@ function bucketize(trades: Trade[], bucketSize: number): Candle[] {
   const candles: Candle[] = [];
   let currentBucket = Math.floor(trades[0].time / bucketSize) * bucketSize;
   let currentCandle: Candle | null = null;
+  // Track the close of the previous candle so the next candle's `open` chains
+  // onto it. Without chaining, every bucket would have `open == close` for
+  // single-trade buckets and the chart shows flat dojis instead of colored
+  // bodies that move with the price.
+  let prevClose: number | null = null;
 
   for (const t of trades) {
     const bucket = Math.floor(t.time / bucketSize) * bucketSize;
     if (currentCandle === null || bucket !== currentBucket) {
-      if (currentCandle !== null) candles.push(currentCandle);
+      if (currentCandle !== null) {
+        candles.push(currentCandle);
+        prevClose = currentCandle.close;
+      }
       currentBucket = bucket;
+      const open: number = prevClose ?? t.price;
       currentCandle = {
         time: bucket,
-        open: t.price,
-        high: t.price,
-        low: t.price,
+        open,
+        high: Math.max(open, t.price),
+        low: Math.min(open, t.price),
         close: t.price,
         volume: t.volumeUsdc,
       };
