@@ -73,7 +73,9 @@ export function PriceChart({ token, mode, pool }: Props) {
       borderDownColor: "#ef4444",
       wickUpColor: "#22c55e",
       wickDownColor: "#ef4444",
-      priceFormat: { type: "price", precision: 8, minMove: 0.00000001 },
+      // 12 decimal places handles Clanker micro-caps ($0.00000003) without
+      // showing trailing zeros for normal-priced tokens.
+      priceFormat: { type: "price", precision: 12, minMove: 0.000000000001 },
     });
 
     volumeSeriesRef.current = chart.addHistogramSeries({

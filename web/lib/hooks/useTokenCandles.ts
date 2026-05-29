@@ -145,13 +145,19 @@ async function fetchTrades(
       const sqrtPriceX96 = log.args.sqrtPriceX96 as bigint;
       if (!sqrtPriceX96) continue;
       const num = sqrtPriceX96 * sqrtPriceX96;
-      let priceRaw: bigint;
+      // Scale by 10^18 in BigInt first to preserve precision (otherwise BigInt
+      // integer division of a small ratio truncates to 0). Then convert to
+      // Number and apply the 6/18 decimals adjustment in one step.
+      //   ratio_raw = USDC_raw / token_raw
+      //   USDC per whole token = ratio_raw * 10^12
+      //   ratioE18 = ratio_raw * 10^18 → price = Number(ratioE18) / 10^6
+      let ratioE18: bigint;
       if (usdcIsToken0) {
-        priceRaw = (Q192 * 1_000_000_000_000n) / num;
+        ratioE18 = (Q192 * 10n ** 18n) / num;
       } else {
-        priceRaw = (num * 1_000_000_000_000n) / Q192;
+        ratioE18 = (num * 10n ** 18n) / Q192;
       }
-      const price = Number(priceRaw) / 1e12;
+      const price = Number(ratioE18) / 1e6;
       const a0 = log.args.amount0 as bigint;
       const a1 = log.args.amount1 as bigint;
       const usdcRaw = usdcIsToken0 ? a0 : a1;
@@ -163,7 +169,7 @@ async function fetchTrades(
     return trades;
   }
 
-  // PUMP / Arcade
+  // PUMP / Arcade. `newPriceQ64` is USDC-per-whole-token × 2^64.
   const [buys, sells] = await Promise.all([
     getLogsChunked(
       publicClient,
@@ -181,9 +187,10 @@ async function fetchTrades(
   for (const log of allLogs) {
     const priceQ64 = log.args.newPriceQ64 as bigint | undefined;
     if (!priceQ64) continue;
-    const num = priceQ64 * 1_000_000_000_000n;
-    const denom = 1n << 64n;
-    const price = Number(num / denom) / 1e6 + (Number(num % denom) / Number(denom)) / 1e6;
+    // price = priceQ64 / 2^64, computed with extra precision:
+    // priceE18 = priceQ64 * 10^18 / 2^64; then Number(priceE18) / 10^18.
+    const priceE18 = (priceQ64 * 10n ** 18n) >> 64n;
+    const price = Number(priceE18) / 1e18;
     const isBuy = "usdcIn" in (log.args as any);
     const volumeUsdc = Number(isBuy ? log.args.usdcIn : log.args.usdcOut) / 1e6;
     trades.push({ time: tsFor(log.blockNumber as bigint), price, volumeUsdc });
