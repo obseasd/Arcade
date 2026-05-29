@@ -61,7 +61,14 @@ export function PriceChart({ token, mode, pool }: Props) {
         horzLines: { color: "rgba(40, 60, 90, 0.25)" },
       },
       crosshair: { mode: CrosshairMode.Normal },
-      rightPriceScale: { borderColor: "rgba(40, 60, 90, 0.5)" },
+      rightPriceScale: {
+        borderColor: "rgba(40, 60, 90, 0.5)",
+        autoScale: true,
+        // Leave generous room above and below the candles so the chart never
+        // feels cropped, and the volume bars (which use the same area) sit at
+        // the bottom 15% with empty space between them and the candles.
+        scaleMargins: { top: 0.15, bottom: 0.35 },
+      },
       timeScale: {
         borderColor: "rgba(40, 60, 90, 0.5)",
         timeVisible: true,
@@ -133,6 +140,10 @@ export function PriceChart({ token, mode, pool }: Props) {
     volumeSeriesRef.current.setData(volumeData);
     if (candles.length > 0 && chartRef.current) {
       chartRef.current.timeScale().fitContent();
+      // Force the price scale to re-fit to the new data range. Without this,
+      // switching Price ↔ Market cap leaves the previous metric's scale, which
+      // puts the new values way off-screen.
+      chartRef.current.priceScale("right").applyOptions({ autoScale: true });
     }
   }, [candles, metric]);
 

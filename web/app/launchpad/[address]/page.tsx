@@ -316,7 +316,6 @@ export default function TokenDetailPage() {
 
           {/* Chart */}
           <div className="arc-card p-5">
-            <h3 className="mb-3 text-base font-semibold">Price</h3>
             <PriceChart
               token={token}
               mode={state ? Number(state.mode) : undefined}
