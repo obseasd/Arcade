@@ -31,7 +31,7 @@ export function PriceChart({ token, mode, pool }: Props) {
   const chartRef = useRef<IChartApi | null>(null);
   const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const volumeSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
-  const [timeframe, setTimeframe] = useState<Timeframe>("1h");
+  const [timeframe, setTimeframe] = useState<Timeframe>("1m");
 
   const { candles, isLoading } = useTokenCandles({
     token,
@@ -126,7 +126,7 @@ export function PriceChart({ token, mode, pool }: Props) {
   return (
     <div>
       <div className="mb-2 flex items-center justify-end gap-1 text-xs">
-        {(["5m", "1h", "1d"] as Timeframe[]).map((tf) => (
+        {(["1s", "1m", "5m", "1h", "1d"] as Timeframe[]).map((tf) => (
           <button
             key={tf}
             onClick={() => setTimeframe(tf)}

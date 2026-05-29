@@ -1,12 +1,14 @@
 "use client";
 
-import { Search, X, Check, Plus } from "lucide-react";
+import { Search, X, Check, Plus, ExternalLink } from "lucide-react";
 import { useState, useMemo, useEffect, useCallback } from "react";
 import { Address, erc20Abi, isAddress, zeroAddress } from "viem";
 import { useReadContracts } from "wagmi";
 import { Modal } from "./Modal";
 import { TokenIcon } from "./TokenIcon";
 import { ADDRESSES } from "@/lib/constants";
+import { arcTestnet } from "@/lib/chains";
+import { useTokenPrices } from "@/lib/hooks/useTokenPrices";
 import { cn } from "@/lib/utils";
 
 export interface TokenOption {
@@ -95,6 +97,9 @@ export function TokenSelectModal({ open, onClose, tokens, onSelect, selectedAddr
       )
       .sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned));
   }, [tokens, trimmedQ, excludeAddress]);
+
+  const prices = useTokenPrices(filtered);
+  const explorerUrl = arcTestnet.blockExplorers?.default.url ?? "https://testnet.arcscan.app";
 
   const handlePinnedClick = useCallback(
     (tpl: PinnedTemplate) => {
@@ -213,6 +218,7 @@ export function TokenSelectModal({ open, onClose, tokens, onSelect, selectedAddr
         )}
         {filtered.map((t) => {
           const active = isSelected(t.address);
+          const price = prices.get(t.address.toLowerCase());
           return (
             <li key={t.address}>
               <button
@@ -231,8 +237,25 @@ export function TokenSelectModal({ open, onClose, tokens, onSelect, selectedAddr
               >
                 <TokenIcon symbol={t.symbol} size={36} />
                 <div className="min-w-0 flex-1">
-                  <div className="text-sm font-medium">{t.symbol ?? "-"}</div>
-                  <div className="truncate text-xs text-arc-text-muted">{t.name ?? t.address}</div>
+                  <div className="flex items-center gap-2 text-sm font-medium">
+                    <span>{t.symbol ?? "-"}</span>
+                    <span className="font-mono text-[11px] font-normal text-arc-text-muted">
+                      {shortAddr(t.address)}
+                    </span>
+                    <a
+                      href={`${explorerUrl}/address/${t.address}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={(e) => e.stopPropagation()}
+                      aria-label="View on explorer"
+                      className="text-arc-text-faint hover:text-arc-cta-hover"
+                    >
+                      <ExternalLink className="h-3 w-3" />
+                    </a>
+                  </div>
+                  <div className="text-xs text-arc-text-muted">
+                    {price ?? <span className="text-arc-text-faint">{t.name ?? "Token"}</span>}
+                  </div>
                 </div>
                 {active && <Check className="h-4 w-4 text-arc-cta-hover" />}
               </button>
@@ -246,4 +269,10 @@ export function TokenSelectModal({ open, onClose, tokens, onSelect, selectedAddr
 
 function short(addr: string): string {
   return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
+}
+
+/** Format like `0x7DCfFCb...` (0x + 6 hex chars + ellipsis), matching the
+ *  pattern used in the swap token rows. */
+function shortAddr(addr: string): string {
+  return `${addr.slice(0, 8)}...`;
 }

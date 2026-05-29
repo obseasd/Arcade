@@ -30,9 +30,11 @@ export interface Candle {
   volume: number;
 }
 
-export type Timeframe = "5m" | "1h" | "1d";
+export type Timeframe = "1s" | "1m" | "5m" | "1h" | "1d";
 
 const BUCKET_SIZE: Record<Timeframe, number> = {
+  "1s": 1,
+  "1m": 60,
   "5m": 5 * 60,
   "1h": 60 * 60,
   "1d": 24 * 60 * 60,
@@ -43,6 +45,10 @@ interface Trade {
   price: number;
   volumeUsdc: number;
 }
+
+/** Module-level cache so flipping between timeframes reuses the trade scan. */
+const tradesCache = new Map<string, { trades: Trade[]; cachedAt: number }>();
+const CACHE_TTL_MS = 30_000; // 30s
 
 /**
  * Reads on-chain trade events for a token, computes the implied USDC-per-token
@@ -70,11 +76,21 @@ export function useTokenCandles(args: {
       return;
     }
     let cancelled = false;
+    const cacheKey = `${token.toLowerCase()}|${mode}|${(pool ?? "").toLowerCase()}`;
+    const cached = tradesCache.get(cacheKey);
+    const isFresh = cached && Date.now() - cached.cachedAt < CACHE_TTL_MS;
+    if (isFresh) {
+      // Re-bucket the cached trades for the new timeframe; no RPC needed.
+      setCandles(bucketize(cached!.trades, BUCKET_SIZE[timeframe]));
+      setIsLoading(false);
+      return;
+    }
     setIsLoading(true);
     (async () => {
       try {
         const trades = await fetchTrades(publicClient, token, mode, pool);
         if (cancelled) return;
+        tradesCache.set(cacheKey, { trades, cachedAt: Date.now() });
         const buckets = bucketize(trades, BUCKET_SIZE[timeframe]);
         setCandles(buckets);
       } catch {
@@ -97,12 +113,17 @@ async function fetchTrades(
   mode: number,
   pool?: Address,
 ): Promise<Trade[]> {
-  const latest = await publicClient.getBlockNumber();
+  // Skip per-block getBlock calls: that would be O(N events) round trips and
+  // is the dominant cost. Arc averages ~1s blocks, so we estimate timestamp
+  // from latest block: t ≈ latestTs - (latestBlock - blockNumber).
+  const latestBlock = await publicClient.getBlock();
+  const latestTs = Number(latestBlock.timestamp);
+  const latestN = latestBlock.number as bigint;
+  const tsFor = (bn: bigint) => latestTs - Number(latestN - bn);
 
   if (mode === 2) {
     // Clanker V3
     if (!pool || pool === "0x0000000000000000000000000000000000000000") return [];
-    // Need to know which side is USDC to compute price properly
     const t0 = (await publicClient.readContract({
       address: pool,
       abi: [
@@ -112,40 +133,31 @@ async function fetchTrades(
     })) as Address;
     const usdcIsToken0 = t0.toLowerCase() === ADDRESSES.usdc.toLowerCase();
     if (!usdcIsToken0 && t0.toLowerCase() !== token.toLowerCase()) {
-      // Neither side is USDC; we don't price WETH-paired pools here.
       return [];
     }
     const swaps = await getLogsChunked(
       publicClient,
       { address: pool, event: V3_SWAP_EVT },
-      latest,
-    );
-    const blockTimes = await fetchBlockTimes(
-      publicClient,
-      swaps.map((s: any) => s.blockNumber as bigint),
+      latestN,
     );
     const trades: Trade[] = [];
     for (const log of swaps) {
       const sqrtPriceX96 = log.args.sqrtPriceX96 as bigint;
       if (!sqrtPriceX96) continue;
-      // price (token1 per token0) = sqrtPriceX96^2 / 2^192
-      // We want USDC per token, accounting for decimals (USDC 6, token 18).
       const num = sqrtPriceX96 * sqrtPriceX96;
       let priceRaw: bigint;
       if (usdcIsToken0) {
-        // 1 token1 raw = Q192 / num token0 raw → USDC per token: scale 1e18/1e6 = 1e12
         priceRaw = (Q192 * 1_000_000_000_000n) / num;
       } else {
-        // 1 token0 raw = num/Q192 token1 raw → USDC per token: scale 1e18/1e6 = 1e12
         priceRaw = (num * 1_000_000_000_000n) / Q192;
       }
-      const price = Number(priceRaw) / 1e12; // USDC per whole token, ~scaled
+      const price = Number(priceRaw) / 1e12;
       const a0 = log.args.amount0 as bigint;
       const a1 = log.args.amount1 as bigint;
-      const usdcAbs = (usdcIsToken0 ? a0 : a1) < 0n ? -(usdcIsToken0 ? a0 : a1) : (usdcIsToken0 ? a0 : a1);
+      const usdcRaw = usdcIsToken0 ? a0 : a1;
+      const usdcAbs = usdcRaw < 0n ? -usdcRaw : usdcRaw;
       const volumeUsdc = Number(usdcAbs) / 1e6;
-      const t = blockTimes.get(log.blockNumber as bigint) ?? 0;
-      trades.push({ time: t, price, volumeUsdc });
+      trades.push({ time: tsFor(log.blockNumber as bigint), price, volumeUsdc });
     }
     trades.sort((a, b) => a.time - b.time);
     return trades;
@@ -156,50 +168,28 @@ async function fetchTrades(
     getLogsChunked(
       publicClient,
       { address: ADDRESSES.launchpad, event: BUY_EVT, args: { token } },
-      latest,
+      latestN,
     ),
     getLogsChunked(
       publicClient,
       { address: ADDRESSES.launchpad, event: SELL_EVT, args: { token } },
-      latest,
+      latestN,
     ),
   ]);
   const allLogs = [...buys, ...sells];
-  const blockTimes = await fetchBlockTimes(
-    publicClient,
-    allLogs.map((l: any) => l.blockNumber as bigint),
-  );
   const trades: Trade[] = [];
   for (const log of allLogs) {
     const priceQ64 = log.args.newPriceQ64 as bigint | undefined;
     if (!priceQ64) continue;
-    // Q64.64 USDC_raw per token_raw → USDC per token = priceQ64 * 1e12 / 2^64
     const num = priceQ64 * 1_000_000_000_000n;
     const denom = 1n << 64n;
     const price = Number(num / denom) / 1e6 + (Number(num % denom) / Number(denom)) / 1e6;
     const isBuy = "usdcIn" in (log.args as any);
     const volumeUsdc = Number(isBuy ? log.args.usdcIn : log.args.usdcOut) / 1e6;
-    const t = blockTimes.get(log.blockNumber as bigint) ?? 0;
-    trades.push({ time: t, price, volumeUsdc });
+    trades.push({ time: tsFor(log.blockNumber as bigint), price, volumeUsdc });
   }
   trades.sort((a, b) => a.time - b.time);
   return trades;
-}
-
-async function fetchBlockTimes(
-  publicClient: any,
-  blockNumbers: bigint[],
-): Promise<Map<bigint, number>> {
-  const unique = Array.from(new Set(blockNumbers.map((b) => b.toString()))).map((s) => BigInt(s));
-  const blocks = await Promise.all(
-    unique.map((bn) => publicClient.getBlock({ blockNumber: bn }).catch(() => null)),
-  );
-  const map = new Map<bigint, number>();
-  for (let i = 0; i < unique.length; i++) {
-    const b = blocks[i];
-    if (b) map.set(unique[i], Number(b.timestamp));
-  }
-  return map;
 }
 
 async function getLogsChunked(
