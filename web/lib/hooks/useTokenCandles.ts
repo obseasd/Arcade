@@ -15,9 +15,6 @@ const SELL_EVT = parseAbiItem(
 const V3_SWAP_EVT = parseAbiItem(
   "event Swap(address indexed sender, address indexed recipient, int256 amount0, int256 amount1, uint160 sqrtPriceX96, uint128 liquidity, int24 tick)",
 );
-const V3_INITIALIZE_EVT = parseAbiItem(
-  "event Initialize(uint160 sqrtPriceX96, int24 tick)",
-);
 
 // Wider chunks = fewer RPC round-trips. 10k blocks per call is well below the
 // per-tx ceiling of the official Arc RPC. We also stop early once we've walked
@@ -195,37 +192,16 @@ async function fetchTrades(
     if (!usdcIsToken0 && t0.toLowerCase() !== token.toLowerCase()) {
       return { trades: [] };
     }
-    // Initial pool price: read the Initialize event so the first candle has a
-    // meaningful open (otherwise it's a flat doji until the second trade).
-    // We chunk in 5k-block windows walking backwards from `latestN`. Arc RPC
-    // silently rejects wide ranges; chunked is the only reliable path.
-    let initialPrice: number | undefined;
-    {
-      const INIT_CHUNK = 5_000n;
-      let end = latestN;
-      let walked = 0n;
-      const INIT_MAX_BACK = 200_000n;
-      while (walked < INIT_MAX_BACK && initialPrice === undefined) {
-        const start = end > INIT_CHUNK - 1n ? end - (INIT_CHUNK - 1n) : 0n;
-        try {
-          const initLogs = await publicClient.getLogs({
-            address: pool,
-            event: V3_INITIALIZE_EVT,
-            fromBlock: start,
-            toBlock: end,
-          });
-          if (initLogs.length > 0) {
-            initialPrice = priceFromSqrtX96(initLogs[0].args.sqrtPriceX96 as bigint, usdcIsToken0);
-            break;
-          }
-        } catch {
-          break;
-        }
-        if (start === 0n) break;
-        walked += end - start + 1n;
-        end = start - 1n;
-      }
-    }
+    // We intentionally do NOT use the pool's Initialize event sqrtPriceX96 as
+    // the first candle's open. Clanker V3 pools are initialized at the FDV
+    // mcap price ($0.000035 for Standard), but no liquidity actually sits at
+    // that tick — all 3 single-sided positions are offset by at least
+    // tickSpacing above. So the first real swap "teleports" from the init
+    // tick to the first liquid tick, which would render as a huge artificial
+    // candle body (often 2-5%). Instead, we leave the first candle as a doji
+    // (open == close == first trade post-price) and let subsequent candles
+    // chain properly. See workflow w9g2a2408 for the full reasoning.
+    const initialPrice: number | undefined = undefined;
     const swaps = await getLogsChunked(
       publicClient,
       { address: pool, event: V3_SWAP_EVT },

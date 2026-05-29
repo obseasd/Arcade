@@ -64,9 +64,9 @@ export function PriceChart({ token, mode, pool }: Props) {
       rightPriceScale: {
         borderColor: "rgba(40, 60, 90, 0.5)",
         autoScale: true,
-        // Tighter margins so candles fill more of the visible area. Volume
-        // bars sit in the bottom 20% via their own overlay scale.
-        scaleMargins: { top: 0.08, bottom: 0.25 },
+        // Very tight margins so candles fill nearly all of the price area.
+        // Volume bars sit in the bottom 22% via their own overlay scale.
+        scaleMargins: { top: 0.05, bottom: 0.28 },
       },
       timeScale: {
         borderColor: "rgba(40, 60, 90, 0.5)",
@@ -140,10 +140,13 @@ export function PriceChart({ token, mode, pool }: Props) {
     volumeSeriesRef.current.setData(volumeData);
     if (candles.length > 0 && chartRef.current) {
       chartRef.current.timeScale().fitContent();
-      // Force the price scale to re-fit to the new data range. Without this,
-      // switching Price ↔ Market cap leaves the previous metric's scale, which
-      // puts the new values way off-screen.
-      chartRef.current.priceScale("right").applyOptions({ autoScale: true });
+      // Bounce autoScale via applyOptions. lightweight-charts v4 doesn't have
+      // a setAutoScale method, but toggling the option forces a recompute of
+      // the price range — needed when only the data values change (price ↔
+      // market cap switch).
+      const ps = chartRef.current.priceScale("right");
+      ps.applyOptions({ autoScale: false });
+      ps.applyOptions({ autoScale: true });
     }
   }, [candles, metric]);
 
