@@ -64,14 +64,19 @@ export function PriceChart({ token, mode, pool }: Props) {
       rightPriceScale: {
         borderColor: "rgba(40, 60, 90, 0.5)",
         autoScale: true,
-        // Very tight margins so candles fill nearly all of the price area.
-        // Volume bars sit in the bottom 22% via their own overlay scale.
-        scaleMargins: { top: 0.05, bottom: 0.28 },
+        // Generous vertical breathing room. A wider visible range also makes
+        // lightweight-charts add more gridlines automatically — the user
+        // perceives the chart as "less zoomed in".
+        scaleMargins: { top: 0.15, bottom: 0.30 },
       },
       timeScale: {
         borderColor: "rgba(40, 60, 90, 0.5)",
         timeVisible: true,
         secondsVisible: false,
+        // Wider bar spacing + right offset so candles feel less cramped and
+        // there's room on the right for upcoming candles, like TradingView.
+        barSpacing: 12,
+        rightOffset: 10,
       },
     });
     chartRef.current = chart;
@@ -93,8 +98,9 @@ export function PriceChart({ token, mode, pool }: Props) {
       priceScaleId: "",
     });
     volumeSeriesRef.current.priceScale().applyOptions({
-      // Volume bars occupy the bottom 18% of the chart, separate from candles.
-      scaleMargins: { top: 0.82, bottom: 0 },
+      // Volume bars occupy the bottom 15% of the chart, separate from candles
+      // and below the candle area's bottom margin (0.30) for clear separation.
+      scaleMargins: { top: 0.85, bottom: 0 },
     });
 
     const ro = new ResizeObserver(() => {
@@ -139,7 +145,6 @@ export function PriceChart({ token, mode, pool }: Props) {
     candleSeriesRef.current.setData(candleData);
     volumeSeriesRef.current.setData(volumeData);
     if (candles.length > 0 && chartRef.current) {
-      chartRef.current.timeScale().fitContent();
       // Bounce autoScale via applyOptions. lightweight-charts v4 doesn't have
       // a setAutoScale method, but toggling the option forces a recompute of
       // the price range — needed when only the data values change (price ↔
@@ -147,6 +152,11 @@ export function PriceChart({ token, mode, pool }: Props) {
       const ps = chartRef.current.priceScale("right");
       ps.applyOptions({ autoScale: false });
       ps.applyOptions({ autoScale: true });
+      // Scroll to the most recent candle so the rightOffset shows empty space
+      // on the right (TradingView style). We avoid fitContent() because it
+      // would override our barSpacing/rightOffset to cram all bars into the
+      // chart width.
+      chartRef.current.timeScale().scrollToRealTime();
     }
   }, [candles, metric]);
 
