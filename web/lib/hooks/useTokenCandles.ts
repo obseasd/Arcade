@@ -150,19 +150,19 @@ async function fetchTrades(
       const sqrtPriceX96 = log.args.sqrtPriceX96 as bigint;
       if (!sqrtPriceX96) continue;
       const num = sqrtPriceX96 * sqrtPriceX96;
-      // Scale by 10^18 in BigInt first to preserve precision (otherwise BigInt
-      // integer division of a small ratio truncates to 0). Then convert to
-      // Number and apply the 6/18 decimals adjustment in one step.
+      // Scale by 10^24 in BigInt first to preserve precision (10^18 truncates
+      // sub-unit moves on micro-caps; e.g. a $0.000035 token shifting 0.3% per
+      // trade rounds to the same integer at 10^18 scaling).
       //   ratio_raw = USDC_raw / token_raw
       //   USDC per whole token = ratio_raw * 10^12
-      //   ratioE18 = ratio_raw * 10^18 → price = Number(ratioE18) / 10^6
-      let ratioE18: bigint;
+      //   ratioE24 = ratio_raw * 10^24 → price = Number(ratioE24) / 10^12
+      let ratioE24: bigint;
       if (usdcIsToken0) {
-        ratioE18 = (Q192 * 10n ** 18n) / num;
+        ratioE24 = (Q192 * 10n ** 24n) / num;
       } else {
-        ratioE18 = (num * 10n ** 18n) / Q192;
+        ratioE24 = (num * 10n ** 24n) / Q192;
       }
-      const price = Number(ratioE18) / 1e6;
+      const price = Number(ratioE24) / 1e12;
       const a0 = log.args.amount0 as bigint;
       const a1 = log.args.amount1 as bigint;
       const usdcRaw = usdcIsToken0 ? a0 : a1;
@@ -192,10 +192,10 @@ async function fetchTrades(
   for (const log of allLogs) {
     const priceQ64 = log.args.newPriceQ64 as bigint | undefined;
     if (!priceQ64) continue;
-    // price = priceQ64 / 2^64, computed with extra precision:
-    // priceE18 = priceQ64 * 10^18 / 2^64; then Number(priceE18) / 10^18.
-    const priceE18 = (priceQ64 * 10n ** 18n) >> 64n;
-    const price = Number(priceE18) / 1e18;
+    // price = priceQ64 / 2^64, computed with extra bigint precision (10^24 so
+    // sub-cent moves on micro-caps survive integer truncation).
+    const priceE24 = (priceQ64 * 10n ** 24n) >> 64n;
+    const price = Number(priceE24) / 1e24;
     const isBuy = "usdcIn" in (log.args as any);
     const volumeUsdc = Number(isBuy ? log.args.usdcIn : log.args.usdcOut) / 1e6;
     trades.push({ time: tsFor(log.blockNumber as bigint), price, volumeUsdc });
