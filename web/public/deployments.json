@@ -20,8 +20,9 @@
     "v3Router": "0x870751c90f82528920437878a6Dd8419CC5fe641",
     "v3Quoter": "0x6BdD818e23E68503f1B3Ae801aFB7110D2B67f66",
     "tokenVault": "0xDfd5a586277F56aBBF23AEcBF0258f26bfDa6a3b",
-    "twitterEscrow": "0xbb25D1A5fFC0402Fc2953A03Ba8F4a5606DA15a3",
-    "twitterEscrowSigner": "0xa31437fC1C8E2723C5EB0D50A26A0bD0C8382Eda"
+    "twitterEscrow": "0x8f60C7B119F551E5055E7B3E94a11C4DFdFA34C7",
+    "twitterEscrowSigner": "0xa31437fC1C8E2723C5EB0D50A26A0bD0C8382Eda",
+    "twitterEscrowOwner": "0x3a0Dd90212838f32a953Acd4B32596b62859324A"
   },
   "constants": {
     "tokenDecimals": 18,
