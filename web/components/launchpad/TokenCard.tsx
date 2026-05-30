@@ -6,10 +6,9 @@ import { Address } from "viem";
 import { TokenIcon } from "@/components/ui/TokenIcon";
 import { LaunchpadTokenInfo } from "@/lib/hooks/useLaunchpadTokens";
 import { useClankerMcap } from "@/lib/hooks/useClankerMcap";
-import { useTokenMetadataURI } from "@/lib/hooks/useTokenMetadataURI";
+import { useTokenImage } from "@/lib/hooks/useTokenImage";
 import { FEATURED_TOKENS } from "@/lib/constants";
 import { formatToken, formatUSDC, formatAddress } from "@/lib/utils";
-import { getImageUrl } from "@/lib/metadata";
 import { cn } from "@/lib/utils";
 
 interface Props {
@@ -20,12 +19,10 @@ interface Props {
 export function TokenCard({ token, curveSupply }: Props) {
   const progress = curveSupply > 0n ? Number((token.tokensSold * 10_000n) / curveSupply) / 100 : 0;
   // The list hook's bulk scan can be slow (multi-second on Arc RPC) so the
-  // image URL may not be populated yet. Subscribe to the per-token hook which
-  // hits a module-level cache and lazy-fetches via an indexed-arg getLogs that
-  // returns in ~100ms.
-  const { metadataURI: liveMetadataURI } = useTokenMetadataURI(token.address);
-  const metadataURI = liveMetadataURI || token.metadataURI;
-  const image = getImageUrl(metadataURI);
+  // image URL may not be populated yet. useTokenImage handles all 3 metadata
+  // shapes (inline data:, ipfs:// JSON, direct http URL) via a module-level
+  // cache so the same logo across many cards only fetches once.
+  const { image } = useTokenImage(token.address);
   const symbol = token.symbol ?? "?";
 
   // CLANKER_V3 = no bonding curve, locked single-sided V3 LP from birth.

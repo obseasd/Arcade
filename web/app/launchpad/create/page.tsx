@@ -8,7 +8,7 @@ import { decodeEventLog, encodeAbiParameters, erc20Abi, isAddress, parseUnits, z
 import { useAccount, usePublicClient, useReadContract, useWriteContract } from "wagmi";
 import { LAUNCHPAD_ABI } from "@/lib/abis/launchpad";
 import { ADDRESSES, CREATION_FEE_USDC, LaunchMode } from "@/lib/constants";
-import { encodeMetadataDataUri } from "@/lib/metadata";
+import { encodeMetadataDataUri, resolveIpfs } from "@/lib/metadata";
 import { useApproveIfNeeded } from "@/lib/hooks/useApproveIfNeeded";
 import { pushToast } from "@/lib/toast";
 import { TxStatus, type TxState } from "@/components/ui/TxStatus";
@@ -90,7 +90,15 @@ function CreateTokenInner() {
 
   const [name, setName] = useState("");
   const [symbol, setSymbol] = useState("");
+  /** Image URL after upload. Empty until the user picks a file. Format:
+   *  - `ipfs://CID` once the Pinata pin succeeds (preferred path)
+   *  - falls back to a `data:image/jpeg;base64,...` data URL when Pinata isn't
+   *    configured server-side (legacy inline path, expensive in calldata) */
   const [image, setImage] = useState("");
+  /** Local preview URL while the IPFS upload is in flight. Resolved from
+   *  `image` once available (handles both ipfs:// and data: prefixes). */
+  const [imagePreview, setImagePreview] = useState("");
+  const [imageUploading, setImageUploading] = useState(false);
   const [description, setDescription] = useState("");
   const [twitter, setTwitter] = useState("");
   const [telegram, setTelegram] = useState("");
@@ -237,47 +245,42 @@ function CreateTokenInner() {
       return next;
     });
 
-  // Read an uploaded image, downscale to 192px and re-encode as JPEG. The
-  // launchpad stores the full metadata URI on-chain as a string; each 32-byte
-  // word of that string costs ~22.1K gas in cold SSTORE on Arc, and Arc has a
-  // per-tx ceiling of ~15M. So we have to keep the image small: target ≤8KB
-  // data-URL by stepping quality down. 8KB at 192px gives a recognizable token
-  // logo; bigger images push the launch over the gas cap.
-  const onImageFile = (file: File | undefined) => {
+  /**
+   * Handle a file pick:
+   *   1. Render an instant local preview so the user sees their selection
+   *      without waiting for the network round-trip.
+   *   2. Try uploading the original file (capped at ~1 MB by the API route) to
+   *      Pinata via /api/pin/file. The returned `ipfs://CID` becomes the
+   *      stored image reference. Metadata calldata stays under 100 bytes
+   *      regardless of image size.
+   *   3. If the API call fails (Pinata not configured server-side, network
+   *      glitch, oversized file), fall back to the legacy data-URL path:
+   *      downscale to 192 px / target 8 KB JPEG and bundle inline. This keeps
+   *      the create flow usable on environments where PINATA_JWT isn't set,
+   *      at the cost of bigger on-chain calldata for that launch.
+   */
+  const onImageFile = async (file: File | undefined) => {
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      const dataUrl = reader.result as string;
-      const img = new window.Image();
-      img.onload = () => {
-        const max = 192;
-        const scale = Math.min(1, max / Math.max(img.width, img.height));
-        const w = Math.max(1, Math.round(img.width * scale));
-        const h = Math.max(1, Math.round(img.height * scale));
-        const canvas = document.createElement("canvas");
-        canvas.width = w;
-        canvas.height = h;
-        const ctx = canvas.getContext("2d");
-        if (!ctx) {
-          setImage(dataUrl);
-          return;
-        }
-        ctx.fillStyle = "#0b1220";
-        ctx.fillRect(0, 0, w, h);
-        ctx.drawImage(img, 0, 0, w, h);
-        // Step quality down until the data URL is under 8KB.
-        const MAX_BYTES = 8_000;
-        let out = canvas.toDataURL("image/jpeg", 0.75);
-        for (const q of [0.6, 0.5, 0.4, 0.3, 0.2]) {
-          if (out.length <= MAX_BYTES) break;
-          out = canvas.toDataURL("image/jpeg", q);
-        }
-        setImage(out);
-      };
-      img.onerror = () => setImage(dataUrl);
-      img.src = dataUrl;
-    };
-    reader.readAsDataURL(file);
+    // Instant preview via objectURL.
+    const previewURL = URL.createObjectURL(file);
+    setImagePreview(previewURL);
+
+    setImageUploading(true);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      const res = await fetch("/api/pin/file", { method: "POST", body: form });
+      if (!res.ok) throw new Error(`pin/file ${res.status}`);
+      const { uri } = (await res.json()) as { uri: string };
+      setImage(uri); // `ipfs://CID`
+    } catch {
+      // Pinata not available — fall back to the inline data-URL path, with
+      // the same downscale logic as before so the calldata stays under the
+      // Arc per-tx gas ceiling.
+      await encodeInlineDataUrl(file).then((dataUrl) => setImage(dataUrl));
+    } finally {
+      setImageUploading(false);
+    }
   };
 
   const usdcBalance = useReadContract({
@@ -312,10 +315,10 @@ function CreateTokenInner() {
       }
       await ensureAllowance(CREATION_FEE_USDC + creatorBuyUsdc);
 
-      setTx({ status: "pending", message: "Building metadata…" });
+      setTx({ status: "pending", message: "Pinning metadata to IPFS…" });
       const slotHandles = recipients.map((r) => (r.isTwitter ? normalizeTwitterHandle(r.twitterHandle) ?? null : null));
       const hasSlotHandle = slotHandles.some((h) => !!h);
-      const metadataURI = encodeMetadataDataUri({
+      const metadataJson = {
         image: image.trim() || undefined,
         description: description.trim() || undefined,
         twitter: twitter.trim() || undefined,
@@ -323,7 +326,24 @@ function CreateTokenInner() {
         website: website.trim() || undefined,
         creatorTwitter: normalizeTwitterHandle(creatorTwitter),
         slotTwitterHandles: hasSlotHandle ? slotHandles : undefined,
-      });
+      };
+      // Prefer pinning the metadata JSON to IPFS so on-chain calldata stays
+      // tiny (`ipfs://CID` is ~53 bytes vs ~10 KB for the inline data: URI).
+      // If Pinata isn't configured server-side we fall back to inline so the
+      // launch still succeeds.
+      let metadataURI: string;
+      try {
+        const res = await fetch("/api/pin/json", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(metadataJson),
+        });
+        if (!res.ok) throw new Error(`pin/json ${res.status}`);
+        const { uri } = (await res.json()) as { uri: string };
+        metadataURI = uri;
+      } catch {
+        metadataURI = encodeMetadataDataUri(metadataJson);
+      }
 
       setTx({ status: "pending", message: "Launching token…" });
 
@@ -513,14 +533,26 @@ function CreateTokenInner() {
         {/* Image (left, square — spans the 3 fields) + launch mode / name / symbol */}
         <div className="flex gap-2">
           <label className="flex w-32 shrink-0 cursor-pointer flex-col items-center justify-center gap-1.5 self-stretch overflow-hidden rounded-xl border border-dashed border-arc-border bg-arc-bg-elevated transition-colors hover:border-arc-cta-hover">
-            {image.trim() ? (
+            {imagePreview || image.trim() ? (
               // eslint-disable-next-line @next/next/no-img-element
-              <img src={image.trim()} alt="" className="h-full w-full object-cover" />
+              <img
+                src={imagePreview || displayImage(image.trim())}
+                alt=""
+                className={cn(
+                  "h-full w-full object-cover",
+                  imageUploading && "opacity-60",
+                )}
+              />
             ) : (
               <>
                 <Upload className="h-6 w-6 text-arc-text-faint" />
                 <span className="text-[10px] leading-none text-arc-text-faint">PNG / JPEG</span>
               </>
+            )}
+            {imageUploading && (
+              <span className="pointer-events-none absolute text-[10px] font-medium text-white drop-shadow">
+                Uploading…
+              </span>
             )}
             <input
               type="file"
@@ -971,10 +1003,10 @@ function CreateTokenInner() {
         <aside className="space-y-4 lg:sticky lg:top-6 lg:self-start">
           <div className="arc-card space-y-4 p-5">
             <div className="flex items-center gap-3">
-              {image.trim() ? (
+              {imagePreview || image.trim() ? (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img
-                  src={image.trim()}
+                  src={imagePreview || displayImage(image.trim())}
                   alt=""
                   className="h-12 w-12 rounded-xl object-cover ring-1 ring-arc-border"
                 />
@@ -1176,5 +1208,54 @@ function RangeField({ label, hint, children }: { label: string; hint?: string; c
       {children}
     </div>
   );
+}
+
+/** Resolve `image` for display in an <img src>: ipfs:// goes through a public
+ *  gateway, data: / http(s): are returned as-is. Used for the form preview and
+ *  the right-hand summary card. */
+function displayImage(image: string): string {
+  if (!image) return "";
+  if (image.startsWith("ipfs://")) return resolveIpfs(image);
+  return image;
+}
+
+/** Fallback path when Pinata isn't reachable: downscale to 192 px and target
+ *  an 8 KB JPEG so the inline data: URL stays under the Arc per-tx gas cap.
+ *  Mirrors the previous inline-only behaviour. */
+async function encodeInlineDataUrl(file: File): Promise<string> {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = reader.result as string;
+      const img = new window.Image();
+      img.onload = () => {
+        const max = 192;
+        const scale = Math.min(1, max / Math.max(img.width, img.height));
+        const w = Math.max(1, Math.round(img.width * scale));
+        const h = Math.max(1, Math.round(img.height * scale));
+        const canvas = document.createElement("canvas");
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) {
+          resolve(dataUrl);
+          return;
+        }
+        ctx.fillStyle = "#0b1220";
+        ctx.fillRect(0, 0, w, h);
+        ctx.drawImage(img, 0, 0, w, h);
+        const MAX_BYTES = 8_000;
+        let out = canvas.toDataURL("image/jpeg", 0.75);
+        for (const q of [0.6, 0.5, 0.4, 0.3, 0.2]) {
+          if (out.length <= MAX_BYTES) break;
+          out = canvas.toDataURL("image/jpeg", q);
+        }
+        resolve(out);
+      };
+      img.onerror = () => resolve(dataUrl);
+      img.src = dataUrl;
+    };
+    reader.readAsDataURL(file);
+  });
 }
 

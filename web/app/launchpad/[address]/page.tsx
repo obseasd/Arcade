@@ -11,9 +11,9 @@ import { V3_POOL_ABI } from "@/lib/abis/v3";
 import { ADDRESSES, LAUNCHPAD_TOTAL_SUPPLY } from "@/lib/constants";
 import { useClankerMcap } from "@/lib/hooks/useClankerMcap";
 import { useLaunchpadVolume } from "@/lib/hooks/useLaunchpadVolume";
-import { useTokenMetadataURI } from "@/lib/hooks/useTokenMetadataURI";
+import { useTokenImage, useTokenMetadata } from "@/lib/hooks/useTokenImage";
 import { useWatchEvent } from "@/lib/hooks/useWatchEvent";
-import { parseInlineMetadata, getImageUrl, type TokenMetadata } from "@/lib/metadata";
+import { type TokenMetadata } from "@/lib/metadata";
 import { formatAddress, formatToken, formatUSDC } from "@/lib/utils";
 import { TokenIcon } from "@/components/ui/TokenIcon";
 import { PriceChart } from "@/components/launchpad/PriceChart";
@@ -82,12 +82,13 @@ export default function TokenDetailPage() {
   const name = (nameQ.data as string | undefined) ?? "Unnamed";
   const mcap = mcapQ.data as bigint | undefined;
 
-  const { metadataURI } = useTokenMetadataURI(isValid ? token : undefined);
-  const metadata: TokenMetadata = useMemo(() => {
-    if (!metadataURI) return {};
-    return parseInlineMetadata(metadataURI) ?? {};
-  }, [metadataURI]);
-  const image = metadataURI ? getImageUrl(metadataURI) : undefined;
+  // Resolve the metadata JSON (handles inline data: + ipfs:// JSONs).
+  const { metadata: resolvedMetadata } = useTokenMetadata(isValid ? token : undefined);
+  const metadata: TokenMetadata = useMemo(
+    () => resolvedMetadata ?? {},
+    [resolvedMetadata],
+  );
+  const { image } = useTokenImage(isValid ? token : undefined);
 
   const tokensSold = (state?.tokensSold as bigint | undefined) ?? 0n;
   const migrated = !!state?.migrated;

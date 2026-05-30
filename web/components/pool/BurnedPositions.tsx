@@ -8,9 +8,8 @@ import { useReadContracts } from "wagmi";
 import { PAIR_ABI } from "@/lib/abis/dex";
 import { ADDRESSES, USDC_DECIMALS } from "@/lib/constants";
 import { useLaunchpadTokens, type LaunchpadTokenInfo } from "@/lib/hooks/useLaunchpadTokens";
-import { useTokenMetadataURI } from "@/lib/hooks/useTokenMetadataURI";
+import { useTokenImage } from "@/lib/hooks/useTokenImage";
 import { TokenIcon } from "@/components/ui/TokenIcon";
-import { getImageUrl } from "@/lib/metadata";
 import { formatUSDC, formatToken } from "@/lib/utils";
 
 const DEAD = "0x000000000000000000000000000000000000dEaD" as Address;
@@ -98,9 +97,7 @@ interface CardProps {
  *  (module-level cache, indexed-arg getLogs) which is faster + more reliable
  *  than the bulk scan that `useLaunchpadTokens` does once on mount. */
 function BurnedCard({ token, tvl, usdcReserve, tokenReserve, burnPct }: CardProps) {
-  const { metadataURI: liveMetadataURI } = useTokenMetadataURI(token.address);
-  const metadataURI = liveMetadataURI || token.metadataURI;
-  const image = getImageUrl(metadataURI);
+  const { image } = useTokenImage(token.address);
 
   return (
     <Link

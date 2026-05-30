@@ -1,16 +1,15 @@
 "use client";
 
 import { Address } from "viem";
-import { useTokenMetadataURI } from "@/lib/hooks/useTokenMetadataURI";
-import { getImageUrl } from "@/lib/metadata";
+import { useTokenImage } from "@/lib/hooks/useTokenImage";
 import { TokenIcon } from "./TokenIcon";
 
 /**
  * Drop-in replacement for `TokenIcon` that auto-resolves the uploaded logo for
  * launchpad tokens. For well-known tokens (USDC, WETH, etc) the symbol lookup
  * inside TokenIcon kicks in instantly; for launchpad tokens we read the
- * on-chain `metadataURI` via the indexed-arg getLogs hook (module-level cache,
- * ~100ms on cache miss, instant on hit) and pass the parsed image URL through.
+ * on-chain `metadataURI` and, when the metadata sits behind an `ipfs://`
+ * pointer, fetch the JSON through a public IPFS gateway to extract the image.
  *
  * Use this anywhere a launchpad token might appear (swap select modal, swap
  * confirm modal, token boxes, toaster). Falls back to the gradient placeholder
@@ -24,7 +23,6 @@ interface Props {
 }
 
 export function AutoTokenIcon({ address, symbol, size = 32, className }: Props) {
-  const { metadataURI } = useTokenMetadataURI(address);
-  const image = metadataURI ? getImageUrl(metadataURI) : undefined;
+  const { image } = useTokenImage(address);
   return <TokenIcon symbol={symbol} image={image} size={size} className={className} />;
 }

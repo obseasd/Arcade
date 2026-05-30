@@ -6,10 +6,9 @@ import { useAccount, usePublicClient, useReadContract, useReadContracts, useWrit
 import { V3_LOCKER_ABI } from "@/lib/abis/v3";
 import { ADDRESSES, USDC_DECIMALS } from "@/lib/constants";
 import { useV3Tokens } from "@/lib/hooks/useV3Tokens";
-import { useTokenMetadataURI } from "@/lib/hooks/useTokenMetadataURI";
+import { useTokenImage } from "@/lib/hooks/useTokenImage";
 import { useV3Volume24h } from "@/lib/hooks/useV3Volume24h";
 import { TokenIcon } from "@/components/ui/TokenIcon";
-import { getImageUrl } from "@/lib/metadata";
 import { pushToast } from "@/lib/toast";
 import { formatToken, formatUSDC, cn } from "@/lib/utils";
 
@@ -122,8 +121,7 @@ function PositionRow({ position }: { position: CreatorPosition }) {
   const [claiming, setClaiming] = useState(false);
 
   // Real logo from the creator's uploaded metadata.
-  const { metadataURI } = useTokenMetadataURI(position.token);
-  const image = getImageUrl(metadataURI ?? "");
+  const { image } = useTokenImage(position.token);
 
   // Pending fees on this position (paired + clanker side).
   const previewQ = useReadContract({
