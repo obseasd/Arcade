@@ -92,14 +92,23 @@ export function buildPool(c: SimulatorConfig): PoolState {
 
 /**
  * Spend `quoteIn` of the quote token to move the pool price up. Returns the
- * tokens received, the final price, and whether the buy was clamped because
- * liquidity ran out (price hit the top of the highest position).
+ * tokens received, the gross quote spent, the LP fee retained, and whether the
+ * buy was clamped because liquidity ran out (price hit the top of the highest
+ * position).
+ *
+ * Real V3 swaps deduct the LP fee from the input before applying the price
+ * impact (the fee accrues to the LP, the rest moves price). We model the same
+ * thing: `effectiveIn = quoteIn * (1 - feeBps/10000)` drives the curve walk;
+ * `quoteUsed` returned is the gross amount the user paid.
  */
 export function simulateBuy(
   state: PoolState,
   quoteIn: number,
-): { tokensOut: number; quoteUsed: number; clamped: boolean; newState: PoolState } {
-  let remaining = quoteIn;
+  feeBps = 0,
+): { tokensOut: number; quoteUsed: number; feePaid: number; clamped: boolean; newState: PoolState } {
+  const feeRate = feeBps / 10_000;
+  let remaining = quoteIn * (1 - feeRate);
+  const grossRemainingStart = quoteIn;
   let tokensOut = 0;
   let sqrtP = state.sqrtPrice;
   const positions = state.positions;
@@ -132,10 +141,19 @@ export function simulateBuy(
     }
   }
 
-  const quoteUsed = quoteIn - remaining;
+  // Net input actually swapped (may be less than effective input if clamped).
+  const netUsed = grossRemainingStart * (1 - feeRate) - remaining;
+  // Gross gets scaled in proportion: same fraction was consumed of both sides.
+  const consumedFraction =
+    grossRemainingStart * (1 - feeRate) > 0
+      ? netUsed / (grossRemainingStart * (1 - feeRate))
+      : 0;
+  const quoteUsed = grossRemainingStart * consumedFraction;
+  const feePaid = quoteUsed * feeRate;
   return {
     tokensOut,
     quoteUsed,
+    feePaid,
     clamped: remaining > 0,
     newState: {
       ...state,

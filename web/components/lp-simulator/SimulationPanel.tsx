@@ -7,12 +7,16 @@ import { cn } from "@/lib/utils";
 
 interface Props {
   config: SimulatorConfig;
-  /** Price of the quote token in USD (1 for USDC, ~3000 for ETH). */
+  /** Price of the quote token in USD (1 for USDC). */
   quotePriceUsd: number;
   quoteSymbol: string;
 }
 
 const QUICK_BUYS = [100, 500, 1_000, 5_000, 10_000, 50_000];
+
+/** Clanker V3 locker default split: creator gets 80%, platform 20%. */
+const CREATOR_SHARE_BPS = 8_000;
+const PLATFORM_SHARE_BPS = 10_000 - CREATOR_SHARE_BPS;
 
 function fmtMcap(v: number): string {
   if (v >= 1e9) return `$${(v / 1e9).toFixed(2)}B`;
@@ -37,12 +41,14 @@ export function SimulationPanel({ config, quotePriceUsd, quoteSymbol }: Props) {
     let totalTokens = 0;
     let totalQuote = 0;
     let totalVolumeUsd = 0;
+    let totalFeesQuote = 0;
     let lastClamped = false;
     for (const amount of buys) {
-      const r = simulateBuy(state, amount);
+      const r = simulateBuy(state, amount, feeBps);
       totalTokens += r.tokensOut;
       totalQuote += r.quoteUsed;
       totalVolumeUsd += r.quoteUsed * quotePriceUsd;
+      totalFeesQuote += r.feePaid;
       lastClamped = r.clamped;
       state = r.newState;
     }
@@ -52,13 +58,17 @@ export function SimulationPanel({ config, quotePriceUsd, quoteSymbol }: Props) {
       totalTokens,
       totalQuote,
       totalVolumeUsd,
+      totalFeesQuote,
       currentMcap,
       lastClamped,
     };
-  }, [buys, config, quotePriceUsd]);
+  }, [buys, config, quotePriceUsd, feeBps]);
 
-  const feeAmount = (result.totalVolumeUsd * feeBps) / 10_000;
-  const feeQuote = (result.totalQuote * feeBps) / 10_000;
+  // Total LP fees in USD, split by recipient.
+  const lpFeesUsd = result.totalFeesQuote * quotePriceUsd;
+  const creatorFeesUsd = (lpFeesUsd * CREATOR_SHARE_BPS) / 10_000;
+  const platformFeesUsd = (lpFeesUsd * PLATFORM_SHARE_BPS) / 10_000;
+  const creatorFeesQuote = (result.totalFeesQuote * CREATOR_SHARE_BPS) / 10_000;
 
   const addBuy = (amount: number) => {
     if (amount > 0) setBuys((b) => [...b, amount]);
@@ -154,7 +164,7 @@ export function SimulationPanel({ config, quotePriceUsd, quoteSymbol }: Props) {
           <h3 className="text-sm font-semibold">Creator Fee Projection</h3>
         </div>
         <div className="mb-3">
-          <label className="text-xs text-arc-text-muted">Static fee rate</label>
+          <label className="text-xs text-arc-text-muted">Pool fee tier</label>
           <div className="mt-1 grid grid-cols-3 gap-1.5">
             {[100, 200, 300].map((b) => (
               <button
@@ -174,14 +184,21 @@ export function SimulationPanel({ config, quotePriceUsd, quoteSymbol }: Props) {
         </div>
         <div className="space-y-2 text-xs">
           <Row label="Swap volume" value={`$${fmtNum(result.totalVolumeUsd, 0)}`} muted />
-          <Row label="Fee rate" value={`${feeBps / 100}%`} muted />
+          <Row label="Pool fee tier" value={`${feeBps / 100}%`} muted />
+          <Row label="Total LP fees" value={`$${fmtNum(lpFeesUsd, 2)}`} muted />
+          <div className="my-2 border-t border-arc-border/60" />
           <Row
-            label="Your fees"
-            value={`$${fmtNum(feeAmount, 2)}`}
-            bold
-            highlight={feeAmount > 0}
+            label="Platform (20%)"
+            value={`-$${fmtNum(platformFeesUsd, 2)}`}
+            muted
           />
-          <Row label={`In ${quoteSymbol}`} value={fmtNum(feeQuote, 6)} muted />
+          <Row
+            label="Your share (80%)"
+            value={`$${fmtNum(creatorFeesUsd, 2)}`}
+            bold
+            highlight={creatorFeesUsd > 0}
+          />
+          <Row label={`In ${quoteSymbol}`} value={fmtNum(creatorFeesQuote, 6)} muted />
         </div>
         {result.totalVolumeUsd === 0 && (
           <div className="mt-3 text-[11px] italic text-arc-text-faint">
@@ -194,9 +211,10 @@ export function SimulationPanel({ config, quotePriceUsd, quoteSymbol }: Props) {
         <div className="mb-1 flex items-center gap-1.5 font-medium text-arc-text">
           <Info className="h-3.5 w-3.5 text-arc-cta-hover" /> About
         </div>
-        This models how {quoteSymbol} buys move through the LP positions. Each
-        buy consumes tokens from the active position and increases price per
-        concentrated-liquidity math. Fees are calculated on swap volume.
+        Models how buys move through the LP positions. Each buy pays the pool
+        fee to the LP first, then the rest swaps through concentrated-liquidity
+        positions. Of every LP fee collected, creators receive 80% and Arcade
+        keeps 20% (Clanker V3 split).
       </div>
     </div>
   );

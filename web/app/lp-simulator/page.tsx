@@ -8,16 +8,12 @@ import { LiquidityChart } from "@/components/lp-simulator/LiquidityChart";
 import { PositionsList } from "@/components/lp-simulator/PositionsList";
 import { SidebarPanel } from "@/components/lp-simulator/SidebarPanel";
 import { SimulationPanel } from "@/components/lp-simulator/SimulationPanel";
-import { cn } from "@/lib/utils";
 
 const DEFAULT_PRESET = getPreset(DEFAULT_PRESET_ID)!;
-
-type QuoteMode = "usdc" | "eth";
 
 export default function LpSimulatorPage() {
   const [presetId, setPresetId] = useState<string>(DEFAULT_PRESET.id);
   const [config, setConfig] = useState<SimulatorConfig>(DEFAULT_PRESET.config);
-  const [quote, setQuote] = useState<QuoteMode>("usdc");
 
   const onPreset = (p: PresetDef) => {
     setPresetId(p.id);
@@ -34,35 +30,14 @@ export default function LpSimulatorPage() {
     [config.positions],
   );
 
-  // USDC is 1:1 USD; ETH placeholder uses a static price for now.
-  const quotePriceUsd = quote === "usdc" ? 1 : 2038;
-  const quoteSymbol = quote === "usdc" ? "USDC" : "ETH";
-
   return (
     <div className="mx-auto max-w-[1500px] px-4 py-8 sm:px-6">
-      <header className="mb-6 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-3xl font-semibold tracking-tight">LP Position Simulator</h1>
-          <p className="mt-1 text-sm text-arc-text-muted">
-            Model LP configurations and simulate how buys move the price.
-          </p>
-        </div>
-        <div className="flex items-center gap-1 rounded-xl border border-arc-border bg-arc-bg-elevated p-1 text-xs">
-          {(["usdc", "eth"] as QuoteMode[]).map((q) => (
-            <button
-              key={q}
-              onClick={() => setQuote(q)}
-              className={cn(
-                "rounded-lg px-3 py-1.5 font-medium transition-colors",
-                quote === q
-                  ? "bg-arc-primary text-white"
-                  : "text-arc-text-muted hover:text-arc-text",
-              )}
-            >
-              {q === "usdc" ? "USDC pool" : "ETH pool"}
-            </button>
-          ))}
-        </div>
+      <header className="mb-6">
+        <h1 className="text-3xl font-semibold tracking-tight">LP Position Simulator</h1>
+        <p className="mt-1 text-sm text-arc-text-muted">
+          Model USDC-paired Clanker V3 configurations and simulate how buys move
+          the price.
+        </p>
       </header>
 
       <div className="grid gap-5 lg:grid-cols-[280px_minmax(0,1fr)_300px]">
@@ -107,14 +82,10 @@ export default function LpSimulatorPage() {
             onChange={(positions) => setConfig({ ...config, positions })}
           />
 
-          <ExportConfig config={config} quote={quote} />
+          <ExportConfig config={config} />
         </div>
 
-        <SimulationPanel
-          config={config}
-          quotePriceUsd={quotePriceUsd}
-          quoteSymbol={quoteSymbol}
-        />
+        <SimulationPanel config={config} quotePriceUsd={1} quoteSymbol="USDC" />
       </div>
     </div>
   );
@@ -129,14 +100,14 @@ function LegendItem({ color, label }: { color: string; label: string }) {
   );
 }
 
-function ExportConfig({ config, quote }: { config: SimulatorConfig; quote: QuoteMode }) {
+function ExportConfig({ config }: { config: SimulatorConfig }) {
   const [open, setOpen] = useState(false);
   const startingTick = Math.floor(
     Math.log(config.startingMcap / config.totalSupply) / Math.log(1.0001),
   );
   const json = JSON.stringify(
     {
-      pair: quote === "usdc" ? "USDC" : "WETH",
+      pair: "USDC",
       totalSupply: config.totalSupply,
       startingMcap: config.startingMcap,
       allocations: {
@@ -171,7 +142,7 @@ function ExportConfig({ config, quote }: { config: SimulatorConfig; quote: Quote
         <span className="text-right font-mono">{startingTick.toLocaleString()}</span>
         <span className="text-arc-text-muted">Positions</span>
         <span className="text-right">{config.positions.length}</span>
-        <span className="text-arc-text-muted">Fee rate</span>
+        <span className="text-arc-text-muted">Fee tier</span>
         <span className="text-right">{config.feeBps / 100}%</span>
         <span className="text-arc-text-muted">Tick spacing</span>
         <span className="text-right">200</span>
