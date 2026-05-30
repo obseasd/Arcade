@@ -74,6 +74,10 @@ contract ArcadeV4Launchpad is ILaunchpadSnipe, IUnlockCallback, ReentrancyGuard 
     int24 public constant TICK_SPACING = 200;
     /// @notice Max starting sniper-tax rate (50%). Same cap as production.
     uint16 public constant MAX_SNIPE_BPS = 5_000;
+    /// @notice Max opening allocation a creator can keep at launch (10% of
+    ///         supply). Hard cap because anything bigger lets the creator
+    ///         soft-rug. Pump.fun-style projects converge around 1-5%.
+    uint16 public constant MAX_CREATOR_BPS = 1_000;
 
     struct Launch {
         /// @notice Token address (== address of the deployed ArcadeLaunchToken).
@@ -89,6 +93,11 @@ contract ArcadeV4Launchpad is ILaunchpadSnipe, IUnlockCallback, ReentrancyGuard 
         uint32 snipeDecaySeconds;
         /// @notice Wall-clock launch time used by `currentSnipeBps` decay.
         uint64 launchedAt;
+        /// @notice Opening allocation kept by the creator (bps of TOTAL_SUPPLY).
+        ///         Whatever is here gets minted straight to the creator at
+        ///         createLaunch time; only the remainder is locked into the
+        ///         V4 pool by initializePool.
+        uint16 creatorBps;
     }
 
     /// @notice Per-token launch info, keyed by token address.
@@ -100,6 +109,7 @@ contract ArcadeV4Launchpad is ILaunchpadSnipe, IUnlockCallback, ReentrancyGuard 
     error EmptyName();
     error InvalidSnipeBps();
     error InvalidDecaySeconds();
+    error InvalidCreatorBps();
     error AlreadyLaunched();
     error UnknownToken();
     error PoolAlreadyInitialized();
@@ -114,6 +124,7 @@ contract ArcadeV4Launchpad is ILaunchpadSnipe, IUnlockCallback, ReentrancyGuard 
         uint16 snipeStartBps,
         uint32 snipeDecaySeconds,
         uint64 launchedAt,
+        uint16 creatorBps,
         string name,
         string symbol,
         string metadataURI
@@ -160,11 +171,13 @@ contract ArcadeV4Launchpad is ILaunchpadSnipe, IUnlockCallback, ReentrancyGuard 
         string calldata symbol,
         string calldata metadataURI,
         uint16 snipeStartBps,
-        uint32 snipeDecaySeconds
+        uint32 snipeDecaySeconds,
+        uint16 creatorBps
     ) external nonReentrant returns (address tokenAddr) {
         if (bytes(name).length == 0 || bytes(symbol).length == 0) revert EmptyName();
         if (snipeStartBps > MAX_SNIPE_BPS) revert InvalidSnipeBps();
         if (snipeStartBps > 0 && snipeDecaySeconds == 0) revert InvalidDecaySeconds();
+        if (creatorBps > MAX_CREATOR_BPS) revert InvalidCreatorBps();
 
         // Pull the creation fee straight to treasury. Doing it before the
         // token deploy means we don't waste gas on a deploy if the user is
@@ -183,11 +196,32 @@ contract ArcadeV4Launchpad is ILaunchpadSnipe, IUnlockCallback, ReentrancyGuard 
         l.snipeStartBps = snipeStartBps;
         l.snipeDecaySeconds = snipeDecaySeconds;
         l.launchedAt = nowTs;
-        // l.poolKey stays zero-initialised; populated by the pool-init commit.
+        l.creatorBps = creatorBps;
+        // l.poolKey stays zero-initialised; populated by initializePool().
+
+        // Transfer the opening creator allocation BEFORE pool-init so the
+        // remainder of the supply is what gets locked into the V4 position.
+        // Doing it here (not at initializePool time) means the creator's
+        // share is independent of the pool state and immune to any swap
+        // front-running attempt.
+        if (creatorBps > 0) {
+            uint256 creatorAlloc = (TOTAL_SUPPLY * creatorBps) / 10_000;
+            IERC20(tokenAddr).safeTransfer(msg.sender, creatorAlloc);
+        }
 
         allTokens.push(tokenAddr);
 
-        emit TokenLaunched(tokenAddr, msg.sender, snipeStartBps, snipeDecaySeconds, nowTs, name, symbol, metadataURI);
+        emit TokenLaunched(
+            tokenAddr,
+            msg.sender,
+            snipeStartBps,
+            snipeDecaySeconds,
+            nowTs,
+            creatorBps,
+            name,
+            symbol,
+            metadataURI
+        );
     }
 
     // ===================== Pool initialization =====================
@@ -281,13 +315,15 @@ contract ArcadeV4Launchpad is ILaunchpadSnipe, IUnlockCallback, ReentrancyGuard 
 
         // Settle the token side. modifyLiquidity creates a debt on the
         // launch-token currency equal to the amount the pool needs to
-        // realise our requested liquidity. We sync, transfer the LP supply,
-        // and call settle to clear the debt. The USDC side has zero debt
-        // because this is a single-sided position above (or below) the
-        // current tick - the pool wants no USDC at init.
+        // realise our requested liquidity. We sync, transfer whatever supply
+        // the launchpad still holds (creator allocation already deducted in
+        // createLaunch), and call settle to clear the debt. The USDC side
+        // has zero debt because this is a single-sided position above (or
+        // below) the current tick - the pool wants no USDC at init.
         Currency tokenCurrency = tokenIsCurrency0 ? key.currency0 : key.currency1;
         POOL_MANAGER.sync(tokenCurrency);
-        IERC20(token).safeTransfer(address(POOL_MANAGER), TOTAL_SUPPLY);
+        uint256 poolAlloc = IERC20(token).balanceOf(address(this));
+        IERC20(token).safeTransfer(address(POOL_MANAGER), poolAlloc);
         POOL_MANAGER.settle();
 
         emit PoolInitialized(token, address(POOL_MANAGER), sqrtPriceX96, tickLower, tickUpper, int256(liquidityDelta));

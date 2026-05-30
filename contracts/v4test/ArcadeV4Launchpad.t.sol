@@ -151,7 +151,7 @@ contract ArcadeV4LaunchpadTest is Test {
         uint256 creatorBefore = usdc.balanceOf(CREATOR);
 
         vm.prank(CREATOR);
-        address token = lp.createLaunch("Test", "TEST", "ipfs://meta", 500, 30 minutes);
+        address token = lp.createLaunch("Test", "TEST", "ipfs://meta", 500, 30 minutes, 0);
 
         // Treasury collected the 3 USDC fee; creator's balance dropped by it.
         assertEq(usdc.balanceOf(TREASURY) - treBefore, lp.CREATION_FEE(), "treasury fee");
@@ -165,6 +165,7 @@ contract ArcadeV4LaunchpadTest is Test {
         assertEq(l.snipeStartBps, 500);
         assertEq(l.snipeDecaySeconds, uint32(30 minutes));
         assertEq(l.launchedAt, uint64(block.timestamp));
+        assertEq(l.creatorBps, 0, "no creator allocation");
         assertEq(IERC20(token).balanceOf(address(lp)), lp.TOTAL_SUPPLY(), "launchpad holds supply");
         assertEq(lp.tokensCount(), 1);
     }
@@ -172,24 +173,45 @@ contract ArcadeV4LaunchpadTest is Test {
     function test_createLaunch_emptyName_reverts() public {
         vm.prank(CREATOR);
         vm.expectRevert(ArcadeV4Launchpad.EmptyName.selector);
-        lp.createLaunch("", "TEST", "", 0, 0);
+        lp.createLaunch("", "TEST", "", 0, 0, 0);
     }
 
     function test_createLaunch_snipeBpsOverCap_reverts() public {
         vm.prank(CREATOR);
         vm.expectRevert(ArcadeV4Launchpad.InvalidSnipeBps.selector);
-        lp.createLaunch("Test", "TEST", "", 5_001, 30 minutes);
+        lp.createLaunch("Test", "TEST", "", 5_001, 30 minutes, 0);
     }
 
     function test_createLaunch_snipeWithoutDecay_reverts() public {
         vm.prank(CREATOR);
         vm.expectRevert(ArcadeV4Launchpad.InvalidDecaySeconds.selector);
-        lp.createLaunch("Test", "TEST", "", 500, 0);
+        lp.createLaunch("Test", "TEST", "", 500, 0, 0);
+    }
+
+    function test_createLaunch_creatorBpsOverCap_reverts() public {
+        vm.prank(CREATOR);
+        vm.expectRevert(ArcadeV4Launchpad.InvalidCreatorBps.selector);
+        lp.createLaunch("Test", "TEST", "", 0, 0, 1_001);
+    }
+
+    function test_createLaunch_withCreatorAllocation_sendsTokensToCreator() public {
+        vm.prank(CREATOR);
+        address token = lp.createLaunch("Test", "TEST", "", 0, 0, 500); // 5%
+
+        uint256 expected = (lp.TOTAL_SUPPLY() * 500) / 10_000;
+        assertEq(IERC20(token).balanceOf(CREATOR), expected, "creator received allocation");
+        assertEq(
+            IERC20(token).balanceOf(address(lp)),
+            lp.TOTAL_SUPPLY() - expected,
+            "launchpad holds remainder"
+        );
+        ArcadeV4Launchpad.Launch memory l = lp.getLaunch(token);
+        assertEq(l.creatorBps, 500);
     }
 
     function test_createLaunch_withoutSnipe_isAllowed() public {
         vm.prank(CREATOR);
-        address token = lp.createLaunch("Test", "TEST", "", 0, 0);
+        address token = lp.createLaunch("Test", "TEST", "", 0, 0, 0);
         ArcadeV4Launchpad.Launch memory l = lp.getLaunch(token);
         assertEq(l.snipeStartBps, 0);
         // currentSnipeBps must return 0 - the hook will no-op for this token.
@@ -200,7 +222,7 @@ contract ArcadeV4LaunchpadTest is Test {
 
     function test_currentSnipeBps_decaysLinearlyToZero() public {
         vm.prank(CREATOR);
-        address token = lp.createLaunch("Test", "TEST", "", 1_000, 100 seconds);
+        address token = lp.createLaunch("Test", "TEST", "", 1_000, 100 seconds, 0);
         // Read launchedAt straight from the contract to avoid any timing
         // drift between the test's `block.timestamp` snapshot and what was
         // actually recorded during the createLaunch call.
@@ -232,7 +254,7 @@ contract ArcadeV4LaunchpadTest is Test {
     function test_hook_readsCurrentSnipeBpsFromLaunchpad() public {
         // Launch a token with 5% snipe tax.
         vm.prank(CREATOR);
-        address token = lp.createLaunch("Test", "TEST", "", 500, 30 minutes);
+        address token = lp.createLaunch("Test", "TEST", "", 500, 30 minutes, 0);
 
         // Build a PoolKey where USDC + token are paired. Canonical order:
         // currency0 is the lower address.
@@ -260,7 +282,7 @@ contract ArcadeV4LaunchpadTest is Test {
 
     function test_hook_skipsTokenWithoutSnipeConfig() public {
         vm.prank(CREATOR);
-        address token = lp.createLaunch("Test", "TEST", "", 0, 0);
+        address token = lp.createLaunch("Test", "TEST", "", 0, 0, 0);
 
         (address c0, address c1) =
             address(usdc) < token ? (address(usdc), token) : (token, address(usdc));
@@ -284,7 +306,7 @@ contract ArcadeV4LaunchpadTest is Test {
 
     function test_initializePool_runsTheFullSequence() public {
         vm.prank(CREATOR);
-        address token = lp.createLaunch("Test", "TEST", "", 500, 30 minutes);
+        address token = lp.createLaunch("Test", "TEST", "", 500, 30 minutes, 0);
 
         // Pick a starting sqrtPriceX96. The launchpad's _tickAtSqrtPriceApprox
         // returns -TICK_SPACING (-200) for any value below 2^96, and 0 at /
@@ -352,19 +374,35 @@ contract ArcadeV4LaunchpadTest is Test {
 
     function test_initializePool_revertsOnZeroLiquidity() public {
         vm.prank(CREATOR);
-        address token = lp.createLaunch("Test", "TEST", "", 0, 0);
+        address token = lp.createLaunch("Test", "TEST", "", 0, 0, 0);
         vm.expectRevert(ArcadeV4Launchpad.ZeroLiquidity.selector);
         lp.initializePool(token, uint160(1 << 96), 0);
     }
 
     function test_initializePool_isIdempotent() public {
         vm.prank(CREATOR);
-        address token = lp.createLaunch("Test", "TEST", "", 0, 0);
+        address token = lp.createLaunch("Test", "TEST", "", 0, 0, 0);
         vm.prank(CREATOR);
         lp.initializePool(token, uint160(1 << 96), 1_000);
         vm.prank(CREATOR);
         vm.expectRevert(ArcadeV4Launchpad.PoolAlreadyInitialized.selector);
         lp.initializePool(token, uint160(1 << 96), 1_000);
+    }
+
+    function test_initializePool_withCreatorAllocation_locksRemainder() public {
+        vm.prank(CREATOR);
+        address token = lp.createLaunch("Test", "TEST", "", 0, 0, 250); // 2.5%
+
+        uint256 creatorShare = (lp.TOTAL_SUPPLY() * 250) / 10_000;
+        uint256 poolShare = lp.TOTAL_SUPPLY() - creatorShare;
+
+        vm.prank(CREATOR);
+        lp.initializePool(token, uint160(1 << 95), 1_000_000);
+
+        // The pool only got the remainder, not the full supply.
+        assertEq(IERC20(token).balanceOf(address(pm)), poolShare, "pool gets remainder");
+        assertEq(IERC20(token).balanceOf(CREATOR), creatorShare, "creator keeps allocation");
+        assertEq(IERC20(token).balanceOf(address(lp)), 0, "launchpad fully drained");
     }
 
     function test_unlockCallback_onlyPoolManager() public {
@@ -382,7 +420,7 @@ contract ArcadeV4LaunchpadTest is Test {
 
     function test_hook_skimDecaysOverTime() public {
         vm.prank(CREATOR);
-        address token = lp.createLaunch("Test", "TEST", "", 1_000, 100 seconds);
+        address token = lp.createLaunch("Test", "TEST", "", 1_000, 100 seconds, 0);
 
         (address c0, address c1) =
             address(usdc) < token ? (address(usdc), token) : (token, address(usdc));
