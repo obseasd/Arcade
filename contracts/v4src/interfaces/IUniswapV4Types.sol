@@ -53,14 +53,62 @@ type BeforeSwapDelta is int256;
 ///         the user took from the pool; positive means the user paid in.
 type BalanceDelta is int256;
 
-/// @notice The V4 PoolManager subset our hook talks to. We only need the
-///         interface for currency settling - the rest is provided by the
-///         PoolManager when it invokes our beforeSwap.
+/// @notice Parameters for adding / removing liquidity in a V4 pool. Mirrors
+///         v4-core's `IPoolManager.ModifyLiquidityParams`.
+struct ModifyLiquidityParams {
+    int24 tickLower;
+    int24 tickUpper;
+    /// @notice Positive = add liquidity, negative = remove. We always add.
+    int256 liquidityDelta;
+    /// @notice Used by v4 to distinguish multiple positions owned by the
+    ///         same address with the same tick range. We use bytes32(0).
+    bytes32 salt;
+}
+
+/// @notice The V4 PoolManager subset our launchpad + hook talk to.
 interface IPoolManager {
+    /// @notice Create the V4 pool defined by `key` initialised at the given
+    ///         `sqrtPriceX96`. Idempotent: calling twice with the same key
+    ///         reverts.
+    function initialize(PoolKey calldata key, uint160 sqrtPriceX96) external returns (int24 tick);
+
     /// @notice Authorises a hook to take a fee from the swap input. The fee
     ///         is added back into the pool's reserves so subsequent LPs
     ///         capture it on the swap path.
     function take(Currency currency, address to, uint256 amount) external;
+
+    /// @notice Enter the unlocked state and call back to the caller's
+    ///         `unlockCallback`. The caller may then call `modifyLiquidity`,
+    ///         `swap`, etc, and must settle all currency deltas to zero
+    ///         before the callback returns. Anything else is a revert.
+    function unlock(bytes calldata data) external returns (bytes memory);
+
+    /// @notice Add or remove liquidity in `key`. Only valid inside an
+    ///         `unlockCallback`. Returns the caller's signed delta per
+    ///         currency (caller owes the negative side, receives the
+    ///         positive side) and any fees accrued to the position.
+    function modifyLiquidity(
+        PoolKey calldata key,
+        ModifyLiquidityParams calldata params,
+        bytes calldata hookData
+    ) external returns (BalanceDelta callerDelta, BalanceDelta feesAccrued);
+
+    /// @notice Snapshot `currency`'s current PoolManager reserve so a
+    ///         subsequent settle() can compare and credit the delta. The
+    ///         caller transfers tokens between sync() and settle().
+    function sync(Currency currency) external;
+
+    /// @notice Credit the caller for any tokens of the synced currency that
+    ///         arrived at the PoolManager since `sync()`. Returns the amount
+    ///         settled.
+    function settle() external payable returns (uint256 paid);
+}
+
+/// @notice Implemented by anyone calling `POOL_MANAGER.unlock`. The
+///         PoolManager calls back into this function before checking that
+///         all currency deltas are zero.
+interface IUnlockCallback {
+    function unlockCallback(bytes calldata data) external returns (bytes memory);
 }
 
 /// @notice Minimal IHooks interface (V4 core defines 14 hook slots; we only

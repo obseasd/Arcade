@@ -6,10 +6,12 @@ import {ArcadeAntiSniperHook} from "../v4src/ArcadeAntiSniperHook.sol";
 import {
     IHooks,
     IPoolManager,
+    IUnlockCallback,
     ILaunchpadSnipe,
     Currency,
     PoolKey,
     SwapParams,
+    ModifyLiquidityParams,
     BeforeSwapDelta,
     BeforeSwapDeltaLibrary,
     BalanceDelta,
@@ -18,7 +20,9 @@ import {
 } from "../v4src/interfaces/IUniswapV4Types.sol";
 
 /// @notice Captures `take` calls so the test can assert the hook moved the
-///         right amount to the right recipient.
+///         right amount to the right recipient. Also no-ops the rest of the
+///         IPoolManager surface our launchpad / hook touch so this contract
+///         can be used in both hook-only and launchpad-integration tests.
 contract MockPoolManager is IPoolManager {
     event Take(address currency, address to, uint256 amount);
 
@@ -31,6 +35,27 @@ contract MockPoolManager is IPoolManager {
         lastTo = to;
         lastAmount = amount;
         emit Take(Currency.unwrap(currency), to, amount);
+    }
+
+    // No-op implementations so the contract is not abstract. The launchpad
+    // integration tests in ArcadeV4Launchpad.t.sol use a SUBCLASS that
+    // overrides these to capture their inputs.
+    function initialize(PoolKey calldata, uint160) external pure override returns (int24) {
+        return 0;
+    }
+    function unlock(bytes calldata) external pure override returns (bytes memory) {
+        return "";
+    }
+    function modifyLiquidity(
+        PoolKey calldata,
+        ModifyLiquidityParams calldata,
+        bytes calldata
+    ) external pure override returns (BalanceDelta, BalanceDelta) {
+        return (BalanceDelta.wrap(0), BalanceDelta.wrap(0));
+    }
+    function sync(Currency) external override {}
+    function settle() external payable override returns (uint256) {
+        return 0;
     }
 }
 

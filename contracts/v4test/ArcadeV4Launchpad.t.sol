@@ -10,11 +10,14 @@ import {ArcadeAntiSniperHook} from "../v4src/ArcadeAntiSniperHook.sol";
 import {
     IHooks,
     IPoolManager,
+    IUnlockCallback,
     Currency,
     PoolKey,
     SwapParams,
+    ModifyLiquidityParams,
     BeforeSwapDelta,
-    BeforeSwapDeltaLibrary
+    BeforeSwapDeltaLibrary,
+    BalanceDelta
 } from "../v4src/interfaces/IUniswapV4Types.sol";
 
 /// @notice Tiny ERC20 used as the test USDC. Mintable so the test can fund
@@ -31,17 +34,83 @@ contract MockUSDC is ERC20 {
     }
 }
 
-/// @notice Captures `take` calls so the hook side of the integration can be
-///         asserted. Same shape as the mock used in the hook unit tests.
+/// @notice Captures every relevant call so launchpad tests can assert the
+///         full V4 sequence: initialize -> unlock -> modifyLiquidity ->
+///         sync -> settle. Plus the hook's take path used by the swap tests.
 contract MockPoolManager is IPoolManager {
+    // --- take (hook path) ---
     Currency public lastCurrency;
     address public lastTo;
     uint256 public lastAmount;
+
+    // --- initialize ---
+    PoolKey public lastInitKey;
+    uint160 public lastInitSqrt;
+    bool public initialized;
+
+    // --- unlock ---
+    bytes public lastUnlockData;
+    uint256 public unlockCount;
+
+    // --- modifyLiquidity ---
+    int24 public lastTickLower;
+    int24 public lastTickUpper;
+    int256 public lastLiquidityDelta;
+    bytes32 public lastSalt;
+    bool public modifyLiquidityCalled;
+
+    // --- sync / settle ---
+    Currency public lastSyncedCurrency;
+    bool public syncCalled;
+    bool public settleCalled;
+    uint256 public settleReturn;
 
     function take(Currency currency, address to, uint256 amount) external override {
         lastCurrency = currency;
         lastTo = to;
         lastAmount = amount;
+    }
+
+    function initialize(PoolKey calldata key, uint160 sqrtPriceX96)
+        external
+        override
+        returns (int24)
+    {
+        lastInitKey = key;
+        lastInitSqrt = sqrtPriceX96;
+        initialized = true;
+        return 0;
+    }
+
+    function unlock(bytes calldata data) external override returns (bytes memory) {
+        lastUnlockData = data;
+        unlockCount++;
+        // Call back into the unlocker so the launchpad's modifyLiquidity +
+        // settle sequence runs under our captured msg.sender check.
+        return IUnlockCallback(msg.sender).unlockCallback(data);
+    }
+
+    function modifyLiquidity(
+        PoolKey calldata,
+        ModifyLiquidityParams calldata params,
+        bytes calldata
+    ) external override returns (BalanceDelta, BalanceDelta) {
+        lastTickLower = params.tickLower;
+        lastTickUpper = params.tickUpper;
+        lastLiquidityDelta = params.liquidityDelta;
+        lastSalt = params.salt;
+        modifyLiquidityCalled = true;
+        return (BalanceDelta.wrap(0), BalanceDelta.wrap(0));
+    }
+
+    function sync(Currency currency) external override {
+        lastSyncedCurrency = currency;
+        syncCalled = true;
+    }
+
+    function settle() external payable override returns (uint256) {
+        settleCalled = true;
+        return settleReturn;
     }
 }
 
@@ -209,6 +278,106 @@ contract ArcadeV4LaunchpadTest is Test {
         hook.beforeSwap(address(0xA), key, p, "");
 
         assertEq(pm.lastAmount(), 0, "no skim when snipe disabled");
+    }
+
+    // --- Pool initialization (unlock callback flow) ---------------------
+
+    function test_initializePool_runsTheFullSequence() public {
+        vm.prank(CREATOR);
+        address token = lp.createLaunch("Test", "TEST", "", 500, 30 minutes);
+
+        // Pick a starting sqrtPriceX96. The launchpad's _tickAtSqrtPriceApprox
+        // returns -TICK_SPACING (-200) for any value below 2^96, and 0 at /
+        // above 2^96. We pick a sub-2^96 value so the test exercises the
+        // currency0/currency1 branch deterministically.
+        uint160 sqrtPriceX96 = uint160(1 << 95); // < 2^96 → currentTick = -200
+        int128 liquidityDelta = 1_000_000;
+
+        vm.prank(CREATOR);
+        lp.initializePool(token, sqrtPriceX96, liquidityDelta);
+
+        // initialize() was called with the right PoolKey + price.
+        assertTrue(pm.initialized(), "PM.initialize called");
+        assertEq(pm.lastInitSqrt(), sqrtPriceX96);
+        (Currency c0, Currency c1, uint24 fee, int24 spacing,) = pm.lastInitKey();
+        // canonical sort
+        (address e0, address e1) = address(usdc) < token
+            ? (address(usdc), token)
+            : (token, address(usdc));
+        assertEq(Currency.unwrap(c0), e0, "currency0 canonical");
+        assertEq(Currency.unwrap(c1), e1, "currency1 canonical");
+        assertEq(fee, 10_000, "1% fee");
+        assertEq(spacing, 200, "tick spacing 200");
+        // hooks address isn't asserted because the test setUp wires the
+        // launchpad with hook=0 (the hook is salt-mined after the launchpad
+        // exists). Production deploys mine the salt first and pass the
+        // predicted address into the launchpad constructor.
+        assertEq(lp.HOOK(), address(0), "test setUp wired hook=0");
+
+        // unlock() fired exactly once.
+        assertEq(pm.unlockCount(), 1, "unlock called once");
+
+        // modifyLiquidity inside the callback used a single-sided range and
+        // the requested liquidityDelta. The exact tick bounds depend on
+        // whether the launch token is currency0 or currency1.
+        assertTrue(pm.modifyLiquidityCalled(), "modifyLiquidity called");
+        assertEq(pm.lastLiquidityDelta(), int256(liquidityDelta));
+        assertEq(pm.lastSalt(), bytes32(0));
+        bool tokenIsC0 = address(token) < address(usdc);
+        if (tokenIsC0) {
+            // Above-current: lower bound just above currentTick, upper at max.
+            // currentTick = -200, floor stays at -200, base = -200 + 200 = 0.
+            assertEq(pm.lastTickLower(), int24(0));
+            assertEq(pm.lastTickUpper(), int24((MAX_TICK_MATH() / 200) * 200));
+        } else {
+            // Below-current: lower at min, upper = floor(currentTick).
+            assertEq(pm.lastTickLower(), int24(-(MAX_TICK_MATH() / 200) * 200));
+            assertEq(pm.lastTickUpper(), int24(-200));
+        }
+
+        // sync + settle for the launch token: the launchpad transferred the
+        // full TOTAL_SUPPLY to the PoolManager during the unlock callback.
+        Currency expectedSync = tokenIsC0 ? c0 : c1;
+        assertEq(Currency.unwrap(pm.lastSyncedCurrency()), Currency.unwrap(expectedSync));
+        assertTrue(pm.syncCalled(), "sync called");
+        assertTrue(pm.settleCalled(), "settle called");
+        assertEq(IERC20(token).balanceOf(address(pm)), lp.TOTAL_SUPPLY());
+        assertEq(IERC20(token).balanceOf(address(lp)), 0, "launchpad emptied of token");
+    }
+
+    function test_initializePool_revertsOnUnknownToken() public {
+        vm.expectRevert(ArcadeV4Launchpad.UnknownToken.selector);
+        lp.initializePool(address(0xDEAD), uint160(1 << 96), 1_000);
+    }
+
+    function test_initializePool_revertsOnZeroLiquidity() public {
+        vm.prank(CREATOR);
+        address token = lp.createLaunch("Test", "TEST", "", 0, 0);
+        vm.expectRevert(ArcadeV4Launchpad.ZeroLiquidity.selector);
+        lp.initializePool(token, uint160(1 << 96), 0);
+    }
+
+    function test_initializePool_isIdempotent() public {
+        vm.prank(CREATOR);
+        address token = lp.createLaunch("Test", "TEST", "", 0, 0);
+        vm.prank(CREATOR);
+        lp.initializePool(token, uint160(1 << 96), 1_000);
+        vm.prank(CREATOR);
+        vm.expectRevert(ArcadeV4Launchpad.PoolAlreadyInitialized.selector);
+        lp.initializePool(token, uint160(1 << 96), 1_000);
+    }
+
+    function test_unlockCallback_onlyPoolManager() public {
+        bytes memory data = abi.encode(address(0), uint160(0), int128(0));
+        vm.expectRevert(ArcadeV4Launchpad.NotPoolManager.selector);
+        lp.unlockCallback(data);
+    }
+
+    /// @dev Mirrors the V4 MAX_TICK constant the launchpad uses for the upper
+    ///      bound. Kept inline to avoid importing private state from the
+    ///      contract under test.
+    function MAX_TICK_MATH() internal pure returns (int24) {
+        return 887_272;
     }
 
     function test_hook_skimDecaysOverTime() public {
