@@ -7,6 +7,7 @@ import { V3_LOCKER_ABI } from "@/lib/abis/v3";
 import { ADDRESSES, USDC_DECIMALS } from "@/lib/constants";
 import { useV3Tokens } from "@/lib/hooks/useV3Tokens";
 import { useTokenMetadataURI } from "@/lib/hooks/useTokenMetadataURI";
+import { useV3Volume24h } from "@/lib/hooks/useV3Volume24h";
 import { TokenIcon } from "@/components/ui/TokenIcon";
 import { getImageUrl } from "@/lib/metadata";
 import { pushToast } from "@/lib/toast";
@@ -24,7 +25,7 @@ const ZERO = "0x0000000000000000000000000000000000000000" as Address;
 /**
  * Lists the connected wallet's CLANKER_V3 launches and lets the creator claim
  * their share of accrued LP fees from the locked position. Shows pending fees
- * per position (paired + clanker side) and a running total.
+ * per position with logos + 24h swap volume.
  */
 export function CreatorFeesPanel() {
   const { address: account } = useAccount();
@@ -46,8 +47,7 @@ export function CreatorFeesPanel() {
     c.status === "success" ? (c.result as bigint) : 0n,
   );
 
-  // Recipients per position. Used both for ownership filtering and for the
-  // per-position fee share (recipient bps).
+  // Recipients per position for ownership filtering.
   const recCalls = useReadContracts({
     contracts: positionIds.map((id) => ({
       address: ADDRESSES.v3Locker,
@@ -107,26 +107,21 @@ export function CreatorFeesPanel() {
 
   return (
     <div className="space-y-3">
-      <p className="text-xs text-arc-text-muted">
-        Your Clanker V3 launches. The locked LP earns you 80% of every swap&apos;s fees (Arcade 20%).
-        Claiming sends your share straight to your wallet.
-      </p>
       {mine.map((p) => (
         <PositionRow key={p.token} position={p} />
       ))}
-      <FeesTotal positions={mine} />
     </div>
   );
 }
 
-/* ------------------------------- Row + Total ------------------------------ */
+/* --------------------------------- Row UI --------------------------------- */
 
 function PositionRow({ position }: { position: CreatorPosition }) {
   const publicClient = usePublicClient();
   const { writeContractAsync } = useWriteContract();
   const [claiming, setClaiming] = useState(false);
 
-  // Fetch the on-chain metadata URI so we can render the creator's uploaded logo.
+  // Real logo from the creator's uploaded metadata.
   const { metadataURI } = useTokenMetadataURI(position.token);
   const image = getImageUrl(metadataURI ?? "");
 
@@ -138,7 +133,7 @@ function PositionRow({ position }: { position: CreatorPosition }) {
     args: [position.positionId],
     query: { enabled: position.positionId > 0n, refetchInterval: 15_000 },
   });
-  // Paired token address so we can label and decimals-format the paired amount.
+  // Position metadata: paired token address + pool for the 24h volume.
   const posQ = useReadContract({
     address: ADDRESSES.v3Locker,
     abi: V3_LOCKER_ABI,
@@ -147,8 +142,10 @@ function PositionRow({ position }: { position: CreatorPosition }) {
     query: { enabled: position.positionId > 0n },
   });
   const pairedToken = posQ.data?.pairedToken as Address | undefined;
+  const pool = posQ.data?.pool as Address | undefined;
 
   const pairedMeta = usePairedTokenMeta(pairedToken);
+  const { volume: vol24h } = useV3Volume24h(pool);
   const pairedRaw = (previewQ.data?.[0] ?? 0n) as bigint;
   const clankerRaw = (previewQ.data?.[1] ?? 0n) as bigint;
   const hasFees = pairedRaw > 0n || clankerRaw > 0n;
@@ -190,16 +187,19 @@ function PositionRow({ position }: { position: CreatorPosition }) {
             </div>
           </div>
         </div>
-        <button
-          onClick={claim}
-          disabled={claiming || !hasFees}
-          className={cn(
-            "arc-button-primary shrink-0 px-4 py-2 text-sm",
-            (claiming || !hasFees) && "opacity-60",
-          )}
-        >
-          {claiming ? "Claiming…" : hasFees ? "Claim fees" : "No fees yet"}
-        </button>
+        <div className="flex shrink-0 items-center gap-3">
+          <Volume24h volume={vol24h} />
+          <button
+            onClick={claim}
+            disabled={claiming || !hasFees}
+            className={cn(
+              "arc-button-primary px-4 py-2 text-sm",
+              (claiming || !hasFees) && "opacity-60",
+            )}
+          >
+            {claiming ? "Claiming…" : hasFees ? "Claim fees" : "No fees yet"}
+          </button>
+        </div>
       </div>
 
       <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
@@ -214,8 +214,24 @@ function PositionRow({ position }: { position: CreatorPosition }) {
           symbol={position.symbol ?? "TOKEN"}
           amount={clankerRaw}
           decimals={18}
+          tokenImage={image}
         />
       </div>
+    </div>
+  );
+}
+
+function Volume24h({ volume }: { volume: bigint | undefined }) {
+  const value =
+    volume === undefined
+      ? "-"
+      : volume === 0n
+        ? "$0"
+        : `$${formatUSDC(volume, USDC_DECIMALS, 0)}`;
+  return (
+    <div className="text-right leading-tight">
+      <div className="text-[10px] uppercase tracking-wider text-arc-text-muted">24h vol</div>
+      <div className="text-sm font-semibold tabular-nums">{value}</div>
     </div>
   );
 }
@@ -225,11 +241,13 @@ function FeeStat({
   symbol,
   amount,
   decimals,
+  tokenImage,
 }: {
   label: string;
   symbol?: string;
   amount: bigint;
   decimals: number;
+  tokenImage?: string;
 }) {
   const formatted =
     decimals === USDC_DECIMALS && (symbol === "USDC" || symbol === "EURC")
@@ -238,113 +256,14 @@ function FeeStat({
   return (
     <div className="rounded-lg border border-arc-border bg-black/30 p-2.5">
       <div className="text-[10px] uppercase tracking-wider text-arc-text-muted">{label}</div>
-      <div className="mt-0.5 truncate font-medium tabular-nums">
-        {formatted}{" "}
+      <div className="mt-0.5 flex items-center gap-1.5">
+        <TokenIcon symbol={symbol} image={tokenImage} size={16} />
+        <span className="truncate font-medium tabular-nums">{formatted}</span>
         <span className="text-arc-text-muted">{symbol ?? "-"}</span>
       </div>
     </div>
   );
 }
-
-/** Sum pending fees across positions, grouped by paired-token symbol. */
-function FeesTotal({ positions }: { positions: CreatorPosition[] }) {
-  // Bulk-read previewFees + getPosition for the totals card.
-  const previewCalls = useReadContracts({
-    contracts: positions.map((p) => ({
-      address: ADDRESSES.v3Locker,
-      abi: V3_LOCKER_ABI,
-      functionName: "previewFees" as const,
-      args: [p.positionId] as const,
-    })),
-    query: { enabled: positions.length > 0, refetchInterval: 15_000 },
-  });
-  const posCalls = useReadContracts({
-    contracts: positions.map((p) => ({
-      address: ADDRESSES.v3Locker,
-      abi: V3_LOCKER_ABI,
-      functionName: "getPosition" as const,
-      args: [p.positionId] as const,
-    })),
-    query: { enabled: positions.length > 0 },
-  });
-
-  // Group totals by paired-token address (USDC, WETH).
-  const pairedTotals = useMemo(() => {
-    const map = new Map<string, bigint>();
-    if (!previewCalls.data || !posCalls.data) return map;
-    for (let i = 0; i < positions.length; i++) {
-      const prev = previewCalls.data[i];
-      const pos = posCalls.data[i];
-      if (prev?.status !== "success" || pos?.status !== "success") continue;
-      const paired = (prev.result as readonly [bigint, bigint])[0];
-      const pairedAddr = (pos.result as { pairedToken: Address }).pairedToken;
-      const key = pairedAddr.toLowerCase();
-      map.set(key, (map.get(key) ?? 0n) + paired);
-    }
-    return map;
-  }, [previewCalls.data, posCalls.data, positions]);
-
-  // Resolve symbol/decimals for each paired-token kind we found.
-  const pairedAddrs = Array.from(pairedTotals.keys()) as Address[];
-  const metaCalls = useReadContracts({
-    contracts: pairedAddrs.flatMap((a) => [
-      { address: a, abi: erc20Abi, functionName: "symbol" as const },
-      { address: a, abi: erc20Abi, functionName: "decimals" as const },
-    ]),
-    query: { enabled: pairedAddrs.length > 0 },
-  });
-
-  if (pairedTotals.size === 0) return null;
-
-  const rows = pairedAddrs.map((addr, i) => {
-    const symbol = metaCalls.data?.[2 * i]?.result as string | undefined;
-    const decimals = (metaCalls.data?.[2 * i + 1]?.result as number | undefined) ?? 18;
-    const total = pairedTotals.get(addr.toLowerCase()) ?? 0n;
-    return { addr, symbol, decimals, total };
-  });
-
-  const hasAny = rows.some((r) => r.total > 0n);
-
-  return (
-    <div className="mt-2 rounded-2xl border border-arc-cta-hover/40 bg-arc-cta-hover/5 p-4">
-      <div className="mb-2 flex items-center justify-between">
-        <div className="text-sm font-semibold">Total claimable</div>
-        <div className="text-[10px] uppercase tracking-wider text-arc-text-muted">
-          {positions.length} position{positions.length === 1 ? "" : "s"}
-        </div>
-      </div>
-      {!hasAny && (
-        <div className="text-xs text-arc-text-muted">
-          No pending fees right now. Totals update every 15s.
-        </div>
-      )}
-      {hasAny && (
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-          {rows
-            .filter((r) => r.total > 0n)
-            .map((r) => (
-              <div
-                key={r.addr}
-                className="flex items-center justify-between rounded-lg border border-arc-border bg-black/30 px-3 py-2 text-xs"
-              >
-                <div className="flex items-center gap-2">
-                  <TokenIcon symbol={r.symbol} size={20} />
-                  <span className="text-arc-text-muted">{r.symbol ?? shortAddr(r.addr)}</span>
-                </div>
-                <div className="font-semibold tabular-nums">
-                  {r.decimals === USDC_DECIMALS && (r.symbol === "USDC" || r.symbol === "EURC")
-                    ? formatUSDC(r.total, r.decimals, 4)
-                    : formatToken(r.total, r.decimals, 6)}
-                </div>
-              </div>
-            ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-/* ------------------------------ Local helpers ----------------------------- */
 
 /** Fetch symbol + decimals for a paired token. USDC short-circuits to constants. */
 function usePairedTokenMeta(addr: Address | undefined): { symbol?: string; decimals: number } {
@@ -364,8 +283,4 @@ function usePairedTokenMeta(addr: Address | undefined): { symbol?: string; decim
     symbol: calls.data?.[0]?.result as string | undefined,
     decimals: (calls.data?.[1]?.result as number | undefined) ?? 18,
   };
-}
-
-function shortAddr(a: string): string {
-  return `${a.slice(0, 6)}…${a.slice(-4)}`;
 }

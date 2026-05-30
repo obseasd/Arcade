@@ -7,7 +7,8 @@ import { Address } from "viem";
 import { useReadContracts } from "wagmi";
 import { PAIR_ABI } from "@/lib/abis/dex";
 import { ADDRESSES, USDC_DECIMALS } from "@/lib/constants";
-import { useLaunchpadTokens } from "@/lib/hooks/useLaunchpadTokens";
+import { useLaunchpadTokens, type LaunchpadTokenInfo } from "@/lib/hooks/useLaunchpadTokens";
+import { useTokenMetadataURI } from "@/lib/hooks/useTokenMetadataURI";
 import { TokenIcon } from "@/components/ui/TokenIcon";
 import { getImageUrl } from "@/lib/metadata";
 import { formatUSDC, formatToken } from "@/lib/utils";
@@ -66,60 +67,73 @@ export function BurnedPositions() {
         const burnPct =
           totalSupply > 0n ? Number((deadBalance * 10000n) / totalSupply) / 100 : 0;
         const isToken0Usdc = token0 && token0.toLowerCase() === ADDRESSES.usdc.toLowerCase();
-        const usdcReserve = !reserves
-          ? 0n
-          : isToken0Usdc
-            ? reserves[0]
-            : reserves[1];
-        const tokenReserve = !reserves
-          ? 0n
-          : isToken0Usdc
-            ? reserves[1]
-            : reserves[0];
+        const usdcReserve = !reserves ? 0n : isToken0Usdc ? reserves[0] : reserves[1];
+        const tokenReserve = !reserves ? 0n : isToken0Usdc ? reserves[1] : reserves[0];
         // TVL = 2 * usdc side (since both sides are equal in value in a V2 pool)
         const tvl = usdcReserve * 2n;
         return (
-          <Link
+          <BurnedCard
             key={t.address}
-            href={`/launchpad/${t.address}`}
-            className="arc-card group p-5 transition-colors hover:border-arc-border-strong"
-          >
-            <div className="mb-3 flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="flex -space-x-2">
-                  <TokenIcon
-                    symbol={t.symbol}
-                    image={getImageUrl(t.metadataURI)}
-                    size={36}
-                  />
-                  <TokenIcon symbol="USDC" size={36} className="ring-2 ring-arc-bg-elevated" />
-                </div>
-                <div>
-                  <div className="font-semibold">
-                    {t.symbol ?? "?"} / USDC
-                  </div>
-                  <div className="text-xs text-arc-text-muted">{t.name ?? "-"}</div>
-                </div>
-              </div>
-              <span className="inline-flex items-center gap-1 rounded-full border border-arc-warn/30 bg-arc-warn/10 px-2 py-0.5 text-[10px] font-medium text-arc-warn">
-                <Flame className="h-3 w-3" /> LP burned
-              </span>
-            </div>
-            <div className="grid grid-cols-3 gap-2 text-xs">
-              <Stat label="TVL" value={`$${formatUSDC(tvl, USDC_DECIMALS, 0)}`} />
-              <Stat label="USDC" value={formatUSDC(usdcReserve, USDC_DECIMALS, 0)} />
-              <Stat label={t.symbol ?? "TOKEN"} value={formatToken(tokenReserve, 18, 0)} />
-            </div>
-            <div className="mt-3 flex items-center justify-between text-[11px] text-arc-text-faint">
-              <span>Burn {burnPct.toFixed(2)}% to dead</span>
-              <span className="inline-flex items-center gap-1 group-hover:text-arc-text">
-                View token <ExternalLink className="h-3 w-3" />
-              </span>
-            </div>
-          </Link>
+            token={t}
+            tvl={tvl}
+            usdcReserve={usdcReserve}
+            tokenReserve={tokenReserve}
+            burnPct={burnPct}
+          />
         );
       })}
     </div>
+  );
+}
+
+interface CardProps {
+  token: LaunchpadTokenInfo;
+  tvl: bigint;
+  usdcReserve: bigint;
+  tokenReserve: bigint;
+  burnPct: number;
+}
+
+/** Per-row card. The token's logo is fetched via the per-token metadata hook
+ *  (module-level cache, indexed-arg getLogs) which is faster + more reliable
+ *  than the bulk scan that `useLaunchpadTokens` does once on mount. */
+function BurnedCard({ token, tvl, usdcReserve, tokenReserve, burnPct }: CardProps) {
+  const { metadataURI: liveMetadataURI } = useTokenMetadataURI(token.address);
+  const metadataURI = liveMetadataURI || token.metadataURI;
+  const image = getImageUrl(metadataURI);
+
+  return (
+    <Link
+      href={`/launchpad/${token.address}`}
+      className="arc-card group p-5 transition-colors hover:border-arc-border-strong"
+    >
+      <div className="mb-3 flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <div className="flex -space-x-2">
+            <TokenIcon symbol={token.symbol} image={image} size={36} />
+            <TokenIcon symbol="USDC" size={36} className="ring-2 ring-arc-bg-elevated" />
+          </div>
+          <div>
+            <div className="font-semibold">{token.symbol ?? "?"} / USDC</div>
+            <div className="text-xs text-arc-text-muted">{token.name ?? "-"}</div>
+          </div>
+        </div>
+        <span className="inline-flex items-center gap-1 rounded-full border border-arc-warn/30 bg-arc-warn/10 px-2 py-0.5 text-[10px] font-medium text-arc-warn">
+          <Flame className="h-3 w-3" /> LP burned
+        </span>
+      </div>
+      <div className="grid grid-cols-3 gap-2 text-xs">
+        <Stat label="TVL" value={`$${formatUSDC(tvl, USDC_DECIMALS, 0)}`} />
+        <Stat label="USDC" value={formatUSDC(usdcReserve, USDC_DECIMALS, 0)} />
+        <Stat label={token.symbol ?? "TOKEN"} value={formatToken(tokenReserve, 18, 0)} />
+      </div>
+      <div className="mt-3 flex items-center justify-between text-[11px] text-arc-text-faint">
+        <span>Burn {burnPct.toFixed(2)}% to dead</span>
+        <span className="inline-flex items-center gap-1 group-hover:text-arc-text">
+          View token <ExternalLink className="h-3 w-3" />
+        </span>
+      </div>
+    </Link>
   );
 }
 

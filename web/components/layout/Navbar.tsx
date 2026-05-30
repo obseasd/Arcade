@@ -10,7 +10,6 @@ const NAV_ITEMS = [
   { href: "/swap", label: "Swap" },
   { href: "/launchpad", label: "Launchpad" },
   { href: "/positions", label: "Positions" },
-  { href: "/lp-simulator", label: "Simulator" },
   { href: "/bridge", label: "Bridge" },
 ];
 

@@ -59,27 +59,9 @@ export const PRESETS: PresetDef[] = [
       ],
     },
   },
-  {
-    id: "five-pos",
-    label: "5-Position (Optimized)",
-    description: "Clanker-style 5 positions for tighter price discovery.",
-    config: {
-      totalSupply: 1_000_000_000,
-      startingMcap: 30_000,
-      feeBps: 100,
-      ...ZERO_ALLOC,
-      positions: [
-        { lowerMcap: 30_000, upperMcap: 150_000, pctOfPool: 0.10 },
-        { lowerMcap: 150_000, upperMcap: 5_000_000, pctOfPool: 0.50 },
-        { lowerMcap: 500_000, upperMcap: 55_000_000, pctOfPool: 0.15 },
-        { lowerMcap: 55_000_000, upperMcap: 1_500_000_000, pctOfPool: 0.20 },
-        { lowerMcap: 225_000_000, upperMcap: 1_500_000_000, pctOfPool: 0.05 },
-      ],
-    },
-  },
 ];
 
-export const DEFAULT_PRESET_ID = "five-pos";
+export const DEFAULT_PRESET_ID = "standard";
 
 export function getPreset(id: string): PresetDef | undefined {
   return PRESETS.find((p) => p.id === id);
