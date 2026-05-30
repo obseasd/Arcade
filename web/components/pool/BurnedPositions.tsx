@@ -9,6 +9,7 @@ import { PAIR_ABI } from "@/lib/abis/dex";
 import { ADDRESSES, USDC_DECIMALS } from "@/lib/constants";
 import { useLaunchpadTokens } from "@/lib/hooks/useLaunchpadTokens";
 import { TokenIcon } from "@/components/ui/TokenIcon";
+import { getImageUrl } from "@/lib/metadata";
 import { formatUSDC, formatToken } from "@/lib/utils";
 
 const DEAD = "0x000000000000000000000000000000000000dEaD" as Address;
@@ -86,7 +87,11 @@ export function BurnedPositions() {
             <div className="mb-3 flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <div className="flex -space-x-2">
-                  <TokenIcon symbol={t.symbol} size={36} />
+                  <TokenIcon
+                    symbol={t.symbol}
+                    image={getImageUrl(t.metadataURI)}
+                    size={36}
+                  />
                   <TokenIcon symbol="USDC" size={36} className="ring-2 ring-arc-bg-elevated" />
                 </div>
                 <div>

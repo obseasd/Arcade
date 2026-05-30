@@ -6,12 +6,10 @@ import { useState } from "react";
 import { AddLiquidityCard } from "@/components/pool/AddLiquidityCard";
 import { MyPositions } from "@/components/pool/MyPositions";
 import { BurnedPositions } from "@/components/pool/BurnedPositions";
-import { CreatorFeesPanel } from "@/components/pool/CreatorFeesPanel";
-import { VaultClaimPanel } from "@/components/pool/VaultClaimPanel";
 import { Modal } from "@/components/ui/Modal";
 import { cn } from "@/lib/utils";
 
-type Tab = "amm" | "burned" | "creator" | "vault" | "concentrated";
+type Tab = "amm" | "burned" | "concentrated";
 
 export default function PositionsPage() {
   const [newOpen, setNewOpen] = useState(false);
@@ -65,12 +63,6 @@ export default function PositionsPage() {
         <TabButton active={tab === "burned"} onClick={() => setTab("burned")}>
           Burned
         </TabButton>
-        <TabButton active={tab === "creator"} onClick={() => setTab("creator")}>
-          Creator fees
-        </TabButton>
-        <TabButton active={tab === "vault"} onClick={() => setTab("vault")}>
-          Vested
-        </TabButton>
         <TabButton active={false} disabled label="Soon">
           Concentrated Liquidity
         </TabButton>
@@ -79,8 +71,6 @@ export default function PositionsPage() {
       {/* Tab content */}
       {tab === "amm" && <MyPositions emptyState={<EmptyState />} />}
       {tab === "burned" && <BurnedPositions />}
-      {tab === "creator" && <CreatorFeesPanel />}
-      {tab === "vault" && <VaultClaimPanel />}
 
       {/* New-position modal - panel matches the swap/bridge cards exactly
           (.arc-card = bg-black/15 backdrop-blur-xl) so the token rectangles

@@ -146,6 +146,7 @@ export function HeaderWalletWidget() {
                 </MenuItem>
                 <MenuItem
                   icon={<LineChart className="h-3.5 w-3.5" />}
+                  href="/lp-simulator"
                   onClick={() => setMenuOpen(false)}
                 >
                   LP Simulator
