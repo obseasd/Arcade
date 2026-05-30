@@ -356,6 +356,7 @@ export default function TokenDetailPage() {
               volumeRaw={volumeRaw}
               volumeTokenRaw={volumeTokenRaw}
               slotHandles={metadata.slotTwitterHandles}
+              refreshKey={refreshKey}
             />
           )}
         </div>

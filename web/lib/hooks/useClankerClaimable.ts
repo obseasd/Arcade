@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import { Address } from "viem";
 import { useReadContract, useReadContracts } from "wagmi";
 import { V3_LOCKER_ABI } from "@/lib/abis/v3";
@@ -19,8 +19,12 @@ export interface ClaimablePreview {
  * Reads the locker's `previewFees(positionId)` view, which sums pending fees
  * across all ranges via the Uniswap V3 fee growth math on-chain. One read
  * replaces the 13+ pool reads we used to do client-side.
+ *
+ * Polls every 15s so accrued fees stay current. Pass `refreshKey` (bumped on
+ * Swap events by the token page's WebSocket subscription) for an immediate
+ * refetch right after a trade rather than waiting for the next poll.
  */
-export function useClankerClaimable(token: Address | undefined): ClaimablePreview {
+export function useClankerClaimable(token: Address | undefined, refreshKey?: number): ClaimablePreview {
   const posIdQ = useReadContract({
     address: ADDRESSES.v3Locker,
     abi: V3_LOCKER_ABI,
@@ -43,8 +47,18 @@ export function useClankerClaimable(token: Address | undefined): ClaimablePrevie
           },
         ]
       : [],
-    query: { enabled: positionId > 0n },
+    // Poll on a 15s interval so the panel stays current without a page
+    // refresh as new swaps accrue fees in the locked V3 position.
+    query: { enabled: positionId > 0n, refetchInterval: 15_000 },
   });
+
+  // When the parent bumps refreshKey (eg a live Swap arrived) re-pull fees
+  // immediately instead of waiting up to 15s for the polling interval.
+  useEffect(() => {
+    if (refreshKey === undefined) return;
+    previewQ.refetch();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshKey]);
 
   return useMemo<ClaimablePreview>(() => {
     if (!previewQ.data || previewQ.data.length === 0) {

@@ -591,13 +591,6 @@ function CreateTokenInner() {
                 </button>
               ))}
             </div>
-            {poolType !== 1 && (parseFloat(creatorBuyStr || "0") > 0 || vaultPct > 0) && (
-              <div className="rounded-lg border border-arc-warn/30 bg-arc-warn/5 p-2.5 text-[11px] text-arc-warn">
-                Heads up: Standard, Deep and WETH pools (3 V3 positions) plus a creator buy or vault
-                can exceed Arc&apos;s per-tx gas ceiling (~15M). If the launch fails with out-of-gas,
-                drop the creator buy / vault or pick the Legacy pool (1 position).
-              </div>
-            )}
             {poolType === 1 && (
               <Field label="Starting market cap (USDC)" hint="1 to 1,000,000.">
                 <input

@@ -23,6 +23,10 @@ interface Props {
   volumeTokenRaw?: bigint | undefined;
   /** Per-slot Twitter @handle from token metadata. Null/missing = not attributed. */
   slotHandles?: (string | null)[];
+  /** Bumped by the parent page on every Swap event (WebSocket). Forwarded to
+   *  the claimable-fees hook so the displayed amount updates immediately after
+   *  a trade lands, instead of waiting for the 15s poll. */
+  refreshKey?: number;
 }
 
 interface Recipient {
@@ -41,7 +45,7 @@ interface Recipient {
  *
  * BPS splits are immutable post-launch (by contract design).
  */
-export function CreatorTokenPanel({ token, symbol, pool, volumeRaw, volumeTokenRaw, slotHandles }: Props) {
+export function CreatorTokenPanel({ token, symbol, pool, volumeRaw, volumeTokenRaw, slotHandles, refreshKey }: Props) {
   const { address: account } = useAccount();
   const publicClient = usePublicClient();
   const { writeContractAsync } = useWriteContract();
@@ -110,7 +114,7 @@ export function CreatorTokenPanel({ token, symbol, pool, volumeRaw, volumeTokenR
   }, [volumeTokenRaw, poolFee, myRecipientBps]);
 
   // 5) Precise unclaimed (= currently-claimable) preview via V3 fee growth math.
-  const claimable = useClankerClaimable(token);
+  const claimable = useClankerClaimable(token, refreshKey);
   const myPairedRaw = (claimable.pairedRaw * BigInt(myRecipientBps)) / 10_000n;
   const myClankerRaw = (claimable.clankerRaw * BigInt(myRecipientBps)) / 10_000n;
 
