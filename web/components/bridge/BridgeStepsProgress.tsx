@@ -16,10 +16,14 @@ interface Props {
   detail?: string;
 }
 
+/** Labels avoid the technical CCTP term "Burn" - users read that as
+ *  destructive ("my USDC is gone"). "Send" makes the source-side action
+ *  feel like a normal transfer. The hook keys still reflect CCTP semantics
+ *  so the BridgeCard state machine doesn't change. */
 const STEPS: { key: Exclude<StepKey, "idle">; label: string }[] = [
-  { key: "burn", label: "Burn" },
+  { key: "burn", label: "Send" },
   { key: "attest", label: "Attestation" },
-  { key: "mint", label: "Mint" },
+  { key: "mint", label: "Claim" },
 ];
 
 const DOT_SIZE = 32;

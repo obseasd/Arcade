@@ -120,7 +120,7 @@ function StatusBadge({ status }: { status: HistoryEntry["status"] }) {
   if (status === "minted") {
     return (
       <span className="rounded-full bg-arc-success/15 px-2 py-0.5 text-[10px] font-medium text-arc-success">
-        Minted
+        Claimed
       </span>
     );
   }

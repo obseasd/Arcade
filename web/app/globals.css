@@ -103,6 +103,24 @@
   }
 }
 
+/* Soft 1.8s pulse used on the bridge Claim button when the attestation is
+   ready - draws the eye so users actually see they need to click. */
+@keyframes arc-bridge-pulse {
+  0%,
+  100% {
+    opacity: 0.45;
+    transform: scale(0.98);
+  }
+  50% {
+    opacity: 0.95;
+    transform: scale(1.04);
+  }
+}
+
+.animate-bridge-pulse {
+  animation: arc-bridge-pulse 1.8s ease-in-out infinite;
+}
+
 @layer components {
   .arc-card {
     @apply rounded-2xl border border-arc-border bg-black/15 backdrop-blur-xl shadow-arc-card;

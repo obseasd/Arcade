@@ -354,7 +354,7 @@ export function BridgeCard() {
         explorerUrl: `${dstChainCfg.explorer}/tx/${hash}`,
       });
     } catch (e: any) {
-      setStep({ kind: "error", message: e?.shortMessage || e?.message || "Mint failed" });
+      setStep({ kind: "error", message: e?.shortMessage || e?.message || "Claim failed" });
     }
   };
 
@@ -550,12 +550,21 @@ export function BridgeCard() {
                     : `Bridge to ${dstChain.name}`}
           </button>
         ) : step.kind === "minting" ? (
-          <button
-            onClick={doMint}
-            className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-arc-success py-3.5 text-base font-medium text-white shadow-[0_18px_36px_-8px_rgba(16,185,129,0.55)] transition-colors hover:bg-arc-success/90"
-          >
-            <CheckCircle2 className="h-4 w-4" /> Mint on {dstChain.name}
-          </button>
+          // Action-required: the attestation is ready and the user has to
+          // confirm the mint tx. We wrap the button in a pulsing halo to draw
+          // the eye away from the (now-stalled) stepper above.
+          <div className="relative">
+            <span
+              className="pointer-events-none absolute inset-0 -m-1 rounded-2xl bg-arc-success/40 opacity-70 blur-md animate-bridge-pulse"
+              aria-hidden
+            />
+            <button
+              onClick={doMint}
+              className="relative inline-flex w-full items-center justify-center gap-2 rounded-xl bg-arc-success py-3.5 text-base font-medium text-white shadow-[0_18px_36px_-8px_rgba(16,185,129,0.55)] transition-colors hover:bg-arc-success/90 ring-2 ring-arc-success/60"
+            >
+              <CheckCircle2 className="h-4 w-4" /> Claim on {dstChain.name}
+            </button>
+          </div>
         ) : step.kind === "done" ? (
           <button onClick={reset} className="arc-button-secondary w-full py-3.5 text-base">
             Bridge another
@@ -591,11 +600,11 @@ export function BridgeCard() {
               step.kind === "approving"
                 ? "Approving USDC spend on the source chain…"
                 : step.kind === "burning"
-                  ? `Burning USDC on ${srcChain.name}…`
+                  ? `Sending USDC on ${srcChain.name}…`
                   : step.kind === "attesting"
                     ? `Waiting for Circle's attestation (${etaLabel(srcChain.id, fastTransfer)})…`
                     : step.kind === "minting"
-                      ? `Ready to mint on ${dstChain.name}.`
+                      ? `Ready to claim on ${dstChain.name}. Click the button above.`
                       : undefined
             }
           />
