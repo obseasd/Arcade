@@ -1,19 +1,17 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {
-    IHooks,
-    IPoolManager,
-    ILaunchpadSnipe,
-    Currency,
-    PoolKey,
-    SwapParams,
-    BeforeSwapDelta,
-    BeforeSwapDeltaLibrary,
-    BalanceDelta,
-    BalanceDeltaLibrary,
-    HookPermissions
-} from "./interfaces/IUniswapV4Types.sol";
+import {ILaunchpadSnipe} from "./interfaces/IArcadeV4Launchpad.sol";
+
+// Upstream V4 core.
+import {IHooks} from "v4-core/interfaces/IHooks.sol";
+import {IPoolManager} from "v4-core/interfaces/IPoolManager.sol";
+import {Hooks} from "v4-core/libraries/Hooks.sol";
+import {Currency} from "v4-core/types/Currency.sol";
+import {PoolKey} from "v4-core/types/PoolKey.sol";
+import {BalanceDelta} from "v4-core/types/BalanceDelta.sol";
+import {BeforeSwapDelta, BeforeSwapDeltaLibrary, toBeforeSwapDelta} from "v4-core/types/BeforeSwapDelta.sol";
+import {ModifyLiquidityParams, SwapParams} from "v4-core/types/PoolOperation.sol";
 
 /**
  * @title ArcadeAntiSniperHook
@@ -23,45 +21,43 @@ import {
  *         happened to swap through Arcade's own router (a sniper could
  *         trivially bypass it by going to the V3 pool directly).
  *
- *         As a V4 hook the tax applies on EVERY swap into the pool, no
- *         matter which router or aggregator routes it. That's the property
- *         we want: snipers can't reach the pool without paying.
+ *         As a V4 hook the tax applies on EVERY swap into the pool, no matter
+ *         which router or aggregator routes it. That's the property we want:
+ *         snipers can't reach the pool without paying.
  *
- * @dev    Hook permissions: BEFORE_SWAP_FLAG + AFTER_SWAP_FLAG. We need
- *         both because the swap shape matters:
+ * @dev    Hook permissions: BEFORE_SWAP_FLAG + AFTER_SWAP_FLAG. The address
+ *         encodes both, mined via CREATE2 (`v4script/MineHookSalt.s.sol`).
  *
- *         - exact-input buys (user specifies USDC amount): handled in
- *           beforeSwap. We see the input amount, compute the skim, call
- *           `pm.take()` to redirect it to treasury, and return a
- *           BeforeSwapDelta that tells the pool to process the reduced
- *           amount.
+ *         Sign convention (matches v4-core upstream):
+ *           amountSpecified < 0  =>  exact-INPUT  (user said "spend X USDC")
+ *           amountSpecified > 0  =>  exact-OUTPUT (user said "give me Y token")
  *
- *         - exact-output buys (user specifies tokens out): we don't know
- *           the USDC input at beforeSwap time. afterSwap runs once the pool
- *           has settled the swap; we read the actual USDC delta from
- *           BalanceDelta, compute the skim, take it to treasury, and return
- *           an int128 hookDelta so the pool charges the user extra.
+ *         - exact-INPUT buys are taxed in beforeSwap. We know the USDC amount
+ *           up-front; we take the skim and return a BeforeSwapDelta that
+ *           reduces the input the pool sees.
  *
- *         The PoolManager checks the hook ADDRESS' low 14 bits against the
- *         permission set; deploying this hook requires mining a CREATE2
- *         salt so the resulting address has bit 7 (BEFORE_SWAP_FLAG) AND
- *         bit 6 (AFTER_SWAP_FLAG) set among the permission bits.
- *         `v4script/MineHookSalt.s.sol` does that mining.
+ *         - exact-OUTPUT buys are taxed in afterSwap. beforeSwap can't see
+ *           how much USDC will end up being charged; afterSwap can read it
+ *           from BalanceDelta. We return a positive hook delta on the
+ *           unspecified currency so the pool charges the user extra USDC to
+ *           cover the skim.
+ *
+ *         The eight other IHooks slots are implemented as reverts so that
+ *         even if a misconfigured PoolManager dispatched to them, nothing
+ *         silently succeeds. The address bits gate which slots actually fire.
  */
 contract ArcadeAntiSniperHook is IHooks {
-    using BeforeSwapDeltaLibrary for BeforeSwapDelta;
-    using BalanceDeltaLibrary for BalanceDelta;
-
     /// @notice The pool manager calling our hook. Set at construction.
     IPoolManager public immutable POOL_MANAGER;
     /// @notice Arcade launchpad - read for the per-token snipe config and
-    ///         treasury address. The contract we already deploy.
+    ///         treasury address.
     ILaunchpadSnipe public immutable LAUNCHPAD;
     /// @notice USDC on Arc. Tax only applies when USDC is the input side.
     Currency public immutable USDC;
 
     error NotPoolManager();
     error InvalidLaunchpad();
+    error HookNotImplemented();
 
     event SniperSkimmed(
         address indexed token,
@@ -71,10 +67,6 @@ contract ArcadeAntiSniperHook is IHooks {
         uint256 bpsApplied
     );
 
-    /// @notice The PoolManager is the only authorised caller for hook
-    ///         entrypoints. Anyone calling beforeSwap/afterSwap directly
-    ///         would otherwise be able to drain the treasury allocation via
-    ///         the `take` calls below.
     modifier onlyPoolManager() {
         if (msg.sender != address(POOL_MANAGER)) revert NotPoolManager();
         _;
@@ -87,40 +79,37 @@ contract ArcadeAntiSniperHook is IHooks {
         USDC = usdc_;
     }
 
-    /// @notice Hook permission flags. Both BEFORE_SWAP and AFTER_SWAP are
-    ///         required so the address can encode them. The salt-mining
-    ///         script targets exactly this combination.
+    /// @notice Hook permission flags the deployed address must encode in its
+    ///         low 14 bits. `MineHookSalt` / `DeployV4` target exactly this.
     function getHookPermissions() public pure returns (uint160) {
-        return HookPermissions.BEFORE_SWAP_FLAG | HookPermissions.AFTER_SWAP_FLAG;
+        return Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG;
     }
 
     // -------------------------------------------------------------------
-    // beforeSwap: exact-input buys
+    // beforeSwap: exact-INPUT buys
     // -------------------------------------------------------------------
 
     /// @inheritdoc IHooks
     function beforeSwap(
-        address /* sender */,
+        address, /* sender */
         PoolKey calldata key,
         SwapParams calldata params,
         bytes calldata /* hookData */
     ) external override onlyPoolManager returns (bytes4, BeforeSwapDelta, uint24) {
-        // Only act on BUYs (USDC into the pool) - sells, non-USDC pools, and
-        // tokens with no snipe config all pass through transparently.
         (bool isBuy, address launchToken) = _classify(key, params.zeroForOne);
         if (!isBuy) return (IHooks.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
 
         uint256 bps = LAUNCHPAD.currentSnipeBps(launchToken);
         if (bps == 0) return (IHooks.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
 
-        // Exact-input only. Exact-output is handled in afterSwap because we
-        // need to see the realised USDC delta first.
+        // Only exact-INPUT is handled here. Exact-output goes through
+        // afterSwap because we need the realised USDC delta.
         int256 specifiedAmount = params.amountSpecified;
-        if (specifiedAmount <= 0) {
+        if (specifiedAmount >= 0) {
             return (IHooks.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
         }
 
-        uint256 amountIn = uint256(specifiedAmount);
+        uint256 amountIn = uint256(-specifiedAmount);
         uint256 skim = (amountIn * bps) / 10_000;
         if (skim == 0) return (IHooks.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
 
@@ -129,26 +118,27 @@ contract ArcadeAntiSniperHook is IHooks {
 
         emit SniperSkimmed(launchToken, treasury, amountIn, skim, bps);
 
-        BeforeSwapDelta delta =
-            BeforeSwapDeltaLibrary.toBeforeSwapDelta(int128(int256(skim)), 0);
+        // For an exact-INPUT swap the SPECIFIED currency is USDC. A positive
+        // specified-delta tells the pool the hook took that much of the
+        // specified currency, so the pool sees a reduced input amount.
+        BeforeSwapDelta delta = toBeforeSwapDelta(int128(int256(skim)), 0);
         return (IHooks.beforeSwap.selector, delta, 0);
     }
 
     // -------------------------------------------------------------------
-    // afterSwap: exact-output buys
+    // afterSwap: exact-OUTPUT buys
     // -------------------------------------------------------------------
 
     /// @inheritdoc IHooks
     function afterSwap(
-        address /* sender */,
+        address, /* sender */
         PoolKey calldata key,
         SwapParams calldata params,
         BalanceDelta delta,
         bytes calldata /* hookData */
     ) external override onlyPoolManager returns (bytes4, int128) {
-        // Only relevant for exact-output BUYS (positive amountSpecified means
-        // the user specified the output side). Exact-input was already taxed
-        // in beforeSwap.
+        // Only relevant for exact-OUTPUT buys (positive amountSpecified). The
+        // exact-input case was already taxed in beforeSwap.
         if (params.amountSpecified <= 0) {
             return (IHooks.afterSwap.selector, int128(0));
         }
@@ -158,17 +148,15 @@ contract ArcadeAntiSniperHook is IHooks {
         uint256 bps = LAUNCHPAD.currentSnipeBps(launchToken);
         if (bps == 0) return (IHooks.afterSwap.selector, int128(0));
 
-        // Recover the actual USDC paid by the user from BalanceDelta.
-        // delta.amountX is signed from the POOL's perspective: positive =
-        // received by the pool, negative = sent out by the pool. The USDC
-        // side is what the user paid IN, so it's positive on the USDC slot.
+        // BalanceDelta from the user's perspective: positive = user is owed
+        // currency from the pool, negative = user owes currency to the pool.
+        // For a BUY the user owes USDC (negative on the USDC slot) and is
+        // owed tokens (positive on the token slot). amountIn is the magnitude.
         bool usdcIsCurrency0 = Currency.unwrap(key.currency0) == Currency.unwrap(USDC);
         int128 usdcDelta = usdcIsCurrency0 ? delta.amount0() : delta.amount1();
-        if (usdcDelta <= 0) {
-            // Shouldn't happen for a BUY, but guard before casting.
-            return (IHooks.afterSwap.selector, int128(0));
-        }
-        uint256 amountIn = uint256(uint128(usdcDelta));
+        if (usdcDelta >= 0) return (IHooks.afterSwap.selector, int128(0));
+        uint256 amountIn = uint256(uint128(-usdcDelta));
+
         uint256 skim = (amountIn * bps) / 10_000;
         if (skim == 0) return (IHooks.afterSwap.selector, int128(0));
 
@@ -177,19 +165,91 @@ contract ArcadeAntiSniperHook is IHooks {
 
         emit SniperSkimmed(launchToken, treasury, amountIn, skim, bps);
 
-        // The returned int128 is added to the UNSPECIFIED currency delta,
-        // which for an exact-output swap is USDC. A positive return makes
-        // the pool charge that much more from the user, covering the skim.
+        // The returned int128 is added to the UNSPECIFIED currency delta. For
+        // an exact-output swap, the unspecified currency is the input side
+        // (USDC). A positive return makes the pool charge that much more from
+        // the user, covering the skim we just took.
         return (IHooks.afterSwap.selector, int128(int256(skim)));
     }
 
     // -------------------------------------------------------------------
-    // Internal helpers
+    // Unused IHooks slots - revert so a misconfigured address can't silently
+    // succeed. The PoolManager only dispatches the slots whose address bits
+    // are set, so in normal use these are unreachable.
+    // -------------------------------------------------------------------
+
+    function beforeInitialize(address, PoolKey calldata, uint160) external pure override returns (bytes4) {
+        revert HookNotImplemented();
+    }
+
+    function afterInitialize(address, PoolKey calldata, uint160, int24) external pure override returns (bytes4) {
+        revert HookNotImplemented();
+    }
+
+    function beforeAddLiquidity(address, PoolKey calldata, ModifyLiquidityParams calldata, bytes calldata)
+        external
+        pure
+        override
+        returns (bytes4)
+    {
+        revert HookNotImplemented();
+    }
+
+    function afterAddLiquidity(
+        address,
+        PoolKey calldata,
+        ModifyLiquidityParams calldata,
+        BalanceDelta,
+        BalanceDelta,
+        bytes calldata
+    ) external pure override returns (bytes4, BalanceDelta) {
+        revert HookNotImplemented();
+    }
+
+    function beforeRemoveLiquidity(address, PoolKey calldata, ModifyLiquidityParams calldata, bytes calldata)
+        external
+        pure
+        override
+        returns (bytes4)
+    {
+        revert HookNotImplemented();
+    }
+
+    function afterRemoveLiquidity(
+        address,
+        PoolKey calldata,
+        ModifyLiquidityParams calldata,
+        BalanceDelta,
+        BalanceDelta,
+        bytes calldata
+    ) external pure override returns (bytes4, BalanceDelta) {
+        revert HookNotImplemented();
+    }
+
+    function beforeDonate(address, PoolKey calldata, uint256, uint256, bytes calldata)
+        external
+        pure
+        override
+        returns (bytes4)
+    {
+        revert HookNotImplemented();
+    }
+
+    function afterDonate(address, PoolKey calldata, uint256, uint256, bytes calldata)
+        external
+        pure
+        override
+        returns (bytes4)
+    {
+        revert HookNotImplemented();
+    }
+
+    // -------------------------------------------------------------------
+    // Internal
     // -------------------------------------------------------------------
 
     /// @dev Determines whether this swap is a USDC -> launch token buy and
-    ///      returns the launch token address if so. Used by both hook
-    ///      entry-points to avoid duplicating the currency classification.
+    ///      returns the launch token address if so.
     function _classify(PoolKey calldata key, bool zeroForOne)
         internal
         view
@@ -199,17 +259,10 @@ contract ArcadeAntiSniperHook is IHooks {
         bool usdcIsCurrency1 = Currency.unwrap(key.currency1) == Currency.unwrap(USDC);
         if (!usdcIsCurrency0 && !usdcIsCurrency1) return (false, address(0));
 
-        // BUY = USDC into the pool. In zeroForOne=true, currency0 -> currency1
-        // direction: the input side is currency0.
         bool buy = (usdcIsCurrency0 && zeroForOne) || (usdcIsCurrency1 && !zeroForOne);
         if (!buy) return (false, address(0));
 
-        // Caller pattern: `(bool isBuy, address launchToken) = _classify(...)`
-        // - we MUST assign isBuy explicitly here, otherwise the named return
-        // defaults to false even though we passed all the buy checks.
         isBuy = true;
-        launchToken = usdcIsCurrency0
-            ? Currency.unwrap(key.currency1)
-            : Currency.unwrap(key.currency0);
+        launchToken = usdcIsCurrency0 ? Currency.unwrap(key.currency1) : Currency.unwrap(key.currency0);
     }
 }

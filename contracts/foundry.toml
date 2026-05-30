@@ -47,14 +47,25 @@ test = "v4test"
 script = "v4script"
 out = "out-v4"
 libs = ["lib"]
-skip = []
+# v4-core has its own test/ folder we don't want compiled into our out-v4.
+# Same for v4-periphery once added.
+skip = ["lib/v4-core/test/**", "lib/v4-periphery/test/**"]
 optimizer = true
 optimizer_runs = 200
 via_ir = true
 solc_version = "0.8.26"
+evm_version = "cancun"
 remappings = [
     "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/",
     "forge-std/=lib/forge-std/src/",
+    # v4-core upstream — vendored under lib/v4-core. Mirrors the import paths
+    # the canonical V4 examples use, so our `v4src/` imports work the same
+    # whether read from this repo or the upstream one.
+    "@uniswap/v4-core/=lib/v4-core/",
+    "v4-core/=lib/v4-core/src/",
+    # v4-core's own deps. We re-route them to ours where they overlap and
+    # use the vendored copy where they don't (solmate is v4-core-only today).
+    "solmate/=lib/v4-core/lib/solmate/",
 ]
 
 [fmt]

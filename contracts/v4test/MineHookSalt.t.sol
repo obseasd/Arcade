@@ -3,12 +3,9 @@ pragma solidity ^0.8.26;
 
 import {Test, console2} from "forge-std/Test.sol";
 import {ArcadeAntiSniperHook} from "../v4src/ArcadeAntiSniperHook.sol";
-import {
-    IPoolManager,
-    ILaunchpadSnipe,
-    Currency,
-    HookPermissions
-} from "../v4src/interfaces/IUniswapV4Types.sol";
+import {ILaunchpadSnipe} from "../v4src/interfaces/IArcadeV4Launchpad.sol";
+import {Hooks} from "v4-core/libraries/Hooks.sol";
+import {Currency} from "v4-core/types/Currency.sol";
 
 /**
  * Tests for the salt-mining algorithm that `MineHookSalt.s.sol` uses.
@@ -22,7 +19,7 @@ contract MineHookSaltTest is Test {
     uint160 internal constant PERM_MASK = (1 << 14) - 1;
     /// @dev Must match `ArcadeAntiSniperHook.getHookPermissions()`.
     uint160 internal constant TARGET_FLAGS =
-        HookPermissions.BEFORE_SWAP_FLAG | HookPermissions.AFTER_SWAP_FLAG;
+        Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG;
 
     address internal constant DEPLOYER = address(0xDEADBEEF);
     address internal constant POOL_MANAGER = address(0xABCD);
@@ -55,7 +52,7 @@ contract MineHookSaltTest is Test {
         // permission flags the hook declares.
         assertEq(uint160(predicted) & PERM_MASK, TARGET_FLAGS, "address permissions mismatch");
         // And the BEFORE_SWAP_FLAG (bit 7) must be set explicitly.
-        assertTrue(uint160(predicted) & HookPermissions.BEFORE_SWAP_FLAG != 0, "BEFORE_SWAP_FLAG should be set");
+        assertTrue(uint160(predicted) & Hooks.BEFORE_SWAP_FLAG != 0, "BEFORE_SWAP_FLAG should be set");
         // Sanity log so test output documents a working salt.
         console2.log("Found predicted hook address:", predicted);
         console2.logBytes32(foundSalt);
@@ -90,7 +87,7 @@ contract MineHookSaltTest is Test {
             if (uint160(predicted) & (uint160(1) << bit) != 0) setBits++;
         }
         assertEq(setBits, 2, "exactly BEFORE_SWAP + AFTER_SWAP flags should be set");
-        assertTrue(uint160(predicted) & HookPermissions.BEFORE_SWAP_FLAG != 0);
-        assertTrue(uint160(predicted) & HookPermissions.AFTER_SWAP_FLAG != 0);
+        assertTrue(uint160(predicted) & Hooks.BEFORE_SWAP_FLAG != 0);
+        assertTrue(uint160(predicted) & Hooks.AFTER_SWAP_FLAG != 0);
     }
 }

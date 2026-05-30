@@ -6,12 +6,10 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 import {ArcadeV4Launchpad} from "../v4src/ArcadeV4Launchpad.sol";
 import {ArcadeAntiSniperHook} from "../v4src/ArcadeAntiSniperHook.sol";
-import {
-    IPoolManager,
-    ILaunchpadSnipe,
-    Currency,
-    HookPermissions
-} from "../v4src/interfaces/IUniswapV4Types.sol";
+import {ILaunchpadSnipe} from "../v4src/interfaces/IArcadeV4Launchpad.sol";
+import {IPoolManager} from "v4-core/interfaces/IPoolManager.sol";
+import {Currency} from "v4-core/types/Currency.sol";
+import {Hooks} from "v4-core/libraries/Hooks.sol";
 
 /**
  * @title DeployV4
@@ -47,8 +45,7 @@ import {
  */
 contract DeployV4 is Script {
     uint160 internal constant PERM_MASK = (1 << 14) - 1;
-    uint160 internal constant TARGET_FLAGS =
-        HookPermissions.BEFORE_SWAP_FLAG | HookPermissions.AFTER_SWAP_FLAG;
+    uint160 internal constant TARGET_FLAGS = Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG;
     uint256 internal constant MAX_ATTEMPTS = 200_000;
 
     function run() external {

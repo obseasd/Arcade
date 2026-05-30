@@ -6,15 +6,15 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 import {ArcadeLaunchToken} from "../src/launchpad/ArcadeLaunchToken.sol";
-import {
-    ILaunchpadSnipe,
-    IPoolManager,
-    IUnlockCallback,
-    Currency,
-    PoolKey,
-    ModifyLiquidityParams,
-    BalanceDelta
-} from "./interfaces/IUniswapV4Types.sol";
+import {ILaunchpadSnipe} from "./interfaces/IArcadeV4Launchpad.sol";
+
+// Upstream V4 core (vendored under contracts/lib/v4-core).
+import {IPoolManager} from "v4-core/interfaces/IPoolManager.sol";
+import {IUnlockCallback} from "v4-core/interfaces/callback/IUnlockCallback.sol";
+import {Currency} from "v4-core/types/Currency.sol";
+import {PoolKey} from "v4-core/types/PoolKey.sol";
+import {ModifyLiquidityParams} from "v4-core/types/PoolOperation.sol";
+import {IHooks} from "v4-core/interfaces/IHooks.sol";
 
 /**
  * @title ArcadeV4Launchpad
@@ -289,7 +289,7 @@ contract ArcadeV4Launchpad is ILaunchpadSnipe, IUnlockCallback, ReentrancyGuard 
             currency1: c1,
             fee: POOL_FEE,
             tickSpacing: TICK_SPACING,
-            hooks: HOOK
+            hooks: IHooks(HOOK)
         });
         // Persist BEFORE the external init call so the unlockCallback can
         // read the key back from storage.

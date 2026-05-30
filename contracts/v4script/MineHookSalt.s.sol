@@ -3,12 +3,10 @@ pragma solidity ^0.8.26;
 
 import {Script, console2} from "forge-std/Script.sol";
 import {ArcadeAntiSniperHook} from "../v4src/ArcadeAntiSniperHook.sol";
-import {
-    IPoolManager,
-    ILaunchpadSnipe,
-    Currency,
-    HookPermissions
-} from "../v4src/interfaces/IUniswapV4Types.sol";
+import {ILaunchpadSnipe} from "../v4src/interfaces/IArcadeV4Launchpad.sol";
+import {IPoolManager} from "v4-core/interfaces/IPoolManager.sol";
+import {Currency} from "v4-core/types/Currency.sol";
+import {Hooks} from "v4-core/libraries/Hooks.sol";
 
 /**
  * @title MineHookSalt
@@ -41,8 +39,7 @@ contract MineHookSalt is Script {
     uint160 internal constant PERM_MASK = (1 << 14) - 1;
     /// @notice Bits we want set on the deployed hook's address - mirrors
     ///         getHookPermissions(): BEFORE_SWAP + AFTER_SWAP.
-    uint160 internal constant TARGET_FLAGS =
-        HookPermissions.BEFORE_SWAP_FLAG | HookPermissions.AFTER_SWAP_FLAG;
+    uint160 internal constant TARGET_FLAGS = Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG;
 
     /// @notice Max salts to try before giving up. 1 in 4096 chance per attempt
     ///         for two permission flags; we cap at 200k for paranoia.

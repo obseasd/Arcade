@@ -1,24 +1,21 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {Test, console2} from "forge-std/Test.sol";
+import {Test} from "forge-std/Test.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
 import {ArcadeV4Launchpad} from "../v4src/ArcadeV4Launchpad.sol";
 import {ArcadeAntiSniperHook} from "../v4src/ArcadeAntiSniperHook.sol";
-import {
-    IHooks,
-    IPoolManager,
-    IUnlockCallback,
-    Currency,
-    PoolKey,
-    SwapParams,
-    ModifyLiquidityParams,
-    BeforeSwapDelta,
-    BeforeSwapDeltaLibrary,
-    BalanceDelta
-} from "../v4src/interfaces/IUniswapV4Types.sol";
+
+import {IHooks} from "v4-core/interfaces/IHooks.sol";
+import {IPoolManager} from "v4-core/interfaces/IPoolManager.sol";
+import {IUnlockCallback} from "v4-core/interfaces/callback/IUnlockCallback.sol";
+import {Currency} from "v4-core/types/Currency.sol";
+import {PoolKey} from "v4-core/types/PoolKey.sol";
+import {BalanceDelta} from "v4-core/types/BalanceDelta.sol";
+import {ModifyLiquidityParams, SwapParams} from "v4-core/types/PoolOperation.sol";
+import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "v4-core/types/BeforeSwapDelta.sol";
 
 /// @notice Tiny ERC20 used as the test USDC. Mintable so the test can fund
 ///         the creator wallet.
@@ -37,7 +34,10 @@ contract MockUSDC is ERC20 {
 /// @notice Captures every relevant call so launchpad tests can assert the
 ///         full V4 sequence: initialize -> unlock -> modifyLiquidity ->
 ///         sync -> settle. Plus the hook's take path used by the swap tests.
-contract MockPoolManager is IPoolManager {
+///         Duck-typed (no `is IPoolManager`) because the upstream interface
+///         has 14+ methods and inherits from 4 base interfaces - tests cast
+///         `IPoolManager(address(pm))` so Solidity doesn't ABI-check.
+contract MockPoolManager {
     // --- take (hook path) ---
     Currency public lastCurrency;
     address public lastTo;
@@ -65,45 +65,37 @@ contract MockPoolManager is IPoolManager {
     bool public settleCalled;
     uint256 public settleReturn;
 
-    function take(Currency currency, address to, uint256 amount) external override {
+    function take(Currency currency, address to, uint256 amount) external {
         lastCurrency = currency;
         lastTo = to;
         lastAmount = amount;
     }
 
     // Tick the mock claims the pool initialised at. Tests set this so the
-    // launchpad's single-sided-range math runs against a known value rather
-    // than a sqrtPrice approximation.
+    // launchpad's single-sided-range math runs against a known value.
     int24 public initialTick;
 
     function setInitialTick(int24 tick) external {
         initialTick = tick;
     }
 
-    function initialize(PoolKey calldata key, uint160 sqrtPriceX96)
-        external
-        override
-        returns (int24)
-    {
+    function initialize(PoolKey memory key, uint160 sqrtPriceX96) external returns (int24) {
         lastInitKey = key;
         lastInitSqrt = sqrtPriceX96;
         initialized = true;
         return initialTick;
     }
 
-    function unlock(bytes calldata data) external override returns (bytes memory) {
+    function unlock(bytes calldata data) external returns (bytes memory) {
         lastUnlockData = data;
         unlockCount++;
-        // Call back into the unlocker so the launchpad's modifyLiquidity +
-        // settle sequence runs under our captured msg.sender check.
         return IUnlockCallback(msg.sender).unlockCallback(data);
     }
 
-    function modifyLiquidity(
-        PoolKey calldata,
-        ModifyLiquidityParams calldata params,
-        bytes calldata
-    ) external override returns (BalanceDelta, BalanceDelta) {
+    function modifyLiquidity(PoolKey memory, ModifyLiquidityParams memory params, bytes calldata)
+        external
+        returns (BalanceDelta, BalanceDelta)
+    {
         lastTickLower = params.tickLower;
         lastTickUpper = params.tickUpper;
         lastLiquidityDelta = params.liquidityDelta;
@@ -112,12 +104,12 @@ contract MockPoolManager is IPoolManager {
         return (BalanceDelta.wrap(0), BalanceDelta.wrap(0));
     }
 
-    function sync(Currency currency) external override {
+    function sync(Currency currency) external {
         lastSyncedCurrency = currency;
         syncCalled = true;
     }
 
-    function settle() external payable override returns (uint256) {
+    function settle() external payable returns (uint256) {
         settleCalled = true;
         return settleReturn;
     }
@@ -275,12 +267,12 @@ contract ArcadeV4LaunchpadTest is Test {
             currency1: Currency.wrap(c1),
             fee: lp.POOL_FEE(),
             tickSpacing: lp.TICK_SPACING(),
-            hooks: address(hook)
+            hooks: IHooks(address(hook))
         });
 
         // Determine the BUY direction relative to USDC's position in the key.
         bool zeroForOne = c0 == address(usdc);
-        SwapParams memory p = SwapParams({zeroForOne: zeroForOne, amountSpecified: 10_000, sqrtPriceLimitX96: 0});
+        SwapParams memory p = SwapParams({zeroForOne: zeroForOne, amountSpecified: -10_000, sqrtPriceLimitX96: 0});
 
         vm.prank(address(pm));
         hook.beforeSwap(address(0xA), key, p, "");
@@ -301,10 +293,10 @@ contract ArcadeV4LaunchpadTest is Test {
             currency1: Currency.wrap(c1),
             fee: lp.POOL_FEE(),
             tickSpacing: lp.TICK_SPACING(),
-            hooks: address(hook)
+            hooks: IHooks(address(hook))
         });
         bool zeroForOne = c0 == address(usdc);
-        SwapParams memory p = SwapParams({zeroForOne: zeroForOne, amountSpecified: 10_000, sqrtPriceLimitX96: 0});
+        SwapParams memory p = SwapParams({zeroForOne: zeroForOne, amountSpecified: -10_000, sqrtPriceLimitX96: 0});
 
         vm.prank(address(pm));
         hook.beforeSwap(address(0xA), key, p, "");
@@ -332,7 +324,7 @@ contract ArcadeV4LaunchpadTest is Test {
         // initialize() was called with the right PoolKey + price.
         assertTrue(pm.initialized(), "PM.initialize called");
         assertEq(pm.lastInitSqrt(), sqrtPriceX96);
-        (Currency c0, Currency c1, uint24 fee, int24 spacing, address hooks) = pm.lastInitKey();
+        (Currency c0, Currency c1, uint24 fee, int24 spacing, IHooks hooks) = pm.lastInitKey();
         (address e0, address e1) = address(usdc) < token
             ? (address(usdc), token)
             : (token, address(usdc));
@@ -340,7 +332,7 @@ contract ArcadeV4LaunchpadTest is Test {
         assertEq(Currency.unwrap(c1), e1, "currency1 canonical");
         assertEq(fee, 10_000, "1% fee");
         assertEq(spacing, 200, "tick spacing 200");
-        assertEq(hooks, address(hook), "hooks address piped from setHook");
+        assertEq(address(hooks), address(hook), "hooks address piped from setHook");
 
         assertEq(pm.unlockCount(), 1, "unlock called once");
         assertTrue(pm.modifyLiquidityCalled(), "modifyLiquidity called");
@@ -494,10 +486,10 @@ contract ArcadeV4LaunchpadTest is Test {
             currency1: Currency.wrap(c1),
             fee: lp.POOL_FEE(),
             tickSpacing: lp.TICK_SPACING(),
-            hooks: address(hook)
+            hooks: IHooks(address(hook))
         });
         bool zeroForOne = c0 == address(usdc);
-        SwapParams memory p = SwapParams({zeroForOne: zeroForOne, amountSpecified: 10_000, sqrtPriceLimitX96: 0});
+        SwapParams memory p = SwapParams({zeroForOne: zeroForOne, amountSpecified: -10_000, sqrtPriceLimitX96: 0});
 
         // At launch: 10% of 10_000 = 1_000.
         vm.prank(address(pm));
@@ -518,6 +510,6 @@ contract ArcadeV4LaunchpadTest is Test {
         // We assert the BeforeSwapDelta is zero instead.
         vm.prank(address(pm));
         (, BeforeSwapDelta delta, ) = hook.beforeSwap(address(0xA), key, p, "");
-        assertEq(BeforeSwapDeltaLibrary.specifiedDelta(delta), 0, "no delta after decay");
+        assertEq(BeforeSwapDeltaLibrary.getSpecifiedDelta(delta), 0, "no delta after decay");
     }
 }
