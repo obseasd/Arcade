@@ -71,6 +71,15 @@ contract MockPoolManager is IPoolManager {
         lastAmount = amount;
     }
 
+    // Tick the mock claims the pool initialised at. Tests set this so the
+    // launchpad's single-sided-range math runs against a known value rather
+    // than a sqrtPrice approximation.
+    int24 public initialTick;
+
+    function setInitialTick(int24 tick) external {
+        initialTick = tick;
+    }
+
     function initialize(PoolKey calldata key, uint160 sqrtPriceX96)
         external
         override
@@ -79,7 +88,7 @@ contract MockPoolManager is IPoolManager {
         lastInitKey = key;
         lastInitSqrt = sqrtPriceX96;
         initialized = true;
-        return 0;
+        return initialTick;
     }
 
     function unlock(bytes calldata data) external override returns (bytes memory) {
@@ -126,18 +135,19 @@ contract ArcadeV4LaunchpadTest is Test {
     function setUp() public {
         usdc = new MockUSDC();
         pm = new MockPoolManager();
+        // Bootstrap order matches production: deploy launchpad, then hook,
+        // then wire setHook.
         lp = new ArcadeV4Launchpad(
             IERC20(address(usdc)),
             IPoolManager(address(pm)),
-            address(0), // hook address - filled in below
             TREASURY
         );
-        // The hook reads the launchpad address for snipe config + treasury.
         hook = new ArcadeAntiSniperHook(
             IPoolManager(address(pm)),
             lp,
             Currency.wrap(address(usdc))
         );
+        lp.setHook(address(hook));
         // Fund + approve creation fee.
         usdc.mint(CREATOR, 100e6);
         vm.prank(CREATOR);
@@ -308,11 +318,12 @@ contract ArcadeV4LaunchpadTest is Test {
         vm.prank(CREATOR);
         address token = lp.createLaunch("Test", "TEST", "", 500, 30 minutes, 0);
 
-        // Pick a starting sqrtPriceX96. The launchpad's _tickAtSqrtPriceApprox
-        // returns -TICK_SPACING (-200) for any value below 2^96, and 0 at /
-        // above 2^96. We pick a sub-2^96 value so the test exercises the
-        // currency0/currency1 branch deterministically.
-        uint160 sqrtPriceX96 = uint160(1 << 95); // < 2^96 → currentTick = -200
+        // Configure the mock to claim the pool initialised at tick -200.
+        // This makes the single-sided-range math deterministic: with currency0
+        // = token branch the range is (0, maxUsable]; with currency1 = token
+        // branch the range is [-maxUsable, -200].
+        pm.setInitialTick(int24(-200));
+        uint160 sqrtPriceX96 = uint160(1 << 95);
         int128 liquidityDelta = 1_000_000;
 
         vm.prank(CREATOR);
@@ -321,8 +332,7 @@ contract ArcadeV4LaunchpadTest is Test {
         // initialize() was called with the right PoolKey + price.
         assertTrue(pm.initialized(), "PM.initialize called");
         assertEq(pm.lastInitSqrt(), sqrtPriceX96);
-        (Currency c0, Currency c1, uint24 fee, int24 spacing,) = pm.lastInitKey();
-        // canonical sort
+        (Currency c0, Currency c1, uint24 fee, int24 spacing, address hooks) = pm.lastInitKey();
         (address e0, address e1) = address(usdc) < token
             ? (address(usdc), token)
             : (token, address(usdc));
@@ -330,35 +340,26 @@ contract ArcadeV4LaunchpadTest is Test {
         assertEq(Currency.unwrap(c1), e1, "currency1 canonical");
         assertEq(fee, 10_000, "1% fee");
         assertEq(spacing, 200, "tick spacing 200");
-        // hooks address isn't asserted because the test setUp wires the
-        // launchpad with hook=0 (the hook is salt-mined after the launchpad
-        // exists). Production deploys mine the salt first and pass the
-        // predicted address into the launchpad constructor.
-        assertEq(lp.HOOK(), address(0), "test setUp wired hook=0");
+        assertEq(hooks, address(hook), "hooks address piped from setHook");
 
-        // unlock() fired exactly once.
         assertEq(pm.unlockCount(), 1, "unlock called once");
-
-        // modifyLiquidity inside the callback used a single-sided range and
-        // the requested liquidityDelta. The exact tick bounds depend on
-        // whether the launch token is currency0 or currency1.
         assertTrue(pm.modifyLiquidityCalled(), "modifyLiquidity called");
         assertEq(pm.lastLiquidityDelta(), int256(liquidityDelta));
         assertEq(pm.lastSalt(), bytes32(0));
         bool tokenIsC0 = address(token) < address(usdc);
         if (tokenIsC0) {
-            // Above-current: lower bound just above currentTick, upper at max.
-            // currentTick = -200, floor stays at -200, base = -200 + 200 = 0.
+            // Above-current: lower = floor(-200)+200 = 0; upper = maxUsable.
             assertEq(pm.lastTickLower(), int24(0));
             assertEq(pm.lastTickUpper(), int24((MAX_TICK_MATH() / 200) * 200));
         } else {
-            // Below-current: lower at min, upper = floor(currentTick).
+            // Below-current: lower = -maxUsable; upper = floor(-200) = -200.
             assertEq(pm.lastTickLower(), int24(-(MAX_TICK_MATH() / 200) * 200));
             assertEq(pm.lastTickUpper(), int24(-200));
         }
 
-        // sync + settle for the launch token: the launchpad transferred the
-        // full TOTAL_SUPPLY to the PoolManager during the unlock callback.
+        // sync + settle for the launch token: the launchpad transferred its
+        // balance (= TOTAL_SUPPLY here since creator allocation is 0) to the
+        // PoolManager during the unlock callback.
         Currency expectedSync = tokenIsC0 ? c0 : c1;
         assertEq(Currency.unwrap(pm.lastSyncedCurrency()), Currency.unwrap(expectedSync));
         assertTrue(pm.syncCalled(), "sync called");
@@ -406,9 +407,73 @@ contract ArcadeV4LaunchpadTest is Test {
     }
 
     function test_unlockCallback_onlyPoolManager() public {
-        bytes memory data = abi.encode(address(0), uint160(0), int128(0));
+        bytes memory data = abi.encode(address(0), int24(0), int128(0), uint160(0));
         vm.expectRevert(ArcadeV4Launchpad.NotPoolManager.selector);
         lp.unlockCallback(data);
+    }
+
+    // --- setHook one-shot wiring -----------------------------------------
+
+    function test_setHook_revertsOnSecondCall() public {
+        // setUp already called setHook once. A second call by anyone reverts.
+        vm.expectRevert(ArcadeV4Launchpad.HookAlreadySet.selector);
+        lp.setHook(address(0xBEEF));
+    }
+
+    function test_setHook_revertsForNonDeployer() public {
+        // Fresh launchpad so HOOK starts unset.
+        ArcadeV4Launchpad fresh = new ArcadeV4Launchpad(
+            IERC20(address(usdc)), IPoolManager(address(pm)), TREASURY
+        );
+        vm.prank(address(0xBAD));
+        vm.expectRevert(ArcadeV4Launchpad.NotDeployer.selector);
+        fresh.setHook(address(0xBEEF));
+    }
+
+    function test_setHook_revertsOnZeroAddress() public {
+        ArcadeV4Launchpad fresh = new ArcadeV4Launchpad(
+            IERC20(address(usdc)), IPoolManager(address(pm)), TREASURY
+        );
+        vm.expectRevert(ArcadeV4Launchpad.ZeroAddress.selector);
+        fresh.setHook(address(0));
+    }
+
+    function test_constructor_rejectsZeroAddresses() public {
+        vm.expectRevert(ArcadeV4Launchpad.ZeroAddress.selector);
+        new ArcadeV4Launchpad(IERC20(address(0)), IPoolManager(address(pm)), TREASURY);
+        vm.expectRevert(ArcadeV4Launchpad.ZeroAddress.selector);
+        new ArcadeV4Launchpad(IERC20(address(usdc)), IPoolManager(address(pm)), address(0));
+    }
+
+    // --- View helpers ----------------------------------------------------
+
+    function test_previewPosition_returnsSingleSidedRange() public {
+        vm.prank(CREATOR);
+        address token = lp.createLaunch("Test", "TEST", "", 0, 0, 0);
+
+        (int24 tickLower, int24 tickUpper, bool tokenIsC0) =
+            lp.previewPosition(token, int24(-200));
+
+        assertEq(tokenIsC0, address(token) < address(usdc));
+        if (tokenIsC0) {
+            assertEq(tickLower, int24(0));
+            assertEq(tickUpper, int24((MAX_TICK_MATH() / 200) * 200));
+        } else {
+            assertEq(tickLower, int24(-(MAX_TICK_MATH() / 200) * 200));
+            assertEq(tickUpper, int24(-200));
+        }
+    }
+
+    function test_previewPosition_revertsOnUnknownToken() public {
+        vm.expectRevert(ArcadeV4Launchpad.UnknownToken.selector);
+        lp.previewPosition(address(0xDEAD), int24(0));
+    }
+
+    function test_poolAllocation_reflectsCreatorDeduction() public {
+        vm.prank(CREATOR);
+        address token = lp.createLaunch("Test", "TEST", "", 0, 0, 300); // 3%
+        uint256 expected = lp.TOTAL_SUPPLY() - (lp.TOTAL_SUPPLY() * 300) / 10_000;
+        assertEq(lp.poolAllocation(token), expected);
     }
 
     /// @dev Mirrors the V4 MAX_TICK constant the launchpad uses for the upper

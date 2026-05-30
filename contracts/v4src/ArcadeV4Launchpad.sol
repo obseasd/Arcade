@@ -23,24 +23,26 @@ import {
  *         production V2/V3 launchpad — has its own token registry, its own
  *         treasury, and exposes the `ILaunchpadSnipe` surface the hook reads.
  *
- *         What this contract does today:
+ *         What this contract does:
  *           - Pulls a fixed creation fee in USDC.
  *           - Deploys an ArcadeLaunchToken with the canonical 1B supply.
+ *           - Hands an opening allocation (max 10%) straight to the creator.
  *           - Stores the per-token snipe configuration (start bps + decay
  *             seconds) and the launch timestamp. The hook reads this on
  *             every swap via `currentSnipeBps(token)`.
+ *           - Initialises the V4 pool and locks single-sided liquidity via
+ *             the `unlock` -> `modifyLiquidity` -> `sync` -> `settle` sequence.
  *           - Exposes `treasury()` so the hook knows where to route skims.
  *
- *         What's deferred to a follow-up commit (needs a real V4 PoolManager
- *         on Arc):
- *           - V4 pool initialization (`POOL_MANAGER.initialize(key, sqrtPrice)`).
- *           - Single-sided liquidity locking via the V4 unlock callback
- *             pattern (`unlock` + `modifyLiquidity` + `settle`).
- *           - Optional creator buy at launch.
+ *         Bootstrap order (mutual constructor dependency between hook and
+ *         launchpad is broken with a one-shot `setHook`):
+ *           1. Deploy launchpad (HOOK = 0).
+ *           2. CREATE2-deploy the anti-sniper hook with constructor refs
+ *              pointing at the launchpad, using a salt mined so the deployed
+ *              address has BEFORE_SWAP + AFTER_SWAP permission bits set.
+ *           3. Call `launchpad.setHook(hookAddr)`. Reverts on second call.
  *
- *         Splitting it this way means the on-chain hook can be tested against
- *         a deployed launchpad TODAY (and the salt miner can target a real
- *         deployer address), without waiting for a working V4 PoolManager.
+ *         `DeployV4.s.sol` orchestrates this end to end.
  */
 contract ArcadeV4Launchpad is ILaunchpadSnipe, IUnlockCallback, ReentrancyGuard {
     using SafeERC20 for IERC20;
@@ -51,13 +53,15 @@ contract ArcadeV4Launchpad is ILaunchpadSnipe, IUnlockCallback, ReentrancyGuard 
 
     /// @notice USDC on Arc. Required as currency in every V4 pool we register.
     IERC20 public immutable USDC;
-    /// @notice The V4 PoolManager all our pools live on. Stored for the
-    ///         follow-up pool-init commit; this version doesn't call it.
+    /// @notice The V4 PoolManager all our pools live on.
     IPoolManager public immutable POOL_MANAGER;
     /// @notice Anti-sniper hook deployed at a CREATE2 address whose low 14
     ///         bits encode BEFORE_SWAP + AFTER_SWAP. Every V4 pool created
-    ///         here uses this hook.
-    address public immutable HOOK;
+    ///         here uses this hook. Settable ONCE by the deployer post-construct
+    ///         to resolve the mutual constructor dependency with the hook
+    ///         (hook needs the launchpad address; launchpad needs the
+    ///         CREATE2-mined hook address).
+    address public HOOK;
     /// @notice Treasury that receives the creation fee and (via the hook)
     ///         the snipe-skim deltas on every taxed swap.
     address public immutable TREASURY;
@@ -113,10 +117,11 @@ contract ArcadeV4Launchpad is ILaunchpadSnipe, IUnlockCallback, ReentrancyGuard 
     error AlreadyLaunched();
     error UnknownToken();
     error PoolAlreadyInitialized();
-    error PoolNotInitialized();
     error NotPoolManager();
+    error NotDeployer();
+    error HookAlreadySet();
+    error ZeroAddress();
     error ZeroLiquidity();
-    error TransferFailed();
 
     event TokenLaunched(
         address indexed token,
@@ -139,12 +144,25 @@ contract ArcadeV4Launchpad is ILaunchpadSnipe, IUnlockCallback, ReentrancyGuard 
         int256 liquidityDelta
     );
 
-    constructor(IERC20 usdc_, IPoolManager poolManager_, address hook_, address treasury_) {
+    event HookSet(address indexed hook);
+
+    constructor(IERC20 usdc_, IPoolManager poolManager_, address treasury_) {
+        if (address(usdc_) == address(0) || treasury_ == address(0)) revert ZeroAddress();
         USDC = usdc_;
         POOL_MANAGER = poolManager_;
-        HOOK = hook_;
         TREASURY = treasury_;
         DEPLOYER = msg.sender;
+    }
+
+    /// @notice One-shot setter the deployer calls after CREATE2-deploying the
+    ///         anti-sniper hook at its salt-mined address. Reverts once set,
+    ///         so the wiring is effectively immutable post-bootstrap.
+    function setHook(address hook_) external {
+        if (msg.sender != DEPLOYER) revert NotDeployer();
+        if (HOOK != address(0)) revert HookAlreadySet();
+        if (hook_ == address(0)) revert ZeroAddress();
+        HOOK = hook_;
+        emit HookSet(hook_);
     }
 
     // ===================== Launching =====================
@@ -258,8 +276,7 @@ contract ArcadeV4Launchpad is ILaunchpadSnipe, IUnlockCallback, ReentrancyGuard 
         if (l.token == address(0)) revert UnknownToken();
         // currency0 is always either USDC or the launch token after a
         // successful init, both non-zero. We can't use `hooks != 0` because
-        // the hook permission-mining flow technically allows a zero address
-        // (and in tests the launchpad is wired before the hook exists).
+        // the hook permission-mining flow technically allows a zero address.
         if (Currency.unwrap(l.poolKey.currency0) != address(0)) revert PoolAlreadyInitialized();
         if (liquidityDelta <= 0) revert ZeroLiquidity();
 
@@ -278,12 +295,15 @@ contract ArcadeV4Launchpad is ILaunchpadSnipe, IUnlockCallback, ReentrancyGuard 
         // read the key back from storage.
         l.poolKey = key;
 
-        POOL_MANAGER.initialize(key, sqrtPriceX96);
+        // PoolManager returns the actual tick the pool initialised at; we
+        // pipe that into unlockCallback rather than re-deriving from sqrtPrice
+        // (which would require the full TickMath library inline).
+        int24 currentTick = POOL_MANAGER.initialize(key, sqrtPriceX96);
 
         // Hand control to the PoolManager: it calls our unlockCallback with
         // the data we encode here, and inside that callback we run the
         // modifyLiquidity + settle sequence.
-        POOL_MANAGER.unlock(abi.encode(token, sqrtPriceX96, liquidityDelta));
+        POOL_MANAGER.unlock(abi.encode(token, currentTick, liquidityDelta, sqrtPriceX96));
     }
 
     /// @inheritdoc IUnlockCallback
@@ -294,15 +314,13 @@ contract ArcadeV4Launchpad is ILaunchpadSnipe, IUnlockCallback, ReentrancyGuard 
     ///      into the PoolManager.
     function unlockCallback(bytes calldata data) external override returns (bytes memory) {
         if (msg.sender != address(POOL_MANAGER)) revert NotPoolManager();
-        (address token, uint160 sqrtPriceX96, int128 liquidityDelta) =
-            abi.decode(data, (address, uint160, int128));
+        (address token, int24 currentTick, int128 liquidityDelta, uint160 sqrtPriceX96) =
+            abi.decode(data, (address, int24, int128, uint160));
 
         Launch storage l = launches[token];
         PoolKey memory key = l.poolKey;
 
-        // Determine which currency is the launch token + its initial tick.
         bool tokenIsCurrency0 = Currency.unwrap(key.currency0) == token;
-        int24 currentTick = _tickAtSqrtPriceApprox(sqrtPriceX96);
         (int24 tickLower, int24 tickUpper) = _singleSidedRange(tokenIsCurrency0, currentTick);
 
         ModifyLiquidityParams memory params = ModifyLiquidityParams({
@@ -359,19 +377,34 @@ contract ArcadeV4Launchpad is ILaunchpadSnipe, IUnlockCallback, ReentrancyGuard 
         return compressed * TICK_SPACING;
     }
 
-    /// @dev Approximate currentTick from sqrtPriceX96. We pass this through to
-    ///      `_singleSidedRange` to compute the position bounds. For the
-    ///      prototype we use a coarse derivation; in production the
-    ///      PoolManager.initialize return value (the actual tick) should be
-    ///      stored on the Launch struct so we don't recompute.
-    function _tickAtSqrtPriceApprox(uint160 sqrtPriceX96) internal pure returns (int24) {
-        // tick = floor(log_{1.0001}(price)) where price = (sqrt / 2^96)^2.
-        // For the prototype we return 0 when sqrtPriceX96 is at the Q96 unit
-        // (price = 1) and rely on a real V4 deploy storing the manager's
-        // returned tick. Tests inject a controlled value through this path
-        // and assert the position bounds are sane.
-        if (sqrtPriceX96 >= 1 << 96) return 0;
-        return -TICK_SPACING; // any small negative; tests verify the snap behaviour
+    /// @notice Pre-flight view used by the frontend / deploy script to size the
+    ///         `liquidityDelta` arg of `initializePool`. Returns the bounds
+    ///         that `unlockCallback` will use, plus the tick the pool will
+    ///         initialise at if the caller passes `currentTick`. The actual
+    ///         liquidity-from-amount math (LiquidityAmounts.getLiquidityForAmount0
+    ///         / Amount1) lives off-chain because importing it inline would
+    ///         double the bytecode size for a single view. The returned bounds
+    ///         are the inputs that lib needs.
+    /// @param token Previously launched token (must exist).
+    /// @param currentTick Tick the pool is initialising at, as reported by
+    ///        PoolManager. Off-chain callers can derive this from sqrtPriceX96
+    ///        via TickMath.getTickAtSqrtPrice.
+    function previewPosition(address token, int24 currentTick)
+        external
+        view
+        returns (int24 tickLower, int24 tickUpper, bool tokenIsCurrency0)
+    {
+        Launch memory l = launches[token];
+        if (l.token == address(0)) revert UnknownToken();
+        tokenIsCurrency0 = address(token) < address(USDC);
+        (tickLower, tickUpper) = _singleSidedRange(tokenIsCurrency0, currentTick);
+    }
+
+    /// @notice Amount of the launch token that's still in the launchpad and
+    ///         will be locked into the pool by `initializePool`. Useful for
+    ///         the frontend to display the pool's opening reserve.
+    function poolAllocation(address token) external view returns (uint256) {
+        return IERC20(token).balanceOf(address(this));
     }
 
     // ===================== ILaunchpadSnipe surface =====================

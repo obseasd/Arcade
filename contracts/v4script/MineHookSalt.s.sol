@@ -39,12 +39,13 @@ import {
 contract MineHookSalt is Script {
     /// @notice Mask covering all 14 permission bits in V4 hook addresses.
     uint160 internal constant PERM_MASK = (1 << 14) - 1;
-    /// @notice Bits we want set on the deployed hook's address - only
-    ///         BEFORE_SWAP_FLAG today, mirrors getHookPermissions().
-    uint160 internal constant TARGET_FLAGS = HookPermissions.BEFORE_SWAP_FLAG;
+    /// @notice Bits we want set on the deployed hook's address - mirrors
+    ///         getHookPermissions(): BEFORE_SWAP + AFTER_SWAP.
+    uint160 internal constant TARGET_FLAGS =
+        HookPermissions.BEFORE_SWAP_FLAG | HookPermissions.AFTER_SWAP_FLAG;
 
-    /// @notice Max salts to try before giving up. 1 in 8192 chance per attempt
-    ///         for a single permission flag; we cap at 200k for paranoia.
+    /// @notice Max salts to try before giving up. 1 in 4096 chance per attempt
+    ///         for two permission flags; we cap at 200k for paranoia.
     uint256 internal constant MAX_ATTEMPTS = 200_000;
 
     function run() external view {
