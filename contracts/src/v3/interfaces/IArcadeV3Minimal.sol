@@ -30,9 +30,20 @@ interface IArcadeTokenVault {
     ) external returns (uint256 id);
 }
 
-/// @notice ArcadeV3SwapRouter — used by the launchpad for the optional creator buy.
+/// @notice ArcadeV3SwapRouter — used by the launchpad for the optional creator
+/// buy and by ArcadeMultiSwap for V3-paired tokens (Clanker V3 launches).
 interface IArcadeV3Router {
     function exactInputSingle(
+        address tokenIn,
+        address tokenOut,
+        uint24 fee,
+        address recipient,
+        uint256 amountIn,
+        uint256 amountOutMinimum,
+        uint256 deadline
+    ) external returns (uint256 amountOut);
+
+    function exactInputThroughUsdc(
         address tokenIn,
         address tokenOut,
         uint24 fee,

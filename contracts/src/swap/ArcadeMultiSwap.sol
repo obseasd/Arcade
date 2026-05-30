@@ -8,6 +8,14 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 import {IArcadeV2Factory} from "../dex/interfaces/IArcadeV2Factory.sol";
 import {IArcadeV2Router} from "../dex/interfaces/IArcadeV2Router.sol";
 import {IArcadeLaunchpad} from "../launchpad/interfaces/IArcadeLaunchpad.sol";
+import {IArcadeV3Router} from "../v3/interfaces/IArcadeV3Minimal.sol";
+
+interface ILaunchpadExtra {
+    /// @notice Returns true if `token` is a launchpad token that uses the V3
+    /// path (Clanker V3 launches — no V2 pair, traded directly on V3 from
+    /// birth). The launchpad sets this when the V3 router is wired.
+    function isMigrated(address token) external view returns (bool);
+}
 
 /**
  * @title ArcadeMultiSwap
@@ -17,12 +25,14 @@ import {IArcadeLaunchpad} from "../launchpad/interfaces/IArcadeLaunchpad.sol";
  *
  *         Per-input routing matches the SwapCard single-swap behaviour:
  *           1. tokenIn == tokenOut         -> passthrough (no swap, no fee)
- *           2. USDC on either side          -> direct V2 swap
- *           3. direct A<->B pool exists     -> direct V2 swap
- *           4. either side is migrated lp   -> launchpad.swapMigratedRoute
- *                                              (so royalty is paid on each
- *                                              migrated leg of A->USDC->B)
- *           5. otherwise                    -> V2 multi-hop via USDC
+ *           2. Either side is a Clanker V3 launch token (no V2 pair):
+ *              route through the V3 router (single hop if the other side
+ *              is USDC, two-hop pivoting through USDC otherwise).
+ *           3. Either side is a curve-migrated launchpad token with a V2
+ *              pair: route through launchpad.swapMigratedRoute so the
+ *              royalty is paid on each migrated leg.
+ *           4. USDC on either side OR direct A<->B pool exists: direct V2.
+ *           5. Otherwise: V2 multi-hop via USDC.
  *
  *         No additional fee is charged by this router on top of the underlying
  *         routes; it only orchestrates approvals and accumulates outputs.
@@ -34,6 +44,12 @@ contract ArcadeMultiSwap is ReentrancyGuard {
     IArcadeV2Factory public immutable v2Factory;
     IArcadeV2Router public immutable v2Router;
     IArcadeLaunchpad public immutable launchpad;
+    /// @notice ArcadeV3SwapRouter — required to route Clanker V3 launch tokens.
+    /// May be the zero address on deployments that don't use V3.
+    IArcadeV3Router public immutable v3Router;
+    /// @notice V3 fee tier used for all Clanker V3 pools (1%). Matches the
+    /// launchpad constant.
+    uint24 public constant V3_FEE = 10_000;
 
     /// @dev Cap to keep gas predictable and prevent malicious "long-list" calls.
     uint256 public constant MAX_INPUTS = 8;
@@ -61,7 +77,8 @@ contract ArcadeMultiSwap is ReentrancyGuard {
         IERC20 usdc_,
         IArcadeV2Factory v2Factory_,
         IArcadeV2Router v2Router_,
-        IArcadeLaunchpad launchpad_
+        IArcadeLaunchpad launchpad_,
+        IArcadeV3Router v3Router_
     ) {
         if (
             address(usdc_) == address(0)
@@ -73,6 +90,7 @@ contract ArcadeMultiSwap is ReentrancyGuard {
         v2Factory = v2Factory_;
         v2Router = v2Router_;
         launchpad = launchpad_;
+        v3Router = v3Router_; // may be address(0) on deployments without V3
     }
 
     /**
@@ -107,7 +125,7 @@ contract ArcadeMultiSwap is ReentrancyGuard {
             }
 
             IERC20(inp.token).safeTransferFrom(msg.sender, address(this), inp.amount);
-            totalOut += _routeOne(inp.token, tokenOut, inp.amount);
+            totalOut += _routeOne(inp.token, tokenOut, inp.amount, deadline);
         }
 
         if (totalOut < minTotalOut) revert InsufficientOutput();
@@ -117,31 +135,46 @@ contract ArcadeMultiSwap is ReentrancyGuard {
         emit MultiSwap(msg.sender, tokenOut, inputs.length, totalOut);
     }
 
+    /// @dev Returns true iff `token` is a launchpad token that has no V2 pair
+    /// (ie a Clanker V3 launch). We treat this as "V3 token" — must route via
+    /// the V3 router, not the V2 path.
+    function _isV3LaunchToken(address token) internal view returns (bool) {
+        if (!launchpad.isMigrated(token)) return false;
+        return v2Factory.getPair(token, address(USDC)) == address(0);
+    }
+
     /// @dev Picks the best route for a single (tokenIn -> tokenOut) leg and
     /// executes it. Output is sent to `address(this)` so the caller can
     /// accumulate before forwarding.
-    function _routeOne(address tokenIn, address tokenOut, uint256 amountIn) internal returns (uint256) {
-        // 1) Direct V2 path: USDC pivot or an explicit A<->B pool exists.
-        bool oneSideUsdc = tokenIn == address(USDC) || tokenOut == address(USDC);
-        if (oneSideUsdc || v2Factory.getPair(tokenIn, tokenOut) != address(0)) {
-            return _swapV2(tokenIn, tokenOut, amountIn, /*viaUsdc=*/ false);
+    function _routeOne(address tokenIn, address tokenOut, uint256 amountIn, uint256 deadline) internal returns (uint256) {
+        // 1) Clanker V3 launches have no V2 pair — route via the V3 router.
+        bool inIsV3 = _isV3LaunchToken(tokenIn);
+        bool outIsV3 = _isV3LaunchToken(tokenOut);
+        if (inIsV3 || outIsV3) {
+            return _swapV3(tokenIn, tokenOut, amountIn, deadline);
         }
 
-        // 2) Multi-hop via USDC. If at least one side is a migrated launchpad
-        // token, route through the launchpad so the royalty is paid; otherwise
-        // a plain V2 multi-hop is enough.
+        // 2) Direct V2 path: USDC pivot or an explicit A<->B pool exists.
+        bool oneSideUsdc = tokenIn == address(USDC) || tokenOut == address(USDC);
+        if (oneSideUsdc || v2Factory.getPair(tokenIn, tokenOut) != address(0)) {
+            return _swapV2(tokenIn, tokenOut, amountIn, /*viaUsdc=*/ false, deadline);
+        }
+
+        // 3) Multi-hop via USDC. If at least one side is a curve-migrated
+        // launchpad token, route through the launchpad so the royalty is paid;
+        // otherwise a plain V2 multi-hop is enough.
         bool inMigrated = launchpad.isMigrated(tokenIn);
         bool outMigrated = launchpad.isMigrated(tokenOut);
         if (inMigrated || outMigrated) {
             IERC20(tokenIn).forceApprove(address(launchpad), amountIn);
-            return launchpad.swapMigratedRoute(tokenIn, tokenOut, amountIn, 0);
+            return launchpad.swapMigratedRoute(tokenIn, tokenOut, amountIn, 0, deadline);
         }
 
-        return _swapV2(tokenIn, tokenOut, amountIn, /*viaUsdc=*/ true);
+        return _swapV2(tokenIn, tokenOut, amountIn, /*viaUsdc=*/ true, deadline);
     }
 
     /// @dev Helper for the two V2 paths (direct or via USDC).
-    function _swapV2(address tokenIn, address tokenOut, uint256 amountIn, bool viaUsdc)
+    function _swapV2(address tokenIn, address tokenOut, uint256 amountIn, bool viaUsdc, uint256 deadline)
         internal
         returns (uint256)
     {
@@ -158,9 +191,21 @@ contract ArcadeMultiSwap is ReentrancyGuard {
             path[1] = tokenOut;
         }
         uint256[] memory amounts = v2Router.swapExactTokensForTokens(
-            amountIn, 0, path, address(this), block.timestamp + 600
+            amountIn, 0, path, address(this), deadline
         );
         return amounts[path.length - 1];
+    }
+
+    /// @dev Route a leg through the V3 router. Single hop if the other side is
+    /// USDC (USDC-paired Clanker V3 pool), two-hop pivoting through USDC
+    /// otherwise (eg ClankerA -> USDC -> ClankerB).
+    function _swapV3(address tokenIn, address tokenOut, uint256 amountIn, uint256 deadline) internal returns (uint256) {
+        if (address(v3Router) == address(0)) revert ZeroAddress();
+        IERC20(tokenIn).forceApprove(address(v3Router), amountIn);
+        if (tokenIn == address(USDC) || tokenOut == address(USDC)) {
+            return v3Router.exactInputSingle(tokenIn, tokenOut, V3_FEE, address(this), amountIn, 0, deadline);
+        }
+        return v3Router.exactInputThroughUsdc(tokenIn, tokenOut, V3_FEE, address(this), amountIn, 0, deadline);
     }
 
     // ====================== Views ======================
@@ -169,6 +214,11 @@ contract ArcadeMultiSwap is ReentrancyGuard {
      * @notice View quote that mirrors `swapToSingle`. Returns the expected
      * total output and a parallel array of per-input outputs so the UI can
      * highlight which legs contribute most. Pure-view: does not change state.
+     *
+     * Quoting V3 routes requires a live `eth_call` to the V3 quoter (or pool)
+     * which we can't do from a pure view here. The UI should call the V3
+     * quoter directly for those legs; this view returns 0 for legs that go
+     * through V3.
      */
     function quoteSwapToSingle(Input[] calldata inputs, address tokenOut)
         external
@@ -191,6 +241,9 @@ contract ArcadeMultiSwap is ReentrancyGuard {
     }
 
     function _quoteOne(address tokenIn, address tokenOut, uint256 amountIn) internal view returns (uint256) {
+        // V3 routes need a separate quoter call (return 0 here, UI fills in).
+        if (_isV3LaunchToken(tokenIn) || _isV3LaunchToken(tokenOut)) return 0;
+
         bool oneSideUsdc = tokenIn == address(USDC) || tokenOut == address(USDC);
         if (oneSideUsdc || v2Factory.getPair(tokenIn, tokenOut) != address(0)) {
             address[] memory path = new address[](2);

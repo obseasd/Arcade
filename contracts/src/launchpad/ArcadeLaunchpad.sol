@@ -52,7 +52,6 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
     uint256 internal constant VIRTUAL_USDC_RESERVE = 5_000e6;
     uint256 internal constant VIRTUAL_TOKEN_RESERVE = 1_000_000_000e18;
     uint256 internal constant K_CONSTANT = VIRTUAL_USDC_RESERVE * VIRTUAL_TOKEN_RESERVE;
-    uint256 public constant MIGRATION_USDC_TARGET = 20_000e6; // 20,000 USDC raised
 
     uint256 public constant CREATION_FEE = 3e6; // 3 USDC
     uint256 internal constant TRADE_FEE_BPS = 100; // 1% total
@@ -156,6 +155,19 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
     error BadVault();
     error BadSnipe();
     error BadPoolType();
+    error InvalidRoute();
+    error Expired();
+    error NothingToWithdraw();
+
+    /// @notice Pull-payment ledger for USDC payouts that failed inline (eg the
+    /// recipient is on the USDC blacklist or its `transfer` reverts). The credit
+    /// can be withdrawn later by the same recipient via `claimPendingUsdc`.
+    /// Without this fallback a single blacklisted creator/treasury/recipient
+    /// would brick every buy/sell of that token forever.
+    mapping(address => uint256) public pendingUsdcWithdrawals;
+
+    event UsdcCredited(address indexed recipient, uint256 amount);
+    event UsdcPendingClaimed(address indexed recipient, uint256 amount);
 
     /// @notice Sniper config stored per token. The Arcade V3 router skims
     /// `startBps` from buys at launch, decaying linearly to 0 over
@@ -203,19 +215,15 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
     /// @notice One-time wiring of the V3 locker + router (resolves the
     /// launchpad<->locker circular constructor dependency, and gives the
     /// launchpad the router it uses for the optional creator buy). Deployer-only.
+    /// All three must be set in the same call; there is intentionally no shim
+    /// that wires the locker alone, because doing so would brick `setV3Infra`
+    /// and leave the launchpad unable to ever wire `v3Router` / `tokenVault`.
     function setV3Infra(address locker, address router, address vault) external {
         if (msg.sender != deployer) revert NotDeployer();
         if (v3Locker != address(0)) revert LockerAlreadySet();
         v3Locker = locker;
         v3Router = router;
         tokenVault = vault;
-    }
-
-    /// @dev Back-compat shim — wires the locker only. Prefer setV3Infra.
-    function setV3Locker(address locker) external {
-        if (msg.sender != deployer) revert NotDeployer();
-        if (v3Locker != address(0)) revert LockerAlreadySet();
-        v3Locker = locker;
     }
 
     // ====================== Token creation ======================
@@ -336,8 +344,11 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
             s, tokenAddr, rs, opts.fee, opts.creatorBuyUsdc, lpSupply, opts.poolType, opts.legacyMcapUsdc
         );
 
-        // Arm the anti-sniper tax AFTER the optional creator buy above, so the
-        // creator's own launch buy isn't taxed by their own config.
+        // The creator's launch buy executes inside `_launchClankerV3` before
+        // this point. Arming the snipe config here means the creator pays no
+        // tax on their own opening buy (it ran with `currentSnipeBps == 0`).
+        // External buyers landing in the same block but AFTER this tx returns
+        // are taxed normally because the config is now set; this is intended.
         if (opts.snipeStartBps > 0 && opts.snipeDecaySeconds > 0) {
             snipeConfig[tokenAddr] = SnipeConfig(opts.snipeStartBps, opts.snipeDecaySeconds);
         }
@@ -397,15 +408,18 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
     /**
      * @dev Bonding-curve fee distribution: split depends on the token's
      * launch mode (PUMP 50/50 vs CLANKER 70/30) and optionally splits the
-     * creator portion between two receivers (CLANKER).
+     * creator portion between two receivers (CLANKER). Dust rounds up to the
+     * platform (ceil division) so the platform never silently subsidises
+     * dust to the creator on tiny micro-trades.
      */
     function _distributeFee(TokenState storage s, uint256 feeIn) internal {
         if (feeIn == 0) return;
         uint256 platformBps = s.mode == LaunchMode.PUMP ? PUMP_PLATFORM_BPS : CLANKER_PLATFORM_BPS;
-        uint256 platformFee = (feeIn * platformBps) / 10_000;
+        uint256 platformFee = (feeIn * platformBps + FEE_DENOMINATOR - 1) / FEE_DENOMINATOR; // ceil
+        if (platformFee > feeIn) platformFee = feeIn;
         uint256 creatorPortion = feeIn - platformFee;
         _payCreatorShare(s, creatorPortion);
-        if (platformFee > 0) USDC.safeTransfer(treasury, platformFee);
+        if (platformFee > 0) _safePayUsdc(treasury, platformFee);
     }
 
     /**
@@ -415,11 +429,13 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
      */
     function _distributeMigratedFee(TokenState storage s, uint256 totalRoyalty) internal {
         if (totalRoyalty == 0) return;
-        // 2/3 of the 0.30% royalty goes to platform, 1/3 to creator
-        uint256 platformFee = (totalRoyalty * MIGRATED_PLATFORM_BPS) / MIGRATED_ROYALTY_BPS;
+        // 2/3 of the 0.30% royalty goes to platform, 1/3 to creator (ceil to platform)
+        uint256 platformFee = (totalRoyalty * MIGRATED_PLATFORM_BPS + MIGRATED_ROYALTY_BPS - 1)
+            / MIGRATED_ROYALTY_BPS;
+        if (platformFee > totalRoyalty) platformFee = totalRoyalty;
         uint256 creatorPortion = totalRoyalty - platformFee;
         _payCreatorShare(s, creatorPortion);
-        if (platformFee > 0) USDC.safeTransfer(treasury, platformFee);
+        if (platformFee > 0) _safePayUsdc(treasury, platformFee);
     }
 
     /// @dev Splits the creator portion between creator and (optional) creator2.
@@ -430,8 +446,37 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
             creator2Cut = (creatorPortion * s.creator2ShareBps) / 10_000;
         }
         uint256 creator1Cut = creatorPortion - creator2Cut;
-        if (creator1Cut > 0) USDC.safeTransfer(s.creator, creator1Cut);
-        if (creator2Cut > 0) USDC.safeTransfer(s.creator2, creator2Cut);
+        if (creator1Cut > 0) _safePayUsdc(s.creator, creator1Cut);
+        if (creator2Cut > 0) _safePayUsdc(s.creator2, creator2Cut);
+    }
+
+    /// @dev Best-effort USDC payout to `to`. If the underlying `transfer` reverts
+    /// or returns false (USDC blacklist, recipient is a smart contract that
+    /// rejects, etc.) the amount is credited to `pendingUsdcWithdrawals[to]`
+    /// instead, where the recipient can later pull it via `claimPendingUsdc`.
+    /// This guarantees a single blacklisted recipient can never DoS curve
+    /// trades or post-migration royalty distribution.
+    function _safePayUsdc(address to, uint256 amount) internal {
+        if (amount == 0 || to == address(0)) return;
+        try IERC20(address(USDC)).transfer(to, amount) returns (bool ok) {
+            if (ok) return;
+        } catch {
+            // fall through to credit
+        }
+        pendingUsdcWithdrawals[to] += amount;
+        emit UsdcCredited(to, amount);
+    }
+
+    /// @notice Withdraw any USDC credited to `msg.sender` from a failed inline
+    /// payout. Permissionless; always sends to the original recipient.
+    function claimPendingUsdc() external nonReentrant returns (uint256 amount) {
+        amount = pendingUsdcWithdrawals[msg.sender];
+        if (amount == 0) revert NothingToWithdraw();
+        pendingUsdcWithdrawals[msg.sender] = 0;
+        // Direct safeTransfer here: if it still reverts, the user's blacklist
+        // status hasn't changed and they can retry once cleared.
+        USDC.safeTransfer(msg.sender, amount);
+        emit UsdcPendingClaimed(msg.sender, amount);
     }
 
     // ====================== Buy ======================
@@ -485,7 +530,9 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
     }
 
     /// @dev Returns (tokensOut, actualUsdcSpent_gross, refund). Caps the purchase
-    /// so `tokensSold` never exceeds `CURVE_SUPPLY`.
+    /// so `tokensSold` never exceeds `CURVE_SUPPLY`. The ceiling-rounded
+    /// `actualGross` is clamped to `netIn + fee` so the final buy in a curve fill
+    /// never underflows `refund` on the last few microUSDC of slack.
     function _computeBuy(TokenState storage s, uint256 netIn, uint256 fee)
         internal
         view
@@ -518,7 +565,12 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
             // gross such that gross * (1 - feeBps/10000) >= actualNet, i.e. gross = actualNet * 10000 / (10000 - feeBps)
             actualGross = (actualNet * FEE_DENOMINATOR + (FEE_DENOMINATOR - TRADE_FEE_BPS) - 1)
                 / (FEE_DENOMINATOR - TRADE_FEE_BPS);
-            refund = (netIn + fee) - actualGross;
+            // Clamp: with tiny `netIn` where the fee floors to 0, the ceiling
+            // above can yield `actualGross > netIn + fee`. The 1-2 microUSDC
+            // accounting drift goes to the curve and refund stays at 0.
+            uint256 gross = netIn + fee;
+            if (actualGross > gross) actualGross = gross;
+            refund = gross - actualGross;
         }
     }
 
@@ -572,11 +624,12 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
      * for the creator(s) + platform. LPs still receive the standard 0.30%
      * V2 swap fee on the remaining amount.
      */
-    function buyMigrated(address tokenAddr, uint256 usdcIn, uint256 minTokensOut)
+    function buyMigrated(address tokenAddr, uint256 usdcIn, uint256 minTokensOut, uint256 deadline)
         external
         nonReentrant
         returns (uint256 tokensOut)
     {
+        if (block.timestamp > deadline) revert Expired();
         TokenState storage s = tokens[tokenAddr];
         if (s.token == address(0)) revert UnknownToken();
         if (!s.migrated) revert NotMigrated();
@@ -595,17 +648,18 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         path[0] = address(USDC);
         path[1] = tokenAddr;
         uint256[] memory amounts = IArcadeV2Router(v2Router).swapExactTokensForTokens(
-            netIn, minTokensOut, path, msg.sender, block.timestamp + 600
+            netIn, minTokensOut, path, msg.sender, deadline
         );
         tokensOut = amounts[1];
     }
 
     /// @notice Sell a migrated token via V2, then skim the royalty from the USDC output.
-    function sellMigrated(address tokenAddr, uint256 tokensIn, uint256 minUsdcOut)
+    function sellMigrated(address tokenAddr, uint256 tokensIn, uint256 minUsdcOut, uint256 deadline)
         external
         nonReentrant
         returns (uint256 usdcOut)
     {
+        if (block.timestamp > deadline) revert Expired();
         TokenState storage s = tokens[tokenAddr];
         if (s.token == address(0)) revert UnknownToken();
         if (!s.migrated) revert NotMigrated();
@@ -619,7 +673,7 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         path[0] = tokenAddr;
         path[1] = address(USDC);
         uint256[] memory amounts = IArcadeV2Router(v2Router).swapExactTokensForTokens(
-            tokensIn, 0, path, address(this), block.timestamp + 600
+            tokensIn, 0, path, address(this), deadline
         );
         uint256 grossUsdc = amounts[1];
 
@@ -657,15 +711,20 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         address tokenIn,
         address tokenOut,
         uint256 tokensIn,
-        uint256 minTokensOut
+        uint256 minTokensOut,
+        uint256 deadline
     ) external nonReentrant returns (uint256 tokensOut) {
+        if (block.timestamp > deadline) revert Expired();
         if (v2Router == address(0)) revert NoRouter();
         if (tokensIn == 0) revert ZeroAmount();
+        // Same token / USDC short-circuits aren't unknown tokens, they're just
+        // unsupported routes here. Use `InvalidRoute()` so the caller can
+        // disambiguate from a never-launched token.
         if (
             tokenIn == tokenOut
                 || tokenIn == address(USDC)
                 || tokenOut == address(USDC)
-        ) revert UnknownToken();
+        ) revert InvalidRoute();
 
         TokenState storage sIn = tokens[tokenIn];
         TokenState storage sOut = tokens[tokenOut];
@@ -680,7 +739,7 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         path1[0] = tokenIn;
         path1[1] = address(USDC);
         uint256[] memory leg1 = IArcadeV2Router(v2Router).swapExactTokensForTokens(
-            tokensIn, 0, path1, address(this), block.timestamp + 600
+            tokensIn, 0, path1, address(this), deadline
         );
         uint256 usdcMid = leg1[1];
 
@@ -708,7 +767,7 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         path2[0] = address(USDC);
         path2[1] = tokenOut;
         uint256[] memory leg2 = IArcadeV2Router(v2Router).swapExactTokensForTokens(
-            usdcMid, minTokensOut, path2, msg.sender, block.timestamp + 600
+            usdcMid, minTokensOut, path2, msg.sender, deadline
         );
         tokensOut = leg2[1];
         if (tokensOut < minTokensOut) revert Slippage();
@@ -910,11 +969,19 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
     }
 
     /// @notice Returns the implied market cap of `tokenAddr` in USDC raw units (6 dp).
+    /// Branches on launch mode:
+    ///   - PUMP / Arcade pre-migration: curve virtual+real reserves.
+    ///   - PUMP / Arcade post-migration: V2 pair reserves (USDC side).
+    ///   - CLANKER_V3: derived from the V3 pool's `slot0().sqrtPriceX96`. Reading
+    ///     V2-pair `getReserves` on a V3 pool would revert.
     function marketCap(address tokenAddr) external view returns (uint256) {
         TokenState storage s = tokens[tokenAddr];
         if (s.token == address(0)) return 0;
         if (s.migrated) {
-            // Post-migration: use V2 pair reserves to derive price
+            if (s.mode == LaunchMode.CLANKER_V3) {
+                return _v3MarketCap(s);
+            }
+            // PUMP / Arcade post-migration: V2 pair reserves.
             (uint112 r0, uint112 r1,) = IArcadeV2Pair(s.v2Pair).getReserves();
             address t0 = IArcadeV2Pair(s.v2Pair).token0();
             (uint256 usdcReserve, uint256 tokenReserve) =
@@ -930,19 +997,59 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         return (currentUsdc * TOTAL_SUPPLY) / currentTokens;
     }
 
+    /// @dev mcap for a CLANKER_V3 token, derived from the V3 pool price.
+    /// Only meaningful for USDC-paired pools (POOL_WETH returns 0 here since we
+    /// don't price WETH internally — the frontend handles the WETH conversion).
+    function _v3MarketCap(TokenState storage s) internal view returns (uint256) {
+        address pool = s.v2Pair;
+        if (pool == address(0)) return 0;
+        (uint160 sqrtPriceX96,,,,,,) = IArcadeV3Pool(pool).slot0();
+        if (sqrtPriceX96 == 0) return 0;
+        address token0 = IArcadeV3Pool(pool).token0();
+        // Only handle USDC-paired pools here.
+        if (token0 != address(USDC) && IArcadeV3Pool(pool).token1() != address(USDC)) return 0;
+        bool usdcIsToken0 = token0 == address(USDC);
+        // price1per0 = (sqrtPriceX96 / 2**96)^2 = token1_amount per token0_amount
+        // To avoid overflow on sqrt^2 we compute mcap directly:
+        //   if usdcIsToken0 (token = token1):
+        //     usdc_per_token = 1 / price1per0 = (2**192) / sqrtPriceX96^2
+        //     mcap = usdc_per_token * TOTAL_SUPPLY
+        //   else (token = token0):
+        //     usdc_per_token = price1per0 = sqrtPriceX96^2 / 2**192
+        //     mcap = usdc_per_token * TOTAL_SUPPLY
+        uint256 numerator;
+        uint256 denominator;
+        if (usdcIsToken0) {
+            // mcap = TOTAL_SUPPLY * 2**192 / sqrtPriceX96^2
+            numerator = TOTAL_SUPPLY * (1 << 96);
+            denominator = uint256(sqrtPriceX96);
+            uint256 part = numerator / denominator;
+            // part = TOTAL_SUPPLY * 2**96 / sqrtPriceX96; finish with another /sqrt
+            return (part * (1 << 96)) / uint256(sqrtPriceX96);
+        } else {
+            // mcap = TOTAL_SUPPLY * sqrtPriceX96^2 / 2**192
+            uint256 p = uint256(sqrtPriceX96);
+            // Done in two steps to keep intermediate within 256-bit:
+            // first compute (p * TOTAL_SUPPLY) / 2**96, then * p / 2**96
+            uint256 partA = (p * TOTAL_SUPPLY) / (1 << 96);
+            return (partA * p) / (1 << 96);
+        }
+    }
+
     /// @notice Quote tokens out for a hypothetical buy of `amountUsdcIn` (gross).
+    /// Returns `(tokensOut, actualGrossPaid, refund)` so the UI can show the
+    /// exact gross the user will be charged (especially on curve-fill edges
+    /// where `actualGross < amountUsdcIn` and the rest is refunded).
     function quoteBuy(address tokenAddr, uint256 amountUsdcIn)
         external
         view
-        returns (uint256 tokensOut, uint256 refund)
+        returns (uint256 tokensOut, uint256 actualGrossPaid, uint256 refund)
     {
         TokenState storage s = tokens[tokenAddr];
-        if (s.token == address(0) || s.migrated || amountUsdcIn == 0) return (0, 0);
+        if (s.token == address(0) || s.migrated || amountUsdcIn == 0) return (0, 0, 0);
         uint256 fee = (amountUsdcIn * TRADE_FEE_BPS) / FEE_DENOMINATOR;
         uint256 netIn = amountUsdcIn - fee;
-        (uint256 out, uint256 actualGross, uint256 _refund) = _computeBuyView(s, netIn, fee);
-        actualGross; // silence
-        return (out, _refund);
+        (tokensOut, actualGrossPaid, refund) = _computeBuyView(s, netIn, fee);
     }
 
     function quoteSell(address tokenAddr, uint256 tokensIn) external view returns (uint256 usdcOut) {
@@ -982,7 +1089,9 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
             uint256 actualNet = capUsdcReserve - currentUsdc;
             actualGross = (actualNet * FEE_DENOMINATOR + (FEE_DENOMINATOR - TRADE_FEE_BPS) - 1)
                 / (FEE_DENOMINATOR - TRADE_FEE_BPS);
-            refund = (netIn + fee) - actualGross;
+            uint256 gross = netIn + fee;
+            if (actualGross > gross) actualGross = gross;
+            refund = gross - actualGross;
         }
     }
 

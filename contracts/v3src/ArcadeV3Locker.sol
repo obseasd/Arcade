@@ -68,6 +68,12 @@ contract ArcadeV3Locker is IUniswapV3MintCallback {
     uint256 public positionCount;
     mapping(address => uint256) public positionIdByToken;
 
+    /// @notice Pull-payment ledger: token => recipient => claimable amount.
+    /// Credited whenever a direct payout in `_distributePot` fails (USDC
+    /// blacklist, recipient contract reverts, etc.) so one bad recipient can
+    /// never DoS the rest of the pot. Recipients pull via `withdrawPending`.
+    mapping(address => mapping(address => uint256)) public pendingWithdrawals;
+
     // transient guard for the mint callback
     address private _expectedPool;
     uint256 private _locked = 1;
@@ -84,6 +90,16 @@ contract ArcadeV3Locker is IUniswapV3MintCallback {
         address recipient,
         uint256 amount
     );
+    /// @notice Emitted when a direct payout failed and was credited to the
+    /// pull-payment ledger. `recipient` can call `withdrawPending(token)` later.
+    event RecipientCredited(
+        uint256 indexed positionId,
+        uint256 indexed slotIndex,
+        address indexed token,
+        address recipient,
+        uint256 amount
+    );
+    event PendingWithdrawn(address indexed token, address indexed recipient, uint256 amount);
     event RecipientUpdated(uint256 indexed positionId, uint256 index, address indexed newRecipient);
     event AdminUpdated(uint256 indexed positionId, uint256 index, address indexed newAdmin);
 
@@ -433,10 +449,39 @@ contract ArcadeV3Locker is IUniswapV3MintCallback {
             uint256 share = i == lastIdx ? amount - distributed : (amount * rs[i].bps) / totalW;
             distributed += share;
             if (share > 0) {
-                _pay(token, rs[i].recipient, share);
-                emit RecipientPaid(positionId, i, token, rs[i].recipient, share);
+                _payOrCredit(positionId, i, token, rs[i].recipient, share);
             }
         }
+    }
+
+    /// @dev Best-effort: try to transfer the recipient's share directly. If the
+    /// underlying ERC20 reverts or returns false (eg the recipient is on the
+    /// USDC blacklist or is a contract that rejects), credit the amount to the
+    /// pull-payment ledger so a single bad recipient cannot brick the whole
+    /// fee distribution.
+    function _payOrCredit(uint256 positionId, uint256 slotIndex, address token, address to, uint256 amount) internal {
+        if (amount == 0) return;
+        (bool ok, bytes memory ret) = token.call(abi.encodeWithSelector(IERC20Min.transfer.selector, to, amount));
+        bool decoded = ret.length == 0 || abi.decode(ret, (bool));
+        if (ok && decoded) {
+            emit RecipientPaid(positionId, slotIndex, token, to, amount);
+            return;
+        }
+        pendingWithdrawals[token][to] += amount;
+        emit RecipientCredited(positionId, slotIndex, token, to, amount);
+    }
+
+    /// @notice Withdraw any pending payouts of `token` credited to `msg.sender`
+    /// from past failed direct transfers (eg blacklist that has since cleared).
+    /// Permissionless; always pays the caller.
+    function withdrawPending(address token) external nonReentrant returns (uint256 amount) {
+        amount = pendingWithdrawals[token][msg.sender];
+        require(amount > 0, "NOTHING");
+        pendingWithdrawals[token][msg.sender] = 0;
+        // If this still reverts the caller can retry once their token status
+        // changes; the ledger entry stays at 0 only after a successful transfer.
+        _pay(token, msg.sender, amount);
+        emit PendingWithdrawn(token, msg.sender, amount);
     }
 
     function _eligible(RewardToken pref, bool forPaired) internal pure returns (bool) {

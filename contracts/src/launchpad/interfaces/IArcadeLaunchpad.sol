@@ -57,11 +57,13 @@ interface IArcadeLaunchpad {
     function isMigrated(address tokenAddr) external view returns (bool);
 
     /// @notice Royalty-aware multi-hop swap A -> USDC -> B with launchpad royalty on each migrated leg.
+    /// @param deadline unix timestamp after which the call reverts (passed through to the V2 router on every leg).
     function swapMigratedRoute(
         address tokenIn,
         address tokenOut,
         uint256 tokensIn,
-        uint256 minTokensOut
+        uint256 minTokensOut,
+        uint256 deadline
     ) external returns (uint256 tokensOut);
 
     /// @notice View quote for `swapMigratedRoute`, returning the expected

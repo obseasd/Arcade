@@ -8,7 +8,7 @@ import {ArcadeV2Router} from "../src/dex/ArcadeV2Router.sol";
 import {ArcadeLaunchpad} from "../src/launchpad/ArcadeLaunchpad.sol";
 import {IArcadeLaunchpad} from "../src/launchpad/interfaces/IArcadeLaunchpad.sol";
 import {ArcadeMultiSwap} from "../src/swap/ArcadeMultiSwap.sol";
-import {IArcadeV3Factory} from "../src/v3/interfaces/IArcadeV3Minimal.sol";
+import {IArcadeV3Factory, IArcadeV3Router} from "../src/v3/interfaces/IArcadeV3Minimal.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 /// @notice Tests for ArcadeMultiSwap. To work around `via_ir` stack-too-deep
@@ -40,8 +40,14 @@ contract ArcadeMultiSwapTest is Test {
         launchpad = new ArcadeLaunchpad(
             IERC20(address(usdc)), factory, address(router), treasury, IArcadeV3Factory(address(0)), address(0)
         );
-        multiSwap =
-            new ArcadeMultiSwap(IERC20(address(usdc)), factory, router, IArcadeLaunchpad(address(launchpad)));
+        multiSwap = new ArcadeMultiSwap(
+            IERC20(address(usdc)),
+            factory,
+            router,
+            IArcadeLaunchpad(address(launchpad)),
+            // V3 router is unused in these tests (no Clanker V3 launches here).
+            IArcadeV3Router(address(0))
+        );
         usdc.mint(alice, 1_000_000e6);
         usdc.mint(bob, 1_000_000e6);
         tokenA = _createTokenAs(creatorA, "Alpha", "A");
@@ -77,7 +83,7 @@ contract ArcadeMultiSwapTest is Test {
     function _bobBuysMigrated(address token, uint256 usdcIn) internal returns (uint256) {
         vm.startPrank(bob);
         usdc.approve(address(launchpad), type(uint256).max);
-        uint256 amount = launchpad.buyMigrated(token, usdcIn, 0);
+        uint256 amount = launchpad.buyMigrated(token, usdcIn, 0, block.timestamp + 600);
         vm.stopPrank();
         return amount;
     }

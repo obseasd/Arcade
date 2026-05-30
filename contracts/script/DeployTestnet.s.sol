@@ -8,7 +8,7 @@ import {ArcadeLaunchpad} from "../src/launchpad/ArcadeLaunchpad.sol";
 import {IArcadeLaunchpad} from "../src/launchpad/interfaces/IArcadeLaunchpad.sol";
 import {ArcadeMultiSwap} from "../src/swap/ArcadeMultiSwap.sol";
 import {ArcadeTokenVault} from "../src/launchpad/ArcadeTokenVault.sol";
-import {IArcadeV3Factory} from "../src/v3/interfaces/IArcadeV3Minimal.sol";
+import {IArcadeV3Factory, IArcadeV3Router} from "../src/v3/interfaces/IArcadeV3Minimal.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 /**
@@ -44,15 +44,18 @@ contract DeployTestnet is Script {
         ArcadeLaunchpad launchpad = new ArcadeLaunchpad(
             IERC20(usdc), factory, address(router), treasury, IArcadeV3Factory(v3Factory), weth
         );
-        ArcadeMultiSwap multiSwap = new ArcadeMultiSwap(
-            IERC20(usdc), factory, router, IArcadeLaunchpad(address(launchpad))
-        );
 
         address v3Locker = _deployV3Locker(address(launchpad), v3Factory);
         address v3Router = _deployV3Router(v3Factory, usdc, address(launchpad));
         address v3Quoter = _deployV3Aux("out-v3/ArcadeV3Quoter.sol/ArcadeV3Quoter.json", v3Factory, usdc);
         ArcadeTokenVault tokenVault = new ArcadeTokenVault(address(launchpad));
         launchpad.setV3Infra(v3Locker, v3Router, address(tokenVault));
+
+        // MultiSwap depends on the V3 router (so it can route Clanker V3 tokens
+        // that have no V2 pair). Deployed AFTER v3Router is wired.
+        ArcadeMultiSwap multiSwap = new ArcadeMultiSwap(
+            IERC20(usdc), factory, router, IArcadeLaunchpad(address(launchpad)), IArcadeV3Router(v3Router)
+        );
         // Enable the 2% and 3% fee tiers (1% is on by default in the V3 factory).
         IArcadeV3Factory(v3Factory).enableFeeAmount(20_000, 200);
         IArcadeV3Factory(v3Factory).enableFeeAmount(30_000, 200);

@@ -150,7 +150,7 @@ contract ArcadeLaunchpadTest is Test {
         uint256 amountIn = 100 * 10 ** 6;
         vm.startPrank(bob);
         usdc.approve(address(launchpad), type(uint256).max);
-        uint256 tokensOut = launchpad.buyMigrated(token, amountIn, 0);
+        uint256 tokensOut = launchpad.buyMigrated(token, amountIn, 0, block.timestamp + 600);
         vm.stopPrank();
 
         assertGt(tokensOut, 0, "tokens received");
@@ -178,13 +178,13 @@ contract ArcadeLaunchpadTest is Test {
         // Bob buys some via the migrated wrapper to acquire tokens
         vm.startPrank(bob);
         usdc.approve(address(launchpad), type(uint256).max);
-        uint256 bought = launchpad.buyMigrated(token, 500 * 10 ** 6, 0);
+        uint256 bought = launchpad.buyMigrated(token, 500 * 10 ** 6, 0, block.timestamp + 600);
 
         uint256 t0 = usdc.balanceOf(treasury);
         uint256 c0 = usdc.balanceOf(creator);
 
         IERC20(token).approve(address(launchpad), type(uint256).max);
-        uint256 received = launchpad.sellMigrated(token, bought, 0);
+        uint256 received = launchpad.sellMigrated(token, bought, 0, block.timestamp + 600);
         vm.stopPrank();
 
         // Sell pays USDC out, with 0.30% royalty skimmed first; PUMP = 50/50
@@ -231,7 +231,7 @@ contract ArcadeLaunchpadTest is Test {
         address token = _createToken();
         uint256 amountIn = 500 * 10 ** 6;
 
-        (uint256 quoted,) = launchpad.quoteBuy(token, amountIn);
+        (uint256 quoted,,) = launchpad.quoteBuy(token, amountIn);
 
         vm.startPrank(alice);
         usdc.approve(address(launchpad), type(uint256).max);
@@ -317,7 +317,7 @@ contract ArcadeLaunchpadTest is Test {
         // Bob now has some tokenA from an unrelated buy
         vm.startPrank(bob);
         usdc.approve(address(launchpad), type(uint256).max);
-        uint256 tokensA = launchpad.buyMigrated(tokenA, 200 * 10 ** 6, 0);
+        uint256 tokensA = launchpad.buyMigrated(tokenA, 200 * 10 ** 6, 0, block.timestamp + 600);
         vm.stopPrank();
 
         // Snapshot AFTER the prior buyMigrated has paid its own royalty
@@ -334,7 +334,7 @@ contract ArcadeLaunchpadTest is Test {
         // Execute the multi-hop swap through the launchpad
         vm.startPrank(bob);
         IERC20(tokenA).approve(address(launchpad), type(uint256).max);
-        uint256 receivedB = launchpad.swapMigratedRoute(tokenA, tokenB, tokensA, 0);
+        uint256 receivedB = launchpad.swapMigratedRoute(tokenA, tokenB, tokensA, 0, block.timestamp + 600);
         vm.stopPrank();
 
         assertEq(receivedB, quotedOut, "actual matches quote");
@@ -359,11 +359,13 @@ contract ArcadeLaunchpadTest is Test {
         address tokenA = _createTokenAs(address(0xA0A0), IArcadeLaunchpad.LaunchMode.PUMP, "A", "A");
         _migrateByBuyingOut(tokenA);
 
-        // USDC as either side is invalid — caller should use buyMigrated/sellMigrated.
-        vm.expectRevert(ArcadeLaunchpad.UnknownToken.selector);
-        launchpad.swapMigratedRoute(address(usdc), tokenA, 1, 0);
-        vm.expectRevert(ArcadeLaunchpad.UnknownToken.selector);
-        launchpad.swapMigratedRoute(tokenA, address(usdc), 1, 0);
+        // USDC as either side is invalid - caller should use buyMigrated/sellMigrated.
+        // Audit renamed this from UnknownToken to InvalidRoute since the tokens
+        // ARE known; the route shape is what's wrong.
+        vm.expectRevert(ArcadeLaunchpad.InvalidRoute.selector);
+        launchpad.swapMigratedRoute(address(usdc), tokenA, 1, 0, block.timestamp + 600);
+        vm.expectRevert(ArcadeLaunchpad.InvalidRoute.selector);
+        launchpad.swapMigratedRoute(tokenA, address(usdc), 1, 0, block.timestamp + 600);
     }
 
     function test_marketCap_increasesWithBuys() public {

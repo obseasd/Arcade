@@ -88,6 +88,11 @@ contract ArcadeV3SwapRouter is IUniswapV3SwapCallback {
     }
 
     /// @notice Swap `tokenIn` -> USDC -> `tokenOut` (both legs at `fee`).
+    /// @dev Apply the anti-sniper skim between leg 1 (which mints USDC into
+    /// this router) and leg 2 (which buys `tokenOut`). Without this, snipers
+    /// could bypass the launch-window tax by routing through any non-USDC
+    /// asset (eg WETH -> USDC -> launchToken). Skim is taken from the router's
+    /// own USDC mid-balance and forwarded to the launchpad treasury.
     function exactInputThroughUsdc(
         address tokenIn,
         address tokenOut,
@@ -104,10 +109,12 @@ contract ArcadeV3SwapRouter is IUniswapV3SwapCallback {
             amountIn,
             address(this)
         );
+        // Anti-sniper skim: paid by the router from its own mid-balance.
+        uint256 skim = _snipeSkim(USDC, tokenOut, usdcMid, address(this));
         // Leg 2: USDC -> tokenOut, paid by this router, delivered to recipient.
         amountOut = _swap(
             SwapCallbackData({tokenIn: USDC, tokenOut: tokenOut, fee: fee, payer: address(this)}),
-            usdcMid,
+            usdcMid - skim,
             recipient
         );
         require(amountOut >= amountOutMinimum, "INSUFFICIENT_OUTPUT");

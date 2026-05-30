@@ -25,6 +25,11 @@ contract ArcadeTokenVault {
 
     address public immutable launchpad;
     uint64 public constant MIN_LOCKUP = 7 days;
+    /// @notice Cap on both `lockupDuration` and `vestingDuration` to prevent
+    /// pathological values (eg `type(uint64).max - block.timestamp + 1`) that
+    /// would overflow `uint64` arithmetic and revert `createClankerV3` after
+    /// the token is already deployed, wasting the caller's signature.
+    uint64 public constant MAX_DURATION = 10 * 365 days; // 10 years
 
     struct Vest {
         address token;
@@ -46,6 +51,7 @@ contract ArcadeTokenVault {
     error OnlyRecipient();
     error BadDuration();
     error ZeroAddress();
+    error ZeroAmount();
 
     event VestCreated(
         uint256 indexed id,
@@ -76,8 +82,10 @@ contract ArcadeTokenVault {
     ) external returns (uint256 id) {
         if (msg.sender != launchpad) revert OnlyLaunchpad();
         if (recipient == address(0)) revert ZeroAddress();
+        if (amount == 0) revert ZeroAmount();
         if (vestIdByToken[token] != 0) revert AlreadyVested();
-        if (lockupDuration < MIN_LOCKUP) revert BadDuration();
+        if (lockupDuration < MIN_LOCKUP || lockupDuration > MAX_DURATION) revert BadDuration();
+        if (vestingDuration > MAX_DURATION) revert BadDuration();
 
         uint64 lockupEnd = uint64(block.timestamp) + lockupDuration;
         uint64 vestingEnd = lockupEnd + vestingDuration;
