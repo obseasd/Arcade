@@ -48,6 +48,11 @@ struct SwapParams {
 ///         by beforeSwap. Zero = no delta adjustment, hook is transparent.
 type BeforeSwapDelta is int256;
 
+/// @notice Packed (int128 amount0, int128 amount1) - the change in pool
+///         balances for a single swap. Used by afterSwap. Negative means
+///         the user took from the pool; positive means the user paid in.
+type BalanceDelta is int256;
+
 /// @notice The V4 PoolManager subset our hook talks to. We only need the
 ///         interface for currency settling - the rest is provided by the
 ///         PoolManager when it invokes our beforeSwap.
@@ -59,7 +64,7 @@ interface IPoolManager {
 }
 
 /// @notice Minimal IHooks interface (V4 core defines 14 hook slots; we only
-///         implement beforeSwap so this captures just that one).
+///         implement beforeSwap + afterSwap so this captures just those).
 interface IHooks {
     function beforeSwap(
         address sender,
@@ -67,6 +72,18 @@ interface IHooks {
         SwapParams calldata params,
         bytes calldata hookData
     ) external returns (bytes4 selector, BeforeSwapDelta delta, uint24 feeOverride);
+
+    /// @notice Called after the swap settles. The `delta` parameter reports
+    ///         the actual amounts moved (signed int128 per currency). The
+    ///         returned `int128 hookDelta` adds to / subtracts from the
+    ///         unspecified currency, allowing the hook to skim more.
+    function afterSwap(
+        address sender,
+        PoolKey calldata key,
+        SwapParams calldata params,
+        BalanceDelta delta,
+        bytes calldata hookData
+    ) external returns (bytes4 selector, int128 hookDelta);
 }
 
 /// @notice Library mirror of the V4 Hooks lib's bitmask flags. The hook
@@ -89,6 +106,22 @@ library HookPermissions {
     uint160 internal constant AFTER_SWAP_RETURNS_DELTA_FLAG = 1 << 2;
     uint160 internal constant AFTER_ADD_LIQUIDITY_RETURNS_DELTA_FLAG = 1 << 1;
     uint160 internal constant AFTER_REMOVE_LIQUIDITY_RETURNS_DELTA_FLAG = 1 << 0;
+}
+
+/// @notice Packs / unpacks BalanceDelta the same way v4-core does. amount0
+///         in the upper 128 bits, amount1 in the lower 128.
+library BalanceDeltaLibrary {
+    function amount0(BalanceDelta delta) internal pure returns (int128) {
+        return int128(BalanceDelta.unwrap(delta) >> 128);
+    }
+
+    function amount1(BalanceDelta delta) internal pure returns (int128) {
+        return int128(int256(BalanceDelta.unwrap(delta)));
+    }
+
+    function pack(int128 a0, int128 a1) internal pure returns (BalanceDelta) {
+        return BalanceDelta.wrap((int256(a0) << 128) | (int256(uint256(uint128(a1)))));
+    }
 }
 
 /// @notice Packs / unpacks BeforeSwapDelta the same way v4-core does.

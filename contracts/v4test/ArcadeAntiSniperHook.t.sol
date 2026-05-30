@@ -11,7 +11,10 @@ import {
     PoolKey,
     SwapParams,
     BeforeSwapDelta,
-    BeforeSwapDeltaLibrary
+    BeforeSwapDeltaLibrary,
+    BalanceDelta,
+    BalanceDeltaLibrary,
+    HookPermissions
 } from "../v4src/interfaces/IUniswapV4Types.sol";
 
 /// @notice Captures `take` calls so the test can assert the hook moved the
@@ -84,9 +87,11 @@ contract ArcadeAntiSniperHookTest is Test {
         hook.beforeSwap(address(this), key, p, "");
     }
 
-    function test_permissionFlag_isOnlyBeforeSwap() public {
-        // The hook declares only the BEFORE_SWAP_FLAG (bit 7).
-        assertEq(hook.getHookPermissions(), 1 << 7);
+    function test_permissionFlags_areBeforeAndAfterSwap() public {
+        // The hook declares BEFORE_SWAP_FLAG (bit 7) AND AFTER_SWAP_FLAG
+        // (bit 6) - the address-mining script must satisfy both.
+        uint160 expected = HookPermissions.BEFORE_SWAP_FLAG | HookPermissions.AFTER_SWAP_FLAG;
+        assertEq(hook.getHookPermissions(), expected);
     }
 
     // --- Hook math -------------------------------------------------------
@@ -174,10 +179,10 @@ contract ArcadeAntiSniperHookTest is Test {
         assertEq(BeforeSwapDeltaLibrary.specifiedDelta(delta), 0);
     }
 
-    function test_exactOutput_isSkippedForNow() public {
-        // exact-output swaps use a negative amountSpecified. The current
-        // implementation skips them and emits a no-op. Documented in the
-        // hook NatSpec for the V4 memo.
+    function test_beforeSwap_skipsExactOutput_handledLaterInAfterSwap() public {
+        // exact-output uses a negative amountSpecified. beforeSwap must not
+        // attempt to tax it (we don't know the input amount yet) - afterSwap
+        // picks it up once the pool has settled the swap.
         lp.setSnipe(TOKEN, 500);
 
         PoolKey memory key = _key(USDC_ADDR, TOKEN);
@@ -186,8 +191,82 @@ contract ArcadeAntiSniperHookTest is Test {
         vm.prank(address(pm));
         (, BeforeSwapDelta delta, ) = hook.beforeSwap(address(0xA), key, p, "");
 
-        assertEq(BeforeSwapDeltaLibrary.specifiedDelta(delta), 0);
+        assertEq(BeforeSwapDeltaLibrary.specifiedDelta(delta), 0, "beforeSwap should not act on exact-out");
+        assertEq(pm.lastAmount(), 0, "no take call from beforeSwap");
+    }
+
+    // --- afterSwap (exact-output handling) ------------------------------
+
+    function test_afterSwap_taxesExactOutputBuy() public {
+        // Scenario: user does an exact-OUTPUT buy of TOKEN. They specify the
+        // tokenOut amount; the pool quotes the USDC input. afterSwap sees
+        // the realised BalanceDelta and we tax the actual USDC paid.
+        //
+        // Address sort: USDC_ADDR=0xC1, TOKEN=0x7E57. 0xC1 < 0x7E57, so
+        // the canonical key has currency0=USDC and currency1=TOKEN.
+        // A BUY moves USDC INTO the pool (positive amount0 from the pool's
+        // perspective) and TOKEN OUT of the pool (negative amount1).
+        lp.setSnipe(TOKEN, 500); // 5%
+
+        PoolKey memory key = _key(USDC_ADDR, TOKEN);
+        SwapParams memory p = SwapParams({zeroForOne: true, amountSpecified: 100, sqrtPriceLimitX96: 0});
+        BalanceDelta delta = BalanceDeltaLibrary.pack(int128(10_000), int128(-50));
+
+        vm.prank(address(pm));
+        (bytes4 sel, int128 hookDelta) = hook.afterSwap(address(0xA), key, p, delta, "");
+
+        assertEq(sel, IHooks.afterSwap.selector);
+        assertEq(pm.lastAmount(), 500, "5% of 10_000 = 500");
+        assertEq(pm.lastTo(), TREASURY);
+        // hookDelta is added to the unspecified side - positive means the
+        // pool charges the user extra USDC to cover the skim.
+        assertEq(hookDelta, int128(500));
+    }
+
+    function test_afterSwap_ignoresExactInput() public {
+        // amountSpecified <= 0 means exact-input - already taxed in
+        // beforeSwap. afterSwap must not double-tax.
+        lp.setSnipe(TOKEN, 500);
+
+        PoolKey memory key = _key(USDC_ADDR, TOKEN);
+        SwapParams memory p = SwapParams({zeroForOne: true, amountSpecified: -1_000, sqrtPriceLimitX96: 0});
+        BalanceDelta delta = BalanceDeltaLibrary.pack(int128(1_000), int128(-50));
+
+        vm.prank(address(pm));
+        (, int128 hookDelta) = hook.afterSwap(address(0xA), key, p, delta, "");
+
+        assertEq(hookDelta, int128(0), "no extra take on exact-input");
         assertEq(pm.lastAmount(), 0);
+    }
+
+    function test_afterSwap_ignoresSell() public {
+        // Sells (TOKEN -> USDC) leave USDC delta NEGATIVE on the pool side
+        // (pool lost USDC). The hook must NOT tax sells.
+        //
+        // Canonical sort: currency0=USDC, currency1=TOKEN. A SELL is
+        // zeroForOne=false (currency1 -> currency0, ie TOKEN -> USDC).
+        // BalanceDelta: pool LOST USDC (amount0 negative), GAINED TOKEN
+        // (amount1 positive).
+        lp.setSnipe(TOKEN, 500);
+
+        PoolKey memory key = _key(USDC_ADDR, TOKEN);
+        SwapParams memory p = SwapParams({zeroForOne: false, amountSpecified: 100, sqrtPriceLimitX96: 0});
+        BalanceDelta delta = BalanceDeltaLibrary.pack(int128(-1_000), int128(50));
+
+        vm.prank(address(pm));
+        (, int128 hookDelta) = hook.afterSwap(address(0xA), key, p, delta, "");
+
+        assertEq(hookDelta, int128(0));
+        assertEq(pm.lastAmount(), 0);
+    }
+
+    function test_afterSwap_onlyPoolManager() public {
+        PoolKey memory key = _key(USDC_ADDR, TOKEN);
+        SwapParams memory p = SwapParams({zeroForOne: true, amountSpecified: 100, sqrtPriceLimitX96: 0});
+        BalanceDelta delta = BalanceDeltaLibrary.pack(int128(0), int128(1_000));
+
+        vm.expectRevert(ArcadeAntiSniperHook.NotPoolManager.selector);
+        hook.afterSwap(address(this), key, p, delta, "");
     }
 
     function test_nonUsdcPool_isNoOp() public {

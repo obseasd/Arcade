@@ -44,7 +44,7 @@ auto_detect_solc = true
 [profile.v4]
 src = "v4src"
 test = "v4test"
-script = "v4src/_none"
+script = "v4script"
 out = "out-v4"
 libs = ["lib"]
 skip = []
