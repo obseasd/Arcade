@@ -340,11 +340,12 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
         // Multi-hop through the launchpad's router so post-migration royalties
         // are charged on each leg whose token is a migrated launchpad token.
         // Only exact-in is supported; the effect above forces lastEdited="in".
+        // Deadline param added in audit fixes (Medium #6).
         hash = await writeContractAsync({
           address: ADDRESSES.launchpad,
           abi: LAUNCHPAD_ABI,
           functionName: "swapMigratedRoute",
-          args: [tokenIn.address, tokenOut.address, finalAmountIn, minOut],
+          args: [tokenIn.address, tokenOut.address, finalAmountIn, minOut, deadline],
         });
       } else if (exactIn) {
         hash = await writeContractAsync({

@@ -97,9 +97,11 @@ export function TradePanel({ token, symbol, migrated, image, onTradeSuccess }: P
   let refund = 0n;
   if (!migrated) {
     if (side === "buy") {
-      const r = curveBuyQuote.data as [bigint, bigint] | undefined;
+      // quoteBuy returns (tokensOut, actualGrossPaid, refund) after the audit
+      // fix; we still surface tokensOut + refund the same way.
+      const r = curveBuyQuote.data as [bigint, bigint, bigint] | undefined;
       estimatedOut = r?.[0] ?? 0n;
-      refund = r?.[1] ?? 0n;
+      refund = r?.[2] ?? 0n;
     } else {
       estimatedOut = (curveSellQuote.data as bigint | undefined) ?? 0n;
     }
@@ -126,11 +128,16 @@ export function TradePanel({ token, symbol, migrated, image, onTradeSuccess }: P
         : side === "buy"
           ? "buy"
           : "sell";
+      // Migrated paths now require a deadline (audit Medium #6). Use 10 min.
+      const deadline = BigInt(Math.floor(Date.now() / 1000) + 600);
+      const args = migrated
+        ? ([token, amountRaw, minOut, deadline] as const)
+        : ([token, amountRaw, minOut] as const);
       const hash = await writeContractAsync({
         address: ADDRESSES.launchpad,
         abi: LAUNCHPAD_ABI,
         functionName: fn,
-        args: [token, amountRaw, minOut],
+        args: args as unknown as readonly [`0x${string}`, bigint, bigint],
       });
       if (publicClient) await publicClient.waitForTransactionReceipt({ hash });
       setTx({ status: "idle" });

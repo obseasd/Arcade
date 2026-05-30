@@ -72,13 +72,10 @@ export default function TokenDetailPage() {
     query: { enabled: isValid },
   });
 
-  const migrationTargetQ = useReadContract({
-    address: ADDRESSES.launchpad,
-    abi: LAUNCHPAD_ABI,
-    functionName: "MIGRATION_USDC_TARGET",
-  });
-  const migrationTarget =
-    (migrationTargetQ.data as bigint | undefined) ?? MIGRATION_TARGET_FALLBACK;
+  // Curve naturally fills at 20k USDC of real reserves; the constant used to
+  // be exposed by the contract but was removed in the audit fixes (dead state).
+  // The frontend uses the hardcoded value, which matches the curve math.
+  const migrationTarget = MIGRATION_TARGET_FALLBACK;
 
   const state = tokenState.data as any;
   const symbol = (symbolQ.data as string | undefined) ?? "?";

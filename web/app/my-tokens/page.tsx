@@ -7,6 +7,7 @@ import { useAccount } from "wagmi";
 import { TokenCard } from "@/components/launchpad/TokenCard";
 import { CreatorFeesPanel } from "@/components/pool/CreatorFeesPanel";
 import { VaultClaimPanel } from "@/components/pool/VaultClaimPanel";
+import { PendingWithdrawalsCard } from "@/components/pool/PendingWithdrawalsCard";
 import { useLaunchpadTokens } from "@/lib/hooks/useLaunchpadTokens";
 
 const CURVE_SUPPLY = 800_000_000n * 10n ** 18n;
@@ -49,6 +50,10 @@ export default function MyTokensPage() {
         </div>
       ) : (
         <div className="space-y-10">
+          {/* Self-hiding escape hatch: surfaces only when this wallet has a
+              pending-withdrawal balance in the launchpad or locker ledgers. */}
+          <PendingWithdrawalsCard />
+
           <Section
             title="Launched by you"
             empty={

@@ -129,6 +129,31 @@ export const TWITTER_ESCROW_ABI = [
     inputs: [],
     outputs: [{ type: "address" }],
   },
+  // True iff (positionId, slotIndex) has an in-flight pending authorization.
+  // Set by `authorize`, cleared by `claim` / `claimByTwitter` / `veto`. Used
+  // to prevent zombie pendingClaims.
+  {
+    type: "function",
+    name: "hasPending",
+    stateMutability: "view",
+    inputs: [
+      { name: "positionId", type: "uint256" },
+      { name: "slotIndex", type: "uint256" },
+    ],
+    outputs: [{ type: "bool" }],
+  },
+  // Owner-only escape hatch to sweep stuck or vetoed tokens.
+  {
+    type: "function",
+    name: "rescue",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "token", type: "address" },
+      { name: "to", type: "address" },
+      { name: "amount", type: "uint256" },
+    ],
+    outputs: [],
+  },
   {
     type: "event",
     name: "Claimed",
@@ -140,6 +165,15 @@ export const TWITTER_ESCROW_ABI = [
       { name: "pairedAmount", type: "uint256", indexed: false },
       { name: "clankerToken", type: "address", indexed: false },
       { name: "clankerAmount", type: "uint256", indexed: false },
+    ],
+  },
+  {
+    type: "event",
+    name: "Rescued",
+    inputs: [
+      { name: "token", type: "address", indexed: true },
+      { name: "to", type: "address", indexed: true },
+      { name: "amount", type: "uint256", indexed: false },
     ],
   },
 ] as const;

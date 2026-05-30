@@ -35,13 +35,6 @@ export const LAUNCHPAD_ABI = [
   },
   {
     type: "function",
-    name: "MIGRATION_USDC_TARGET",
-    stateMutability: "view",
-    inputs: [],
-    outputs: [{ type: "uint256" }],
-  },
-  {
-    type: "function",
     name: "getTokenState",
     stateMutability: "view",
     inputs: [{ name: "token", type: "address" }],
@@ -81,8 +74,19 @@ export const LAUNCHPAD_ABI = [
     ],
     outputs: [
       { name: "tokensOut", type: "uint256" },
+      { name: "actualGrossPaid", type: "uint256" },
       { name: "refund", type: "uint256" },
     ],
+  },
+  // Pull-payment ledger for USDC payouts that failed inline (eg a
+  // recipient on the Circle blacklist). Read the balance; call
+  // `claimPendingUsdc` to withdraw.
+  {
+    type: "function",
+    name: "pendingUsdcWithdrawals",
+    stateMutability: "view",
+    inputs: [{ name: "recipient", type: "address" }],
+    outputs: [{ type: "uint256" }],
   },
   {
     type: "function",
@@ -209,6 +213,7 @@ export const LAUNCHPAD_ABI = [
       { name: "token", type: "address" },
       { name: "usdcIn", type: "uint256" },
       { name: "minTokensOut", type: "uint256" },
+      { name: "deadline", type: "uint256" },
     ],
     outputs: [{ name: "tokensOut", type: "uint256" }],
   },
@@ -220,6 +225,7 @@ export const LAUNCHPAD_ABI = [
       { name: "token", type: "address" },
       { name: "tokensIn", type: "uint256" },
       { name: "minUsdcOut", type: "uint256" },
+      { name: "deadline", type: "uint256" },
     ],
     outputs: [{ name: "usdcOut", type: "uint256" }],
   },
@@ -232,8 +238,18 @@ export const LAUNCHPAD_ABI = [
       { name: "tokenOut", type: "address" },
       { name: "tokensIn", type: "uint256" },
       { name: "minTokensOut", type: "uint256" },
+      { name: "deadline", type: "uint256" },
     ],
     outputs: [{ name: "tokensOut", type: "uint256" }],
+  },
+  // Pull-payment withdrawal: claim USDC the caller is credited with from
+  // failed inline payouts (eg a previous trade's fee transfer reverted).
+  {
+    type: "function",
+    name: "claimPendingUsdc",
+    stateMutability: "nonpayable",
+    inputs: [],
+    outputs: [{ name: "amount", type: "uint256" }],
   },
   {
     type: "function",
@@ -315,6 +331,25 @@ export const LAUNCHPAD_ABI = [
       { name: "author", type: "address", indexed: true },
       { name: "index", type: "uint256", indexed: false },
       { name: "text", type: "string", indexed: false },
+    ],
+  },
+  // Emitted when a direct USDC payout failed and the amount was credited to
+  // the pull-payment ledger instead. The recipient should be prompted to call
+  // `claimPendingUsdc`.
+  {
+    type: "event",
+    name: "UsdcCredited",
+    inputs: [
+      { name: "recipient", type: "address", indexed: true },
+      { name: "amount", type: "uint256", indexed: false },
+    ],
+  },
+  {
+    type: "event",
+    name: "UsdcPendingClaimed",
+    inputs: [
+      { name: "recipient", type: "address", indexed: true },
+      { name: "amount", type: "uint256", indexed: false },
     ],
   },
 ] as const;
