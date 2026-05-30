@@ -2,6 +2,7 @@
 
 import { AlertTriangle } from "lucide-react";
 import { useEffect, useState } from "react";
+import { usePathname } from "next/navigation";
 import { useAccount, useChainId, useSwitchChain } from "wagmi";
 import { arcTestnet } from "@/lib/chains";
 import { pushToast } from "@/lib/toast";
@@ -21,8 +22,14 @@ export function ChainGuard() {
   const chainId = useChainId();
   const { switchChain, isPending } = useSwitchChain();
   const [dismissed, setDismissed] = useState(false);
+  const pathname = usePathname();
 
-  const wrongChain = isConnected && chainId !== arcTestnet.id;
+  // The /bridge page legitimately needs the wallet on a non-Arc source chain
+  // (Eth Sepolia, Base, etc.) while CCTP burns. Suppress the guard there so
+  // the user can complete the burn without being nagged to switch back.
+  const onBridgePage = pathname?.startsWith("/bridge") ?? false;
+
+  const wrongChain = isConnected && chainId !== arcTestnet.id && !onBridgePage;
 
   // Reset dismissed state if the user disconnects or moves back to Arc.
   useEffect(() => {

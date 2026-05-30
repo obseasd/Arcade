@@ -1,8 +1,8 @@
 "use client";
 
-import { ExternalLink, ChevronDown, History } from "lucide-react";
+import { ExternalLink, ChevronDown, History, X } from "lucide-react";
 import { useEffect, useState } from "react";
-import { loadBridgeHistory, type HistoryEntry } from "@/lib/bridgeHistory";
+import { loadBridgeHistory, removeBridge, type HistoryEntry } from "@/lib/bridgeHistory";
 import { getCctpChain } from "@/lib/cctp";
 import { ChainIcon } from "@/components/ui/ChainIcon";
 import { formatUSDC, cn } from "@/lib/utils";
@@ -25,6 +25,11 @@ export function BridgeHistory() {
     window.addEventListener("storage", onStorage);
     return () => window.removeEventListener("storage", onStorage);
   }, []);
+
+  const dismiss = (id: string) => {
+    removeBridge(id);
+    setEntries(loadBridgeHistory());
+  };
 
   if (entries.length === 0) return null;
 
@@ -50,14 +55,14 @@ export function BridgeHistory() {
       </button>
       <div className="divide-y divide-arc-border/40 border-t border-arc-border/40">
         {visible.map((e) => (
-          <Row key={e.id} entry={e} />
+          <Row key={e.id} entry={e} onDismiss={() => dismiss(e.id)} />
         ))}
       </div>
     </div>
   );
 }
 
-function Row({ entry }: { entry: HistoryEntry }) {
+function Row({ entry, onDismiss }: { entry: HistoryEntry; onDismiss: () => void }) {
   const src = getCctpChain(entry.srcChainId);
   const dst = getCctpChain(entry.dstChainId);
   const amount = (() => {
@@ -97,6 +102,16 @@ function Row({ entry }: { entry: HistoryEntry }) {
           <ExternalLink className="h-3 w-3" />
         </a>
       )}
+      {/* Dismiss: hide a stuck entry locally. Useful when the burn was made
+          before the burnTxHash auto-patch shipped and the entry is stranded
+          as "pending" even though the user has already minted. */}
+      <button
+        onClick={onDismiss}
+        aria-label="Dismiss"
+        className="text-arc-text-faint hover:text-arc-danger"
+      >
+        <X className="h-3 w-3" />
+      </button>
     </div>
   );
 }

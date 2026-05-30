@@ -33,7 +33,7 @@ export function BridgeStepsProgress({ current, detail }: Props) {
     current === "done" ? STEPS.length : STEPS.findIndex((s) => s.key === current);
 
   return (
-    <div className="rounded-2xl border border-arc-border bg-black/30 px-5 py-4">
+    <div className="rounded-2xl border border-arc-border bg-white/[0.015] px-5 py-4">
       {/* Grid layout: one column per step. Dots + connector lines render on
           a top row, labels render directly below each dot. This keeps each
           dot perfectly centered above its label and gives the connector

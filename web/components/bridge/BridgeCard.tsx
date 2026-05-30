@@ -33,7 +33,7 @@ import {
   loadPendingBridge,
   savePendingBridge,
 } from "@/lib/pendingBridge";
-import { recordBridge, updateBridge } from "@/lib/bridgeHistory";
+import { recordBridge, updateBridge, updateBridgeByBurnTx } from "@/lib/bridgeHistory";
 import { BridgeStepsProgress } from "./BridgeStepsProgress";
 import { pushToast } from "@/lib/toast";
 
@@ -70,7 +70,13 @@ type Step =
   | { kind: "approving" }
   | { kind: "burning" }
   | { kind: "attesting"; burnTxHash: `0x${string}`; srcDomain: number; dstId: number }
-  | { kind: "minting"; message: `0x${string}`; attestation: `0x${string}`; dstId: number }
+  | {
+      kind: "minting";
+      burnTxHash: `0x${string}`;
+      message: `0x${string}`;
+      attestation: `0x${string}`;
+      dstId: number;
+    }
   | { kind: "done"; mintTxHash: `0x${string}`; dstId: number }
   | { kind: "error"; message: string };
 
@@ -289,6 +295,7 @@ export function BridgeCard() {
       if (att && att.status === "complete" && !cancelled) {
         setStep({
           kind: "minting",
+          burnTxHash: step.burnTxHash,
           message: att.message,
           attestation: att.attestation,
           dstId: step.dstId,
@@ -330,8 +337,14 @@ export function BridgeCard() {
       // Funds delivered - drop the persisted claim entry.
       clearPendingBridge();
       // Patch the history entry: pending → minted, store the mint tx.
+      // Prefer historyId when we still have it (same session); fall back to
+      // burnTxHash lookup so a refresh-then-mint flow still flips the entry
+      // out of "pending" instead of leaving a stale row.
+      const patch = { status: "minted" as const, mintTxHash: hash, mintedAt: Date.now() };
       if (historyId) {
-        updateBridge(historyId, { status: "minted", mintTxHash: hash, mintedAt: Date.now() });
+        updateBridge(historyId, patch);
+      } else if (step.kind === "minting" && step.burnTxHash) {
+        updateBridgeByBurnTx(step.burnTxHash, patch);
       }
       setStep({ kind: "done", mintTxHash: hash, dstId: step.dstId });
       pushToast({

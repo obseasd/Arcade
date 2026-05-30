@@ -65,6 +65,29 @@ export function updateBridge(id: string, patch: Partial<HistoryEntry>): void {
   save(next);
 }
 
+/** Patch by burnTxHash. Used when the user refreshed the page between burn
+ *  and mint - the in-memory `historyId` is gone but burnTxHash is recoverable
+ *  from the persisted pendingBridge entry, so we can still flip the entry to
+ *  "minted" without leaking a permanent "pending" row. */
+export function updateBridgeByBurnTx(
+  burnTxHash: `0x${string}`,
+  patch: Partial<HistoryEntry>,
+): void {
+  const existing = loadBridgeHistory();
+  const next = existing.map((e) =>
+    e.burnTxHash.toLowerCase() === burnTxHash.toLowerCase() ? { ...e, ...patch } : e,
+  );
+  save(next);
+}
+
+/** Remove a single entry. Used by the per-row dismiss action when a user
+ *  has already minted but the history entry was created before the
+ *  updateBridgeByBurnTx fix shipped (so it's stuck as "pending"). */
+export function removeBridge(id: string): void {
+  const existing = loadBridgeHistory();
+  save(existing.filter((e) => e.id !== id));
+}
+
 export function clearBridgeHistory(): void {
   if (!isBrowser()) return;
   try {

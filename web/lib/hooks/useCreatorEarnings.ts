@@ -26,6 +26,16 @@ const DAY_SECONDS = 86_400;
 /** Max days the sparkline ever displays even if there's older data. */
 const MAX_CHART_DAYS = 30;
 
+/** Module-level cache so flipping pages or wagmi refetches don't restart the
+ *  whole event scan. Keyed by `${account}|${stable mine set}`. */
+interface ScanCacheEntry {
+  byToken: Map<string, TokenEarnings>;
+  byDay: Map<number, number>;
+  ts: number;
+}
+const scanCache = new Map<string, ScanCacheEntry>();
+const CACHE_TTL_MS = 5 * 60_000; // 5 minutes
+
 /** Per-token aggregated earnings. */
 export interface TokenEarnings {
   token: Address;
@@ -157,6 +167,19 @@ export function useCreatorEarnings(): CreatorEarningsResult {
   }, [previewCalls.data]);
 
   // 4) Historical claims: scan RecipientPaid for each position.
+  // Stable key for the set of positions we need to scan. Without this, every
+  // wagmi refetch (eg the previewCalls 30s interval) would change object
+  // references in `mine` even when the actual position set is identical and
+  // re-trigger the scan, causing the card to flicker through scanning state.
+  const mineKey = useMemo(
+    () =>
+      mine
+        .map((p) => `${p.positionId.toString()}-${p.token.toLowerCase()}`)
+        .sort()
+        .join(","),
+    [mine],
+  );
+
   const [byToken, setByToken] = useState<Map<string, TokenEarnings>>(new Map());
   const [byDay, setByDay] = useState<Map<number, number>>(new Map());
   const [fullyLoaded, setFullyLoaded] = useState(false);
@@ -167,6 +190,16 @@ export function useCreatorEarnings(): CreatorEarningsResult {
       setByToken(new Map());
       setByDay(new Map());
       setFullyLoaded(false);
+      return;
+    }
+    // Cache hit: use the cached aggregates immediately and skip the scan.
+    const cacheKey = `${account.toLowerCase()}|${mineKey}`;
+    const hit = scanCache.get(cacheKey);
+    if (hit && Date.now() - hit.ts < CACHE_TTL_MS) {
+      setByToken(hit.byToken);
+      setByDay(hit.byDay);
+      setFullyLoaded(true);
+      setScanning(false);
       return;
     }
     let cancelled = false;
@@ -257,7 +290,16 @@ export function useCreatorEarnings(): CreatorEarningsResult {
             setByDay(new Map(daysMap));
           }
         }
-        if (!cancelled) setFullyLoaded(true);
+        if (!cancelled) {
+          setFullyLoaded(true);
+          // Cache the final aggregates so the next render (or 30s preview
+          // refetch) doesn't restart the scan from scratch.
+          scanCache.set(cacheKey, {
+            byToken: new Map(tokensMap),
+            byDay: new Map(daysMap),
+            ts: Date.now(),
+          });
+        }
       } catch {
         if (!cancelled) {
           setByToken(new Map());
@@ -269,7 +311,11 @@ export function useCreatorEarnings(): CreatorEarningsResult {
     return () => {
       cancelled = true;
     };
-  }, [publicClient, account, mine]);
+    // mineKey reflects the actual position set; `mine` itself has unstable
+    // identity due to upstream wagmi refetches. eslint-disable to skip the
+    // mine warning - the key is the load-bearing input.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [publicClient, account, mineKey]);
 
   const result = useMemo<CreatorEarningsResult>(() => {
     const perToken = Array.from(byToken.values()).sort((a, b) => b.amountUsd - a.amountUsd);
