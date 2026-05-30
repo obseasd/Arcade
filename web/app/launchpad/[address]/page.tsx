@@ -1,6 +1,6 @@
 "use client";
 
-import { ExternalLink, Twitter, MessageSquare, Globe, ArrowLeft } from "lucide-react";
+import { ExternalLink, Twitter, MessageSquare, Globe, ArrowLeft, HelpCircle } from "lucide-react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useMemo, useState } from "react";
@@ -8,7 +8,7 @@ import { Address, erc20Abi, isAddress, parseAbiItem } from "viem";
 import { useReadContract } from "wagmi";
 import { LAUNCHPAD_ABI } from "@/lib/abis/launchpad";
 import { V3_POOL_ABI } from "@/lib/abis/v3";
-import { ADDRESSES } from "@/lib/constants";
+import { ADDRESSES, LAUNCHPAD_TOTAL_SUPPLY } from "@/lib/constants";
 import { useClankerMcap } from "@/lib/hooks/useClankerMcap";
 import { useLaunchpadVolume } from "@/lib/hooks/useLaunchpadVolume";
 import { useTokenMetadataURI } from "@/lib/hooks/useTokenMetadataURI";
@@ -20,7 +20,9 @@ import { PriceChart } from "@/components/launchpad/PriceChart";
 import { TradePanel } from "@/components/launchpad/TradePanel";
 import { ClankerTradePanel } from "@/components/launchpad/ClankerTradePanel";
 import { CreatorTokenPanel } from "@/components/launchpad/CreatorTokenPanel";
+import { TokenActivityPanel } from "@/components/launchpad/TokenActivityPanel";
 import { Comments } from "@/components/launchpad/Comments";
+import { Tooltip } from "@/components/ui/Tooltip";
 
 const CURVE_SUPPLY = 800_000_000n * 10n ** 18n;
 const MIGRATION_TARGET_FALLBACK = 20_000n * 10n ** 6n;
@@ -276,23 +278,48 @@ export default function TokenDetailPage() {
             {/* Stats row — bonding-curve modes show raised/progress/migration; Clanker
                 tokens show pool-type info (no curve, LP locked from launch). */}
             <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
-              <Stat label="Market cap" value={mcapLabel} />
+              <Stat
+                label="Market cap"
+                value={mcapLabel}
+                hint="Price per token multiplied by the 1B total supply. Equivalent to FDV since all tokens are circulating from launch."
+              />
               {Number(state?.mode ?? 0) === 2 ? (
                 <>
-                  <Stat label="Volume" value={volumeLabel} />
-                  <Stat label="Liquidity" value="Single-sided" />
+                  <Stat
+                    label="Volume"
+                    value={volumeLabel}
+                    hint="Cumulative USDC traded against this token's V3 pool since launch."
+                  />
+                  <Stat
+                    label="Liquidity"
+                    value="Single-sided"
+                    hint="LP is single-sided (token only) at launch and converts to USDC as buyers consume positions. The position itself is locked forever."
+                  />
                   <Stat label="Type" value="Clanker (V3 locked)" />
                 </>
               ) : (
                 <>
-                  <Stat label="Volume" value={volumeLabel} />
-                  <Stat label="Progress" value={`${progress.toFixed(1)}%`} />
+                  <Stat
+                    label="Volume"
+                    value={volumeLabel}
+                    hint="Cumulative USDC traded through the bonding curve plus the V2 pool (if migrated)."
+                  />
+                  <Stat
+                    label="Progress"
+                    value={`${progress.toFixed(1)}%`}
+                    hint="Fraction of the 800M curve supply sold. At 100% the launchpad seeds a V2 pool with the collected USDC and burns the LP."
+                  />
                   <Stat
                     label={migrated ? "DEX pool" : "Migration at"}
                     value={
                       migrated && state.v2Pair
                         ? formatAddress(state.v2Pair)
                         : `$${formatUSDC(migrationTarget, 6, 0)}`
+                    }
+                    hint={
+                      migrated
+                        ? "The V2 pair address holding the migrated liquidity."
+                        : "USDC threshold at which the curve fully sells out and migrates to a burned V2 pool."
                     }
                   />
                 </>
@@ -322,6 +349,18 @@ export default function TokenDetailPage() {
               pool={isClanker ? (state?.v2Pair as Address | undefined) : undefined}
             />
           </div>
+
+          {/* Activity: live trade feed + holders. The default Transactions tab
+              listens to Buy/Sell (curve) or Swap (V3) events via WebSocket so
+              new trades show up at the top in real time. */}
+          <TokenActivityPanel
+            token={token}
+            symbol={symbol}
+            mode={state ? Number(state.mode) : undefined}
+            pool={isClanker ? (state?.v2Pair as Address | undefined) : undefined}
+            totalSupplyRaw={LAUNCHPAD_TOTAL_SUPPLY * 10n ** 18n}
+            launchpadAddress={ADDRESSES.launchpad}
+          />
 
           {/* Comments */}
           <Comments token={token} />
@@ -365,10 +404,17 @@ export default function TokenDetailPage() {
   );
 }
 
-function Stat({ label, value }: { label: string; value: string }) {
+function Stat({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
     <div className="rounded-xl border border-arc-border bg-arc-bg-elevated p-3">
-      <div className="text-xs text-arc-text-muted">{label}</div>
+      <div className="flex items-center gap-1 text-xs text-arc-text-muted">
+        {label}
+        {hint && (
+          <Tooltip content={hint}>
+            <HelpCircle className="h-3 w-3 text-arc-text-faint" aria-label="Definition" />
+          </Tooltip>
+        )}
+      </div>
       <div className="mt-1 truncate tabular-nums text-base font-medium">{value}</div>
     </div>
   );
