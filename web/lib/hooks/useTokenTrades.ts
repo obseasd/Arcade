@@ -30,11 +30,12 @@ export interface Trade {
   tokenRaw: bigint;
 }
 
-// 5_000 blocks ≈ 1.4h on Arc (1s blocks). Plenty for a young token's history,
-// and trades from earlier than that are dominated by the WebSocket live feed
-// for the active session. Bigger windows were burning ~8s on a fresh load.
+// Two-phase adaptive scan. Phase 1 covers the recent window for the immediate
+// render; phase 2 silently extends history in the background so older trades
+// don't get permanently lost.
 const CHUNK = 1_000n;
-const LOOKBACK = 5_000n;
+const FAST_LOOKBACK = 5_000n; // ~1.4h on Arc (1s blocks) - renders in ~1s
+const FULL_LOOKBACK = 50_000n; // ~14h - completes silently after the initial paint
 const MAX_TRADES = 100;
 
 /**
@@ -67,7 +68,7 @@ export function useTokenTrades(args: {
 
   const isV3 = mode === 2;
 
-  // -------- Initial historical load -----------------------------------------
+  // -------- Initial historical load (adaptive: fast then extended) ---------
   useEffect(() => {
     if (!publicClient || !token || mode === undefined) {
       setTrades([]);
@@ -83,12 +84,8 @@ export function useTokenTrades(args: {
       try {
         const latest = await publicClient.getBlockNumber();
         if (!cancelled) setLatestBlock(latest);
-        const target = latest > LOOKBACK ? latest - LOOKBACK : 0n;
-        let end = latest;
-        const collected: Trade[] = [];
-        let errors = 0;
 
-        // Detect USDC side for V3 pools.
+        // Detect USDC side for V3 pools (constant for the rest of the scan).
         let usdcIsToken0 = true;
         if (isV3 && pool) {
           try {
@@ -111,55 +108,80 @@ export function useTokenTrades(args: {
           }
         }
 
-        while (end > target && collected.length < MAX_TRADES) {
-          const start = end > CHUNK - 1n ? end - (CHUNK - 1n) : 0n;
-          const from = start > target ? start : target;
-          try {
-            if (isV3 && pool) {
-              const logs = await publicClient.getLogs({
-                address: pool,
-                event: V3_SWAP_EVT,
-                fromBlock: from,
-                toBlock: end,
-              });
-              for (const log of logs) {
-                collected.push(swapLogToTrade(log, latest, usdcIsToken0));
+        const collected: Trade[] = [];
+
+        /** Run a windowed scan and accumulate Trades into `collected`. Returns
+         *  the block we stopped at so the next phase can continue from there. */
+        const scanWindow = async (startEnd: bigint, target: bigint): Promise<bigint> => {
+          let end = startEnd;
+          let errors = 0;
+          while (end > target && collected.length < MAX_TRADES) {
+            const start = end > CHUNK - 1n ? end - (CHUNK - 1n) : 0n;
+            const from = start > target ? start : target;
+            try {
+              if (isV3 && pool) {
+                const logs = await publicClient.getLogs({
+                  address: pool,
+                  event: V3_SWAP_EVT,
+                  fromBlock: from,
+                  toBlock: end,
+                });
+                for (const log of logs) collected.push(swapLogToTrade(log, latest, usdcIsToken0));
+              } else {
+                const [buys, sells] = await Promise.all([
+                  publicClient.getLogs({
+                    address: ADDRESSES.launchpad,
+                    event: BUY_EVT,
+                    args: { token },
+                    fromBlock: from,
+                    toBlock: end,
+                  }),
+                  publicClient.getLogs({
+                    address: ADDRESSES.launchpad,
+                    event: SELL_EVT,
+                    args: { token },
+                    fromBlock: from,
+                    toBlock: end,
+                  }),
+                ]);
+                for (const log of buys) collected.push(buyLogToTrade(log, latest));
+                for (const log of sells) collected.push(sellLogToTrade(log, latest));
               }
-            } else {
-              const [buys, sells] = await Promise.all([
-                publicClient.getLogs({
-                  address: ADDRESSES.launchpad,
-                  event: BUY_EVT,
-                  args: { token },
-                  fromBlock: from,
-                  toBlock: end,
-                }),
-                publicClient.getLogs({
-                  address: ADDRESSES.launchpad,
-                  event: SELL_EVT,
-                  args: { token },
-                  fromBlock: from,
-                  toBlock: end,
-                }),
-              ]);
-              for (const log of buys) collected.push(buyLogToTrade(log, latest));
-              for (const log of sells) collected.push(sellLogToTrade(log, latest));
+            } catch {
+              errors += 1;
+              if (errors > 3) break;
             }
-          } catch {
-            errors += 1;
-            if (errors > 3) break;
+            if (from === 0n) return 0n;
+            end = from - 1n;
           }
-          if (from === 0n) break;
-          end = from - 1n;
+          return end;
+        };
+
+        const fastTarget = latest > FAST_LOOKBACK ? latest - FAST_LOOKBACK : 0n;
+        const fullTarget = latest > FULL_LOOKBACK ? latest - FULL_LOOKBACK : 0n;
+
+        // Phase 1: fast window, immediate render.
+        let stoppedAt = await scanWindow(latest, fastTarget);
+        const snapshot = (): Trade[] => {
+          const sorted = [...collected].sort((a, b) => Number(b.blockNumber - a.blockNumber));
+          return sorted.slice(0, MAX_TRADES);
+        };
+        if (!cancelled) {
+          setTrades(snapshot());
+          setIsLoading(false);
         }
 
-        // Newest first, cap to MAX_TRADES.
-        collected.sort((a, b) => Number(b.blockNumber - a.blockNumber));
-        if (!cancelled) setTrades(collected.slice(0, MAX_TRADES));
+        // Phase 2: extend until FULL_LOOKBACK in the background. Skip if we
+        // already hit the MAX_TRADES cap or walked past the full target.
+        if (!cancelled && collected.length < MAX_TRADES && stoppedAt > fullTarget) {
+          stoppedAt = await scanWindow(stoppedAt, fullTarget);
+          if (!cancelled) setTrades(snapshot());
+        }
       } catch {
-        if (!cancelled) setTrades([]);
-      } finally {
-        if (!cancelled) setIsLoading(false);
+        if (!cancelled) {
+          setTrades([]);
+          setIsLoading(false);
+        }
       }
     })();
     return () => {
