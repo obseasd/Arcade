@@ -63,8 +63,12 @@ remappings = [
     # whether read from this repo or the upstream one.
     "@uniswap/v4-core/=lib/v4-core/",
     "v4-core/=lib/v4-core/src/",
-    # v4-core's own deps. We re-route them to ours where they overlap and
-    # use the vendored copy where they don't (solmate is v4-core-only today).
+    # v4-periphery for PositionManager, V4Quoter, StateView, LiquidityAmounts.
+    "@uniswap/v4-periphery/=lib/v4-periphery/",
+    "v4-periphery/=lib/v4-periphery/src/",
+    # Permit2 - required by PositionManager.
+    "permit2/=lib/v4-periphery/lib/permit2/",
+    # v4-core's own deps. solmate is v4-core-only.
     "solmate/=lib/v4-core/lib/solmate/",
 ]
 
