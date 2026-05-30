@@ -33,6 +33,8 @@ import {
   loadPendingBridge,
   savePendingBridge,
 } from "@/lib/pendingBridge";
+import { recordBridge, updateBridge } from "@/lib/bridgeHistory";
+import { BridgeStepsProgress } from "./BridgeStepsProgress";
 import { pushToast } from "@/lib/toast";
 
 const ARC_CHAIN_ID = 5_042_002;
@@ -83,6 +85,9 @@ export function BridgeCard() {
   const [dstChainId, setDstChainId] = useState<number>(ARC_CHAIN_ID);
   const [amountStr, setAmountStr] = useState("");
   const [step, setStep] = useState<Step>({ kind: "idle" });
+  /** localStorage id of the current bridge's history entry. Set after burn,
+   *  used to patch the entry to "minted" once the mint confirms. */
+  const [historyId, setHistoryId] = useState<string | null>(null);
   const [picker, setPicker] = useState<"from" | "to" | null>(null);
   const [fastTransfer, setFastTransfer] = useState(false);
   const [recipientOverride, setRecipientOverride] = useState<Address | null>(null);
@@ -249,6 +254,18 @@ export function BridgeCard() {
         recipient: (recipientOverride ?? account) as string,
         createdAt: Date.now(),
       });
+      // Record in long-lived history so it shows up in the "Recent bridges"
+      // list below the card.
+      const id = recordBridge({
+        srcChainId: srcChain.id,
+        dstChainId: dstChain.id,
+        amountRaw6: amountRaw.toString(),
+        recipient: (recipientOverride ?? account) as string,
+        burnTxHash: burnHash,
+        status: "pending",
+        burnedAt: Date.now(),
+      });
+      setHistoryId(id);
       setStep({
         kind: "attesting",
         burnTxHash: burnHash,
@@ -312,6 +329,10 @@ export function BridgeCard() {
       const dstChainCfg = getCctpChain(step.dstId)!;
       // Funds delivered - drop the persisted claim entry.
       clearPendingBridge();
+      // Patch the history entry: pending → minted, store the mint tx.
+      if (historyId) {
+        updateBridge(historyId, { status: "minted", mintTxHash: hash, mintedAt: Date.now() });
+      }
       setStep({ kind: "done", mintTxHash: hash, dstId: step.dstId });
       pushToast({
         kind: "swap",
@@ -536,23 +557,34 @@ export function BridgeCard() {
         )}
       </div>
 
-      {/* Progress tracker */}
-      {step.kind !== "idle" && step.kind !== "error" && step.kind !== "done" && (
-        <div className="mt-4 space-y-2 rounded-xl border border-arc-border bg-arc-bg-elevated p-4 text-xs">
-          <Stepper
-            label={`Send USDC from ${srcChain.name}`}
-            active={step.kind === "approving" || step.kind === "burning"}
-            done={["attesting", "minting"].includes(step.kind)}
-          />
-          <Stepper
-            label="Wait for Circle attestation"
-            active={step.kind === "attesting"}
-            done={step.kind === "minting"}
-          />
-          <Stepper
-            label={`Mint USDC on ${dstChain.name}`}
-            active={step.kind === "minting"}
-            done={false}
+      {/* Visual stepper for the burn → attest → mint flow. Replaces the old
+          plain text list with connected dots so users on slow chains (eg
+          Eth Sepolia attestation ~15-20 min) can see exactly where they are. */}
+      {step.kind !== "idle" && step.kind !== "error" && (
+        <div className="mt-4">
+          <BridgeStepsProgress
+            current={
+              step.kind === "approving" || step.kind === "burning"
+                ? "burn"
+                : step.kind === "attesting"
+                  ? "attest"
+                  : step.kind === "minting"
+                    ? "mint"
+                    : step.kind === "done"
+                      ? "done"
+                      : "idle"
+            }
+            detail={
+              step.kind === "approving"
+                ? "Approving USDC spend on the source chain…"
+                : step.kind === "burning"
+                  ? `Burning USDC on ${srcChain.name}…`
+                  : step.kind === "attesting"
+                    ? `Waiting for Circle's attestation (${etaLabel(srcChain.id, fastTransfer)})…`
+                    : step.kind === "minting"
+                      ? `Ready to mint on ${dstChain.name}.`
+                      : undefined
+            }
           />
         </div>
       )}
