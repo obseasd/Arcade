@@ -4,6 +4,8 @@ import { X, Loader2 } from "lucide-react";
 import Image from "next/image";
 import { Modal } from "@/components/ui/Modal";
 import { TokenIcon } from "@/components/ui/TokenIcon";
+import { AutoTokenIcon } from "@/components/ui/AutoTokenIcon";
+import type { Address } from "viem";
 import { TxStatus, type TxState } from "@/components/ui/TxStatus";
 import { type TokenOption } from "@/components/ui/TokenSelectModal";
 
@@ -60,6 +62,7 @@ export function SwapConfirmModal({
       <div className="space-y-3 p-5">
         <SideRow
           label="From"
+          address={tokenIn.address}
           symbol={tokenIn.symbol ?? "?"}
           amountFormatted={amountInFormatted}
         />
@@ -72,6 +75,7 @@ export function SwapConfirmModal({
 
         <SideRow
           label="To"
+          address={tokenOut.address}
           symbol={tokenOut.symbol ?? "?"}
           amountFormatted={amountOutFormatted}
         />
@@ -100,13 +104,23 @@ export function SwapConfirmModal({
   );
 }
 
-function SideRow({ label, symbol, amountFormatted }: { label: string; symbol: string; amountFormatted: string }) {
+function SideRow({
+  label,
+  address,
+  symbol,
+  amountFormatted,
+}: {
+  label: string;
+  address: Address;
+  symbol: string;
+  amountFormatted: string;
+}) {
   return (
     <div className="rounded-2xl border border-arc-border bg-arc-bg p-4">
       <div className="mb-2 text-xs text-arc-text-muted">{label}</div>
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2">
-          <TokenIcon symbol={symbol} size={28} />
+          <AutoTokenIcon address={address} symbol={symbol} size={28} />
           <span className="font-medium">{symbol}</span>
         </div>
         <span className="truncate text-xl font-semibold tabular-nums" title={amountFormatted}>

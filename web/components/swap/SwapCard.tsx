@@ -17,6 +17,7 @@ import { useUsdValue } from "@/lib/hooks/useTokenUsdPrice";
 import { useSwapRoute } from "@/lib/hooks/useSwapRoute";
 import { pushToast } from "@/lib/toast";
 import { TokenIcon } from "@/components/ui/TokenIcon";
+import { AutoTokenIcon } from "@/components/ui/AutoTokenIcon";
 import { TokenSelectModal, TokenOption } from "@/components/ui/TokenSelectModal";
 import { TxStatus, type TxState } from "@/components/ui/TxStatus";
 import { SwapConfirmModal } from "./SwapConfirmModal";
@@ -252,9 +253,25 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
   const inUsd = useUsdValue(tokenIn.address, finalAmountIn, decimalsIn);
   const outUsd = useUsdValue(tokenOut?.address, finalAmountOut, decimalsOut);
 
-  // Fee = 0.3% of input (V2)
-  const feeRaw = (finalAmountIn * 3n) / 1000n;
+  // Fee depends on the route. Normalize everything to PIPS (1_000_000 = 100%):
+  //   - V2 fee 0.30% = 3_000 pips
+  //   - V3 fee tier comes from feeOf() already in pips (10_000 = 1%)
+  //   - swapMigratedRoute: V2 fee on each leg + 0.30% royalty per migrated side
+  const feePips: bigint = (() => {
+    if (isV3Swap) return BigInt(v3Fee);
+    if (route.useLaunchpadRouter) {
+      // 2 V2 legs (3_000 pips each) + 3_000 pips per migrated side (royalty).
+      let pips = 6_000n;
+      if (route.inMigrated) pips += 3_000n;
+      if (route.outMigrated) pips += 3_000n;
+      return pips;
+    }
+    return 3_000n; // plain V2
+  })();
+  const feeRaw = (finalAmountIn * feePips) / 1_000_000n;
   const feeFormatted = formatTokenAmount(feeRaw, decimalsIn);
+  const feePct = Number(feePips) / 10_000;
+  const feePctLabel = `${feePct.toFixed(feePct < 1 ? 2 : 1)}%`;
   // Total loss % includes price impact + AMM fee (already baked into out amount)
   const lossPct =
     inUsd.usd !== undefined && outUsd.usd !== undefined && inUsd.usd > 0
@@ -454,7 +471,11 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
         balanceRaw={balOutRaw}
         usdValue={outUsd.usd}
         lossPct={lossPct}
-        feeLabel={feeRaw > 0n ? `Fee ${feeFormatted} ${tokenIn.symbol ?? "TOKEN"}` : undefined}
+        feeLabel={
+          feeRaw > 0n
+            ? `Fee ${feePctLabel} (${feeFormatted} ${tokenIn.symbol ?? "TOKEN"})`
+            : undefined
+        }
       />
 
       {/* Cross-protocol (V3<->V2) routes can't execute in one tx. */}
@@ -660,7 +681,7 @@ function TokenBox({
         >
           {token ? (
             <>
-              <TokenIcon symbol={token.symbol} size={24} />
+              <AutoTokenIcon address={token.address} symbol={token.symbol} size={24} />
               <span>{token.symbol}</span>
               <ChevronDown className="h-4 w-4 text-arc-text-muted transition-transform group-hover:text-arc-text" />
             </>

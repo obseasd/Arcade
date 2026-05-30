@@ -119,33 +119,119 @@ export function useTokenCandles(args: {
     };
   }, [publicClient, token, mode, pool, timeframe, refreshKey, liveTick]);
 
-  // Live trade subscription. Invalidates the cache + bumps liveTick whenever a
-  // new Swap (Clanker) or Buy/Sell (PUMP/Arcade) hits this token.
-  const bumpLive = useCallback(() => {
-    const cacheKey = `${(token ?? "").toLowerCase()}|${mode ?? 0}|${(pool ?? "").toLowerCase()}`;
-    tradesCache.delete(cacheKey);
-    setLiveTick((t) => t + 1);
-  }, [token, mode, pool]);
+  // Live trade subscription. Two paths share `useV3Usdc0Hint` and a common
+  // log->trade parser:
+  //
+  //   1. Append the parsed trade directly to the cache and re-bucketize. This
+  //      avoids the brief RPC indexer lag where a getLogs scan immediately
+  //      after the WS push can still miss the new event (which was the visible
+  //      symptom: first buy on a fresh token left the chart empty until a
+  //      timeframe switch forced re-bucketize).
+  //   2. Bump liveTick anyway so the effect re-runs on the next tick. The
+  //      backup full-fetch reconciles anything the WS missed.
+  const appendTrades = useCallback(
+    (newTrades: Trade[]) => {
+      if (newTrades.length === 0) return;
+      const cacheKey = `${(token ?? "").toLowerCase()}|${mode ?? 0}|${(pool ?? "").toLowerCase()}`;
+      const prior = tradesCache.get(cacheKey)?.result.trades ?? [];
+      // Dedupe by (time, price) so a backup refetch right after doesn't
+      // double-count anything we already appended from the WS path.
+      const merged = [...prior, ...newTrades]
+        .filter(
+          (t, i, arr) =>
+            arr.findIndex((x) => x.time === t.time && x.price === t.price && x.volumeUsdc === t.volumeUsdc) === i,
+        )
+        .sort((a, b) => a.time - b.time);
+      tradesCache.set(cacheKey, {
+        result: { trades: merged, initialPrice: tradesCache.get(cacheKey)?.result.initialPrice },
+        cachedAt: Date.now(),
+      });
+      setCandles(bucketize(merged, BUCKET_SIZE[timeframe]));
+      setLiveTick((t) => t + 1);
+    },
+    [token, mode, pool, timeframe],
+  );
+
+  // Estimate "now" from `latestBlock.timestamp` once at mount, so the WS-pushed
+  // log's `blockNumber` can be turned into seconds-since-epoch without an RPC
+  // round-trip per event. ~1s/block on Arc → close enough for charting.
+  const [tsAnchor, setTsAnchor] = useState<{ ts: number; n: bigint } | null>(null);
+  useEffect(() => {
+    if (!publicClient) return;
+    publicClient
+      .getBlock()
+      .then((b: any) => setTsAnchor({ ts: Number(b.timestamp), n: b.number as bigint }))
+      .catch(() => {});
+  }, [publicClient]);
+  const tsForBlock = useCallback(
+    (bn: bigint) => (tsAnchor ? tsAnchor.ts - Number(tsAnchor.n - bn) : Math.floor(Date.now() / 1000)),
+    [tsAnchor],
+  );
+
+  const onSwapLog = useCallback(
+    (logs: any[]) => {
+      if (mode !== 2 || !pool) return;
+      const parsed: Trade[] = [];
+      for (const log of logs) {
+        const sqrtPriceX96 = log.args?.sqrtPriceX96 as bigint | undefined;
+        if (!sqrtPriceX96) continue;
+        // We don't know `usdcIsToken0` here — defer to the more accurate fetch
+        // by also bumping liveTick. But for the immediate UI update we make
+        // a best-effort assumption: USDC is conventionally token0 when its
+        // address sorts lower. The full fetch reconciles within ~1s.
+        const usdcIsToken0 = ADDRESSES.usdc.toLowerCase() < (pool ?? "").toLowerCase();
+        const price = priceFromSqrtX96(sqrtPriceX96, usdcIsToken0);
+        const a0 = log.args.amount0 as bigint;
+        const a1 = log.args.amount1 as bigint;
+        const usdcRaw = usdcIsToken0 ? a0 : a1;
+        const usdcAbs = usdcRaw < 0n ? -usdcRaw : usdcRaw;
+        parsed.push({
+          time: tsForBlock(log.blockNumber as bigint),
+          price,
+          volumeUsdc: Number(usdcAbs) / 1e6,
+        });
+      }
+      appendTrades(parsed);
+    },
+    [mode, pool, tsForBlock, appendTrades],
+  );
+
+  const onCurveLog = useCallback(
+    (logs: any[]) => {
+      const parsed: Trade[] = [];
+      for (const log of logs) {
+        const priceQ64 = log.args?.newPriceQ64 as bigint | undefined;
+        if (!priceQ64) continue;
+        const priceE24 = (priceQ64 * 10n ** 24n) >> 64n;
+        const price = Number(priceE24) / 1e24;
+        const isBuy = "usdcIn" in (log.args as any);
+        const volumeUsdc = Number(isBuy ? log.args.usdcIn : log.args.usdcOut) / 1e6;
+        parsed.push({ time: tsForBlock(log.blockNumber as bigint), price, volumeUsdc });
+      }
+      appendTrades(parsed);
+    },
+    [tsForBlock, appendTrades],
+  );
 
   useWatchEvent({
     address: mode === 2 ? pool : undefined,
     event: V3_SWAP_EVT,
     enabled: mode === 2 && !!pool,
-    onLogs: bumpLive,
+    onLogs: onSwapLog,
   });
   useWatchEvent({
     address: mode !== undefined && mode !== 2 ? ADDRESSES.launchpad : undefined,
     event: BUY_EVT,
     args: token ? { token } : undefined,
     enabled: mode !== undefined && mode !== 2 && !!token,
-    onLogs: bumpLive,
+    onLogs: onCurveLog,
   });
   useWatchEvent({
     address: mode !== undefined && mode !== 2 ? ADDRESSES.launchpad : undefined,
     event: SELL_EVT,
     args: token ? { token } : undefined,
     enabled: mode !== undefined && mode !== 2 && !!token,
-    onLogs: bumpLive,
+    onLogs: onCurveLog,
   });
 
   return { candles, isLoading };

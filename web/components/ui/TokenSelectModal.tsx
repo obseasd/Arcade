@@ -6,6 +6,7 @@ import { Address, erc20Abi, isAddress, zeroAddress } from "viem";
 import { useReadContracts } from "wagmi";
 import { Modal } from "./Modal";
 import { TokenIcon } from "./TokenIcon";
+import { AutoTokenIcon } from "./AutoTokenIcon";
 import { ADDRESSES } from "@/lib/constants";
 import { arcTestnet } from "@/lib/chains";
 import { useTokenPrices } from "@/lib/hooks/useTokenPrices";
@@ -192,7 +193,7 @@ export function TokenSelectModal({ open, onClose, tokens, onSelect, selectedAddr
               }}
               className="flex w-full items-center gap-3 text-left"
             >
-              <TokenIcon symbol={importedToken.symbol} size={36} />
+              <AutoTokenIcon address={importedToken.address} symbol={importedToken.symbol} size={36} />
               <div className="min-w-0 flex-1">
                 <div className="text-sm font-medium">
                   Import <span className="text-arc-cta-hover">{importedToken.symbol}</span>
@@ -235,7 +236,7 @@ export function TokenSelectModal({ open, onClose, tokens, onSelect, selectedAddr
                     : "hover:bg-white/5",
                 )}
               >
-                <TokenIcon symbol={t.symbol} size={36} />
+                <AutoTokenIcon address={t.address} symbol={t.symbol} size={36} />
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2 text-sm font-medium">
                     <span>{t.symbol ?? "-"}</span>

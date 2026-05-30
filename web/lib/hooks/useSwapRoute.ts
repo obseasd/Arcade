@@ -27,6 +27,11 @@ export interface SwapRoute {
    * royalties on launchpad-migrated tokens are honoured. Only ever true when
    * `viaUsdc` is also true. */
   useLaunchpadRouter: boolean;
+  /** Whether the input token is a curve-migrated launchpad token (charges
+   *  royalty on leg 1). Used by the swap card to compute the displayed fee. */
+  inMigrated: boolean;
+  /** Whether the output token is curve-migrated (royalty on leg 2). */
+  outMigrated: boolean;
   isLoading: boolean;
 }
 
@@ -83,6 +88,8 @@ export function useSwapRoute(tokenIn?: Address, tokenOut?: Address): SwapRoute {
         hops: 0,
         viaUsdc: false,
         useLaunchpadRouter: false,
+        inMigrated: false,
+        outMigrated: false,
         isLoading: false,
       };
     }
@@ -93,6 +100,8 @@ export function useSwapRoute(tokenIn?: Address, tokenOut?: Address): SwapRoute {
         hops: 1,
         viaUsdc: false,
         useLaunchpadRouter: false,
+        inMigrated: false,
+        outMigrated: false,
         isLoading: false,
       };
     }
@@ -104,6 +113,8 @@ export function useSwapRoute(tokenIn?: Address, tokenOut?: Address): SwapRoute {
         hops: 1,
         viaUsdc: false,
         useLaunchpadRouter: false,
+        inMigrated: false,
+        outMigrated: false,
         isLoading: false,
       };
     }
@@ -122,6 +133,8 @@ export function useSwapRoute(tokenIn?: Address, tokenOut?: Address): SwapRoute {
       hops: 2,
       viaUsdc: true,
       useLaunchpadRouter: inMigrated || outMigrated,
+      inMigrated,
+      outMigrated,
       isLoading: directPairQ.isLoading || migrationProbe.isLoading,
     };
   }, [

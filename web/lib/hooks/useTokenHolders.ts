@@ -26,8 +26,11 @@ interface CacheEntry {
  *  cache aggressively because holder distribution doesn't shift second-to-second. */
 const cache = new Map<string, CacheEntry>();
 const TTL_MS = 90_000;
-const CHUNK = 1_000n;
-const MAX_LOOKBACK = 500_000n;
+// 5_000-block chunks at 50_000 lookback (~14h on Arc 1s blocks) covers the
+// holder distribution for any active token; older transfers are rare on a
+// young launch. Previously 500k blocks = ~6 days = wasted ~30s per fresh load.
+const CHUNK = 5_000n;
+const MAX_LOOKBACK = 50_000n;
 
 /**
  * Builds the holder list for an ERC20 token by replaying Transfer events. For

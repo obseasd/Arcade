@@ -30,8 +30,11 @@ export interface Trade {
   tokenRaw: bigint;
 }
 
+// 5_000 blocks ≈ 1.4h on Arc (1s blocks). Plenty for a young token's history,
+// and trades from earlier than that are dominated by the WebSocket live feed
+// for the active session. Bigger windows were burning ~8s on a fresh load.
 const CHUNK = 1_000n;
-const LOOKBACK = 50_000n;
+const LOOKBACK = 5_000n;
 const MAX_TRADES = 100;
 
 /**
