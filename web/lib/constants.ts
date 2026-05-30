@@ -20,7 +20,22 @@ export const ADDRESSES = {
   weth: safeAddress(process.env.NEXT_PUBLIC_WETH_ADDRESS),
   /** ArcadeTwitterEscrow: holds Clanker LP fees attributed to a Twitter @handle. */
   twitterEscrow: safeAddress(process.env.NEXT_PUBLIC_TWITTER_ESCROW_ADDRESS),
+  // --- Uniswap V4 stack (Arc testnet, behind NEXT_PUBLIC_V4_ENABLED) ---
+  v4PoolManager: safeAddress(process.env.NEXT_PUBLIC_V4_POOL_MANAGER_ADDRESS),
+  v4Launchpad: safeAddress(process.env.NEXT_PUBLIC_V4_LAUNCHPAD_ADDRESS),
+  v4Hook: safeAddress(process.env.NEXT_PUBLIC_V4_HOOK_ADDRESS),
+  v4StateView: safeAddress(process.env.NEXT_PUBLIC_V4_STATE_VIEW_ADDRESS),
+  v4Quoter: safeAddress(process.env.NEXT_PUBLIC_V4_QUOTER_ADDRESS),
 } as const;
+
+/** True iff the V4 stack is enabled in this env. Gates every V4 UI
+ *  surface; renders nothing instead of throwing when addresses are unset. */
+export const V4_ENABLED: boolean =
+  process.env.NEXT_PUBLIC_V4_ENABLED === "1" || process.env.NEXT_PUBLIC_V4_ENABLED === "true";
+
+/** V4 pool params used for every Arcade launch (1% fee tier). */
+export const V4_POOL_FEE = 10_000;
+export const V4_TICK_SPACING = 200;
 
 /** V3 fee tier used for all CLANKER_V3 pools (1%). */
 export const V3_FEE = 10_000;

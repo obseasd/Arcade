@@ -3,7 +3,7 @@
 import { X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { Modal } from "@/components/ui/Modal";
-import { LaunchMode } from "@/lib/constants";
+import { LaunchMode, V4_ENABLED } from "@/lib/constants";
 import { cn } from "@/lib/utils";
 
 interface Props {
@@ -52,7 +52,12 @@ export function LaunchModeModal({ open, onClose }: Props) {
           <X className="h-5 w-5" />
         </button>
       </div>
-      <div className="grid grid-cols-1 gap-4 p-6 sm:grid-cols-3">
+      <div
+        className={cn(
+          "grid grid-cols-1 gap-4 p-6",
+          V4_ENABLED ? "sm:grid-cols-4" : "sm:grid-cols-3",
+        )}
+      >
         {MODES.map((m) => (
           <button
             key={m.label}
@@ -70,6 +75,28 @@ export function LaunchModeModal({ open, onClose }: Props) {
             </span>
           </button>
         ))}
+        {V4_ENABLED && (
+          <button
+            onClick={() => {
+              onClose();
+              router.push("/launchpad/v4");
+            }}
+            className={cn(
+              "group relative flex h-44 items-end overflow-hidden rounded-2xl border border-arc-border bg-arc-surface-2/40 p-4 text-left transition-all",
+              "hover:border-arc-cta-hover hover:shadow-arc-nav-glow active:scale-[0.98]",
+            )}
+          >
+            <span className="absolute right-3 top-3 rounded-md border border-arc-primary/40 bg-arc-primary/10 px-2 py-0.5 text-[10px] uppercase tracking-wider text-arc-primary">
+              beta
+            </span>
+            <div className="relative">
+              <div className="text-xl font-semibold text-white">V4</div>
+              <div className="mt-1 text-xs text-arc-text-muted">
+                Anti-sniper hook + single-sided locked LP
+              </div>
+            </div>
+          </button>
+        )}
       </div>
     </Modal>
   );
