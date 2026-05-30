@@ -171,6 +171,19 @@ export const V3_LOCKER_ABI = [
     inputs: [{ name: "token", type: "address" }],
     outputs: [{ name: "amount", type: "uint256" }],
   },
+  // Emitted once per recipient per `collectFees` call. Used by the creator
+  // earnings dashboard to build per-token / per-day claim history.
+  {
+    type: "event",
+    name: "RecipientPaid",
+    inputs: [
+      { name: "positionId", type: "uint256", indexed: true },
+      { name: "slotIndex", type: "uint256", indexed: true },
+      { name: "token", type: "address", indexed: true },
+      { name: "recipient", type: "address", indexed: false },
+      { name: "amount", type: "uint256", indexed: false },
+    ],
+  },
 ] as const;
 
 export const V3_POOL_ABI = [

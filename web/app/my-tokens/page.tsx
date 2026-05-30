@@ -6,6 +6,7 @@ import { useMemo } from "react";
 import { useAccount } from "wagmi";
 import { TokenCard } from "@/components/launchpad/TokenCard";
 import { CreatorFeesPanel } from "@/components/pool/CreatorFeesPanel";
+import { CreatorEarningsCard } from "@/components/pool/CreatorEarningsCard";
 import { VaultClaimPanel } from "@/components/pool/VaultClaimPanel";
 import { PendingWithdrawalsCard } from "@/components/pool/PendingWithdrawalsCard";
 import { useLaunchpadTokens } from "@/lib/hooks/useLaunchpadTokens";
@@ -50,6 +51,10 @@ export default function MyTokensPage() {
         </div>
       ) : (
         <div className="space-y-10">
+          {/* Earnings summary - self-hides if the wallet has no V3 locker
+              positions and zero pending balance. */}
+          <CreatorEarningsCard />
+
           {/* Self-hiding escape hatch: surfaces only when this wallet has a
               pending-withdrawal balance in the launchpad or locker ledgers. */}
           <PendingWithdrawalsCard />
