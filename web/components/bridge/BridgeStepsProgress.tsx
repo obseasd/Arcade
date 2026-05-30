@@ -11,67 +11,87 @@ import { cn } from "@/lib/utils";
 export type StepKey = "burn" | "attest" | "mint" | "done" | "idle";
 
 interface Props {
-  /** Current step. */
   current: StepKey;
-  /** Optional human-readable detail under the active step (eg "Waiting for
-   *  attestation… 3m elapsed"). */
+  /** Optional human-readable detail under the active step. */
   detail?: string;
 }
 
 const STEPS: { key: Exclude<StepKey, "idle">; label: string }[] = [
-  { key: "burn", label: "Burn on source" },
-  { key: "attest", label: "Circle attestation" },
-  { key: "mint", label: "Mint on destination" },
+  { key: "burn", label: "Burn" },
+  { key: "attest", label: "Attestation" },
+  { key: "mint", label: "Mint" },
 ];
+
+const DOT_SIZE = 32;
+const DOT_CENTER = DOT_SIZE / 2;
 
 export function BridgeStepsProgress({ current, detail }: Props) {
   if (current === "idle") return null;
 
   // Index of the active step; done = all three completed.
-  const activeIndex = current === "done" ? STEPS.length : STEPS.findIndex((s) => s.key === current);
+  const activeIndex =
+    current === "done" ? STEPS.length : STEPS.findIndex((s) => s.key === current);
 
   return (
-    <div className="rounded-2xl border border-arc-border bg-black/30 p-4">
-      <div className="mb-2 flex items-center justify-between">
+    <div className="rounded-2xl border border-arc-border bg-black/30 px-5 py-4">
+      {/* Grid layout: one column per step. Dots + connector lines render on
+          a top row, labels render directly below each dot. This keeps each
+          dot perfectly centered above its label and gives the connector
+          lines clean horizontal alignment between dot centers. */}
+      <div
+        className="relative grid"
+        style={{ gridTemplateColumns: `repeat(${STEPS.length}, minmax(0, 1fr))` }}
+      >
+        {/* Connector lines layer - absolutely positioned over the grid so
+            they don't push the dots around. One line per gap. */}
+        <div className="pointer-events-none absolute left-0 right-0 flex h-8 items-center">
+          {STEPS.slice(0, -1).map((_, i) => {
+            // Line span: from the center of column i to the center of column i+1.
+            const colWidthPct = 100 / STEPS.length;
+            const leftPct = colWidthPct * (i + 0.5);
+            const widthPct = colWidthPct;
+            // The line stops just before the next dot so it doesn't underlap it.
+            const isCompleted = i < activeIndex;
+            return (
+              <div
+                key={i}
+                className={cn(
+                  "absolute h-px transition-colors",
+                  isCompleted ? "bg-arc-success" : "bg-arc-border",
+                )}
+                style={{
+                  left: `calc(${leftPct}% + ${DOT_CENTER + 2}px)`,
+                  width: `calc(${widthPct}% - ${DOT_SIZE + 4}px)`,
+                }}
+              />
+            );
+          })}
+        </div>
+
+        {/* Dots */}
         {STEPS.map((step, i) => {
           const status: "done" | "active" | "pending" =
             i < activeIndex ? "done" : i === activeIndex ? "active" : "pending";
           return (
-            <div key={step.key} className="flex flex-1 items-center">
+            <div key={step.key} className="relative flex flex-col items-center gap-2.5">
               <Dot status={status} />
-              {i < STEPS.length - 1 && (
-                <div
-                  className={cn(
-                    "h-px flex-1 transition-colors",
-                    status === "done" ? "bg-arc-success" : "bg-arc-border",
-                  )}
-                />
-              )}
+              <span
+                className={cn(
+                  "text-center text-[10px] uppercase tracking-wider transition-colors",
+                  status === "done"
+                    ? "text-arc-success"
+                    : status === "active"
+                      ? "font-semibold text-arc-text"
+                      : "text-arc-text-faint",
+                )}
+              >
+                {step.label}
+              </span>
             </div>
           );
         })}
       </div>
-      <div className="grid grid-cols-3 gap-2 text-[10px] uppercase tracking-wider">
-        {STEPS.map((step, i) => {
-          const isActive = i === activeIndex;
-          const isDone = i < activeIndex;
-          return (
-            <div
-              key={step.key}
-              className={cn(
-                "text-center transition-colors",
-                isDone
-                  ? "text-arc-success"
-                  : isActive
-                    ? "font-semibold text-arc-text"
-                    : "text-arc-text-faint",
-              )}
-            >
-              {step.label}
-            </div>
-          );
-        })}
-      </div>
+
       {detail && (
         <div className="mt-3 text-center text-xs text-arc-text-muted">{detail}</div>
       )}
@@ -82,20 +102,34 @@ export function BridgeStepsProgress({ current, detail }: Props) {
 function Dot({ status }: { status: "done" | "active" | "pending" }) {
   if (status === "done") {
     return (
-      <div className="flex h-7 w-7 items-center justify-center rounded-full bg-arc-success/15 text-arc-success ring-1 ring-arc-success/40">
-        <Check className="h-3.5 w-3.5" />
+      <div
+        className="flex items-center justify-center rounded-full bg-arc-success/15 text-arc-success ring-2 ring-arc-success/40"
+        style={{ width: DOT_SIZE, height: DOT_SIZE }}
+      >
+        <Check className="h-4 w-4" />
       </div>
     );
   }
   if (status === "active") {
     return (
-      <div className="flex h-7 w-7 items-center justify-center rounded-full bg-arc-cta-hover/15 text-arc-cta-hover ring-1 ring-arc-cta-hover/50">
-        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+      <div
+        className="relative flex items-center justify-center rounded-full bg-arc-cta-hover/15 text-arc-cta-hover ring-2 ring-arc-cta-hover/60"
+        style={{ width: DOT_SIZE, height: DOT_SIZE }}
+      >
+        <Loader2 className="h-4 w-4 animate-spin" />
+        {/* Soft halo on the active step so it's the clear focal point. */}
+        <span
+          className="pointer-events-none absolute -inset-1 rounded-full bg-arc-cta-hover/15 blur-sm"
+          aria-hidden
+        />
       </div>
     );
   }
   return (
-    <div className="flex h-7 w-7 items-center justify-center rounded-full bg-arc-bg-elevated ring-1 ring-arc-border">
+    <div
+      className="flex items-center justify-center rounded-full bg-arc-bg-elevated ring-2 ring-arc-border"
+      style={{ width: DOT_SIZE, height: DOT_SIZE }}
+    >
       <span className="h-1.5 w-1.5 rounded-full bg-arc-text-faint" />
     </div>
   );

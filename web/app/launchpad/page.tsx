@@ -7,6 +7,7 @@ import { useLaunchpadTokens, LaunchpadTokenInfo } from "@/lib/hooks/useLaunchpad
 import { parseInlineMetadata } from "@/lib/metadata";
 import { TokenCard } from "@/components/launchpad/TokenCard";
 import { LaunchModeModal } from "@/components/launchpad/LaunchModeModal";
+import { SkeletonCard } from "@/components/ui/Skeleton";
 import { cn } from "@/lib/utils";
 
 const CURVE_SUPPLY = 800_000_000n * 10n ** 18n;
@@ -121,7 +122,7 @@ export default function LaunchpadIndexPage() {
       {isLoading && (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {[...Array(6)].map((_, i) => (
-            <div key={i} className="arc-card h-48 animate-pulse" />
+            <SkeletonCard key={i} className="h-48" />
           ))}
         </div>
       )}

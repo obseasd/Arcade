@@ -10,6 +10,7 @@ import { ADDRESSES, USDC_DECIMALS } from "@/lib/constants";
 import { useLaunchpadTokens, type LaunchpadTokenInfo } from "@/lib/hooks/useLaunchpadTokens";
 import { useTokenImage } from "@/lib/hooks/useTokenImage";
 import { TokenIcon } from "@/components/ui/TokenIcon";
+import { SkeletonCard } from "@/components/ui/Skeleton";
 import { formatUSDC, formatToken } from "@/lib/utils";
 
 const DEAD = "0x000000000000000000000000000000000000dEaD" as Address;
@@ -39,7 +40,7 @@ export function BurnedPositions() {
     return (
       <div className="grid gap-4 sm:grid-cols-2">
         {[...Array(2)].map((_, i) => (
-          <div key={i} className="arc-card h-32 animate-pulse" />
+          <SkeletonCard key={i} className="h-32" />
         ))}
       </div>
     );

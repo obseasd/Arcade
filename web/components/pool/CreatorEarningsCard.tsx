@@ -1,6 +1,6 @@
 "use client";
 
-import { TrendingUp, DollarSign, Clock } from "lucide-react";
+import { DollarSign, Clock } from "lucide-react";
 import { Area, AreaChart, ResponsiveContainer, Tooltip, YAxis } from "recharts";
 import { useCreatorEarnings, type TokenEarnings } from "@/lib/hooks/useCreatorEarnings";
 import { AutoTokenIcon } from "@/components/ui/AutoTokenIcon";
@@ -13,12 +13,12 @@ function fmtUsd(v: number): string {
 }
 
 /**
- * Header card on /my-tokens summarising creator LP earnings: total claimed in
- * the past 7 days, currently-pending preview, a sparkline of daily claims, and
- * the top tokens by claim amount.
+ * Header card on /my-tokens summarising creator LP earnings: total claimed
+ * over the scan window, currently-pending preview, a sparkline of daily
+ * claims, and the top tokens by claim amount.
  *
  * Self-hiding: renders nothing if the wallet has zero positions and zero
- * pending. For users without any Clanker V3 launches, the card is invisible.
+ * pending. For users without any Clanker V3 launches the card is invisible.
  */
 export function CreatorEarningsCard() {
   const { claimedUsd, pendingUsd, perToken, daily, fullyLoaded, isLoading } = useCreatorEarnings();
@@ -30,24 +30,21 @@ export function CreatorEarningsCard() {
 
   return (
     <div className="arc-card relative overflow-hidden p-5">
-      {/* Subtle gradient flair */}
+      {/* Subtle blue flair in top-right - matches the rest of the app's tone. */}
       <div
         className="pointer-events-none absolute inset-0 opacity-50"
         style={{
           background:
-            "radial-gradient(ellipse at top right, rgba(34, 197, 94, 0.08), transparent 60%)",
+            "radial-gradient(ellipse at top right, rgba(21, 80, 143, 0.10), transparent 60%)",
         }}
         aria-hidden
       />
       <div className="relative">
         <div className="mb-4 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-arc-success/15 text-arc-success">
-              <TrendingUp className="h-3.5 w-3.5" />
-            </div>
             <h3 className="text-sm font-semibold">Creator earnings</h3>
             <span className="text-[10px] uppercase tracking-wider text-arc-text-faint">
-              {fullyLoaded ? "Last 7 days" : "Last 14h"}
+              {fullyLoaded ? "All time" : "Scanning…"}
             </span>
           </div>
           {isLoading && (
@@ -56,7 +53,7 @@ export function CreatorEarningsCard() {
         </div>
 
         <div className="grid grid-cols-1 gap-4 md:grid-cols-[1fr_1fr_auto]">
-          {/* Claimed */}
+          {/* Claimed - the ONE place that stays green (per direct user ask) */}
           <Metric
             label="Claimed"
             value={fmtUsd(claimedUsd)}
@@ -77,8 +74,8 @@ export function CreatorEarningsCard() {
                 <AreaChart data={chartData}>
                   <defs>
                     <linearGradient id="creatorSpark" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#10B981" stopOpacity={0.6} />
-                      <stop offset="100%" stopColor="#10B981" stopOpacity={0} />
+                      <stop offset="0%" stopColor="#15508F" stopOpacity={0.6} />
+                      <stop offset="100%" stopColor="#15508F" stopOpacity={0} />
                     </linearGradient>
                   </defs>
                   <YAxis hide domain={[0, "dataMax"]} />
@@ -96,7 +93,7 @@ export function CreatorEarningsCard() {
                   <Area
                     type="monotone"
                     dataKey="y"
-                    stroke="#10B981"
+                    stroke="#15508F"
                     strokeWidth={1.5}
                     fill="url(#creatorSpark)"
                     isAnimationActive={false}

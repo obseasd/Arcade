@@ -14,9 +14,17 @@ const RECIPIENT_PAID_EVT = parseAbiItem(
 const CHUNK = 10_000n;
 /** Phase 1 lookback (~14h on Arc 1s blocks). Fast initial render. */
 const FAST_LOOKBACK = 50_000n;
-/** Phase 2 full lookback (~7d on Arc). Background-extended after first paint. */
-const FULL_LOOKBACK = 600_000n;
+/**
+ * Phase 2 lookback (~5.8 days on Arc 1s blocks). Today on Arc testnet this
+ * covers the entire launchpad history because the latest deploy is only
+ * hours old. Once mainnet has months of activity we'll need an indexer
+ * (subgraph or ponder.sh) since walking millions of blocks per page load is
+ * not viable. Noted in MEMORY as a post-mainnet task.
+ */
+const FULL_LOOKBACK = 500_000n;
 const DAY_SECONDS = 86_400;
+/** Max days the sparkline ever displays even if there's older data. */
+const MAX_CHART_DAYS = 30;
 
 /** Per-token aggregated earnings. */
 export interface TokenEarnings {
@@ -267,9 +275,19 @@ export function useCreatorEarnings(): CreatorEarningsResult {
     const perToken = Array.from(byToken.values()).sort((a, b) => b.amountUsd - a.amountUsd);
     const claimedUsd = perToken.reduce((acc, t) => acc + t.amountUsd, 0);
     // Build daily series filling gaps with 0 so the sparkline is continuous.
+    // Window spans from the oldest day we saw data through today, capped to
+    // MAX_CHART_DAYS so old tokens with months of history don't make the
+    // sparkline unreadable.
     const now = Math.floor(Date.now() / 1000);
     const today = Math.floor(now / DAY_SECONDS) * DAY_SECONDS;
-    const windowDays = fullyLoaded ? 7 : 1;
+    let oldestDay = today;
+    for (const day of byDay.keys()) {
+      if (day < oldestDay) oldestDay = day;
+    }
+    const earliestAllowed = today - (MAX_CHART_DAYS - 1) * DAY_SECONDS;
+    if (oldestDay < earliestAllowed) oldestDay = earliestAllowed;
+    const windowDays =
+      Math.max(1, Math.floor((today - oldestDay) / DAY_SECONDS) + 1);
     const daily: DailyEarnings[] = [];
     for (let i = windowDays - 1; i >= 0; i--) {
       const day = today - i * DAY_SECONDS;

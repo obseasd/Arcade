@@ -3,6 +3,8 @@
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { Menu, X } from "lucide-react";
+import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
 import { HeaderWalletWidget } from "./HeaderWalletWidget";
 
@@ -15,6 +17,13 @@ const NAV_ITEMS = [
 
 export function Navbar() {
   const pathname = usePathname();
+  const [mobileOpen, setMobileOpen] = useState(false);
+
+  // Close the mobile menu whenever the route changes so a tap on a link
+  // doesn't leave the drawer open.
+  useEffect(() => {
+    setMobileOpen(false);
+  }, [pathname]);
 
   return (
     <header className="sticky top-0 z-40 bg-transparent">
@@ -32,7 +41,7 @@ export function Navbar() {
           <span className="font-display text-2xl font-semibold tracking-tight">Arcade</span>
         </Link>
 
-        {/* Center: nav with active highlight */}
+        {/* Center: nav with active highlight (desktop only) */}
         <nav className="absolute left-1/2 hidden -translate-x-1/2 items-center gap-1 rounded-2xl border border-arc-border bg-black/15 px-2.5 py-1.5 backdrop-blur-xl md:flex">
           {NAV_ITEMS.map((item) => {
             const active = pathname === item.href || pathname.startsWith(item.href + "/");
@@ -67,9 +76,49 @@ export function Navbar() {
           })}
         </nav>
 
-        {/* Right: combined wallet widget */}
-        <HeaderWalletWidget />
+        {/* Right cluster: wallet widget + mobile hamburger */}
+        <div className="flex items-center gap-2">
+          <HeaderWalletWidget />
+          <button
+            onClick={() => setMobileOpen((v) => !v)}
+            aria-label={mobileOpen ? "Close menu" : "Open menu"}
+            className="flex h-10 w-10 items-center justify-center rounded-xl border border-arc-border bg-black/15 text-arc-text backdrop-blur-xl transition-colors hover:bg-white/5 md:hidden"
+          >
+            {mobileOpen ? <X className="h-4 w-4" /> : <Menu className="h-4 w-4" />}
+          </button>
+        </div>
       </div>
+
+      {/* Mobile drawer - slides down under the header on small screens. */}
+      {mobileOpen && (
+        <div className="md:hidden">
+          {/* Backdrop catches taps outside the panel. */}
+          <div
+            onClick={() => setMobileOpen(false)}
+            className="fixed inset-0 z-30 bg-black/40 backdrop-blur-sm"
+            aria-hidden
+          />
+          <nav className="relative z-40 mx-4 mt-2 overflow-hidden rounded-2xl border border-arc-border bg-arc-bg-elevated/95 shadow-arc-card backdrop-blur-xl">
+            {NAV_ITEMS.map((item) => {
+              const active = pathname === item.href || pathname.startsWith(item.href + "/");
+              return (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  className={cn(
+                    "block border-b border-arc-border/40 px-4 py-3 text-sm font-medium transition-colors last:border-b-0",
+                    active
+                      ? "bg-arc-cta-hover/15 text-white"
+                      : "text-arc-text-muted hover:bg-white/5 hover:text-arc-text",
+                  )}
+                >
+                  {item.label}
+                </Link>
+              );
+            })}
+          </nav>
+        </div>
+      )}
     </header>
   );
 }
