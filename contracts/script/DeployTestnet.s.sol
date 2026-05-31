@@ -45,7 +45,13 @@ contract DeployTestnet is Script {
             IERC20(usdc), factory, address(router), treasury, IArcadeV3Factory(v3Factory), weth
         );
 
-        address v3Locker = _deployV3Locker(address(launchpad), v3Factory);
+        // Optional Twitter escrow address. When set, the locker mirrors any
+        // payout routed to it via the escrow's `creditSlot(...)` so the V3
+        // escrow can enforce per-slot accounting (see ArcadeTwitterEscrowV3).
+        // Empty / unset → legacy behavior (locker forwards tokens with no
+        // on-chain attribution).
+        address twitterEscrow = vm.envOr("TWITTER_ESCROW_ADDRESS", address(0));
+        address v3Locker = _deployV3Locker(address(launchpad), v3Factory, twitterEscrow);
         address v3Router = _deployV3Router(v3Factory, usdc, address(launchpad));
         address v3Quoter = _deployV3Aux("out-v3/ArcadeV3Quoter.sol/ArcadeV3Quoter.json", v3Factory, usdc);
         ArcadeTokenVault tokenVault = new ArcadeTokenVault(address(launchpad));
@@ -90,10 +96,16 @@ contract DeployTestnet is Script {
         require(factory != address(0), "v3 factory deploy failed");
     }
 
-    function _deployV3Locker(address launchpad_, address factory_) internal returns (address locker) {
+    /// @dev `twitterEscrow_` is optional. Pass `address(0)` to skip the V3
+    ///      escrow integration (the locker still works, just doesn't mirror
+    ///      transfers to the escrow's on-chain accounting).
+    function _deployV3Locker(address launchpad_, address factory_, address twitterEscrow_)
+        internal
+        returns (address locker)
+    {
         bytes memory code = abi.encodePacked(
             vm.getCode("out-v3/ArcadeV3Locker.sol/ArcadeV3Locker.json"),
-            abi.encode(launchpad_, factory_)
+            abi.encode(launchpad_, factory_, twitterEscrow_)
         );
         assembly {
             locker := create(0, add(code, 0x20), mload(code))

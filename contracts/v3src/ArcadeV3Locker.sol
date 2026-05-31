@@ -13,6 +13,14 @@ interface IERC20Min {
     function balanceOf(address account) external view returns (uint256);
 }
 
+/// @dev Minimal escrow surface for the on-chain credit-slot integration. Lets
+///      the locker tell the V3 Twitter escrow which (positionId, slotIndex,
+///      token, amount) was just routed to it, so the escrow can enforce
+///      per-slot accounting at claim time.
+interface IArcadeTwitterEscrowMin {
+    function creditSlot(uint256 positionId, uint256 slotIndex, address token, uint256 amount) external;
+}
+
 /**
  * @title ArcadeV3Locker
  * @notice Permanently custodies single-sided Uniswap V3 launch positions and
@@ -32,6 +40,15 @@ interface IERC20Min {
 contract ArcadeV3Locker is IUniswapV3MintCallback {
     address public immutable launchpad;
     address public immutable factory;
+    /// @notice Optional V3 Twitter escrow. When non-zero, every successful
+    ///         direct payout whose recipient equals this address also calls
+    ///         `escrow.creditSlot(positionId, slot, token, amount)` so the
+    ///         escrow can enforce per-slot accounting at claim time. Wrapped
+    ///         in try/catch: a misbehaving escrow never bricks fee
+    ///         distribution. Pass `address(0)` to disable the integration
+    ///         (legacy behavior - escrow receives tokens with no on-chain
+    ///         attribution, claim path falls back on backend-only attestation).
+    address public immutable twitterEscrow;
 
     uint256 internal constant BPS = 10_000;
     uint8 public constant MAX_RECIPIENTS = 4; // up to 3 creator recipients + the platform
@@ -102,6 +119,18 @@ contract ArcadeV3Locker is IUniswapV3MintCallback {
     event PendingWithdrawn(address indexed token, address indexed recipient, uint256 amount);
     event RecipientUpdated(uint256 indexed positionId, uint256 index, address indexed newRecipient);
     event AdminUpdated(uint256 indexed positionId, uint256 index, address indexed newAdmin);
+    /// @notice Emitted when the locker successfully transferred to the Twitter
+    ///         escrow but the escrow rejected `creditSlot` (paused, wrong
+    ///         locker authorised, etc). The tokens are in the escrow but its
+    ///         on-chain accounting did not update - the backend can retry via
+    ///         a manual creditSlot call (with operator role) if needed.
+    event EscrowCreditFailed(
+        uint256 indexed positionId,
+        uint256 indexed slotIndex,
+        address indexed token,
+        uint256 amount,
+        bytes reason
+    );
 
     modifier nonReentrant() {
         require(_locked == 1, "REENTRANT");
@@ -110,10 +139,21 @@ contract ArcadeV3Locker is IUniswapV3MintCallback {
         _locked = 1;
     }
 
-    constructor(address launchpad_, address factory_) {
+    /// @param launchpad_     Trusted launchpad that calls `lockSingleSided`.
+    /// @param factory_       Uniswap V3 factory whose pools we accept.
+    /// @param twitterEscrow_ Optional V3 Twitter escrow address. Pass
+    ///                       `address(0)` to disable the per-slot accounting
+    ///                       integration entirely (legacy behavior); otherwise
+    ///                       any successful direct payout to this address is
+    ///                       mirrored to `escrow.creditSlot(...)` so the
+    ///                       escrow can enforce on-chain balances at claim
+    ///                       time. The escrow MUST recognise this locker
+    ///                       address as the authorised depositor.
+    constructor(address launchpad_, address factory_, address twitterEscrow_) {
         require(launchpad_ != address(0) && factory_ != address(0), "ZERO");
         launchpad = launchpad_;
         factory = factory_;
+        twitterEscrow = twitterEscrow_;
     }
 
     // ====================== Locking ======================
@@ -464,6 +504,19 @@ contract ArcadeV3Locker is IUniswapV3MintCallback {
         (bool ok, bytes memory ret) = token.call(abi.encodeWithSelector(IERC20Min.transfer.selector, to, amount));
         bool decoded = ret.length == 0 || abi.decode(ret, (bool));
         if (ok && decoded) {
+            // Mirror the deposit into the Twitter escrow's on-chain accounting
+            // when (and only when) we routed to it. Wrapped in try/catch so a
+            // misbehaving / paused escrow never blocks legitimate fee
+            // distribution to OTHER slots in the same collectFees call. The
+            // backend can manually credit later via an operator role if it
+            // ever fails (event provides the {positionId, slot, token, amount}).
+            if (to == twitterEscrow && twitterEscrow != address(0)) {
+                try IArcadeTwitterEscrowMin(twitterEscrow).creditSlot(positionId, slotIndex, token, amount) {
+                    // ok
+                } catch (bytes memory reason) {
+                    emit EscrowCreditFailed(positionId, slotIndex, token, amount, reason);
+                }
+            }
             emit RecipientPaid(positionId, slotIndex, token, to, amount);
             return;
         }

@@ -103,7 +103,9 @@ contract ArcadeV3MigrationTest is Test {
             IERC20(address(usdc)), v2Factory, address(v2Router), treasury, IArcadeV3Factory(v3Factory), address(weth)
         );
         v3Locker = _deploy(
-            "out-v3/ArcadeV3Locker.sol/ArcadeV3Locker.json", abi.encode(address(launchpad), v3Factory)
+            "out-v3/ArcadeV3Locker.sol/ArcadeV3Locker.json",
+            // address(0) = legacy behavior (no Twitter escrow integration).
+            abi.encode(address(launchpad), v3Factory, address(0))
         );
         v3Router = _deploy(
             "out-v3/ArcadeV3SwapRouter.sol/ArcadeV3SwapRouter.json",
