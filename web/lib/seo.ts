@@ -8,7 +8,7 @@
  * touch the wagmi browser hooks (which can't run during server rendering).
  */
 
-import { Address, createPublicClient, erc20Abi, formatUnits, http, isAddress } from "viem";
+import { Address, createPublicClient, erc20Abi, formatUnits, http, isAddress, parseAbiItem } from "viem";
 import { LAUNCHPAD_ABI } from "@/lib/abis/launchpad";
 import { V4_LAUNCHPAD_ABI } from "@/lib/abis/v4Launchpad";
 import { ADDRESSES, USDC_DECIMALS } from "@/lib/constants";
@@ -19,6 +19,53 @@ const serverClient = createPublicClient({
     chain: arcTestnet,
     transport: http(arcTestnet.rpcUrls.default.http[0]),
 });
+
+const TOKEN_CREATED_EVT = parseAbiItem(
+    "event TokenCreated(address indexed token, address indexed creator, uint8 mode, address creator2, uint16 creator2ShareBps, string name, string symbol, string metadataURI)",
+);
+
+/**
+ * Server-side scan for a token's metadataURI from the TokenCreated event.
+ * The launchpad stopped storing metadataURI in its state struct (saves ~5M
+ * gas at launch), so the URI now lives ONLY on the event. We chunk the
+ * eth_getLogs query because Arc testnet's RPC caps the per-call block range
+ * around 1k.
+ *
+ * Returns "" if the token isn't found in the scan window — safer than null
+ * because the caller already treats empty as "no metadata".
+ */
+async function scanMetadataURI(token: Address): Promise<string> {
+    const CHUNK = 1_000n;
+    const MAX_BACK = 500_000n;
+    try {
+        const latest = await serverClient.getBlockNumber();
+        let end = latest;
+        let walked = 0n;
+        while (walked < MAX_BACK) {
+            const start = end > CHUNK - 1n ? end - (CHUNK - 1n) : 0n;
+            try {
+                const logs = await serverClient.getLogs({
+                    address: ADDRESSES.launchpad,
+                    event: TOKEN_CREATED_EVT,
+                    args: { token },
+                    fromBlock: start,
+                    toBlock: end,
+                });
+                if (logs.length > 0) {
+                    return (logs[0].args.metadataURI as string) ?? "";
+                }
+            } catch {
+                break;
+            }
+            if (start === 0n) break;
+            walked += end - start + 1n;
+            end = start - 1n;
+        }
+    } catch {
+        /* ignore */
+    }
+    return "";
+}
 
 export interface TokenSeoData {
     name: string;
@@ -42,53 +89,51 @@ export async function fetchV23TokenSeo(token: string): Promise<TokenSeoData | nu
     if (!isAddress(token)) return null;
     const tokenAddr = token as Address;
     try {
-        const [nameRes, symbolRes, mcapRes, stateRes] = await Promise.allSettled([
+        const [nameRes, symbolRes, mcapRes, metadataURI] = await Promise.all([
             serverClient.readContract({
                 address: tokenAddr,
                 abi: erc20Abi,
                 functionName: "name",
-            }) as Promise<string>,
+            }).catch(() => "Arcade Token") as Promise<string>,
             serverClient.readContract({
                 address: tokenAddr,
                 abi: erc20Abi,
                 functionName: "symbol",
-            }) as Promise<string>,
+            }).catch(() => "TKN") as Promise<string>,
             serverClient.readContract({
                 address: ADDRESSES.launchpad,
                 abi: LAUNCHPAD_ABI,
                 functionName: "marketCap",
                 args: [tokenAddr],
-            }) as Promise<bigint>,
-            serverClient.readContract({
-                address: ADDRESSES.launchpad,
-                abi: LAUNCHPAD_ABI,
-                functionName: "getTokenState",
-                args: [tokenAddr],
-            }) as Promise<unknown>,
+            }).catch(() => 0n) as Promise<bigint>,
+            // getTokenState no longer carries metadataURI (gas savings),
+            // so we read it from the TokenCreated event instead.
+            scanMetadataURI(tokenAddr),
         ]);
 
-        const name = nameRes.status === "fulfilled" ? nameRes.value : "Arcade Token";
-        const symbol = symbolRes.status === "fulfilled" ? symbolRes.value : "TKN";
+        const name = nameRes;
+        const symbol = symbolRes;
 
         let marketCapFormatted: string | undefined;
-        if (mcapRes.status === "fulfilled") {
-            const mcap = Number(formatUnits(mcapRes.value, USDC_DECIMALS));
-            if (mcap > 0) {
-                marketCapFormatted = mcap.toLocaleString(undefined, { maximumFractionDigits: 0 });
-            }
+        const mcap = Number(formatUnits(mcapRes, USDC_DECIMALS));
+        if (mcap > 0) {
+            marketCapFormatted = mcap.toLocaleString(undefined, { maximumFractionDigits: 0 });
         }
 
-        // metadataURI comes from the TokenState struct. We resolve it via the
-        // same path the UI uses so creator-supplied images come through.
+        // fetchMetadata handles both inline data: URIs and ipfs:// pointers.
         let imageUrl: string | undefined;
         let creatorHandle: string | undefined;
-        if (stateRes.status === "fulfilled") {
-            const state = stateRes.value as { metadataURI?: string };
-            // fetchMetadata supports both inline data: and ipfs:// URIs;
-            // parseInlineMetadata used to be inline-only and silently
-            // dropped image + creator info from any Pinata-uploaded launch.
-            const meta = await fetchMetadata(state?.metadataURI ?? "");
-            if (meta?.image) imageUrl = resolveIpfs(meta.image);
+        if (metadataURI) {
+            const meta = await fetchMetadata(metadataURI);
+            if (meta?.image) {
+                const resolved = resolveIpfs(meta.image);
+                // Only forward http(s) image URLs to the OG renderer. data:
+                // URLs would explode the query-string length and Satori
+                // wouldn't fetch them anyway; the placeholder is cleaner.
+                if (resolved.startsWith("http://") || resolved.startsWith("https://")) {
+                    imageUrl = resolved;
+                }
+            }
             if (meta?.creatorTwitter) {
                 creatorHandle = meta.creatorTwitter.replace(/^@/, "");
             }

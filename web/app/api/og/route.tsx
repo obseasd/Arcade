@@ -256,13 +256,13 @@ export async function GET(req: NextRequest) {
                     <div
                         style={{
                             display: "flex",
-                            padding: "16px 28px",
+                            padding: "16px 30px",
                             borderRadius: 14,
                             background: `linear-gradient(135deg, ${CTA} 0%, ${CTA_DEEP} 100%)`,
                             fontSize: 24,
                             fontWeight: 700,
                             color: "#E5EEF8",
-                            boxShadow: "0 14px 20px -4px rgba(21, 80, 143, 0.6)",
+                            border: "1px solid rgba(255,255,255,0.08)",
                         }}
                     >
                         Trade on Arcade
