@@ -3,6 +3,9 @@
 import { DollarSign, Clock } from "lucide-react";
 import { Area, AreaChart, ResponsiveContainer, Tooltip, YAxis } from "recharts";
 import { useCreatorEarnings, type TokenEarnings } from "@/lib/hooks/useCreatorEarnings";
+// Aliased - Recharts also exports a Tooltip; we want the UI primitive.
+import { Tooltip as InfoTooltip } from "@/components/ui/Tooltip";
+import { Info } from "lucide-react";
 import { AutoTokenIcon } from "@/components/ui/AutoTokenIcon";
 import { cn } from "@/lib/utils";
 
@@ -43,6 +46,15 @@ export function CreatorEarningsCard() {
         <div className="mb-4 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <h3 className="text-sm font-semibold">Creator earnings</h3>
+            <InfoTooltip content={<FeeSplitBreakdown />} side="bottom" className="w-72">
+              <button
+                type="button"
+                className="text-arc-text-muted transition-colors hover:text-arc-text"
+                aria-label="How creator fees are split"
+              >
+                <Info className="h-3.5 w-3.5" />
+              </button>
+            </InfoTooltip>
             <span className="text-[10px] uppercase tracking-wider text-arc-text-faint">
               {fullyLoaded ? "All time" : "Scanning…"}
             </span>
@@ -161,6 +173,76 @@ function TokenRow({ earnings, totalClaimed }: { earnings: TokenEarnings; totalCl
         <span className="text-arc-text-muted">{pct.toFixed(0)}%</span>
         <span className="w-16 text-right font-semibold">{fmtUsd(earnings.amountUsd)}</span>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Breakdown of how LP fees are split per launch mode. Rendered inside the
+ * Creator-earnings tooltip so creators understand WHY the numbers above
+ * match (or don't match) what the pool collected.
+ *
+ * Numbers come from the launchpad constants:
+ *   - Pump bonding curve: 1% trade fee, split 0.5% platform + 0.5% creator
+ *     while on the curve; post-V2 migration the LP is burned (no fees).
+ *   - Clanker (V2 curve, custom recipients): same trade fee split during
+ *     the curve, then post-migration the V2 LP fees route to the locker's
+ *     recipient list (creator-defined bps + the platform 20%).
+ *   - Clanker V3 (no curve): full supply locked single-sided in V3, the
+ *     locker routes 80% of LP fees to the creator's slots and 20% to the
+ *     platform forever. This is where most "all time" earnings come from.
+ */
+function FeeSplitBreakdown() {
+  return (
+    <div className="space-y-2 text-[11px] leading-relaxed">
+      <div className="font-semibold text-white">How fees are split</div>
+      <FeeRow
+        mode="Clanker V3"
+        creatorPct="80%"
+        platformPct="20%"
+        note="Permanent V3 LP fees. The bulk of long-tail earnings."
+      />
+      <FeeRow
+        mode="Clanker (V2)"
+        creatorPct="80%"
+        platformPct="20%"
+        note="Post-migration: V2 LP fees route to your locker slot."
+      />
+      <FeeRow
+        mode="Pump"
+        creatorPct="0.5%"
+        platformPct="0.5%"
+        note="Curve only — LP is burned at V2 migration."
+      />
+      <div className="border-t border-arc-border/60 pt-1.5 text-arc-text-faint">
+        Multi-recipient launches: the 80% creator slice further splits per
+        the locker's per-slot bps you configured at launch.
+      </div>
+    </div>
+  );
+}
+
+function FeeRow({
+  mode,
+  creatorPct,
+  platformPct,
+  note,
+}: {
+  mode: string;
+  creatorPct: string;
+  platformPct: string;
+  note: string;
+}) {
+  return (
+    <div className="space-y-0.5">
+      <div className="flex items-center justify-between">
+        <span className="font-medium text-arc-text">{mode}</span>
+        <span className="tabular-nums text-arc-text-muted">
+          <span className="text-arc-success">{creatorPct}</span> creator ·{" "}
+          {platformPct} platform
+        </span>
+      </div>
+      <div className="text-arc-text-faint">{note}</div>
     </div>
   );
 }

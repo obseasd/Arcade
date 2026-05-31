@@ -1,14 +1,22 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Plus, Search, Star } from "lucide-react";
-import { FEATURED_TOKENS, LAUNCHPAD_TOTAL_SUPPLY } from "@/lib/constants";
+import Link from "next/link";
+import { ArrowRight, Plus, Search, Sparkles } from "lucide-react";
+import { FEATURED_TOKENS, LAUNCHPAD_TOTAL_SUPPLY, V4_ENABLED } from "@/lib/constants";
 import { useLaunchpadTokens, LaunchpadTokenInfo } from "@/lib/hooks/useLaunchpadTokens";
+import { useV4LaunchpadTokens } from "@/lib/hooks/useV4LaunchpadTokens";
 import { parseInlineMetadata } from "@/lib/metadata";
 import { TokenCard } from "@/components/launchpad/TokenCard";
+import { V4LaunchCard } from "@/components/launchpad/V4LaunchCard";
 import { LaunchModeModal } from "@/components/launchpad/LaunchModeModal";
 import { SkeletonCard } from "@/components/ui/Skeleton";
 import { cn } from "@/lib/utils";
+
+// How many V4 launches to surface in the top strip on /launchpad before the
+// user needs to click "View all" to see the dedicated V4 list. Six fits in
+// one row on lg breakpoint, three on sm.
+const V4_PREVIEW_LIMIT = 6;
 
 const CURVE_SUPPLY = 800_000_000n * 10n ** 18n;
 
@@ -16,9 +24,19 @@ type Filter = "all" | "new" | "trending" | "migrating" | "migrated";
 
 export default function LaunchpadIndexPage() {
   const { tokens, isLoading } = useLaunchpadTokens();
+  const { tokens: v4Tokens } = useV4LaunchpadTokens();
   const [filter, setFilter] = useState<Filter>("all");
   const [q, setQ] = useState("");
   const [launchOpen, setLaunchOpen] = useState(false);
+  const nowSec = BigInt(Math.floor(Date.now() / 1000));
+
+  // Most-recent V4 launches first, capped at V4_PREVIEW_LIMIT. The
+  // dedicated /launchpad/v4/list page exposes the full set with filters.
+  const v4Preview = useMemo(() => {
+    if (!V4_ENABLED) return [];
+    const sorted = [...v4Tokens].sort((a, b) => Number(b.launchedAt - a.launchedAt));
+    return sorted.slice(0, V4_PREVIEW_LIMIT);
+  }, [v4Tokens]);
 
   const filtered = useMemo(() => {
     let list: LaunchpadTokenInfo[] = [...tokens];
@@ -82,6 +100,35 @@ export default function LaunchpadIndexPage() {
           </span>
         </button>
       </div>
+
+      {/* V4 strip above the V2/V3 grid - only renders when V4_ENABLED AND
+          at least one V4 launch exists. Keeps the existing UX clean for
+          users who aren't on a V4-active environment. */}
+      {V4_ENABLED && v4Preview.length > 0 && (
+        <div className="mb-8">
+          <div className="mb-3 flex items-center justify-between">
+            <h2 className="flex items-center gap-2 text-sm font-medium text-arc-text-muted">
+              <Sparkles className="h-4 w-4 text-arc-primary" />
+              <span className="text-arc-text">V4 launches</span>
+              <span className="rounded-md border border-arc-primary/40 bg-arc-primary/10 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-arc-primary">
+                beta
+              </span>
+            </h2>
+            <Link
+              href="/launchpad/v4/list"
+              className="flex items-center gap-1 text-xs text-arc-text-muted hover:text-arc-text"
+            >
+              View all
+              <ArrowRight className="h-3 w-3" />
+            </Link>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {v4Preview.map((t) => (
+              <V4LaunchCard key={t.address} token={t} nowSec={nowSec} />
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex flex-wrap items-center gap-1 rounded-xl border border-arc-border bg-arc-bg-elevated p-1">

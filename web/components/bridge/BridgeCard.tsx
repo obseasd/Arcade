@@ -46,6 +46,15 @@ const ARCADE_BRIDGE_FEE_BPS = 5n; // 0.05%
 const CCTP_FAST_MAX_FEE_BPS = 1n; // 0.01% upper bound on Circle's fast transfer fee
 const BPS_DENOMINATOR = 10_000n;
 
+/** Formats an elapsed-second count like "1m 24s" or "47s". Used by the
+ *  attestation step's "Still waiting" indicator. */
+function formatElapsed(totalSec: number): string {
+  if (totalSec < 60) return `${totalSec}s`;
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  return s === 0 ? `${m}m` : `${m}m ${s}s`;
+}
+
 /** Human-readable ETA per source chain. Ethereum Sepolia waits for 2 epochs of finality. */
 function etaLabel(srcChainId: number, fast: boolean): string {
   if (fast) return "~10-30s";
@@ -283,10 +292,24 @@ export function BridgeCard() {
     }
   };
 
+  // Tracks how long we've been polling Circle for an attestation, so the
+  // UI can show "Taking longer than usual" once we pass the expected ETA.
+  // Resets to 0 every time we (re)enter the `attesting` step.
+  const [attestStartMs, setAttestStartMs] = useState<number | null>(null);
+  const [attestElapsedSec, setAttestElapsedSec] = useState(0);
+
   useEffect(() => {
-    if (step.kind !== "attesting") return;
+    if (step.kind !== "attesting") {
+      setAttestStartMs(null);
+      setAttestElapsedSec(0);
+      return;
+    }
     let cancelled = false;
     let attempts = 0;
+    const startedAt = Date.now();
+    setAttestStartMs(startedAt);
+    setAttestElapsedSec(0);
+
     const poll = async () => {
       attempts += 1;
       const att = await fetchAttestation(step.srcDomain, step.burnTxHash);
@@ -311,11 +334,44 @@ export function BridgeCard() {
       const done = await poll();
       if (done) clearInterval(interval);
     }, 6_000);
+    // Independent tick for the UI elapsed counter (1s granularity).
+    const tickInterval = setInterval(() => {
+      if (cancelled) return;
+      setAttestElapsedSec(Math.floor((Date.now() - startedAt) / 1000));
+    }, 1_000);
     return () => {
       cancelled = true;
       clearInterval(interval);
+      clearInterval(tickInterval);
     };
   }, [step]);
+
+  /**
+   * Upper bound (in seconds) of the "normal" attestation window per source
+   * chain. Beyond this we tell the user we're still polling — drives the
+   * "Taking longer than usual" notice without making the user think
+   * something's broken.
+   */
+  function expectedAttestUpperSec(srcChainId: number, fast: boolean): number {
+    if (fast) return 45; // ~10-30s + buffer
+    switch (srcChainId) {
+      case 11_155_111: return 25 * 60; // Eth Sepolia 15-20 min + buffer
+      case 84_532:
+      case 421_614:
+      case 11_155_420:
+        return 4 * 60; // 1-3 min + buffer
+      case 43_113:
+      case 5_042_002:
+        return 90; // 30-60s + buffer
+      default:
+        return 4 * 60;
+    }
+  }
+
+  const attestingSlow =
+    step.kind === "attesting" &&
+    attestStartMs !== null &&
+    attestElapsedSec > expectedAttestUpperSec(srcChain.id, fastTransfer);
 
   const doMint = async () => {
     if (step.kind !== "minting" || !account) return;
@@ -574,7 +630,10 @@ export function BridgeCard() {
             <Loader2 className="h-4 w-4 animate-spin" />
             {step.kind === "approving" && "Approving USDC…"}
             {step.kind === "burning" && `Sending USDC from ${srcChain.name}…`}
-            {step.kind === "attesting" && "Waiting for Circle attestation…"}
+            {step.kind === "attesting" &&
+              (attestingSlow
+                ? `Still waiting for Circle (${formatElapsed(attestElapsedSec)})…`
+                : "Waiting for Circle attestation…")}
           </button>
         )}
       </div>
@@ -602,7 +661,9 @@ export function BridgeCard() {
                 : step.kind === "burning"
                   ? `Sending USDC on ${srcChain.name}…`
                   : step.kind === "attesting"
-                    ? `Waiting for Circle's attestation (${etaLabel(srcChain.id, fastTransfer)})…`
+                    ? attestingSlow
+                      ? `Still waiting for Circle (${formatElapsed(attestElapsedSec)} elapsed, usual ${etaLabel(srcChain.id, fastTransfer)}). We keep polling every 6s — no action needed.`
+                      : `Waiting for Circle's attestation (${etaLabel(srcChain.id, fastTransfer)})…`
                     : step.kind === "minting"
                       ? `Ready to claim on ${dstChain.name}. Click the button above.`
                       : undefined
