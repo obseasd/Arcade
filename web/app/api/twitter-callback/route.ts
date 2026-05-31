@@ -11,6 +11,7 @@ import {
 import { privateKeyToAccount } from "viem/accounts";
 import { LAUNCHPAD_ABI } from "@/lib/abis/launchpad";
 import { V3_LOCKER_ABI, V3_POOL_ABI } from "@/lib/abis/v3";
+import { TWITTER_ESCROW_V3_ABI } from "@/lib/abis/twitterEscrowV3";
 import { arcTestnet } from "@/lib/chains";
 import { ADDRESSES } from "@/lib/constants";
 import { parseInlineMetadata } from "@/lib/metadata";
@@ -222,24 +223,27 @@ export async function GET(req: NextRequest) {
     pairedAmount = (totalPaired * BigInt(slotBps)) / 10_000n;
     clankerAmount = (totalClanker * BigInt(slotBps)) / 10_000n;
 
-    // Cap by what the escrow actually holds, to never sign an over-payment.
+    // V3 escrow: read the PER-SLOT balance, not the raw ERC20 balance. This
+    // is the audit F-3 fix - we sign amounts that fit within the on-chain
+    // credit for (positionId, slotIndex, token). authorize() enforces the
+    // same invariant; signing more would just revert with InsufficientBalance.
     const escrow = ADDRESSES.twitterEscrow;
-    const [escrowPaired, escrowClanker] = await Promise.all([
+    const [slotPaired, slotClanker] = await Promise.all([
       client.readContract({
-        address: pairedToken,
-        abi: erc20Abi,
-        functionName: "balanceOf",
-        args: [escrow],
+        address: escrow,
+        abi: TWITTER_ESCROW_V3_ABI,
+        functionName: "balances",
+        args: [positionId, BigInt(slotIndex), pairedToken],
       }) as Promise<bigint>,
       client.readContract({
-        address: clankerToken,
-        abi: erc20Abi,
-        functionName: "balanceOf",
-        args: [escrow],
+        address: escrow,
+        abi: TWITTER_ESCROW_V3_ABI,
+        functionName: "balances",
+        args: [positionId, BigInt(slotIndex), clankerToken],
       }) as Promise<bigint>,
     ]);
-    if (pairedAmount > escrowPaired) pairedAmount = escrowPaired;
-    if (clankerAmount > escrowClanker) clankerAmount = escrowClanker;
+    if (pairedAmount > slotPaired) pairedAmount = slotPaired;
+    if (clankerAmount > slotClanker) clankerAmount = slotClanker;
   } catch (err) {
     return redirectBackWithError(origin, "onchain_read_failed");
   }
@@ -252,7 +256,10 @@ export async function GET(req: NextRequest) {
   const signature = await account.signTypedData({
     domain: {
       name: "ArcadeTwitterEscrow",
-      version: "1",
+      // V3 bumped the domain version to "3" to invalidate any v2 signature
+      // that might still be in flight (defence-in-depth on cross-contract
+      // replay - v3 also has a different verifyingContract address).
+      version: "3",
       chainId: arcTestnet.id,
       verifyingContract: ADDRESSES.twitterEscrow,
     },

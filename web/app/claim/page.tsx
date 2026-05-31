@@ -7,7 +7,7 @@ import { Suspense, useState } from "react";
 import { Address, formatUnits, isAddress } from "viem";
 import { useAccount, usePublicClient, useReadContract, useWriteContract } from "wagmi";
 import { erc20Abi } from "viem";
-import { TWITTER_ESCROW_ABI } from "@/lib/abis/twitterEscrow";
+import { TWITTER_ESCROW_V3_ABI } from "@/lib/abis/twitterEscrowV3";
 import { ADDRESSES, LAUNCHPAD_TOKEN_DECIMALS, USDC_DECIMALS } from "@/lib/constants";
 import { pushToast } from "@/lib/toast";
 import { cn, formatAddress, formatToken, formatUSDC } from "@/lib/utils";
@@ -91,15 +91,35 @@ function ClaimPageInner() {
   // Check if already claimed on-chain.
   const claimedQ = useReadContract({
     address: escrow,
-    abi: TWITTER_ESCROW_ABI,
+    abi: TWITTER_ESCROW_V3_ABI,
     functionName: "claimed",
     args: [positionId, slotIndex],
     query: { enabled: !!escrow },
   });
   const alreadyClaimed = !!(claimedQ.data as boolean | undefined);
 
+  // Read the on-chain timelock so we can show the user a wait countdown.
+  const timelockQ = useReadContract({
+    address: escrow,
+    abi: TWITTER_ESCROW_V3_ABI,
+    functionName: "claimTimelock",
+    query: { enabled: !!escrow },
+  });
+  const timelockSec = Number((timelockQ.data as bigint | undefined) ?? 0n);
+
   const expired = Date.now() / 1000 > Number(deadline);
 
+  /**
+   * V3 escrow flow: 2 tx
+   *   1. `authorize(...)` with the EIP-712 sig - commits the claim on-chain,
+   *      starts the timelock countdown.
+   *   2. `claimByTwitter(nonce)` once `block.timestamp >= executeAfter` -
+   *      transfers the tokens to the recipient.
+   *
+   * Testnet has `claimTimelock = 0` so both fire back-to-back. Mainnet (after
+   * `setClaimTimelock(48h)`) will need a separate page revisit after the
+   * window elapses; for now we polish only the testnet path.
+   */
   const onClaim = async () => {
     if (!account) {
       pushToast({ kind: "error", title: "Connect a wallet first" });
@@ -115,10 +135,11 @@ function ClaimPageInner() {
     }
     setSubmitting(true);
     try {
-      const hash = await writeContractAsync({
+      // --- Step 1: authorize the claim on-chain ---
+      const authorizeHash = await writeContractAsync({
         address: escrow,
-        abi: TWITTER_ESCROW_ABI,
-        functionName: "claim",
+        abi: TWITTER_ESCROW_V3_ABI,
+        functionName: "authorize",
         args: [
           positionId,
           slotIndex,
@@ -132,7 +153,26 @@ function ClaimPageInner() {
           sig!,
         ],
       });
-      if (publicClient) await publicClient.waitForTransactionReceipt({ hash });
+      if (publicClient) await publicClient.waitForTransactionReceipt({ hash: authorizeHash });
+
+      // --- Step 2: execute the claim (if timelock is 0, immediately) ---
+      if (timelockSec > 0) {
+        pushToast({
+          kind: "info",
+          title: "Authorized",
+          message: `Come back in ${Math.ceil(timelockSec / 60)} min to finish the claim.`,
+        });
+        router.replace(`/launchpad/${token}`);
+        return;
+      }
+
+      const claimHash = await writeContractAsync({
+        address: escrow,
+        abi: TWITTER_ESCROW_V3_ABI,
+        functionName: "claimByTwitter",
+        args: [nonce!],
+      });
+      if (publicClient) await publicClient.waitForTransactionReceipt({ hash: claimHash });
       pushToast({
         kind: "info",
         title: "Claim confirmed",
