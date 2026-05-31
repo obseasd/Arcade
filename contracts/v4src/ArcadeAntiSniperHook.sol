@@ -49,14 +49,20 @@ import {ModifyLiquidityParams, SwapParams} from "v4-core/types/PoolOperation.sol
 contract ArcadeAntiSniperHook is IHooks {
     /// @notice The pool manager calling our hook. Set at construction.
     IPoolManager public immutable POOL_MANAGER;
-    /// @notice Arcade launchpad - read for the per-token snipe config and
-    ///         treasury address.
+    /// @notice Arcade launchpad - read for the per-token snipe config only.
+    ///         Treasury is NOT read from here (see audit finding #3): the
+    ///         hook trusts its own immutable TREASURY instead, so a
+    ///         compromised or upgraded launchpad can't redirect skims.
     ILaunchpadSnipe public immutable LAUNCHPAD;
     /// @notice USDC on Arc. Tax only applies when USDC is the input side.
     Currency public immutable USDC;
+    /// @notice Recipient of the snipe skim. Hardcoded at construction so the
+    ///         hook is independent of any future launchpad upgrade.
+    address public immutable TREASURY;
 
     error NotPoolManager();
     error InvalidLaunchpad();
+    error InvalidTreasury();
     error HookNotImplemented();
 
     event SniperSkimmed(
@@ -72,17 +78,31 @@ contract ArcadeAntiSniperHook is IHooks {
         _;
     }
 
-    constructor(IPoolManager poolManager_, ILaunchpadSnipe launchpad_, Currency usdc_) {
+    constructor(
+        IPoolManager poolManager_,
+        ILaunchpadSnipe launchpad_,
+        Currency usdc_,
+        address treasury_
+    ) {
         if (address(launchpad_) == address(0)) revert InvalidLaunchpad();
+        if (treasury_ == address(0)) revert InvalidTreasury();
         POOL_MANAGER = poolManager_;
         LAUNCHPAD = launchpad_;
         USDC = usdc_;
+        TREASURY = treasury_;
     }
 
     /// @notice Hook permission flags the deployed address must encode in its
     ///         low 14 bits. `MineHookSalt` / `DeployV4` target exactly this.
+    ///
+    /// @dev MUST include both `_RETURNS_DELTA_FLAG` bits — without them, the
+    ///      pool manager dispatcher discards the BeforeSwapDelta / int128 we
+    ///      return, leaving the `pm.take(...)` we just issued as an unresolved
+    ///      hook delta that fails `CurrencyNotSettled` at unlock close. That
+    ///      would DOS every taxed buy during the snipe window.
     function getHookPermissions() public pure returns (uint160) {
-        return Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG;
+        return Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG
+            | Hooks.BEFORE_SWAP_RETURNS_DELTA_FLAG | Hooks.AFTER_SWAP_RETURNS_DELTA_FLAG;
     }
 
     // -------------------------------------------------------------------
@@ -113,10 +133,9 @@ contract ArcadeAntiSniperHook is IHooks {
         uint256 skim = (amountIn * bps) / 10_000;
         if (skim == 0) return (IHooks.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
 
-        address treasury = LAUNCHPAD.treasury();
-        POOL_MANAGER.take(USDC, treasury, skim);
+        POOL_MANAGER.take(USDC, TREASURY, skim);
 
-        emit SniperSkimmed(launchToken, treasury, amountIn, skim, bps);
+        emit SniperSkimmed(launchToken, TREASURY, amountIn, skim, bps);
 
         // For an exact-INPUT swap the SPECIFIED currency is USDC. A positive
         // specified-delta tells the pool the hook took that much of the
@@ -160,10 +179,9 @@ contract ArcadeAntiSniperHook is IHooks {
         uint256 skim = (amountIn * bps) / 10_000;
         if (skim == 0) return (IHooks.afterSwap.selector, int128(0));
 
-        address treasury = LAUNCHPAD.treasury();
-        POOL_MANAGER.take(USDC, treasury, skim);
+        POOL_MANAGER.take(USDC, TREASURY, skim);
 
-        emit SniperSkimmed(launchToken, treasury, amountIn, skim, bps);
+        emit SniperSkimmed(launchToken, TREASURY, amountIn, skim, bps);
 
         // The returned int128 is added to the UNSPECIFIED currency delta. For
         // an exact-output swap, the unspecified currency is the input side

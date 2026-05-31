@@ -18,26 +18,31 @@ import {Currency} from "v4-core/types/Currency.sol";
 contract MineHookSaltTest is Test {
     uint160 internal constant PERM_MASK = (1 << 14) - 1;
     /// @dev Must match `ArcadeAntiSniperHook.getHookPermissions()`.
-    uint160 internal constant TARGET_FLAGS =
-        Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG;
+    ///      BEFORE_SWAP + AFTER_SWAP + BEFORE_SWAP_RETURNS_DELTA +
+    ///      AFTER_SWAP_RETURNS_DELTA. The RETURNS_DELTA bits are mandatory
+    ///      so pm.take's hook delta gets reconciled (otherwise the swap
+    ///      reverts with CurrencyNotSettled).
+    uint160 internal constant TARGET_FLAGS = Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG
+        | Hooks.BEFORE_SWAP_RETURNS_DELTA_FLAG | Hooks.AFTER_SWAP_RETURNS_DELTA_FLAG;
 
     address internal constant DEPLOYER = address(0xDEADBEEF);
     address internal constant POOL_MANAGER = address(0xABCD);
     address internal constant LAUNCHPAD = address(0x1234);
     address internal constant USDC_ADDR = address(0x5678);
+    address internal constant TREASURY = address(0xBEEF);
 
     function test_mining_findsSaltWithCorrectPermissions() public view {
         bytes memory creationCode = abi.encodePacked(
             type(ArcadeAntiSniperHook).creationCode,
-            abi.encode(POOL_MANAGER, LAUNCHPAD, Currency.wrap(USDC_ADDR))
+            abi.encode(POOL_MANAGER, LAUNCHPAD, Currency.wrap(USDC_ADDR), TREASURY)
         );
         bytes32 codeHash = keccak256(creationCode);
 
-        // Brute-force the same way the script does. With one permission bit,
-        // expected attempts ≈ 8 192. Cap at 100k for safety.
+        // 4 fixed bits → 1/2^10 = 1024 expected attempts. Cap at 200k for
+        // budget.
         bytes32 foundSalt;
         address predicted;
-        for (uint256 i = 0; i < 100_000; ++i) {
+        for (uint256 i = 0; i < 200_000; ++i) {
             bytes32 salt = bytes32(i);
             address a = vm.computeCreate2Address(salt, codeHash, DEPLOYER);
             if (uint160(a) & PERM_MASK == TARGET_FLAGS) {
@@ -48,29 +53,29 @@ contract MineHookSaltTest is Test {
         }
 
         assertTrue(predicted != address(0), "mining should find a salt within cap");
-        // The low 14 bits of the predicted address must equal exactly the
-        // permission flags the hook declares.
         assertEq(uint160(predicted) & PERM_MASK, TARGET_FLAGS, "address permissions mismatch");
-        // And the BEFORE_SWAP_FLAG (bit 7) must be set explicitly.
         assertTrue(uint160(predicted) & Hooks.BEFORE_SWAP_FLAG != 0, "BEFORE_SWAP_FLAG should be set");
-        // Sanity log so test output documents a working salt.
+        assertTrue(uint160(predicted) & Hooks.AFTER_SWAP_FLAG != 0, "AFTER_SWAP_FLAG should be set");
+        assertTrue(
+            uint160(predicted) & Hooks.BEFORE_SWAP_RETURNS_DELTA_FLAG != 0,
+            "BEFORE_SWAP_RETURNS_DELTA_FLAG should be set"
+        );
+        assertTrue(
+            uint160(predicted) & Hooks.AFTER_SWAP_RETURNS_DELTA_FLAG != 0,
+            "AFTER_SWAP_RETURNS_DELTA_FLAG should be set"
+        );
         console2.log("Found predicted hook address:", predicted);
         console2.logBytes32(foundSalt);
     }
 
     function test_exactlyDeclaredFlags_areSet() public view {
-        // V4's PoolManager calls every slot whose flag is set on the hook
-        // address. Bits we don't implement must NOT be set or the call would
-        // revert. Bits we DO implement must be set or the manager skips them.
         bytes memory creationCode = abi.encodePacked(
             type(ArcadeAntiSniperHook).creationCode,
-            abi.encode(POOL_MANAGER, LAUNCHPAD, Currency.wrap(USDC_ADDR))
+            abi.encode(POOL_MANAGER, LAUNCHPAD, Currency.wrap(USDC_ADDR), TREASURY)
         );
         bytes32 codeHash = keccak256(creationCode);
 
         address predicted;
-        // The search space for 2 fixed bits is 1 / 2^12 ≈ 4 096 attempts on
-        // average. Allow up to 200k for paranoia.
         for (uint256 i = 0; i < 200_000; ++i) {
             address a = vm.computeCreate2Address(bytes32(i), codeHash, DEPLOYER);
             if (uint160(a) & PERM_MASK == TARGET_FLAGS) {
@@ -80,14 +85,11 @@ contract MineHookSaltTest is Test {
         }
         require(predicted != address(0), "salt not found in test budget");
 
-        // Iterate the 14 permission bits and assert exactly two set (BEFORE
-        // and AFTER swap).
+        // Iterate the 14 permission bits and assert EXACTLY four set.
         uint160 setBits;
         for (uint8 bit = 0; bit < 14; ++bit) {
             if (uint160(predicted) & (uint160(1) << bit) != 0) setBits++;
         }
-        assertEq(setBits, 2, "exactly BEFORE_SWAP + AFTER_SWAP flags should be set");
-        assertTrue(uint160(predicted) & Hooks.BEFORE_SWAP_FLAG != 0);
-        assertTrue(uint160(predicted) & Hooks.AFTER_SWAP_FLAG != 0);
+        assertEq(setBits, 4, "exactly the four declared permission flags should be set");
     }
 }

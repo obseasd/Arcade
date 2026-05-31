@@ -61,7 +61,12 @@ import {V4Quoter} from "v4-periphery/lens/V4Quoter.sol";
  */
 contract DeployV4 is Script {
     uint160 internal constant PERM_MASK = (1 << 14) - 1;
-    uint160 internal constant TARGET_FLAGS = Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG;
+    /// @dev Matches `ArcadeAntiSniperHook.getHookPermissions()`. RETURNS_DELTA
+    ///      bits are mandatory - without them the pool manager discards the
+    ///      delta we return after pm.take, leaving an unsettled hook delta
+    ///      that DOSes every taxed swap.
+    uint160 internal constant TARGET_FLAGS = Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG
+        | Hooks.BEFORE_SWAP_RETURNS_DELTA_FLAG | Hooks.AFTER_SWAP_RETURNS_DELTA_FLAG;
     uint256 internal constant MAX_ATTEMPTS = 200_000;
 
     function run() external {
@@ -100,7 +105,8 @@ contract DeployV4 is Script {
             abi.encode(
                 IPoolManager(poolManager),
                 ILaunchpadSnipe(address(launchpad)),
-                Currency.wrap(usdc)
+                Currency.wrap(usdc),
+                treasury
             )
         );
         bytes32 codeHash = keccak256(hookCreationCode);
@@ -123,7 +129,8 @@ contract DeployV4 is Script {
         ArcadeAntiSniperHook hook = new ArcadeAntiSniperHook{salt: salt}(
             IPoolManager(poolManager),
             ILaunchpadSnipe(address(launchpad)),
-            Currency.wrap(usdc)
+            Currency.wrap(usdc),
+            treasury
         );
         require(address(hook) == predicted, "deployed hook addr != predicted");
 

@@ -38,11 +38,16 @@ contract MineHookSalt is Script {
     /// @notice Mask covering all 14 permission bits in V4 hook addresses.
     uint160 internal constant PERM_MASK = (1 << 14) - 1;
     /// @notice Bits we want set on the deployed hook's address - mirrors
-    ///         getHookPermissions(): BEFORE_SWAP + AFTER_SWAP.
-    uint160 internal constant TARGET_FLAGS = Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG;
+    ///         getHookPermissions(): BEFORE_SWAP + AFTER_SWAP +
+    ///         BEFORE_SWAP_RETURNS_DELTA + AFTER_SWAP_RETURNS_DELTA. The
+    ///         RETURNS_DELTA bits are required so the manager keeps the
+    ///         non-zero delta we return (otherwise pm.take leaves an
+    ///         unresolved hook delta and the swap reverts).
+    uint160 internal constant TARGET_FLAGS = Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG
+        | Hooks.BEFORE_SWAP_RETURNS_DELTA_FLAG | Hooks.AFTER_SWAP_RETURNS_DELTA_FLAG;
 
-    /// @notice Max salts to try before giving up. 1 in 4096 chance per attempt
-    ///         for two permission flags; we cap at 200k for paranoia.
+    /// @notice Max salts to try before giving up. ~1 in 16k chance per attempt
+    ///         for four permission flags; we cap at 200k for paranoia.
     uint256 internal constant MAX_ATTEMPTS = 200_000;
 
     function run() external view {
@@ -50,10 +55,11 @@ contract MineHookSalt is Script {
         IPoolManager poolManager = IPoolManager(vm.envAddress("POOL_MANAGER"));
         ILaunchpadSnipe launchpad = ILaunchpadSnipe(vm.envAddress("LAUNCHPAD"));
         Currency usdc = Currency.wrap(vm.envAddress("USDC"));
+        address treasury = vm.envAddress("TREASURY");
 
         bytes memory creationCode = abi.encodePacked(
             type(ArcadeAntiSniperHook).creationCode,
-            abi.encode(poolManager, launchpad, usdc)
+            abi.encode(poolManager, launchpad, usdc, treasury)
         );
         bytes32 codeHash = keccak256(creationCode);
 

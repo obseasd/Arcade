@@ -137,7 +137,8 @@ contract ArcadeV4LaunchpadTest is Test {
         hook = new ArcadeAntiSniperHook(
             IPoolManager(address(pm)),
             lp,
-            Currency.wrap(address(usdc))
+            Currency.wrap(address(usdc)),
+            TREASURY
         );
         lp.setHook(address(hook));
         // Fund + approve creation fee.
@@ -428,6 +429,38 @@ contract ArcadeV4LaunchpadTest is Test {
         );
         vm.expectRevert(ArcadeV4Launchpad.ZeroAddress.selector);
         fresh.setHook(address(0));
+    }
+
+    // --- Audit #2: HOOK-must-be-set guards ------------------------------
+
+    function test_createLaunch_revertsWhenHookUnset() public {
+        // Fresh launchpad without setHook: createLaunch should refuse to
+        // register anything (prevents the front-run path between deploy and
+        // setHook, where someone could create a launch that would later be
+        // initializePool'd with key.hooks = 0).
+        ArcadeV4Launchpad fresh = new ArcadeV4Launchpad(
+            IERC20(address(usdc)), IPoolManager(address(pm)), TREASURY
+        );
+        usdc.mint(CREATOR, 100e6);
+        vm.prank(CREATOR);
+        usdc.approve(address(fresh), type(uint256).max);
+        vm.prank(CREATOR);
+        vm.expectRevert(ArcadeV4Launchpad.HookNotSet.selector);
+        fresh.createLaunch("Test", "TEST", "", 0, 0, 0);
+    }
+
+    function test_initializePool_revertsWhenHookUnset() public {
+        // The wired test launchpad already has HOOK set, so to exercise the
+        // initializePool guard we need a fresh launchpad. But createLaunch is
+        // now guarded too, so we can't register a launch without setHook.
+        // The guard is implicitly tested by createLaunch_revertsWhenHookUnset
+        // (no launch can exist with HOOK=0). For completeness, verify the
+        // error selector is wired in.
+        ArcadeV4Launchpad fresh = new ArcadeV4Launchpad(
+            IERC20(address(usdc)), IPoolManager(address(pm)), TREASURY
+        );
+        vm.expectRevert(ArcadeV4Launchpad.HookNotSet.selector);
+        fresh.initializePool(address(0xDEAD), uint160(1 << 96), 1_000);
     }
 
     function test_constructor_rejectsZeroAddresses() public {

@@ -71,7 +71,8 @@ contract ArcadeAntiSniperHookTest is Test {
         hook = new ArcadeAntiSniperHook(
             IPoolManager(address(pm)),
             ILaunchpadSnipe(address(lp)),
-            Currency.wrap(USDC_ADDR)
+            Currency.wrap(USDC_ADDR),
+            TREASURY
         );
     }
 
@@ -85,12 +86,45 @@ contract ArcadeAntiSniperHookTest is Test {
         hook.beforeSwap(address(this), key, p, "");
     }
 
-    function test_permissionFlags_areBeforeAndAfterSwap() public view {
-        uint160 expected = Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG;
+    function test_permissionFlags_includeReturnsDeltaBits() public view {
+        // BEFORE_SWAP + AFTER_SWAP alone is NOT sufficient: without the
+        // RETURNS_DELTA bits the pool manager discards our returned delta,
+        // leaving pm.take() as an unsettled hook delta -> swap reverts.
+        uint160 expected = Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG
+            | Hooks.BEFORE_SWAP_RETURNS_DELTA_FLAG | Hooks.AFTER_SWAP_RETURNS_DELTA_FLAG;
         assertEq(hook.getHookPermissions(), expected);
     }
 
     // --- beforeSwap (exact-INPUT) ---------------------------------------
+
+    function test_skim_routesToImmutableTreasury_notLaunchpadTreasury() public {
+        // Audit #3: hook should ignore LAUNCHPAD.treasury() and always send
+        // skims to its own immutable TREASURY, so a compromised launchpad
+        // can't redirect them.
+        lp.setSnipe(TOKEN, 500);
+        lp.setTreasury(address(0xDEADBEEF)); // launchpad now claims a different treasury
+
+        PoolKey memory key = _key(USDC_ADDR, TOKEN);
+        SwapParams memory p = SwapParams({zeroForOne: true, amountSpecified: -10_000, sqrtPriceLimitX96: 0});
+
+        vm.prank(address(pm));
+        hook.beforeSwap(address(0xA), key, p, "");
+
+        // Skim went to the hook's TREASURY constant, not the launchpad's
+        // newly-changed treasury_.
+        assertEq(pm.lastTo(), TREASURY, "skim ignores launchpad's mutated treasury");
+        assertEq(hook.TREASURY(), TREASURY, "TREASURY is immutable on the hook");
+    }
+
+    function test_constructor_rejectsZeroTreasury() public {
+        vm.expectRevert(ArcadeAntiSniperHook.InvalidTreasury.selector);
+        new ArcadeAntiSniperHook(
+            IPoolManager(address(pm)),
+            ILaunchpadSnipe(address(lp)),
+            Currency.wrap(USDC_ADDR),
+            address(0)
+        );
+    }
 
     function test_buyUsdcCurrency0_taxedAtConfiguredBps() public {
         lp.setSnipe(TOKEN, 500); // 5%

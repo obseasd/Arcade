@@ -120,6 +120,7 @@ contract ArcadeV4Launchpad is ILaunchpadSnipe, IUnlockCallback, ReentrancyGuard 
     error NotPoolManager();
     error NotDeployer();
     error HookAlreadySet();
+    error HookNotSet();
     error ZeroAddress();
     error ZeroLiquidity();
 
@@ -192,6 +193,11 @@ contract ArcadeV4Launchpad is ILaunchpadSnipe, IUnlockCallback, ReentrancyGuard 
         uint32 snipeDecaySeconds,
         uint16 creatorBps
     ) external nonReentrant returns (address tokenAddr) {
+        // Defense-in-depth: refuse launches until the deployer has wired
+        // setHook(). Otherwise a watcher could front-run the deployer between
+        // the launchpad deploy and the setHook call, creating launches that
+        // would then be initializePool'd with hooks = address(0) (audit #2).
+        if (HOOK == address(0)) revert HookNotSet();
         if (bytes(name).length == 0 || bytes(symbol).length == 0) revert EmptyName();
         if (snipeStartBps > MAX_SNIPE_BPS) revert InvalidSnipeBps();
         if (snipeStartBps > 0 && snipeDecaySeconds == 0) revert InvalidDecaySeconds();
@@ -272,11 +278,13 @@ contract ArcadeV4Launchpad is ILaunchpadSnipe, IUnlockCallback, ReentrancyGuard 
         external
         nonReentrant
     {
+        // Same guard as createLaunch (audit #2). The hook field of every pool
+        // created here is `HOOK`; if it's zero, the resulting pool has no
+        // anti-sniper hook attached - permanently, since PoolKey.hooks is
+        // immutable in v4-core.
+        if (HOOK == address(0)) revert HookNotSet();
         Launch storage l = launches[token];
         if (l.token == address(0)) revert UnknownToken();
-        // currency0 is always either USDC or the launch token after a
-        // successful init, both non-zero. We can't use `hooks != 0` because
-        // the hook permission-mining flow technically allows a zero address.
         if (Currency.unwrap(l.poolKey.currency0) != address(0)) revert PoolAlreadyInitialized();
         if (liquidityDelta <= 0) revert ZeroLiquidity();
 
