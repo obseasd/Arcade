@@ -6,6 +6,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 import {ArcadeV4Launchpad} from "../v4src/ArcadeV4Launchpad.sol";
 import {ArcadeAntiSniperHook} from "../v4src/ArcadeAntiSniperHook.sol";
+import {ArcadeV4SwapRouter} from "../v4src/ArcadeV4SwapRouter.sol";
 import {ILaunchpadSnipe} from "../v4src/interfaces/IArcadeV4Launchpad.sol";
 
 // Upstream v4-core.
@@ -129,9 +130,10 @@ contract DeployV4 is Script {
         // Step 4: lock the wiring.
         launchpad.setHook(address(hook));
 
-        // Step 5: lens contracts.
+        // Step 5: lens contracts + thin swap router.
         StateView stateView = new StateView(IPoolManager(poolManager));
         V4Quoter quoter = new V4Quoter(IPoolManager(poolManager));
+        ArcadeV4SwapRouter swapRouter = new ArcadeV4SwapRouter(IPoolManager(poolManager));
 
         vm.stopBroadcast();
 
@@ -144,6 +146,7 @@ contract DeployV4 is Script {
         console2.log("Hook:            ", address(hook));
         console2.log("StateView:       ", address(stateView));
         console2.log("V4Quoter:        ", address(quoter));
+        console2.log("V4SwapRouter:    ", address(swapRouter));
         console2.log("Hook salt (uint):", uint256(salt));
         console2.log("Salt attempts:   ", attempts);
     }

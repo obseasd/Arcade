@@ -26,6 +26,7 @@ export const ADDRESSES = {
   v4Hook: safeAddress(process.env.NEXT_PUBLIC_V4_HOOK_ADDRESS),
   v4StateView: safeAddress(process.env.NEXT_PUBLIC_V4_STATE_VIEW_ADDRESS),
   v4Quoter: safeAddress(process.env.NEXT_PUBLIC_V4_QUOTER_ADDRESS),
+  v4Router: safeAddress(process.env.NEXT_PUBLIC_V4_ROUTER_ADDRESS),
 } as const;
 
 /** True iff the V4 stack is enabled in this env. Gates every V4 UI
