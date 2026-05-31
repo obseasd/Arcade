@@ -20,6 +20,7 @@ import { useTokenImage } from "@/lib/hooks/useTokenImage";
 import { useWatchEvent } from "@/lib/hooks/useWatchEvent";
 import { TokenIcon } from "@/components/ui/TokenIcon";
 import { Skeleton } from "@/components/ui/Skeleton";
+import { V4SwapPanel } from "@/components/launchpad/v4/V4SwapPanel";
 import { cn, formatAddress } from "@/lib/utils";
 
 const TOKEN_LAUNCHED_EVT = parseAbiItem(
@@ -273,11 +274,12 @@ function V4DetailInner() {
                 </div>
 
                 <div className="space-y-4">
+                    {poolInitialised ? (
+                        <V4SwapPanel token={token} symbol={symbolQ.data as string | undefined} />
+                    ) : (
+                        <ActionsCard token={token} poolInitialised={poolInitialised} />
+                    )}
                     <LaunchInfoCard launch={launch} />
-                    <ActionsCard
-                        token={token}
-                        poolInitialised={poolInitialised}
-                    />
                 </div>
             </div>
         </div>
