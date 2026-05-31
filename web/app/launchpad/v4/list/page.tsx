@@ -170,7 +170,10 @@ function V4TokenCard({
             : 0;
 
     return (
-        <div className="arc-card group flex flex-col gap-3 p-4 transition-colors hover:border-arc-primary/40">
+        <Link
+            href={`/launchpad/v4/${token.address}`}
+            className="arc-card group flex flex-col gap-3 p-4 transition-colors hover:border-arc-primary/40"
+        >
             <div className="flex items-center justify-between gap-2">
                 <div className="min-w-0 flex-1">
                     <div className="truncate text-base font-semibold">
@@ -225,7 +228,7 @@ function V4TokenCard({
                     </>
                 )}
             </div>
-        </div>
+        </Link>
     );
 }
 
