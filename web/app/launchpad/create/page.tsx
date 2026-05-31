@@ -1088,6 +1088,7 @@ function CreateTokenInner() {
               !valid ||
               (isV3 && (!recipientsValid || !vaultValid || !snipeValid || !poolValid)) ||
               tx.status === "pending" ||
+              imageUploading ||
               !hasFee
             }
             className="arc-button-primary w-full py-3 text-base"
@@ -1100,9 +1101,11 @@ function CreateTokenInner() {
                   ? "Fill in name and symbol"
                   : isV3 && !recipientsValid
                     ? "Fix fee recipients"
-                    : tx.status === "pending"
-                      ? "Launching…"
-                      : `Launch ${modeLabel(mode)}`}
+                    : imageUploading
+                      ? "Uploading image…"
+                      : tx.status === "pending"
+                        ? "Launching…"
+                        : `Launch ${modeLabel(mode)}`}
           </button>
           <TxStatus state={tx} />
         </aside>

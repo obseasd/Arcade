@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useLayoutEffect } from "react";
+import { createPortal } from "react-dom";
 import { cn } from "@/lib/utils";
 
 interface Props {
@@ -15,21 +16,60 @@ interface Props {
 }
 
 /**
- * Lightweight CSS-only tooltip. Shows on hover or keyboard focus, dismisses
- * after a short delay on mouseleave. No portal, no dependency on a popper
- * library — the popup is absolutely positioned relative to the trigger and
- * keeps a small offset so it doesn't visually touch the underlying element.
+ * Hover tooltip that renders via a document-level portal so it escapes
+ * every ancestor stacking context. Without the portal a sibling section
+ * (eg a card grid below the trigger's card) could paint over the popup
+ * even with z-[200] because each card sat in its own stacking layer.
+ *
+ * Positioning is measured from the trigger's bounding rect every time
+ * the popup opens, so scroll / resize keep it anchored.
  */
 export function Tooltip({ children, content, side = "top", className }: Props) {
   const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const triggerRef = useRef<HTMLSpanElement>(null);
+  const popupRef = useRef<HTMLSpanElement>(null);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [mounted, setMounted] = useState(false);
 
+  useEffect(() => setMounted(true), []);
   useEffect(
     () => () => {
       if (closeTimer.current) clearTimeout(closeTimer.current);
     },
     [],
   );
+
+  // Position the popup against the trigger's viewport rect every time we
+  // open. We measure the popup itself so vertical/horizontal alignment
+  // accounts for the popup's own dimensions.
+  useLayoutEffect(() => {
+    if (!open || !triggerRef.current || !popupRef.current) return;
+    const t = triggerRef.current.getBoundingClientRect();
+    const p = popupRef.current.getBoundingClientRect();
+    const gap = 8;
+    let top = 0;
+    let left = 0;
+    if (side === "top") {
+      top = t.top - p.height - gap;
+      left = t.left + t.width / 2 - p.width / 2;
+    } else if (side === "bottom") {
+      top = t.bottom + gap;
+      left = t.left + t.width / 2 - p.width / 2;
+    } else if (side === "left") {
+      top = t.top + t.height / 2 - p.height / 2;
+      left = t.left - p.width - gap;
+    } else {
+      top = t.top + t.height / 2 - p.height / 2;
+      left = t.right + gap;
+    }
+    // Clamp to the viewport so the popup never gets clipped off-screen
+    // when the trigger is near an edge.
+    const pad = 8;
+    left = Math.max(pad, Math.min(left, window.innerWidth - p.width - pad));
+    top = Math.max(pad, Math.min(top, window.innerHeight - p.height - pad));
+    setPos({ top, left });
+  }, [open, side, content]);
 
   const show = () => {
     if (closeTimer.current) clearTimeout(closeTimer.current);
@@ -41,6 +81,7 @@ export function Tooltip({ children, content, side = "top", className }: Props) {
 
   return (
     <span
+      ref={triggerRef}
       className="relative inline-flex"
       onMouseEnter={show}
       onMouseLeave={hideSoon}
@@ -49,26 +90,26 @@ export function Tooltip({ children, content, side = "top", className }: Props) {
       tabIndex={-1}
     >
       {children}
-      {open && (
-        <span
-          role="tooltip"
-          className={cn(
-            // z-[200] beats most adjacent stacking contexts so the popup
-            // doesn't get visually hidden under sibling cards even when the
-            // ancestor card creates a new layer via position:relative.
-            // Solid bg avoids see-through artefacts when the tooltip overlaps
-            // the card below it.
-            "pointer-events-none absolute z-[200] w-max max-w-xs rounded-md border border-arc-border bg-arc-bg-elevated px-2.5 py-1.5 text-[11px] font-normal leading-snug text-arc-text shadow-arc-card",
-            side === "top" && "bottom-full left-1/2 mb-1.5 -translate-x-1/2",
-            side === "bottom" && "left-1/2 top-full mt-1.5 -translate-x-1/2",
-            side === "left" && "right-full top-1/2 mr-1.5 -translate-y-1/2",
-            side === "right" && "left-full top-1/2 ml-1.5 -translate-y-1/2",
-            className,
-          )}
-        >
-          {content}
-        </span>
-      )}
+      {open && mounted &&
+        createPortal(
+          <span
+            ref={popupRef}
+            role="tooltip"
+            style={{
+              position: "fixed",
+              top: pos?.top ?? -9999,
+              left: pos?.left ?? -9999,
+              visibility: pos ? "visible" : "hidden",
+            }}
+            className={cn(
+              "pointer-events-none z-[9999] w-max max-w-xs rounded-md border border-arc-border bg-arc-bg-elevated px-2.5 py-1.5 text-[11px] font-normal leading-snug text-arc-text shadow-arc-card",
+              className,
+            )}
+          >
+            {content}
+          </span>,
+          document.body,
+        )}
     </span>
   );
 }

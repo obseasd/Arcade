@@ -72,11 +72,13 @@ export function BridgeHistory() {
           )}
         />
       </button>
-      <div className="divide-y divide-arc-border/40 border-t border-arc-border/40">
-        {visible.map((e) => (
-          <Row key={e.id} entry={e} onDismiss={() => dismiss(e.id)} />
-        ))}
-      </div>
+      {expanded && (
+        <div className="divide-y divide-arc-border/40 border-t border-arc-border/40">
+          {visible.map((e) => (
+            <Row key={e.id} entry={e} onDismiss={() => dismiss(e.id)} />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
