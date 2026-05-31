@@ -10,6 +10,25 @@ export const runtime = "edge";
 // of being statically optimized into a single cached response.
 export const dynamic = "force-dynamic";
 
+// Brand palette (kept in sync with tailwind.config.ts -> arc-*).
+const BG_FROM = "#001029";
+const BG_MID = "#0A1F3A";
+const BG_TO = "#15324F";
+const CTA = "#15508F"; // arc-cta-hover, the brand action blue
+const CTA_DEEP = "#0E3A6A"; // arc-cta, darker stop for the gradient
+const TEXT_FAINT = "rgba(229,238,248,0.55)";
+const TEXT_MUTED = "rgba(146,168,194,1)";
+
+/**
+ * Resolve a query-string base for fetching local /public assets from the
+ * running deployment. The OG route can be hit from anywhere (Discord, X,
+ * Telegram), so we use the request's own host as the canonical origin.
+ */
+function originFromReq(req: NextRequest): string {
+    const u = new URL(req.url);
+    return `${u.protocol}//${u.host}`;
+}
+
 /**
  * Dynamic OpenGraph image generator for token detail pages.
  *
@@ -17,9 +36,7 @@ export const dynamic = "force-dynamic";
  * Returns a 1200x630 PNG suitable as og:image and twitter:image.
  *
  * Keep the JSX flat. Satori chokes on overly-nested flex layouts and on
- * unsupported CSS, so every container declares display:flex explicitly and
- * the gradient lives on a single backing layer. No external font fetches:
- * the route relies on Satori's default font, which always resolves.
+ * unsupported CSS, so every container declares display:flex explicitly.
  */
 export async function GET(req: NextRequest) {
     const { searchParams } = new URL(req.url);
@@ -30,6 +47,8 @@ export async function GET(req: NextRequest) {
     const creator = (searchParams.get("creator") ?? "").slice(0, 30);
     const variant = searchParams.get("variant") ?? "v23";
 
+    const cleanSymbol = symbol.replace(/^\$+/, "") || "TKN";
+
     // Only embed http(s) images. ipfs:// must already be resolved by the
     // caller (seo.ts does this); anything else falls through to the letter
     // placeholder so the route never serves a broken <img>.
@@ -37,6 +56,9 @@ export async function GET(req: NextRequest) {
         rawImage.startsWith("https://") || rawImage.startsWith("http://")
             ? rawImage
             : "";
+
+    const origin = originFromReq(req);
+    const brandLogo = `${origin}/arcade.png`;
 
     return new ImageResponse(
         (
@@ -46,46 +68,53 @@ export async function GET(req: NextRequest) {
                     flexDirection: "column",
                     width: "100%",
                     height: "100%",
-                    background:
-                        "linear-gradient(135deg, #001029 0%, #0a1e3a 50%, #15508f 100%)",
+                    background: `linear-gradient(135deg, ${BG_FROM} 0%, ${BG_MID} 55%, ${BG_TO} 100%)`,
                     padding: "60px 80px",
-                    color: "white",
+                    color: "#E5EEF8",
+                    fontFamily: "Inter, sans-serif",
                 }}
             >
+                {/* Brand row: real arcade.png glyph + ARCADE wordmark */}
                 <div
                     style={{
                         display: "flex",
                         alignItems: "center",
-                        fontSize: 28,
-                        fontWeight: 700,
-                        letterSpacing: 4,
                     }}
                 >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                        src={brandLogo}
+                        alt=""
+                        width={56}
+                        height={56}
+                        style={{
+                            width: 56,
+                            height: 56,
+                            marginRight: 16,
+                        }}
+                    />
                     <div
                         style={{
                             display: "flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            width: 44,
-                            height: 44,
-                            borderRadius: 10,
-                            background: "#2f7fd6",
-                            marginRight: 14,
-                            fontSize: 24,
+                            fontSize: 32,
+                            fontWeight: 800,
+                            letterSpacing: 6,
+                            color: "#E5EEF8",
                         }}
                     >
-                        A
+                        ARCADE
                     </div>
-                    <div style={{ display: "flex" }}>ARCADE</div>
                     {variant === "v4" && (
                         <div
                             style={{
                                 display: "flex",
-                                marginLeft: 14,
-                                padding: "4px 12px",
-                                borderRadius: 8,
-                                background: "rgba(47,127,214,0.2)",
+                                marginLeft: 18,
+                                padding: "6px 14px",
+                                borderRadius: 10,
+                                background: "rgba(47,127,214,0.18)",
                                 fontSize: 18,
+                                fontWeight: 700,
+                                letterSpacing: 2,
                                 color: "#9ecbff",
                             }}
                         >
@@ -94,12 +123,13 @@ export async function GET(req: NextRequest) {
                     )}
                 </div>
 
+                {/* Middle: token logo + name */}
                 <div
                     style={{
                         display: "flex",
                         alignItems: "center",
-                        marginTop: 60,
-                        marginBottom: 60,
+                        marginTop: 56,
+                        marginBottom: 56,
                     }}
                 >
                     {image ? (
@@ -107,14 +137,15 @@ export async function GET(req: NextRequest) {
                         <img
                             src={image}
                             alt=""
-                            width={220}
-                            height={220}
+                            width={240}
+                            height={240}
                             style={{
-                                width: 220,
-                                height: 220,
-                                borderRadius: 28,
+                                width: 240,
+                                height: 240,
+                                borderRadius: 32,
                                 objectFit: "cover",
-                                marginRight: 50,
+                                marginRight: 56,
+                                border: "2px solid rgba(255,255,255,0.12)",
                             }}
                         />
                     ) : (
@@ -123,42 +154,45 @@ export async function GET(req: NextRequest) {
                                 display: "flex",
                                 alignItems: "center",
                                 justifyContent: "center",
-                                width: 220,
-                                height: 220,
-                                borderRadius: 28,
-                                background:
-                                    "linear-gradient(135deg, #2f7fd6, #15508f)",
-                                fontSize: 110,
+                                width: 240,
+                                height: 240,
+                                borderRadius: 32,
+                                background: `linear-gradient(135deg, ${CTA} 0%, ${CTA_DEEP} 100%)`,
+                                fontSize: 130,
                                 fontWeight: 800,
-                                marginRight: 50,
+                                marginRight: 56,
+                                color: "#E5EEF8",
+                                border: "2px solid rgba(255,255,255,0.12)",
                             }}
                         >
-                            {symbol.replace(/^\$+/, "").charAt(0) || "?"}
+                            {cleanSymbol.charAt(0).toUpperCase()}
                         </div>
                     )}
                     <div
                         style={{
                             display: "flex",
                             flexDirection: "column",
-                            maxWidth: 640,
+                            maxWidth: 660,
                         }}
                     >
                         <div
                             style={{
                                 display: "flex",
-                                fontSize: 32,
-                                color: "#9ecbff",
-                                fontWeight: 600,
+                                fontSize: 34,
+                                color: "#42729A",
+                                fontWeight: 700,
+                                letterSpacing: 2,
                             }}
                         >
-                            ${symbol.replace(/^\$+/, "")}
+                            ${cleanSymbol}
                         </div>
                         <div
                             style={{
                                 display: "flex",
-                                fontSize: 64,
-                                fontWeight: 700,
-                                marginTop: 6,
+                                fontSize: 68,
+                                fontWeight: 800,
+                                marginTop: 8,
+                                lineHeight: 1.05,
                             }}
                         >
                             {name}
@@ -168,8 +202,8 @@ export async function GET(req: NextRequest) {
                                 style={{
                                     display: "flex",
                                     fontSize: 22,
-                                    color: "rgba(255,255,255,0.65)",
-                                    marginTop: 12,
+                                    color: TEXT_FAINT,
+                                    marginTop: 14,
                                 }}
                             >
                                 by @{creator}
@@ -178,6 +212,7 @@ export async function GET(req: NextRequest) {
                     </div>
                 </div>
 
+                {/* Footer: MC + CTA */}
                 <div
                     style={{
                         display: "flex",
@@ -197,8 +232,9 @@ export async function GET(req: NextRequest) {
                                 style={{
                                     display: "flex",
                                     fontSize: 18,
-                                    color: "rgba(255,255,255,0.6)",
-                                    letterSpacing: 2,
+                                    color: TEXT_MUTED,
+                                    letterSpacing: 4,
+                                    fontWeight: 600,
                                 }}
                             >
                                 MARKET CAP
@@ -206,9 +242,9 @@ export async function GET(req: NextRequest) {
                             <div
                                 style={{
                                     display: "flex",
-                                    fontSize: 44,
-                                    fontWeight: 700,
-                                    marginTop: 4,
+                                    fontSize: 46,
+                                    fontWeight: 800,
+                                    marginTop: 6,
                                 }}
                             >
                                 ${fdv}
@@ -220,11 +256,13 @@ export async function GET(req: NextRequest) {
                     <div
                         style={{
                             display: "flex",
-                            padding: "14px 26px",
+                            padding: "16px 28px",
                             borderRadius: 14,
-                            background: "#2f7fd6",
-                            fontSize: 22,
-                            fontWeight: 600,
+                            background: `linear-gradient(135deg, ${CTA} 0%, ${CTA_DEEP} 100%)`,
+                            fontSize: 24,
+                            fontWeight: 700,
+                            color: "#E5EEF8",
+                            boxShadow: "0 14px 20px -4px rgba(21, 80, 143, 0.6)",
                         }}
                     >
                         Trade on Arcade
