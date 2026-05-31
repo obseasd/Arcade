@@ -35,10 +35,11 @@ export function useMyHoldings(): { holdings: HoldingInfo[]; isLoading: boolean }
 
     const candidates = useMemo(() => {
         if (!account) return [];
-        const acc = account.toLowerCase();
-        // Exclude tokens the user launched - those show up in the
-        // "Launched by you" section.
-        return tokens.filter((t) => t.creator.toLowerCase() !== acc);
+        // Include EVERY token the user has a balance in, even ones they
+        // launched. Originally we excluded self-launches assuming they
+        // already showed in "Launched by you", but users buy back their
+        // own tokens and want to see the position alongside other holdings.
+        return tokens;
     }, [tokens, account]);
 
     const balanceCalls = useReadContracts({

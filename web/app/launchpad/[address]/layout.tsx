@@ -16,10 +16,10 @@ export async function generateMetadata(
         };
     }
 
-    const title = `$${data.symbol} — ${data.name} on Arcade`;
+    const title = `$${data.symbol} · ${data.name} on Arcade`;
     const description = data.marketCapFormatted
         ? `${data.name} ($${data.symbol}) · Market cap $${data.marketCapFormatted} · Trade on Arcade.`
-        : `${data.name} ($${data.symbol}) — Trade on Arcade.`;
+        : `${data.name} ($${data.symbol}) · Trade on Arcade.`;
     const imageUrl = buildOgImageUrl(data);
 
     return {

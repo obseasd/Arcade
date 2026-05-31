@@ -62,6 +62,36 @@ export function resolveIpfs(uri: string): string {
 }
 
 /**
+ * Resolve a metadataURI to the parsed JSON, supporting BOTH the inline
+ * data: URI shape AND the ipfs:// path. Inline is parsed synchronously
+ * just like parseInlineMetadata; ipfs:// is fetched via the public ipfs.io
+ * gateway with a hard timeout so a slow gateway doesn't hang the caller.
+ *
+ * Returns null if the URI shape is unsupported, the fetch fails, the
+ * response isn't valid JSON, or the timeout fires.
+ */
+export async function fetchMetadata(uri: string, timeoutMs = 5_000): Promise<TokenMetadata | null> {
+  if (!uri) return null;
+  const inline = parseInlineMetadata(uri);
+  if (inline) return inline;
+  if (uri.startsWith("ipfs://")) {
+    const url = resolveIpfs(uri);
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+      const res = await fetch(url, { signal: ctrl.signal });
+      if (!res.ok) return null;
+      return (await res.json()) as TokenMetadata;
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(t);
+    }
+  }
+  return null;
+}
+
+/**
  * Best-effort: returns just the image URL given the on-chain metadataURI.
  * Doesn't make network calls - for inline metadata it parses synchronously,
  * for URI-based metadata it returns the URI itself (caller can fetch).

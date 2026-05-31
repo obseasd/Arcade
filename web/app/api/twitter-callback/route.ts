@@ -14,7 +14,7 @@ import { V3_LOCKER_ABI, V3_POOL_ABI } from "@/lib/abis/v3";
 import { TWITTER_ESCROW_V3_ABI } from "@/lib/abis/twitterEscrowV3";
 import { arcTestnet } from "@/lib/chains";
 import { ADDRESSES } from "@/lib/constants";
-import { parseInlineMetadata } from "@/lib/metadata";
+import { fetchMetadata } from "@/lib/metadata";
 
 export const dynamic = "force-dynamic";
 
@@ -154,7 +154,11 @@ export async function GET(req: NextRequest) {
         end = start - 1n;
       }
     }
-    const metadata = parseInlineMetadata(metadataURI);
+    // Supports both inline data: and ipfs:// metadata URIs. Pinata uploads
+    // produce ipfs:// which the old parseInlineMetadata couldn't read,
+    // causing every claim with an IPFS metadata to fail with
+    // "slot_not_attributed" even when the handle was set correctly.
+    const metadata = await fetchMetadata(metadataURI);
     const expectedHandle = metadata?.slotTwitterHandles?.[slotIndex]?.toLowerCase();
     if (!expectedHandle) {
       return redirectBackWithError(origin, "slot_not_attributed");

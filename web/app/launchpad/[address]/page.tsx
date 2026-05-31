@@ -114,7 +114,13 @@ export default function TokenDetailPage() {
 
   // Live updates via WebSocket: bump refreshKey whenever a trade happens on
   // this token. The hooks downstream (volume, claimable, balances) refetch.
-  const bumpRefresh = useCallback(() => setRefreshKey((k) => k + 1), []);
+  // We ALSO call refetch on the core token state queries directly because
+  // they don't depend on refreshKey via their queryKey.
+  const bumpRefresh = useCallback(() => {
+    setRefreshKey((k) => k + 1);
+    tokenState.refetch();
+    mcapQ.refetch();
+  }, [tokenState, mcapQ]);
   useWatchEvent({
     address: isClanker ? (state?.v2Pair as Address | undefined) : undefined,
     event: V3_SWAP_EVT,
@@ -374,7 +380,7 @@ export default function TokenDetailPage() {
               symbol={symbol}
               pool={state.v2Pair as Address}
               image={image}
-              onTradeSuccess={() => setRefreshKey((k) => k + 1)}
+              onTradeSuccess={bumpRefresh}
             />
           ) : (
             <TradePanel
@@ -382,7 +388,7 @@ export default function TokenDetailPage() {
               symbol={symbol}
               migrated={migrated}
               image={image}
-              onTradeSuccess={() => setRefreshKey((k) => k + 1)}
+              onTradeSuccess={bumpRefresh}
             />
           )}
           {isClanker && (

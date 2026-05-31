@@ -1,5 +1,6 @@
 import { cn } from "@/lib/utils";
 import { TokenLogo } from "./TokenLogo";
+import { resolveIpfs } from "@/lib/metadata";
 
 /**
  * Known well-known tokens that ship with a real logo file in /public.
@@ -26,7 +27,10 @@ interface Props {
 }
 
 export function TokenIcon({ symbol, image, size = 32, className }: Props) {
-  const src = image || (symbol ? PNG_LOGOS[symbol.toUpperCase()] : undefined);
+  // Resolve ipfs:// to an HTTPS gateway since native <img> can't load the
+  // ipfs:// protocol. Pass through http(s):// and data: URLs untouched.
+  const rawImage = image ? resolveIpfs(image) : undefined;
+  const src = rawImage || (symbol ? PNG_LOGOS[symbol.toUpperCase()] : undefined);
   if (src) {
     return (
       // eslint-disable-next-line @next/next/no-img-element

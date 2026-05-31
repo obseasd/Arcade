@@ -2,7 +2,12 @@
 
 import { ExternalLink, ChevronDown, History, X } from "lucide-react";
 import { useEffect, useState } from "react";
-import { loadBridgeHistory, removeBridge, type HistoryEntry } from "@/lib/bridgeHistory";
+import {
+  BRIDGE_HISTORY_CHANGE_EVENT,
+  loadBridgeHistory,
+  removeBridge,
+  type HistoryEntry,
+} from "@/lib/bridgeHistory";
 import { getCctpChain } from "@/lib/cctp";
 import { ChainIcon } from "@/components/ui/ChainIcon";
 import { formatUSDC, cn } from "@/lib/utils";
@@ -18,12 +23,20 @@ export function BridgeHistory() {
 
   useEffect(() => {
     setEntries(loadBridgeHistory());
-    // Subscribe to storage events from other tabs.
+    // Subscribe to storage events from OTHER tabs.
     const onStorage = (e: StorageEvent) => {
       if (e.key === "arcade_bridge_history_v1") setEntries(loadBridgeHistory());
     };
+    // Subscribe to our custom event for SAME-tab updates. The native
+    // "storage" event never fires on the tab that wrote, so the user's
+    // own bridge would stay invisible until refresh without this.
+    const onChange = () => setEntries(loadBridgeHistory());
     window.addEventListener("storage", onStorage);
-    return () => window.removeEventListener("storage", onStorage);
+    window.addEventListener(BRIDGE_HISTORY_CHANGE_EVENT, onChange);
+    return () => {
+      window.removeEventListener("storage", onStorage);
+      window.removeEventListener(BRIDGE_HISTORY_CHANGE_EVENT, onChange);
+    };
   }, []);
 
   const dismiss = (id: string) => {

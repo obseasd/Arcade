@@ -13,7 +13,7 @@ import { LAUNCHPAD_ABI } from "@/lib/abis/launchpad";
 import { V4_LAUNCHPAD_ABI } from "@/lib/abis/v4Launchpad";
 import { ADDRESSES, USDC_DECIMALS } from "@/lib/constants";
 import { arcTestnet } from "@/lib/chains";
-import { parseInlineMetadata, resolveIpfs } from "@/lib/metadata";
+import { fetchMetadata, resolveIpfs } from "@/lib/metadata";
 
 const serverClient = createPublicClient({
     chain: arcTestnet,
@@ -84,7 +84,10 @@ export async function fetchV23TokenSeo(token: string): Promise<TokenSeoData | nu
         let creatorHandle: string | undefined;
         if (stateRes.status === "fulfilled") {
             const state = stateRes.value as { metadataURI?: string };
-            const meta = parseInlineMetadata(state?.metadataURI ?? "");
+            // fetchMetadata supports both inline data: and ipfs:// URIs;
+            // parseInlineMetadata used to be inline-only and silently
+            // dropped image + creator info from any Pinata-uploaded launch.
+            const meta = await fetchMetadata(state?.metadataURI ?? "");
             if (meta?.image) imageUrl = resolveIpfs(meta.image);
             if (meta?.creatorTwitter) {
                 creatorHandle = meta.creatorTwitter.replace(/^@/, "");
@@ -148,11 +151,19 @@ export async function fetchV4TokenSeo(token: string): Promise<TokenSeoData | nul
  * pass an explicit `siteUrl` if env happens not to be set.
  */
 export function buildOgImageUrl(data: TokenSeoData, siteUrl?: string): string {
+    // Resolution order: explicit caller-supplied URL, env var, Vercel
+    // automatic env vars, then a hardcoded prod fallback. Localhost is
+    // the LAST resort and only kicks in during local dev, never on a
+    // deployed instance. Critical because Discord / X fetch this URL
+    // server-side and a localhost link breaks every share preview.
     const base =
         siteUrl ??
         process.env.NEXT_PUBLIC_SITE_URL ??
-        process.env.VERCEL_URL ??
-        "http://localhost:3000";
+        (process.env.VERCEL_PROJECT_PRODUCTION_URL
+            ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
+            : undefined) ??
+        (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : undefined) ??
+        "https://arcade.trading";
     const origin = base.startsWith("http") ? base : `https://${base}`;
     const params = new URLSearchParams({
         name: data.name,

@@ -348,7 +348,7 @@ export function BridgeCard() {
 
   /**
    * Upper bound (in seconds) of the "normal" attestation window per source
-   * chain. Beyond this we tell the user we're still polling — drives the
+   * chain. Beyond this we tell the user we're still polling. Drives the
    * "Taking longer than usual" notice without making the user think
    * something's broken.
    */
@@ -662,7 +662,7 @@ export function BridgeCard() {
                   ? `Sending USDC on ${srcChain.name}…`
                   : step.kind === "attesting"
                     ? attestingSlow
-                      ? `Still waiting for Circle (${formatElapsed(attestElapsedSec)} elapsed, usual ${etaLabel(srcChain.id, fastTransfer)}). We keep polling every 6s — no action needed.`
+                      ? `Still waiting for Circle (${formatElapsed(attestElapsedSec)} elapsed, usual ${etaLabel(srcChain.id, fastTransfer)}). We keep polling every 6s, no action needed.`
                       : `Waiting for Circle's attestation (${etaLabel(srcChain.id, fastTransfer)})…`
                     : step.kind === "minting"
                       ? `Ready to claim on ${dstChain.name}. Click the button above.`

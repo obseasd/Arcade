@@ -31,17 +31,23 @@ export function CreatorEarningsCard() {
 
   const chartData = daily.map((d, i) => ({ x: i, y: d.amountUsd }));
 
+  // overflow stays visible at the OUTER level so the fee-split tooltip
+  // can escape the card bounds. The gradient is wrapped in its own
+  // clipping div so it still respects the card edges.
   return (
-    <div className="arc-card relative overflow-hidden p-5">
-      {/* Subtle blue flair in top-right - matches the rest of the app's tone. */}
+    <div className="arc-card relative p-5">
       <div
-        className="pointer-events-none absolute inset-0 opacity-50"
-        style={{
-          background:
-            "radial-gradient(ellipse at top right, rgba(21, 80, 143, 0.10), transparent 60%)",
-        }}
+        className="pointer-events-none absolute inset-0 overflow-hidden rounded-2xl opacity-50"
         aria-hidden
-      />
+      >
+        <div
+          className="absolute inset-0"
+          style={{
+            background:
+              "radial-gradient(ellipse at top right, rgba(21, 80, 143, 0.10), transparent 60%)",
+          }}
+        />
+      </div>
       <div className="relative">
         <div className="mb-4 flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -212,7 +218,7 @@ function FeeSplitBreakdown() {
         mode="Pump"
         creatorPct="0.5%"
         platformPct="0.5%"
-        note="Curve only — LP is burned at V2 migration."
+        note="Curve only. LP is burned at V2 migration."
       />
       <div className="border-t border-arc-border/60 pt-1.5 text-arc-text-faint">
         Multi-recipient launches: the 80% creator slice further splits per

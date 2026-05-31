@@ -340,7 +340,7 @@ function V4LaunchInner() {
                                 "rounded-xl bg-arc-primary px-4 py-3 text-sm font-medium text-white transition hover:bg-arc-primary/90 disabled:cursor-not-allowed disabled:opacity-50",
                             )}
                         >
-                            Step 1 — Create launch (pays {formatUSDC(CREATION_FEE_USDC)} USDC)
+                            Step 1: Create launch (pays {formatUSDC(CREATION_FEE_USDC)} USDC)
                         </button>
                     ) : (
                         <button
@@ -350,7 +350,7 @@ function V4LaunchInner() {
                                 "rounded-xl bg-arc-primary px-4 py-3 text-sm font-medium text-white transition hover:bg-arc-primary/90 disabled:cursor-not-allowed disabled:opacity-50",
                             )}
                         >
-                            Step 2 — Initialize pool
+                            Step 2: Initialize pool
                         </button>
                     )}
                     <TxStatus state={createState} />

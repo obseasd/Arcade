@@ -9,13 +9,13 @@ export async function generateMetadata(
 
     if (!data) {
         return {
-            title: "V4 Launch — Arcade",
+            title: "V4 Launch · Arcade",
             description: "Anti-sniper hook + single-sided locked LP. Trade on Arcade.",
         };
     }
 
-    const title = `$${data.symbol} — ${data.name} · V4 on Arcade`;
-    const description = `${data.name} ($${data.symbol}) — V4 launch with anti-sniper hook. Trade on Arcade.`;
+    const title = `$${data.symbol} · ${data.name} · V4 on Arcade`;
+    const description = `${data.name} ($${data.symbol}). V4 launch with anti-sniper hook. Trade on Arcade.`;
     const imageUrl = buildOgImageUrl(data);
 
     return {

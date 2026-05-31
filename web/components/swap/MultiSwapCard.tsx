@@ -14,6 +14,7 @@ import {
 import { MULTISWAP_ABI } from "@/lib/abis/multiSwap";
 import { ADDRESSES, MULTISWAP_MAX_INPUTS, USDC_DECIMALS } from "@/lib/constants";
 import { useV2Tokens } from "@/lib/hooks/useV2Tokens";
+import { useV3Tokens } from "@/lib/hooks/useV3Tokens";
 import { pushToast } from "@/lib/toast";
 import { TokenIcon } from "@/components/ui/TokenIcon";
 import { MultiTokenSelectModal } from "@/components/ui/MultiTokenSelectModal";
@@ -56,9 +57,22 @@ export function MultiSwapCard({ tab, onTabChange }: MultiSwapCardProps) {
   const { address: account } = useAccount();
   const publicClient = usePublicClient();
   const { tokens: v2Tokens } = useV2Tokens();
+  // Clanker V3 tokens have no V2 pair, so they're absent from useV2Tokens.
+  // The MultiSwap contract routes them via the V3SwapRouter (and now V4 too,
+  // via the V4 leg added in feat(swap)), so we surface them in the picker.
+  const { tokens: v3Tokens } = useV3Tokens();
   const { writeContractAsync } = useWriteContract();
 
-  const allTokens: TokenOption[] = useMemo(() => [USDC_TOKEN, EURC_TOKEN, ...v2Tokens], [v2Tokens]);
+  const allTokens: TokenOption[] = useMemo(() => {
+    // Dedup by lowercase address (a token could theoretically have BOTH a
+    // V2 pair and V3 pool listed, eg manually migrated tokens).
+    const map = new Map<string, TokenOption>();
+    [USDC_TOKEN, EURC_TOKEN, ...v2Tokens, ...v3Tokens].forEach((t) => {
+      const k = t.address.toLowerCase();
+      if (!map.has(k)) map.set(k, t);
+    });
+    return Array.from(map.values());
+  }, [v2Tokens, v3Tokens]);
 
   const [inputs, setInputs] = useState<InputRow[]>([]);
   const [outputToken, setOutputToken] = useState<TokenOption | null>(null);

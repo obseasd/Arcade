@@ -50,7 +50,7 @@ export function HoldingCard({ holding }: { holding: HoldingInfo }) {
                 <div className="mt-0.5 text-xs text-arc-text-muted">
                     {valueUsd !== undefined
                         ? `$${valueUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
-                        : "—"}
+                        : "-"}
                 </div>
             </div>
         </Link>

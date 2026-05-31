@@ -40,14 +40,23 @@ export function loadBridgeHistory(): HistoryEntry[] {
   }
 }
 
+/** Custom event the BridgeHistory component listens to. We fire it on every
+ *  `save` so same-tab updates are picked up immediately (the native
+ *  "storage" event only fires for OTHER tabs, leaving the active tab stale
+ *  until the user refreshes). */
+const CHANGE_EVENT = "arcade-bridge-history-changed";
+
 function save(entries: HistoryEntry[]): void {
   if (!isBrowser()) return;
   try {
     window.localStorage.setItem(KEY, JSON.stringify(entries.slice(0, MAX_ENTRIES)));
+    window.dispatchEvent(new CustomEvent(CHANGE_EVENT));
   } catch {
-    /* quota / privacy - ignore */
+    /* quota / privacy. ignore. */
   }
 }
+
+export const BRIDGE_HISTORY_CHANGE_EVENT = CHANGE_EVENT;
 
 /** Record a new bridge (call right after the burn confirms). */
 export function recordBridge(entry: Omit<HistoryEntry, "id">): string {
