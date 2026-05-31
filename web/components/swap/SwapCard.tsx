@@ -22,6 +22,7 @@ import { TokenSelectModal, TokenOption } from "@/components/ui/TokenSelectModal"
 import { TxStatus, type TxState } from "@/components/ui/TxStatus";
 import { SwapConfirmModal } from "./SwapConfirmModal";
 import { SwapTabs, type SwapTab } from "./SwapTabs";
+import { V4RoutingNotice } from "./V4RoutingNotice";
 import { cn, formatToken, formatUSDC } from "@/lib/utils";
 
 const USDC_TOKEN: TokenOption = {
@@ -477,6 +478,10 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
             : undefined
         }
       />
+
+      {/* V4 tokens trade on a separate pool the V2/V3 aggregator can't
+          reach yet - nudge the user to the V4 swap panel instead. */}
+      <V4RoutingNotice tokenIn={tokenIn.address} tokenOut={tokenOut?.address} />
 
       {/* Cross-protocol (V3<->V2) routes can't execute in one tx. */}
       {v3Unsupported && (
