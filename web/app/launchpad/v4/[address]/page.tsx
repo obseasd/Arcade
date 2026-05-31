@@ -233,25 +233,25 @@ function V4DetailInner() {
                 >
                     <ArrowLeft className="h-4 w-4" />
                 </Link>
-                <div className="flex flex-1 items-center gap-3">
+                <div className="flex min-w-0 flex-1 items-center gap-3">
                     <TokenIcon
                         image={image}
                         symbol={(symbolQ.data as string) ?? ""}
                         size={48}
                     />
-                    <div className="flex-1">
-                        <div className="flex items-center gap-2">
-                            <h1 className="text-2xl font-semibold">
+                    <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                            <h1 className="truncate text-xl font-semibold sm:text-2xl">
                                 {(nameQ.data as string) ?? <Skeleton className="h-6 w-32" />}
                             </h1>
                             <span className="rounded-md border border-arc-primary/40 bg-arc-primary/10 px-2 py-0.5 text-[10px] uppercase tracking-wider text-arc-primary">
                                 V4
                             </span>
                         </div>
-                        <div className="mt-0.5 flex items-center gap-2 text-xs text-arc-text-muted">
+                        <div className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-arc-text-muted">
                             <span>{(symbolQ.data as string) ?? "..."}</span>
                             <span>·</span>
-                            <span>{formatAddress(token)}</span>
+                            <span className="truncate">{formatAddress(token)}</span>
                         </div>
                     </div>
                 </div>

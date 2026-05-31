@@ -218,7 +218,8 @@ function V4LaunchInner() {
 
             <div className="space-y-5 rounded-2xl border border-arc-border bg-arc-surface p-6">
                 {/* Identity ----------------------------------------------- */}
-                <div className="grid grid-cols-2 gap-3">
+                {/* Stack on very narrow screens; side-by-side from sm (~640px) up. */}
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                     <label className="text-sm">
                         <span className="text-arc-text-muted">Name</span>
                         <input
