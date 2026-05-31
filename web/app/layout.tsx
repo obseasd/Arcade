@@ -32,10 +32,14 @@ export const metadata: Metadata = {
     type: "website",
   },
   twitter: {
-    card: "summary",
+    // summary_large_image so even non-token pages get a full-width preview
+    // when shared on X. Token detail pages override this with a per-token
+    // OG image generated via /api/og.
+    card: "summary_large_image",
     title: "Arcade",
     description: "DEX and token launchpad on Arc.",
     images: ["/arcade.png"],
+    site: "@arcade",
   },
 };
 
