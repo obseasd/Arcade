@@ -15,6 +15,7 @@ import { MULTISWAP_ABI } from "@/lib/abis/multiSwap";
 import { ADDRESSES, MULTISWAP_MAX_INPUTS, USDC_DECIMALS } from "@/lib/constants";
 import { useV2Tokens } from "@/lib/hooks/useV2Tokens";
 import { useV3Tokens } from "@/lib/hooks/useV3Tokens";
+import { V3_QUOTER_ABI } from "@/lib/abis/v3";
 import { pushToast } from "@/lib/toast";
 import { TokenIcon } from "@/components/ui/TokenIcon";
 import { MultiTokenSelectModal } from "@/components/ui/MultiTokenSelectModal";
@@ -60,7 +61,7 @@ export function MultiSwapCard({ tab, onTabChange }: MultiSwapCardProps) {
   // Clanker V3 tokens have no V2 pair, so they're absent from useV2Tokens.
   // The MultiSwap contract routes them via the V3SwapRouter (and now V4 too,
   // via the V4 leg added in feat(swap)), so we surface them in the picker.
-  const { tokens: v3Tokens } = useV3Tokens();
+  const { tokens: v3Tokens, isV3Token, feeOf } = useV3Tokens();
   const { writeContractAsync } = useWriteContract();
 
   const allTokens: TokenOption[] = useMemo(() => {
@@ -133,12 +134,86 @@ export function MultiSwapCard({ tab, onTabChange }: MultiSwapCardProps) {
     query: { enabled: !!outputToken && tupleArgs.length > 0 },
   });
   const quoteData = quoteQ.data as readonly [bigint, readonly bigint[]] | undefined;
-  const totalOutRaw: bigint = quoteData?.[0] ?? 0n;
+
+  // The contract's quoteSwapToSingle returns 0 for legs that touch a V3
+  // Clanker token (the comment in the contract spells this out: V3 routes
+  // need a separate quoter call, UI fills in). We fan out a V3 quoter call
+  // per leg whose input OR output is a V3 token, and merge the results
+  // into the totals below.
+  const v3QuoteContracts = useMemo(() => {
+    if (!outputToken) return [] as const;
+    const out: {
+      address: Address;
+      abi: typeof V3_QUOTER_ABI;
+      functionName: "quoteExactInputSingle" | "quoteExactInputThroughUsdc";
+      args: readonly [Address, Address, number, bigint];
+    }[] = [];
+    for (const t of tupleArgs) {
+      const inIsV3 = isV3Token(t.token);
+      const outIsV3 = isV3Token(outputToken.address);
+      if (!inIsV3 && !outIsV3) {
+        out.push(null as never); // placeholder so indices line up with tupleArgs
+        continue;
+      }
+      const v3Token = inIsV3 ? t.token : outputToken.address;
+      const fee = feeOf(v3Token);
+      const isUsdcHop =
+        t.token.toLowerCase() === ADDRESSES.usdc.toLowerCase() ||
+        outputToken.address.toLowerCase() === ADDRESSES.usdc.toLowerCase();
+      out.push({
+        address: ADDRESSES.v3Quoter,
+        abi: V3_QUOTER_ABI,
+        functionName: isUsdcHop
+          ? ("quoteExactInputSingle" as const)
+          : ("quoteExactInputThroughUsdc" as const),
+        args: [t.token, outputToken.address, fee, t.amount],
+      });
+    }
+    return out;
+  }, [tupleArgs, outputToken, isV3Token, feeOf]);
+
+  const v3QuoteCalls = useReadContracts({
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    contracts: v3QuoteContracts.filter(Boolean) as any,
+    query: {
+      enabled:
+        ADDRESSES.v3Quoter !== "0x0000000000000000000000000000000000000000" &&
+        v3QuoteContracts.some((c) => !!c),
+    },
+  });
+
+  // Merge: for each leg, prefer the V3 quoter result when this leg involves
+  // a V3 token, otherwise use the contract's perInput value.
+  const mergedQuote = useMemo(() => {
+    const per = quoteData?.[1];
+    const v3Results = v3QuoteCalls.data;
+    let total = 0n;
+    const perOut: bigint[] = [];
+    let v3Cursor = 0;
+    for (let i = 0; i < tupleArgs.length; i++) {
+      const v3Spec = v3QuoteContracts[i];
+      if (v3Spec) {
+        const r = v3Results?.[v3Cursor];
+        v3Cursor += 1;
+        const v3Amount =
+          r?.status === "success" ? ((r.result as bigint) ?? 0n) : 0n;
+        perOut.push(v3Amount);
+        total += v3Amount;
+      } else {
+        const fallback = per?.[i] ?? 0n;
+        perOut.push(fallback);
+        total += fallback;
+      }
+    }
+    return { total, perOut };
+  }, [quoteData, v3QuoteCalls.data, v3QuoteContracts, tupleArgs.length]);
+
+  const totalOutRaw: bigint = mergedQuote.total;
   // Note: `perInput` indexes into `tupleArgs`, not `inputs` (zero-amount rows were filtered).
   // We re-map back so each visible row knows its contribution.
   const perRowOut: (bigint | undefined)[] = useMemo(() => {
-    const per = quoteData?.[1];
-    if (!per) return inputs.map(() => undefined);
+    const per = mergedQuote.perOut;
+    if (per.length === 0) return inputs.map(() => undefined);
     const out: (bigint | undefined)[] = [];
     let cursor = 0;
     for (const row of inputs) {
@@ -154,7 +229,7 @@ export function MultiSwapCard({ tab, onTabChange }: MultiSwapCardProps) {
       }
     }
     return out;
-  }, [inputs, quoteData]);
+  }, [inputs, mergedQuote.perOut]);
 
   // ----- Slippage helpers -----
   const onSlippagePreset = (bps: number) => {
@@ -472,9 +547,15 @@ function InputBox({
             if (parts.length > 2) return;
             onAmountChange(v);
           }}
-          className="arc-input w-0 flex-1 bg-transparent text-2xl font-medium leading-tight sm:text-3xl"
+          className={cn(
+            "arc-input w-0 min-w-0 flex-1 bg-transparent font-medium leading-tight tabular-nums",
+            // Shrink the font as the amount grows so a 18-char balance
+            // like 557976.127802551570 stops clipping into the ticker
+            // chip. Native input scroll picks up past the smallest step.
+            multiInputSize(row.amountStr),
+          )}
         />
-        <div className="flex items-center gap-1.5">
+        <div className="flex shrink-0 items-center gap-1.5">
           <span className="flex items-center gap-2 rounded-xl bg-arc-surface-2 px-3 py-1.5 text-sm font-semibold">
             <TokenIcon symbol={row.token.symbol} size={20} />
             {row.token.symbol ?? "-"}
@@ -719,4 +800,16 @@ function formatTokenAmount(raw: bigint, decimals: number, fraction: number = 6):
 function shortSym(tokenAddr: Address, rows: InputRow[]): string {
   const row = rows.find((r) => r.token.address.toLowerCase() === tokenAddr.toLowerCase());
   return row?.token.symbol ?? "token";
+}
+
+/** Mirrors AmountInput's sizeFromLength but tuned slightly larger because
+ *  the MultiSwap inputs sit in a wider column on desktop. The mobile vs
+ *  desktop split is folded in here: small base sizes on phones, the full
+ *  3xl reserved for short values on desktop. */
+function multiInputSize(s: string): string {
+  const n = (s ?? "").length;
+  if (n <= 8) return "text-2xl sm:text-3xl";
+  if (n <= 12) return "text-xl sm:text-2xl";
+  if (n <= 16) return "text-lg sm:text-xl";
+  return "text-base sm:text-lg";
 }

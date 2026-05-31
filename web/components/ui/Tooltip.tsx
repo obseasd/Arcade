@@ -53,7 +53,12 @@ export function Tooltip({ children, content, side = "top", className }: Props) {
         <span
           role="tooltip"
           className={cn(
-            "pointer-events-none absolute z-50 w-max max-w-xs rounded-md border border-arc-border bg-arc-bg-elevated/95 px-2.5 py-1.5 text-[11px] font-normal leading-snug text-arc-text shadow-arc-card backdrop-blur-xl",
+            // z-[200] beats most adjacent stacking contexts so the popup
+            // doesn't get visually hidden under sibling cards even when the
+            // ancestor card creates a new layer via position:relative.
+            // Solid bg avoids see-through artefacts when the tooltip overlaps
+            // the card below it.
+            "pointer-events-none absolute z-[200] w-max max-w-xs rounded-md border border-arc-border bg-arc-bg-elevated px-2.5 py-1.5 text-[11px] font-normal leading-snug text-arc-text shadow-arc-card",
             side === "top" && "bottom-full left-1/2 mb-1.5 -translate-x-1/2",
             side === "bottom" && "left-1/2 top-full mt-1.5 -translate-x-1/2",
             side === "left" && "right-full top-1/2 mr-1.5 -translate-y-1/2",

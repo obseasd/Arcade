@@ -206,16 +206,22 @@ export default function TokenDetailPage() {
           {/* Header */}
           <div className="arc-card p-6">
             <div className="flex items-start gap-4">
-              {image ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={image}
-                  alt={symbol}
-                  className="h-20 w-20 rounded-2xl border border-arc-border object-cover"
-                  onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = "none")}
-                />
-              ) : (
-                <TokenIcon symbol={symbol} size={80} />
+              {/* TokenIcon resolves ipfs:// to a gateway internally so the
+                  raw <img> works for both inline data: and ipfs:// URLs.
+                  Without this, ipfs:// silently rendered nothing in the
+                  header even when useTokenImage returned a value. */}
+              <TokenIcon
+                symbol={symbol}
+                image={image}
+                size={80}
+                className="h-20 w-20 rounded-2xl border border-arc-border"
+              />
+              {/* Hidden span left for layout-stability when useTokenImage
+                  initially returns undefined and image hasn't resolved yet. */}
+              {false && (
+                <span className="hidden" aria-hidden>
+                  {symbol}
+                </span>
               )}
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-baseline gap-2">

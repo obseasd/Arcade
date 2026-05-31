@@ -19,7 +19,10 @@ import { formatUSDC, cn } from "@/lib/utils";
  */
 export function BridgeHistory() {
   const [entries, setEntries] = useState<HistoryEntry[]>([]);
-  const [expanded, setExpanded] = useState(false);
+  // Default to expanded so the user sees their most recent bridges
+  // immediately. Closing the panel hides every row (closed = empty,
+  // open = full list), so there's no half-state to confuse with.
+  const [expanded, setExpanded] = useState(true);
 
   useEffect(() => {
     setEntries(loadBridgeHistory());
@@ -46,7 +49,10 @@ export function BridgeHistory() {
 
   if (entries.length === 0) return null;
 
-  const visible = expanded ? entries : entries.slice(0, 3);
+  // Closed -> show nothing. Open -> show every entry. The user explicitly
+  // asked for this binary behaviour to avoid the half-collapsed "3 of 12"
+  // state that used to confuse what "recent" means.
+  const visible = expanded ? entries : [];
 
   return (
     <div className="mt-5 rounded-2xl border border-arc-border bg-black/15 backdrop-blur-xl">

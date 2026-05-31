@@ -30,7 +30,12 @@ export function TokenIcon({ symbol, image, size = 32, className }: Props) {
   // Resolve ipfs:// to an HTTPS gateway since native <img> can't load the
   // ipfs:// protocol. Pass through http(s):// and data: URLs untouched.
   const rawImage = image ? resolveIpfs(image) : undefined;
-  const src = rawImage || (symbol ? PNG_LOGOS[symbol.toUpperCase()] : undefined);
+  // Strip a leading "$" before looking up the symbol in PNG_LOGOS or
+  // falling back to the gradient initial. Otherwise "$PUMP" looks up as
+  // "$PUMP" (no match) and the placeholder shows "$" as the letter,
+  // which is what users see when a token had no logo upload.
+  const cleanSymbol = symbol?.replace(/^\$+/, "");
+  const src = rawImage || (cleanSymbol ? PNG_LOGOS[cleanSymbol.toUpperCase()] : undefined);
   if (src) {
     return (
       // eslint-disable-next-line @next/next/no-img-element
@@ -44,5 +49,6 @@ export function TokenIcon({ symbol, image, size = 32, className }: Props) {
       />
     );
   }
-  return <TokenLogo symbol={symbol ?? "?"} size={size} className={className} />;
+  // Pass cleanSymbol so the initial is "P" for "$PUMP" rather than "$".
+  return <TokenLogo symbol={cleanSymbol ?? "?"} size={size} className={className} />;
 }

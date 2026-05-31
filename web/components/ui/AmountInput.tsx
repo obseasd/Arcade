@@ -69,10 +69,16 @@ export function AmountInput({
             if (parts.length > 2) return;
             onChange(v);
           }}
-          className="arc-input flex-1 text-3xl font-medium"
+          className={cn(
+            "arc-input min-w-0 flex-1 font-medium tabular-nums",
+            // Auto-shrink the font as the typed amount grows so we don't
+            // run out of horizontal space and clip into the ticker chip.
+            // Stays at text-3xl for normal-length values, then steps down.
+            sizeFromLength(value),
+          )}
         />
         {rightAccessory ?? (
-          <div className="flex items-center gap-1.5 rounded-xl bg-arc-surface-2 px-3 py-1.5 text-sm font-medium text-arc-text">
+          <div className="flex shrink-0 items-center gap-1.5 rounded-xl bg-arc-surface-2 px-3 py-1.5 text-sm font-medium text-arc-text">
             <TokenIcon symbol={symbol} image={image} size={18} />
             {symbol}
           </div>
@@ -80,4 +86,19 @@ export function AmountInput({
       </div>
     </div>
   );
+}
+
+/**
+ * Returns a Tailwind font-size class chosen by the typed amount's length.
+ * Hand-tuned breakpoints so 18-char balances (eg "557976.127802551570")
+ * stay readable instead of clipping under the ticker chip on the right.
+ * Past the smallest step the native input's horizontal scroll takes over,
+ * so the most recent digits stay visible while the user types.
+ */
+function sizeFromLength(s: string): string {
+  const n = (s ?? "").length;
+  if (n <= 8) return "text-3xl";
+  if (n <= 12) return "text-2xl";
+  if (n <= 16) return "text-xl";
+  return "text-base";
 }
