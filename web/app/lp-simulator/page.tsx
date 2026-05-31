@@ -8,12 +8,19 @@ import { LiquidityChart } from "@/components/lp-simulator/LiquidityChart";
 import { PositionsList } from "@/components/lp-simulator/PositionsList";
 import { SidebarPanel } from "@/components/lp-simulator/SidebarPanel";
 import { SimulationPanel } from "@/components/lp-simulator/SimulationPanel";
+import { cn } from "@/lib/utils";
 
 const DEFAULT_PRESET = getPreset(DEFAULT_PRESET_ID)!;
+
+type MobileTab = "setup" | "chart" | "simulate";
 
 export default function LpSimulatorPage() {
   const [presetId, setPresetId] = useState<string>(DEFAULT_PRESET.id);
   const [config, setConfig] = useState<SimulatorConfig>(DEFAULT_PRESET.config);
+  // On lg+ all three panels render side-by-side; below lg we use a tab
+  // strip so the user only sees one panel at a time instead of scrolling
+  // 2000+ px through Setup → Chart → Simulate.
+  const [mobileTab, setMobileTab] = useState<MobileTab>("chart");
 
   const onPreset = (p: PresetDef) => {
     setPresetId(p.id);
@@ -40,16 +47,38 @@ export default function LpSimulatorPage() {
         </p>
       </header>
 
-      <div className="grid gap-5 lg:grid-cols-[280px_minmax(0,1fr)_300px]">
-        <SidebarPanel
-          config={config}
-          presetId={presetId}
-          onPreset={onPreset}
-          onConfigChange={setConfig}
-          onReset={onReset}
-        />
+      {/* Mobile-only tab strip. Hidden on lg+ where the 3 panels fit
+          side-by-side. Order matches the natural flow: configure → see the
+          curve → run scenarios. */}
+      <div className="mb-4 flex gap-1 rounded-xl border border-arc-border bg-arc-bg-elevated p-1 lg:hidden">
+        {(["setup", "chart", "simulate"] as MobileTab[]).map((t) => (
+          <button
+            key={t}
+            onClick={() => setMobileTab(t)}
+            className={cn(
+              "flex-1 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors",
+              mobileTab === t
+                ? "bg-arc-primary text-white"
+                : "text-arc-text-muted hover:bg-arc-surface hover:text-arc-text",
+            )}
+          >
+            {t === "setup" ? "Setup" : t === "chart" ? "Chart" : "Simulate"}
+          </button>
+        ))}
+      </div>
 
-        <div className="space-y-4">
+      <div className="grid gap-5 lg:grid-cols-[280px_minmax(0,1fr)_300px]">
+        <div className={cn(mobileTab === "setup" ? "block" : "hidden", "lg:block")}>
+          <SidebarPanel
+            config={config}
+            presetId={presetId}
+            onPreset={onPreset}
+            onConfigChange={setConfig}
+            onReset={onReset}
+          />
+        </div>
+
+        <div className={cn("space-y-4", mobileTab === "chart" ? "block" : "hidden", "lg:block")}>
           <div className="arc-card p-5">
             <div className="mb-3 flex items-center justify-between">
               <h3 className="text-sm font-semibold">Liquidity Distribution</h3>
@@ -85,7 +114,9 @@ export default function LpSimulatorPage() {
           <ExportConfig config={config} />
         </div>
 
-        <SimulationPanel config={config} quotePriceUsd={1} quoteSymbol="USDC" />
+        <div className={cn(mobileTab === "simulate" ? "block" : "hidden", "lg:block")}>
+          <SimulationPanel config={config} quotePriceUsd={1} quoteSymbol="USDC" />
+        </div>
       </div>
     </div>
   );

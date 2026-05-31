@@ -458,7 +458,7 @@ function InputBox({
             if (parts.length > 2) return;
             onAmountChange(v);
           }}
-          className="arc-input w-0 flex-1 bg-transparent text-3xl font-medium leading-tight"
+          className="arc-input w-0 flex-1 bg-transparent text-2xl font-medium leading-tight sm:text-3xl"
         />
         <div className="flex items-center gap-1.5">
           <span className="flex items-center gap-2 rounded-xl bg-arc-surface-2 px-3 py-1.5 text-sm font-semibold">
@@ -467,7 +467,7 @@ function InputBox({
           </span>
           <button
             onClick={onRemove}
-            className="flex h-6 w-6 items-center justify-center rounded-full bg-arc-surface-2/60 text-arc-text-muted opacity-70 transition-all hover:bg-arc-danger/20 hover:text-arc-danger hover:opacity-100"
+            className="flex h-8 w-8 items-center justify-center rounded-full bg-arc-surface-2/60 text-arc-text-muted opacity-70 transition-all hover:bg-arc-danger/20 hover:text-arc-danger hover:opacity-100 sm:h-6 sm:w-6"
             title="Remove this token"
           >
             <XIcon className="h-3 w-3" />
@@ -507,7 +507,7 @@ function PlaceholderInputBox({ onClick }: { onClick: () => void }) {
   return (
     <div className="rounded-2xl border border-arc-border bg-white/[0.015] p-4">
       <div className="flex items-center justify-between">
-        <span className="text-3xl font-medium leading-tight text-arc-text-faint">0.0</span>
+        <span className="text-2xl font-medium leading-tight text-arc-text-faint sm:text-3xl">0.0</span>
         <button
           onClick={onClick}
           className="group flex items-center gap-2 rounded-xl bg-arc-surface-2 px-3 py-1.5 text-sm font-semibold transition-colors hover:bg-arc-surface-3"
@@ -576,7 +576,10 @@ function QuickButton({
       onClick={onClick}
       disabled={disabled || !onClick}
       className={cn(
-        "rounded-md px-2 py-1 text-[11px] font-semibold uppercase tracking-wide transition-all",
+        // Bigger touch target on mobile (~36px tall), back to compact on
+        // sm: up. Apple HIG asks for 44px but our 36px+padding sits in
+        // the acceptable range for inline secondary actions.
+        "rounded-md px-2.5 py-1.5 text-[11px] font-semibold uppercase tracking-wide transition-all sm:px-2 sm:py-1",
         "bg-arc-surface text-arc-text-muted",
         "hover:bg-arc-cta hover:text-white",
         "active:scale-90 active:bg-arc-cta-hover",
