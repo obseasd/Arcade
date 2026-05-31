@@ -6,7 +6,7 @@ import {ArcadeV2Factory} from "../src/dex/ArcadeV2Factory.sol";
 import {ArcadeV2Router} from "../src/dex/ArcadeV2Router.sol";
 import {ArcadeLaunchpad} from "../src/launchpad/ArcadeLaunchpad.sol";
 import {IArcadeLaunchpad} from "../src/launchpad/interfaces/IArcadeLaunchpad.sol";
-import {ArcadeMultiSwap} from "../src/swap/ArcadeMultiSwap.sol";
+import {ArcadeMultiSwap, IArcadeV4SwapRouterMin, IArcadeV4LaunchpadMin} from "../src/swap/ArcadeMultiSwap.sol";
 import {ArcadeTokenVault} from "../src/launchpad/ArcadeTokenVault.sol";
 import {IArcadeV3Factory, IArcadeV3Router} from "../src/v3/interfaces/IArcadeV3Minimal.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -59,8 +59,20 @@ contract DeployTestnet is Script {
 
         // MultiSwap depends on the V3 router (so it can route Clanker V3 tokens
         // that have no V2 pair). Deployed AFTER v3Router is wired.
+        // Optional V4 stack. Set V4_ROUTER + V4_LAUNCHPAD when the V4 deploy
+        // has run; otherwise leave at address(0) and the aggregator skips
+        // the V4 leg (the frontend already shows a "use V4 swap panel" nudge
+        // when the user picks a V4 token in that case).
+        address v4Router = vm.envOr("V4_ROUTER", address(0));
+        address v4Launchpad = vm.envOr("V4_LAUNCHPAD", address(0));
         ArcadeMultiSwap multiSwap = new ArcadeMultiSwap(
-            IERC20(usdc), factory, router, IArcadeLaunchpad(address(launchpad)), IArcadeV3Router(v3Router)
+            IERC20(usdc),
+            factory,
+            router,
+            IArcadeLaunchpad(address(launchpad)),
+            IArcadeV3Router(v3Router),
+            IArcadeV4SwapRouterMin(v4Router),
+            IArcadeV4LaunchpadMin(v4Launchpad)
         );
         // Enable the 2% and 3% fee tiers (1% is on by default in the V3 factory).
         IArcadeV3Factory(v3Factory).enableFeeAmount(20_000, 200);

@@ -7,7 +7,7 @@ import {ArcadeV2Factory} from "../src/dex/ArcadeV2Factory.sol";
 import {ArcadeV2Router} from "../src/dex/ArcadeV2Router.sol";
 import {ArcadeLaunchpad} from "../src/launchpad/ArcadeLaunchpad.sol";
 import {IArcadeLaunchpad} from "../src/launchpad/interfaces/IArcadeLaunchpad.sol";
-import {ArcadeMultiSwap} from "../src/swap/ArcadeMultiSwap.sol";
+import {ArcadeMultiSwap, IArcadeV4SwapRouterMin, IArcadeV4LaunchpadMin} from "../src/swap/ArcadeMultiSwap.sol";
 import {IArcadeV3Factory, IArcadeV3Router} from "../src/v3/interfaces/IArcadeV3Minimal.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
@@ -45,8 +45,10 @@ contract ArcadeMultiSwapTest is Test {
             factory,
             router,
             IArcadeLaunchpad(address(launchpad)),
-            // V3 router is unused in these tests (no Clanker V3 launches here).
-            IArcadeV3Router(address(0))
+            // V3 + V4 are unused in these tests (no Clanker V3 or V4 launches).
+            IArcadeV3Router(address(0)),
+            IArcadeV4SwapRouterMin(address(0)),
+            IArcadeV4LaunchpadMin(address(0))
         );
         usdc.mint(alice, 1_000_000e6);
         usdc.mint(bob, 1_000_000e6);

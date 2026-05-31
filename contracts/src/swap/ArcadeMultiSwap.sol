@@ -17,6 +17,48 @@ interface ILaunchpadExtra {
     function isMigrated(address token) external view returns (bool);
 }
 
+/// @dev V4 PoolKey on the wire. Upstream v4-core types this as
+///      `(Currency, Currency, uint24, int24, IHooks)` where `Currency is
+///      address`. Our local declaration uses raw addresses for both ends
+///      (ABI-compatible because the encoding is identical), so MultiSwap
+///      doesn't need to compile against v4-core's 0.8.26 types from inside
+///      this 0.8.24 profile.
+struct V4PoolKey {
+    address currency0;
+    address currency1;
+    uint24 fee;
+    int24 tickSpacing;
+    address hooks;
+}
+
+/// @dev Minimal slice of `ArcadeV4Launchpad` we need to look up a launch's
+///      PoolKey. The returned struct's shape MUST match the upstream
+///      ArcadeV4Launchpad.Launch layout exactly so ABI decoding succeeds.
+interface IArcadeV4LaunchpadMin {
+    struct Launch {
+        address token;
+        address creator;
+        V4PoolKey poolKey;
+        uint16 snipeStartBps;
+        uint32 snipeDecaySeconds;
+        uint64 launchedAt;
+        uint16 creatorBps;
+    }
+    function getLaunch(address token) external view returns (Launch memory);
+}
+
+/// @dev Minimal slice of `ArcadeV4SwapRouter` we need to route a V4 leg.
+interface IArcadeV4SwapRouterMin {
+    function exactInputSingle(
+        V4PoolKey calldata key,
+        bool zeroForOne,
+        uint256 amountIn,
+        uint256 minAmountOut,
+        address recipient,
+        uint160 sqrtPriceLimitX96
+    ) external returns (uint256 amountOut);
+}
+
 /**
  * @title ArcadeMultiSwap
  * @notice Atomic N-input -> 1-output swap router. Each input is routed
@@ -47,6 +89,15 @@ contract ArcadeMultiSwap is ReentrancyGuard {
     /// @notice ArcadeV3SwapRouter — required to route Clanker V3 launch tokens.
     /// May be the zero address on deployments that don't use V3.
     IArcadeV3Router public immutable v3Router;
+    /// @notice ArcadeV4SwapRouter — required to route V4 launch tokens. May
+    ///         be address(0) on deployments without the V4 stack; in that
+    ///         case `_isV4LaunchToken` always returns false and the V4
+    ///         dispatch is dead code.
+    IArcadeV4SwapRouterMin public immutable v4Router;
+    /// @notice ArcadeV4Launchpad — used to look up a token's PoolKey when
+    ///         we route a V4 leg. May be address(0) - same semantics as
+    ///         v4Router (V4 dispatch is gated on BOTH being set).
+    IArcadeV4LaunchpadMin public immutable v4Launchpad;
     /// @notice V3 fee tier used for all Clanker V3 pools (1%). Matches the
     /// launchpad constant.
     uint24 public constant V3_FEE = 10_000;
@@ -73,12 +124,24 @@ contract ArcadeMultiSwap is ReentrancyGuard {
         uint256 totalOut
     );
 
+    /// @param v3Router_     ArcadeV3SwapRouter — `address(0)` to disable the
+    ///                      V3 leg entirely (Clanker V3 launches won't be
+    ///                      routable).
+    /// @param v4Router_     ArcadeV4SwapRouter — `address(0)` to disable the
+    ///                      V4 leg entirely (V4 launches won't be routable
+    ///                      through this aggregator; the frontend nudges
+    ///                      users to the per-token V4 swap panel in that case).
+    /// @param v4Launchpad_  ArcadeV4Launchpad — same opt-in semantics as
+    ///                      `v4Router_`. Both must be set together; if either
+    ///                      is zero, V4 dispatch is skipped.
     constructor(
         IERC20 usdc_,
         IArcadeV2Factory v2Factory_,
         IArcadeV2Router v2Router_,
         IArcadeLaunchpad launchpad_,
-        IArcadeV3Router v3Router_
+        IArcadeV3Router v3Router_,
+        IArcadeV4SwapRouterMin v4Router_,
+        IArcadeV4LaunchpadMin v4Launchpad_
     ) {
         if (
             address(usdc_) == address(0)
@@ -91,6 +154,8 @@ contract ArcadeMultiSwap is ReentrancyGuard {
         v2Router = v2Router_;
         launchpad = launchpad_;
         v3Router = v3Router_; // may be address(0) on deployments without V3
+        v4Router = v4Router_; // may be address(0) - see _isV4LaunchToken
+        v4Launchpad = v4Launchpad_;
     }
 
     /**
@@ -143,10 +208,31 @@ contract ArcadeMultiSwap is ReentrancyGuard {
         return v2Factory.getPair(token, address(USDC)) == address(0);
     }
 
+    /// @dev Returns true iff `token` is registered in the V4 launchpad and
+    ///      therefore trades only on a V4 pool. Cheap: a single SLOAD on the
+    ///      launchpad's `launches` mapping. Short-circuits to false when the
+    ///      V4 stack isn't wired into this aggregator.
+    function _isV4LaunchToken(address token) internal view returns (bool) {
+        if (address(v4Launchpad) == address(0) || address(v4Router) == address(0)) return false;
+        if (token == address(USDC)) return false; // USDC never the launch token
+        // getLaunch returns a zeroed Launch struct (token == address(0)) when
+        // the address isn't registered.
+        IArcadeV4LaunchpadMin.Launch memory l = v4Launchpad.getLaunch(token);
+        return l.token == token;
+    }
+
     /// @dev Picks the best route for a single (tokenIn -> tokenOut) leg and
     /// executes it. Output is sent to `address(this)` so the caller can
     /// accumulate before forwarding.
     function _routeOne(address tokenIn, address tokenOut, uint256 amountIn, uint256 deadline) internal returns (uint256) {
+        // 0) V4 takes priority: any leg touching a V4 launch routes through
+        // the V4 swap router (potentially via USDC for cross-version legs).
+        bool inIsV4 = _isV4LaunchToken(tokenIn);
+        bool outIsV4 = _isV4LaunchToken(tokenOut);
+        if (inIsV4 || outIsV4) {
+            return _swapV4Path(tokenIn, tokenOut, amountIn, inIsV4, outIsV4, deadline);
+        }
+
         // 1) Clanker V3 launches have no V2 pair — route via the V3 router.
         bool inIsV3 = _isV3LaunchToken(tokenIn);
         bool outIsV3 = _isV3LaunchToken(tokenOut);
@@ -171,6 +257,66 @@ contract ArcadeMultiSwap is ReentrancyGuard {
         }
 
         return _swapV2(tokenIn, tokenOut, amountIn, /*viaUsdc=*/ true, deadline);
+    }
+
+    /// @dev Dispatch for legs touching a V4 launch. Cases:
+    ///        (V4, USDC)  -> single V4 swap
+    ///        (USDC, V4)  -> single V4 swap
+    ///        (V4, V4)    -> V4 swap to USDC, then USDC -> V4
+    ///        (V4, other) -> V4 swap to USDC, then USDC -> other via V2/V3
+    ///        (other, V4) -> other -> USDC via V2/V3, then USDC -> V4
+    function _swapV4Path(
+        address tokenIn,
+        address tokenOut,
+        uint256 amountIn,
+        bool inIsV4,
+        bool outIsV4,
+        uint256 deadline
+    ) internal returns (uint256) {
+        // V4 <-> USDC: one V4 hop.
+        if (tokenIn == address(USDC) || tokenOut == address(USDC)) {
+            return _swapV4Single(tokenIn, tokenOut, amountIn);
+        }
+
+        // V4 <-> V4: pivot through USDC, both legs on V4.
+        if (inIsV4 && outIsV4) {
+            uint256 usdcOut = _swapV4Single(tokenIn, address(USDC), amountIn);
+            return _swapV4Single(address(USDC), tokenOut, usdcOut);
+        }
+
+        // Mixed: V4 leg + V2/V3 leg, pivoting through USDC. We recurse into
+        // `_routeOne` for the non-V4 leg so it gets the existing V2/V3 path
+        // selection (direct, migrated, multi-hop, etc).
+        if (inIsV4) {
+            uint256 usdcOut = _swapV4Single(tokenIn, address(USDC), amountIn);
+            return _routeOne(address(USDC), tokenOut, usdcOut, deadline);
+        }
+        // outIsV4
+        uint256 usdcMid = _routeOne(tokenIn, address(USDC), amountIn, deadline);
+        return _swapV4Single(address(USDC), tokenOut, usdcMid);
+    }
+
+    /// @dev Execute a single V4 swap between `tokenIn` and `tokenOut`, one
+    ///      of which is USDC and the other a registered V4 launch. Looks up
+    ///      the PoolKey from the launchpad and derives `zeroForOne` from the
+    ///      key's currency sort.
+    function _swapV4Single(address tokenIn, address tokenOut, uint256 amountIn)
+        internal
+        returns (uint256)
+    {
+        address v4Token = tokenIn == address(USDC) ? tokenOut : tokenIn;
+        IArcadeV4LaunchpadMin.Launch memory l = v4Launchpad.getLaunch(v4Token);
+        // zeroForOne == true iff tokenIn is currency0 of the pool.
+        bool zeroForOne = tokenIn == l.poolKey.currency0;
+        IERC20(tokenIn).forceApprove(address(v4Router), amountIn);
+        return v4Router.exactInputSingle(
+            l.poolKey,
+            zeroForOne,
+            amountIn,
+            0, // aggregator-internal slippage = 0; final slippage at swapToSingle
+            address(this),
+            0  // sqrtPriceLimitX96 = unlimited within tick range
+        );
     }
 
     /// @dev Helper for the two V2 paths (direct or via USDC).
