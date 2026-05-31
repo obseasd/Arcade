@@ -50,7 +50,7 @@ contract MockLaunchpad is ILaunchpadSnipe {
         return bps[token];
     }
 
-    function treasury() external view override returns (address) {
+    function treasury() external view returns (address) {
         return treasury_;
     }
 }

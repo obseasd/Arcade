@@ -14,13 +14,15 @@ import {Hooks} from "v4-core/libraries/Hooks.sol";
  *         encodes exactly the permission flags it declares.
  *
  *         V4's PoolManager checks the hook ADDRESS' low 14 bits against the
- *         permissions a hook claims. For our hook we want only
- *         BEFORE_SWAP_FLAG (bit 7) set. The deployer mines a salt off-chain
- *         until they find one that produces such an address, then deploys
- *         with that salt via CREATE2.
+ *         permissions a hook claims. For our hook we want exactly four bits
+ *         set: BEFORE_SWAP_FLAG (7), AFTER_SWAP_FLAG (6),
+ *         BEFORE_SWAP_RETURNS_DELTA_FLAG (3), AFTER_SWAP_RETURNS_DELTA_FLAG
+ *         (2). The deployer mines a salt off-chain until the resulting
+ *         CREATE2 address has those four bits set (and only those four).
  *
- *         At the search space size for one flag set (1/2^13 ≈ 1 in 8192),
- *         this typically finds a match in well under a second.
+ *         At the search space size for exact-match across all 14 low bits
+ *         (1/2^14 = 1 in 16384), this typically finds a match in well under
+ *         a second; MAX_ATTEMPTS = 200_000 leaves a 12x safety margin.
  *
  *         Usage:
  *           FOUNDRY_PROFILE=v4 \

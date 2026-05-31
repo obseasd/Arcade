@@ -429,8 +429,12 @@ contract ArcadeV4Launchpad is ILaunchpadSnipe, IUnlockCallback, ReentrancyGuard 
         return (uint256(l.snipeStartBps) * (l.snipeDecaySeconds - elapsed)) / l.snipeDecaySeconds;
     }
 
-    /// @notice Treasury that receives the hook's snipe skims.
-    function treasury() external view override returns (address) {
+    /// @notice Treasury that received the launch's creation fee. Indexer
+    ///         convenience: the hook no longer reads this (it caches its
+    ///         own immutable TREASURY at construction - audit fix #3) but
+    ///         it stays public so dashboards can show "launches that paid
+    ///         their fee to <treasury>".
+    function treasury() external view returns (address) {
         return TREASURY;
     }
 

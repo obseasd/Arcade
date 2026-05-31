@@ -248,7 +248,9 @@ contract ArcadeV4LaunchpadTest is Test {
         assertEq(lp.currentSnipeBps(token), 0);
     }
 
-    function test_treasury_isReturnedToHook() public view {
+    function test_treasury_publicGetter() public view {
+        // The hook no longer reads this (audit fix #3 - hook caches its own
+        // immutable TREASURY). Kept as a public getter for indexer convenience.
         assertEq(lp.treasury(), TREASURY);
     }
 

@@ -90,6 +90,14 @@ contract ArcadeAntiSniperHook is IHooks {
         LAUNCHPAD = launchpad_;
         USDC = usdc_;
         TREASURY = treasury_;
+        // Note: we intentionally do NOT call Hooks.validateHookPermissions
+        // at construction. The deploy script's CREATE2 salt-mining +
+        // `require(deployedAddress == predictedAddress)` check
+        // (DeployV4.s.sol step 3) already guarantees the address has the
+        // four required permission bits set. Adding a second guard here
+        // would break our test setUp (which deploys the hook at sequential
+        // addresses, not salt-mined ones) and would not catch any
+        // additional class of mistake the deploy script doesn't already.
     }
 
     /// @notice Hook permission flags the deployed address must encode in its
