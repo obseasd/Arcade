@@ -65,17 +65,12 @@ export function TokenCard({ token, curveSupply }: Props) {
       )}
     >
       <div className="flex items-start gap-3">
-        {image ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={image}
-            alt={symbol}
-            className="h-14 w-14 rounded-xl border border-arc-border object-cover"
-            onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = "none")}
-          />
-        ) : (
-          <TokenIcon symbol={symbol} size={56} />
-        )}
+        <TokenIcon
+          symbol={symbol}
+          image={image}
+          size={56}
+          className="rounded-xl border border-arc-border"
+        />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <div className="truncate font-semibold">{token.name ?? "Unnamed"}</div>
