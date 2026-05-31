@@ -74,7 +74,11 @@ contract ArcadeTwitterEscrowV3Test is Test {
         usdc = new MockUSDC();
         clanker = new MockClanker();
 
-        escrow = new ArcadeTwitterEscrowV3(address(locker), signer, OWNER);
+        // V3 escrow's LOCKER is settable-once. Production flow: deploy
+        // escrow, deploy locker pointing to escrow address, then setLocker.
+        escrow = new ArcadeTwitterEscrowV3(signer, OWNER);
+        vm.prank(OWNER);
+        escrow.setLocker(address(locker));
     }
 
     // ============= helpers =================
@@ -107,6 +111,33 @@ contract ArcadeTwitterEscrowV3Test is Test {
         bytes32 digest = MessageHashUtils.toTypedDataHash(escrow.DOMAIN_SEPARATOR(), structHash);
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(signerPk, digest);
         return abi.encodePacked(r, s, v);
+    }
+
+    // ============= setLocker one-shot =================
+
+    function test_setLocker_revertsOnSecondCall() public {
+        vm.prank(OWNER);
+        vm.expectRevert(ArcadeTwitterEscrowV3.LockerAlreadySet.selector);
+        escrow.setLocker(address(0xDEAD));
+    }
+
+    function test_setLocker_revertsOnNonOwner() public {
+        ArcadeTwitterEscrowV3 fresh = new ArcadeTwitterEscrowV3(signer, OWNER);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, address(this)));
+        fresh.setLocker(address(0xDEAD));
+    }
+
+    function test_setLocker_revertsOnZero() public {
+        ArcadeTwitterEscrowV3 fresh = new ArcadeTwitterEscrowV3(signer, OWNER);
+        vm.prank(OWNER);
+        vm.expectRevert(ArcadeTwitterEscrowV3.ZeroAddress.selector);
+        fresh.setLocker(address(0));
+    }
+
+    function test_creditSlot_revertsBeforeSetLocker() public {
+        ArcadeTwitterEscrowV3 fresh = new ArcadeTwitterEscrowV3(signer, OWNER);
+        vm.expectRevert(ArcadeTwitterEscrowV3.LockerNotSet.selector);
+        fresh.creditSlot(1, 0, address(usdc), 100);
     }
 
     // ============= F-3: per-slot accounting =================

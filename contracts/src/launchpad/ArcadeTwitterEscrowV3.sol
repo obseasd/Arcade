@@ -60,9 +60,14 @@ contract ArcadeTwitterEscrowV3 is Ownable2Step, Pausable, ReentrancyGuard {
     using ECDSA for bytes32;
     using SafeERC20 for IERC20;
 
-    // ====================== Immutable wiring ======================
+    // ====================== Wiring ======================
 
-    address public immutable LOCKER;
+    /// @notice Authorised depositor (the V3 locker). Settable ONCE post-
+    ///         construct via `setLocker` to resolve the mutual constructor
+    ///         dependency with the locker (locker needs the escrow address;
+    ///         escrow needs the locker address). After the first set, this
+    ///         is effectively immutable.
+    address public LOCKER;
     bytes32 private immutable _DOMAIN_SEPARATOR_CACHED;
     uint256 private immutable _CACHED_CHAIN_ID;
 
@@ -136,6 +141,7 @@ contract ArcadeTwitterEscrowV3 is Ownable2Step, Pausable, ReentrancyGuard {
     event Credited(uint256 indexed positionId, uint256 indexed slotIndex, address indexed token, uint256 amount);
     event TrustedSignerUpdated(address indexed previous, address indexed next);
     event RotationFailed(uint256 indexed positionId, uint256 indexed slotIndex, bytes reason);
+    event LockerSet(address indexed locker);
 
     // ====================== Errors ======================
 
@@ -145,6 +151,8 @@ contract ArcadeTwitterEscrowV3 is Ownable2Step, Pausable, ReentrancyGuard {
     error InvalidSignature();
     error ZeroAddress();
     error NotLocker();
+    error LockerNotSet();
+    error LockerAlreadySet();
     error NotAuthorized();
     error Timelocked();
     error TimelockTooLong();
@@ -157,13 +165,24 @@ contract ArcadeTwitterEscrowV3 is Ownable2Step, Pausable, ReentrancyGuard {
 
     // ====================== Construction ======================
 
-    constructor(address locker_, address trustedSigner_, address owner_) Ownable(owner_) {
-        if (locker_ == address(0) || trustedSigner_ == address(0)) revert ZeroAddress();
-        LOCKER = locker_;
+    /// @param trustedSigner_ Backend EIP-712 signer. Must be non-zero.
+    /// @param owner_         Initial owner (typically a multisig).
+    constructor(address trustedSigner_, address owner_) Ownable(owner_) {
+        if (trustedSigner_ == address(0)) revert ZeroAddress();
         trustedSigner = trustedSigner_;
         _CACHED_CHAIN_ID = block.chainid;
         _DOMAIN_SEPARATOR_CACHED = _buildDomainSeparator();
         emit TrustedSignerUpdated(address(0), trustedSigner_);
+    }
+
+    /// @notice One-shot setter the deployer calls after deploying the locker
+    ///         at its predicted (CREATE-derived) address. Reverts on second
+    ///         call so the wiring is effectively immutable post-bootstrap.
+    function setLocker(address locker_) external onlyOwner {
+        if (locker_ == address(0)) revert ZeroAddress();
+        if (LOCKER != address(0)) revert LockerAlreadySet();
+        LOCKER = locker_;
+        emit LockerSet(locker_);
     }
 
     function DOMAIN_SEPARATOR() public view returns (bytes32) {
@@ -197,6 +216,10 @@ contract ArcadeTwitterEscrowV3 is Ownable2Step, Pausable, ReentrancyGuard {
      *         check.
      */
     function creditSlot(uint256 positionId, uint256 slotIndex, address token, uint256 amount) external {
+        // Belt-and-suspenders: LOCKER == 0 means setLocker was never called,
+        // in which case msg.sender == 0 would be the only "match" - which
+        // can't happen, but we reject explicitly for clarity.
+        if (LOCKER == address(0)) revert LockerNotSet();
         if (msg.sender != LOCKER) revert NotLocker();
         if (token == address(0)) revert ZeroAddress();
         balances[positionId][slotIndex][token] += amount;
