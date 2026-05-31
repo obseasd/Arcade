@@ -202,12 +202,18 @@ function V4LaunchInner() {
                 >
                     <ArrowLeft className="h-4 w-4" />
                 </Link>
-                <div>
+                <div className="flex-1">
                     <h1 className="text-2xl font-semibold">Launch on V4</h1>
                     <p className="text-sm text-arc-text-muted">
                         Anti-sniper hook + single-sided locked LP. Behind feature flag.
                     </p>
                 </div>
+                <Link
+                    href="/launchpad/v4/list"
+                    className="rounded-lg border border-arc-border bg-arc-surface px-3 py-1.5 text-xs text-arc-text-muted hover:border-arc-primary/40 hover:text-arc-text"
+                >
+                    Browse V4 launches
+                </Link>
             </div>
 
             <div className="space-y-5 rounded-2xl border border-arc-border bg-arc-surface p-6">

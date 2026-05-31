@@ -81,6 +81,37 @@ export const V4_LAUNCHPAD_ABI = [
     // --- Views the wizard needs -----------------------------------------
     {
         type: "function",
+        name: "getLaunch",
+        stateMutability: "view",
+        inputs: [{ name: "token", type: "address" }],
+        outputs: [
+            {
+                name: "",
+                type: "tuple",
+                components: [
+                    { name: "token", type: "address" },
+                    { name: "creator", type: "address" },
+                    {
+                        name: "poolKey",
+                        type: "tuple",
+                        components: [
+                            { name: "currency0", type: "address" },
+                            { name: "currency1", type: "address" },
+                            { name: "fee", type: "uint24" },
+                            { name: "tickSpacing", type: "int24" },
+                            { name: "hooks", type: "address" },
+                        ],
+                    },
+                    { name: "snipeStartBps", type: "uint16" },
+                    { name: "snipeDecaySeconds", type: "uint32" },
+                    { name: "launchedAt", type: "uint64" },
+                    { name: "creatorBps", type: "uint16" },
+                ],
+            },
+        ],
+    },
+    {
+        type: "function",
         name: "previewPosition",
         stateMutability: "view",
         inputs: [
