@@ -21,6 +21,14 @@ interface IArcadeTwitterEscrowMin {
     function creditSlot(uint256 positionId, uint256 slotIndex, address token, uint256 amount) external;
 }
 
+/// @dev Minimal launchpad surface — the locker reads the paired-token
+///      allowlist from the launchpad so it can re-validate a fresh lock,
+///      defence-in-depth against the launchpad being miswired (M-06).
+interface IArcadeLaunchpadMin {
+    function USDC() external view returns (address);
+    function weth() external view returns (address);
+}
+
 /**
  * @title ArcadeV3Locker
  * @notice Permanently custodies single-sided Uniswap V3 launch positions and
@@ -182,6 +190,20 @@ contract ArcadeV3Locker is IUniswapV3MintCallback {
     {
         require(msg.sender == launchpad, "ONLY_LAUNCHPAD");
         require(positionIdByToken[p.token] == 0, "EXISTS");
+        // M-06: re-validate `paired ∈ {USDC, WETH}` against the launchpad's
+        // immutable allowlist. The launchpad already enforces this via its
+        // pool-type selector, but the locker has historically trusted whatever
+        // it was passed. If the launchpad ever ships a regression that lets a
+        // creator slip an arbitrary `paired` through, this guard stops a
+        // malicious-token reentrancy via _payOrCredit's inline transfer.
+        // Note: clankerToken (p.token) is the launch token and is always
+        // safe (ArcadeLaunchToken is a plain OZ ERC20 minted by the launchpad).
+        {
+            address u = IArcadeLaunchpadMin(launchpad).USDC();
+            address w = IArcadeLaunchpadMin(launchpad).weth();
+            require(p.paired == u || (w != address(0) && p.paired == w), "BAD_PAIRED");
+            require(p.token != p.paired, "SAME_TOKEN");
+        }
         _validateRecipients(p.recipients);
         uint8 n = _validateBps(p.positionBps);
 
@@ -502,7 +524,11 @@ contract ArcadeV3Locker is IUniswapV3MintCallback {
     function _payOrCredit(uint256 positionId, uint256 slotIndex, address token, address to, uint256 amount) internal {
         if (amount == 0) return;
         (bool ok, bytes memory ret) = token.call(abi.encodeWithSelector(IERC20Min.transfer.selector, to, amount));
-        bool decoded = ret.length == 0 || abi.decode(ret, (bool));
+        // M-14: defensive decode. abi.decode reverts on a return shorter than
+        // 32 bytes (a malicious or non-standard token could return 1 byte and
+        // brick this distribution path). Treat any short non-empty return as
+        // a failure rather than letting it bubble up and revert collectFees.
+        bool decoded = ret.length == 0 || (ret.length >= 32 && abi.decode(ret, (bool)));
         if (ok && decoded) {
             // Mirror the deposit into the Twitter escrow's on-chain accounting
             // when (and only when) we routed to it. Wrapped in try/catch so a
@@ -565,7 +591,9 @@ contract ArcadeV3Locker is IUniswapV3MintCallback {
 
     function _pay(address token, address to, uint256 amount) internal {
         (bool ok, bytes memory ret) = token.call(abi.encodeWithSelector(IERC20Min.transfer.selector, to, amount));
-        require(ok && (ret.length == 0 || abi.decode(ret, (bool))), "TRANSFER_FAIL");
+        // M-14: same defensive decode as _payOrCredit. Reverts cleanly on
+        // non-standard tokens instead of bubbling an abi.decode panic.
+        require(ok && (ret.length == 0 || (ret.length >= 32 && abi.decode(ret, (bool)))), "TRANSFER_FAIL");
     }
 
     function _sweep(address token, address to) internal {

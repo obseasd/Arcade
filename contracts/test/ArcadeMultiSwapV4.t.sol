@@ -29,6 +29,9 @@ contract MockV4LaunchToken is ERC20 {
 ///         `l.token == token` so non-registered addresses return false.
 contract MockV4Launchpad is IArcadeV4LaunchpadMin {
     mapping(address => Launch) internal _launches;
+    address internal _hook;
+
+    function setHook(address h) external { _hook = h; }
 
     function register(address token, V4PoolKey calldata key) external {
         Launch storage l = _launches[token];
@@ -40,6 +43,8 @@ contract MockV4Launchpad is IArcadeV4LaunchpadMin {
     function getLaunch(address token) external view override returns (Launch memory) {
         return _launches[token];
     }
+
+    function HOOK() external view override returns (address) { return _hook; }
 }
 
 /// @notice Mock V4 swap router that:
@@ -127,6 +132,9 @@ contract ArcadeMultiSwapV4Test is Test {
 
         v4Router = new MockV4SwapRouter();
         v4Launchpad = new MockV4Launchpad();
+        // H-06: MultiSwap now whitelists the hook returned by HOOK(). Set the
+        // mock's hook to match the address we use in the registered PoolKeys.
+        v4Launchpad.setHook(address(0xCAFE));
 
         multiSwap = new ArcadeMultiSwap(
             IERC20(address(usdc)),

@@ -182,9 +182,11 @@ contract ArcadeTwitterEscrowV3Test is Test {
     function test_F3_claim_debitsBalances() public {
         _credit(1, 0, address(usdc), 100);
         bytes32 nonce = bytes32("debit");
-        uint256 deadline = block.timestamp + 1 hours;
+        // Deadline must outlast the default 1h timelock (H-01) and the warp below.
+        uint256 deadline = block.timestamp + 1 days;
         bytes memory sig = _signClaim(1, 0, recipient, address(usdc), 100, address(0), 0, deadline, nonce);
         escrow.authorize(1, 0, recipient, address(usdc), 100, address(0), 0, deadline, nonce, sig);
+        vm.warp(block.timestamp + escrow.claimTimelock() + 1);
         escrow.claimByTwitter(nonce);
         assertEq(escrow.balances(1, 0, address(usdc)), 0, "balance debited");
         assertEq(escrow.creditedTotal(address(usdc)), 0, "credited total debited");
@@ -338,9 +340,10 @@ contract ArcadeTwitterEscrowV3Test is Test {
         locker.setRevertRecipient(true);
 
         bytes32 nonce = bytes32("rotrev1");
-        uint256 deadline = block.timestamp + 1 hours;
+        uint256 deadline = block.timestamp + 1 days;
         bytes memory sig = _signClaim(1, 0, recipient, address(usdc), 100, address(0), 0, deadline, nonce);
         escrow.authorize(1, 0, recipient, address(usdc), 100, address(0), 0, deadline, nonce, sig);
+        vm.warp(block.timestamp + escrow.claimTimelock() + 1);
         // claim should NOT revert; user gets tokens; RotationFailed event fires.
         escrow.claimByTwitter(nonce);
         assertEq(usdc.balanceOf(recipient), 100, "user paid despite rotation failure");
@@ -351,9 +354,10 @@ contract ArcadeTwitterEscrowV3Test is Test {
         locker.setRevertAdmin(true);
 
         bytes32 nonce = bytes32("rotrev2");
-        uint256 deadline = block.timestamp + 1 hours;
+        uint256 deadline = block.timestamp + 1 days;
         bytes memory sig = _signClaim(1, 0, recipient, address(usdc), 100, address(0), 0, deadline, nonce);
         escrow.authorize(1, 0, recipient, address(usdc), 100, address(0), 0, deadline, nonce, sig);
+        vm.warp(block.timestamp + escrow.claimTimelock() + 1);
         escrow.claimByTwitter(nonce);
         assertEq(usdc.balanceOf(recipient), 100);
     }
@@ -363,9 +367,10 @@ contract ArcadeTwitterEscrowV3Test is Test {
     function test_F7_veto_revertsIfSlotAlreadyClaimed() public {
         _credit(1, 0, address(usdc), 100);
         bytes32 nonce = bytes32("already");
-        uint256 deadline = block.timestamp + 1 hours;
+        uint256 deadline = block.timestamp + 1 days;
         bytes memory sig = _signClaim(1, 0, recipient, address(usdc), 100, address(0), 0, deadline, nonce);
         escrow.authorize(1, 0, recipient, address(usdc), 100, address(0), 0, deadline, nonce, sig);
+        vm.warp(block.timestamp + escrow.claimTimelock() + 1);
         escrow.claimByTwitter(nonce);
         // After claim, p.consumed = true so veto reverts with AlreadyClaimed.
         vm.prank(OWNER);

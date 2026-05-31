@@ -3,6 +3,7 @@ pragma solidity ^0.8.24;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 /**
  * @title ArcadeTokenVault
@@ -20,7 +21,7 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
  *         `claim` is permissionless but always pays the registered recipient,
  *         who can rotate the payout address via `updateRecipient`.
  */
-contract ArcadeTokenVault {
+contract ArcadeTokenVault is ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     address public immutable launchpad;
@@ -119,7 +120,11 @@ contract ArcadeTokenVault {
     }
 
     /// @notice Claim vested tokens to the registered recipient. Permissionless.
-    function claim(uint256 id) external returns (uint256 amount) {
+    /// @dev M-01: nonReentrant for consistency with the rest of the protocol.
+    /// CEI (claimed += amount before transfer) already protects against re-
+    /// entry of THIS function with the current LaunchToken, but the guard
+    /// future-proofs us against vesting non-standard tokens.
+    function claim(uint256 id) external nonReentrant returns (uint256 amount) {
         Vest storage v = vests[id];
         if (!v.exists) revert NoVest();
         amount = vestedAmount(id) - v.claimed;

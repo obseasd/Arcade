@@ -12,6 +12,7 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 interface IArcadeV3Locker {
     function updateRecipient(uint256 positionId, uint256 index, address newRecipient) external;
     function updateAdmin(uint256 positionId, uint256 index, address newAdmin) external;
+    function withdrawPending(address token) external returns (uint256 amount);
 }
 
 /**
@@ -78,6 +79,16 @@ contract ArcadeTwitterEscrowV3 is Ownable2Step, Pausable, ReentrancyGuard {
     /// @notice Maximum value the owner can set for `claimTimelock`. Caps DOS
     ///         potential while leaving room for a 7-day mainnet timelock.
     uint64 public constant MAX_TIMELOCK = 7 days;
+
+    /// @notice Minimum value the owner can set for `claimTimelock`. Enforces a
+    ///         non-zero veto window so the F-1/F-8 safety net is never
+    ///         accidentally disabled by setting timelock = 0.
+    uint64 public constant MIN_TIMELOCK = 1 hours;
+
+    /// @notice Default timelock applied at construction so the veto window is
+    ///         active from block one, even if the owner forgets to call
+    ///         setClaimTimelock post-deploy.
+    uint64 public constant DEFAULT_TIMELOCK = 1 hours;
 
     // ====================== Mutable security primitives ======================
 
@@ -156,12 +167,16 @@ contract ArcadeTwitterEscrowV3 is Ownable2Step, Pausable, ReentrancyGuard {
     error NotAuthorized();
     error Timelocked();
     error TimelockTooLong();
+    error TimelockTooShort();
     error Already();
     error SlotPending();
     error InsufficientBalance();
     error ExceedsFreeBalance();
     error InvalidTokens();
     error DeadlineInPast();
+    error NothingToClaim();
+    error RenounceDisabled();
+    error SlotAlreadyClaimed();
 
     // ====================== Construction ======================
 
@@ -170,9 +185,15 @@ contract ArcadeTwitterEscrowV3 is Ownable2Step, Pausable, ReentrancyGuard {
     constructor(address trustedSigner_, address owner_) Ownable(owner_) {
         if (trustedSigner_ == address(0)) revert ZeroAddress();
         trustedSigner = trustedSigner_;
+        // H-01: ship with a live veto window. The F-1/F-8 safety net depended
+        // on the owner remembering to call setClaimTimelock right after deploy.
+        // Default to 1 hour so even an unconfigured escrow is not drainable
+        // in a single tx by a compromised signer.
+        claimTimelock = DEFAULT_TIMELOCK;
         _CACHED_CHAIN_ID = block.chainid;
         _DOMAIN_SEPARATOR_CACHED = _buildDomainSeparator();
         emit TrustedSignerUpdated(address(0), trustedSigner_);
+        emit TimelockChanged(DEFAULT_TIMELOCK);
     }
 
     /// @notice One-shot setter the deployer calls after deploying the locker
@@ -222,6 +243,13 @@ contract ArcadeTwitterEscrowV3 is Ownable2Step, Pausable, ReentrancyGuard {
         if (LOCKER == address(0)) revert LockerNotSet();
         if (msg.sender != LOCKER) revert NotLocker();
         if (token == address(0)) revert ZeroAddress();
+        // H-03: refuse credits to an already-claimed slot. The slot's recipient
+        // on the locker SHOULD have been rotated by claimByTwitter so further
+        // collectFees calls don't route here, but if updateRecipient failed in
+        // the try/catch we'd silently strand fees forever. Reverting here lets
+        // the locker's own try/catch route the amount to its pendingWithdrawals
+        // ledger for the escrow's address, recoverable via pullFromLocker.
+        if (claimed[positionId][slotIndex]) revert SlotAlreadyClaimed();
         balances[positionId][slotIndex][token] += amount;
         creditedTotal[token] += amount;
         emit Credited(positionId, slotIndex, token, amount);
@@ -262,8 +290,20 @@ contract ArcadeTwitterEscrowV3 is Ownable2Step, Pausable, ReentrancyGuard {
         ) revert InvalidSignature();
 
         // F-3: hard balance check. Backend over-attestation reverts here.
+        // Signed amounts act as a MINIMUM at claim time (the user is
+        // guaranteed at least this much); the claim itself sweeps the full
+        // current balance to avoid stranding fees credited after authorize.
         if (pairedAmount > balances[positionId][slotIndex][pairedToken]) revert InsufficientBalance();
         if (clankerAmount > balances[positionId][slotIndex][clankerToken]) revert InsufficientBalance();
+
+        // M-11: refuse an authorization that would brick the slot for nothing.
+        // If both tokens have zero balance at authorize time, the claim would
+        // mark `claimed[slot]=true` and permanently freeze any future credits
+        // (per H-03 logic). Reject so the slot stays open until real fees land.
+        if (
+            balances[positionId][slotIndex][pairedToken] == 0
+                && balances[positionId][slotIndex][clankerToken] == 0
+        ) revert NothingToClaim();
 
         // F-10: same-token aliasing trap. If both tokens point at the same
         // address, the two safeTransfers in _settle would double-pull from the
@@ -307,38 +347,46 @@ contract ArcadeTwitterEscrowV3 is Ownable2Step, Pausable, ReentrancyGuard {
         if (block.timestamp < p.executeAfter) revert Timelocked();
         if (block.timestamp > p.deadline) revert Expired();
 
-        // Snapshot before state writes so the settle path uses fixed values.
+        // Snapshot the addresses + slot from the authorized claim.
         uint256 positionId = p.positionId;
         uint256 slotIndex = p.slotIndex;
         address recipient = p.recipient;
         address pairedToken = p.pairedToken;
-        uint256 pairedAmount = p.pairedAmount;
         address clankerToken = p.clankerToken;
-        uint256 clankerAmount = p.clankerAmount;
+        uint256 signedPaired = p.pairedAmount;
+        uint256 signedClanker = p.clankerAmount;
 
-        // Re-check balances (the locker MAY have re-credited or claimed
-        // since authorize; we already enforced >= at authorize but the
-        // invariant could shift if creditSlot is ever called with a negative
-        // delta - not possible today, but cheap to re-check).
-        if (pairedAmount > balances[positionId][slotIndex][pairedToken]) revert InsufficientBalance();
-        if (clankerAmount > balances[positionId][slotIndex][clankerToken]) revert InsufficientBalance();
+        // H-04: sweep the CURRENT credited balance, not the snapshot from
+        // authorize. The locker is permissionless to call collectFees, so any
+        // fees credited during the timelock window would otherwise be
+        // permanently stranded (the per-slot `claimed` flag becomes true after
+        // this call and blocks future authorize). Signed amounts act as a
+        // minimum guarantee — re-check below ensures the actual balance is at
+        // least what the backend signed for.
+        uint256 actualPaired = balances[positionId][slotIndex][pairedToken];
+        uint256 actualClanker = balances[positionId][slotIndex][clankerToken];
 
-        // Effects.
+        if (signedPaired > actualPaired) revert InsufficientBalance();
+        if (signedClanker > actualClanker) revert InsufficientBalance();
+
+        // Effects (CEI).
         p.consumed = true;
         claimed[positionId][slotIndex] = true;
         hasPending[positionId][slotIndex] = false;
-        if (pairedAmount > 0) {
-            balances[positionId][slotIndex][pairedToken] -= pairedAmount;
-            creditedTotal[pairedToken] -= pairedAmount;
+        if (actualPaired > 0) {
+            balances[positionId][slotIndex][pairedToken] = 0;
+            creditedTotal[pairedToken] -= actualPaired;
         }
-        if (clankerAmount > 0) {
-            balances[positionId][slotIndex][clankerToken] -= clankerAmount;
-            creditedTotal[clankerToken] -= clankerAmount;
+        if (actualClanker > 0) {
+            balances[positionId][slotIndex][clankerToken] = 0;
+            creditedTotal[clankerToken] -= actualClanker;
         }
 
         // Interactions: transfers first (CEI), then locker rotation in try/catch.
-        if (pairedAmount > 0) IERC20(pairedToken).safeTransfer(recipient, pairedAmount);
-        if (clankerAmount > 0) IERC20(clankerToken).safeTransfer(recipient, clankerAmount);
+        if (actualPaired > 0) IERC20(pairedToken).safeTransfer(recipient, actualPaired);
+        if (actualClanker > 0 && pairedToken != clankerToken) {
+            IERC20(clankerToken).safeTransfer(recipient, actualClanker);
+        }
 
         // F-6: rotation is best-effort. If the locker reverts (slot already
         // rotated, locker upgraded, etc), the user STILL gets their tokens.
@@ -354,7 +402,7 @@ contract ArcadeTwitterEscrowV3 is Ownable2Step, Pausable, ReentrancyGuard {
             emit RotationFailed(positionId, slotIndex, reason);
         }
 
-        emit Claimed(positionId, slotIndex, recipient, pairedToken, pairedAmount, clankerToken, clankerAmount);
+        emit Claimed(positionId, slotIndex, recipient, pairedToken, actualPaired, clankerToken, actualClanker);
     }
 
     // ====================== Veto ======================
@@ -382,8 +430,19 @@ contract ArcadeTwitterEscrowV3 is Ownable2Step, Pausable, ReentrancyGuard {
 
     function setClaimTimelock(uint64 newTimelock) external onlyOwner {
         if (newTimelock > MAX_TIMELOCK) revert TimelockTooLong();
+        // H-01: enforce a non-zero floor so the veto window is never disabled.
+        if (newTimelock < MIN_TIMELOCK) revert TimelockTooShort();
         claimTimelock = newTimelock;
         emit TimelockChanged(newTimelock);
+    }
+
+    /// @notice M-03: disable renounceOwnership. With a hot owner key, an
+    ///         accidental or coerced renounce would permanently disable
+    ///         pause/veto/setTrustedSigner/rescue — the only defenses against
+    ///         a compromised backend signer. Can be removed in a future
+    ///         upgrade once governance is fully decentralised.
+    function renounceOwnership() public pure override {
+        revert RenounceDisabled();
     }
 
     /// @notice Rotate the trusted backend signer. Use when the signer's key
@@ -425,6 +484,42 @@ contract ArcadeTwitterEscrowV3 is Ownable2Step, Pausable, ReentrancyGuard {
         if (amount > free) revert ExceedsFreeBalance();
         IERC20(token).safeTransfer(to, amount);
         emit Rescued(token, to, amount);
+    }
+
+    /// @notice H-08: pull tokens credited to this contract in the locker's
+    ///         pull-payment ledger (eg failed inline transfers from
+    ///         _payOrCredit). Without this, any token routed to the escrow
+    ///         via the locker's catch path stays permanently locked because
+    ///         the escrow address has no other way to call withdrawPending.
+    ///         The retrieved amount lands in the escrow's free balance bucket
+    ///         (not earmarked, so rescue() can sweep it). Owner gated.
+    function pullFromLocker(address token) external onlyOwner returns (uint256 amount) {
+        if (LOCKER == address(0)) revert LockerNotSet();
+        if (token == address(0)) revert ZeroAddress();
+        amount = IArcadeV3Locker(LOCKER).withdrawPending(token);
+    }
+
+    /// @notice M-12: owner-callable locker admin rotation. If the in-claim
+    ///         updateAdmin try/catch failed (locker race / bug), the slot's
+    ///         admin is stuck at the escrow's address with no rotation path.
+    ///         This lets the owner unstick it after off-chain investigation.
+    function rotateLockerAdmin(uint256 positionId, uint256 slotIndex, address newAdmin)
+        external
+        onlyOwner
+    {
+        if (LOCKER == address(0)) revert LockerNotSet();
+        if (newAdmin == address(0)) revert ZeroAddress();
+        IArcadeV3Locker(LOCKER).updateAdmin(positionId, slotIndex, newAdmin);
+    }
+
+    /// @notice Companion to rotateLockerAdmin for the recipient field.
+    function rotateLockerRecipient(uint256 positionId, uint256 slotIndex, address newRecipient)
+        external
+        onlyOwner
+    {
+        if (LOCKER == address(0)) revert LockerNotSet();
+        if (newRecipient == address(0)) revert ZeroAddress();
+        IArcadeV3Locker(LOCKER).updateRecipient(positionId, slotIndex, newRecipient);
     }
 
     // ====================== EIP-712 helpers ======================

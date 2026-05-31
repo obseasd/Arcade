@@ -112,6 +112,11 @@ interface IArcadeV3Locker {
     function updateAdmin(uint256 positionId, uint256 index, address newAdmin) external;
 
     function positionIdByToken(address token) external view returns (uint256);
+
+    /// @notice Address of the optional Twitter escrow. May be address(0) if the
+    ///         integration is disabled. Used by the launchpad to enforce the
+    ///         M-13 invariant that recipient==escrow ⇒ admin==escrow.
+    function twitterEscrow() external view returns (address);
     function recipientsCount(uint256 positionId) external view returns (uint256);
     function rangeCount(uint256 positionId) external view returns (uint256);
     function getRecipients(uint256 positionId) external view returns (Recipient[] memory);

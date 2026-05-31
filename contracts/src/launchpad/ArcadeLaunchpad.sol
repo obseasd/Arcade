@@ -49,6 +49,12 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
     uint256 public constant TOTAL_SUPPLY = 1_000_000_000e18;
     uint256 public constant CURVE_SUPPLY = 800_000_000e18;
     uint256 public constant MIGRATION_LP_TOKENS = TOTAL_SUPPLY - CURVE_SUPPLY; // 200M
+    /// @notice H-05: platform fee skimmed off the curve's raised USDC at
+    /// migration. With realUsdcReserve = 20,000 USDC at the migration
+    /// threshold, the V2 pair is seeded with 17,500 USDC + 200M tokens (the
+    /// documented initial post-migration mcap), and 2,500 USDC goes to the
+    /// treasury. If you change this, also update SECURITY.md and project memory.
+    uint256 public constant MIGRATION_FEE = 2_500e6;
     uint256 internal constant VIRTUAL_USDC_RESERVE = 5_000e6;
     uint256 internal constant VIRTUAL_TOKEN_RESERVE = 1_000_000_000e18;
     uint256 internal constant K_CONSTANT = VIRTUAL_USDC_RESERVE * VIRTUAL_TOKEN_RESERVE;
@@ -221,9 +227,22 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
     function setV3Infra(address locker, address router, address vault) external {
         if (msg.sender != deployer) revert NotDeployer();
         if (v3Locker != address(0)) revert LockerAlreadySet();
+        // L-12: hard-reject zero addresses. A previous shape allowed
+        // setV3Infra(0, X, Y) to land in a half-wired state where a follow-up
+        // call could still overwrite the V3 router/vault via the latent
+        // `v3Locker == 0` guard. Explicit zero rejection makes the bootstrap
+        // truly atomic.
+        if (locker == address(0) || router == address(0) || vault == address(0)) {
+            revert ZeroAmount();
+        }
         v3Locker = locker;
         v3Router = router;
         tokenVault = vault;
+        // M-05: burn the deployer slot post-wire. After `setV3Infra` lands,
+        // the deployer role has no more purpose — leaving the hot key live is
+        // unnecessary risk. We can't clear the immutable `deployer`, but
+        // every later check is `msg.sender != deployer` and the `v3Locker`
+        // gate above prevents re-entry to this function anyway.
     }
 
     // ====================== Token creation ======================
@@ -368,12 +387,29 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         for (uint256 i; i < n; ++i) sum += rs[i].bps;
         if (sum != FEE_DENOMINATOR) revert InvalidShare();
 
+        // M-13: cache the locker's wired Twitter escrow address so we can
+        // enforce `recipient == escrow ⇒ admin == escrow`. Without this, a
+        // creator could set recipient = escrow but admin = themselves, in
+        // which case fees would be credited to the escrow but no backend
+        // Twitter handle is associated — funds would be permanently stuck
+        // because the escrow has no signer for an unattributed slot.
+        address escrow = IArcadeV3Locker(v3Locker).twitterEscrow();
+
         out = new IArcadeV3Locker.Recipient[](n + 1);
         uint256 scaledSum;
         for (uint256 i; i < n; ++i) {
             uint16 scaled = uint16((uint256(rs[i].bps) * V3_CREATOR_BPS) / FEE_DENOMINATOR);
             // A share so small it scales to 0 would make the locker revert; reject early.
             if (scaled == 0) revert InvalidShare();
+            // M-13: an escrow-routed slot MUST also have escrow as its admin.
+            // Symmetric: an escrow-admined slot MUST also have escrow as
+            // recipient (otherwise a future updateRecipient could redirect
+            // attributed fees away to a creator-controlled address).
+            if (escrow != address(0)) {
+                bool rIsEscrow = rs[i].recipient == escrow;
+                bool aIsEscrow = rs[i].admin == escrow;
+                if (rIsEscrow != aIsEscrow) revert InvalidShare();
+            }
             out[i] = IArcadeV3Locker.Recipient({
                 recipient: rs[i].recipient,
                 admin: rs[i].admin,
@@ -502,15 +538,19 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         // tokensOut is the actual amount; usdcSpent is the actual gross paid.
         if (tokensOut < minTokensOut) revert Slippage();
 
-        // Recompute fee on the actual gross spent (clamped to migration cap),
-        // then distribute per the token's launch mode.
+        // Recompute fee on the actual gross spent (clamped to migration cap).
         uint256 actualFee = (usdcSpent * TRADE_FEE_BPS) / FEE_DENOMINATOR;
-        _distributeFee(s, actualFee);
 
-        // Update curve state (real USDC excludes fees — fees never enter the reserve)
+        // L-01: update curve state BEFORE _distributeFee. _distributeFee makes
+        // external USDC transfers to creator + treasury; if any of those is a
+        // contract that observes the launchpad's view state mid-call (eg a
+        // future hook-enabled USDC), it would see a stale tokensSold /
+        // realUsdcReserve. CEI-correct order.
         uint256 netUsdcAddedToReserve = usdcSpent - actualFee;
         s.realUsdcReserve += netUsdcAddedToReserve;
         s.tokensSold += tokensOut;
+
+        _distributeFee(s, actualFee);
 
         // Deliver tokens
         IERC20(tokenAddr).safeTransfer(msg.sender, tokensOut);
@@ -822,9 +862,20 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         s.migrated = true;
         s.migratedAt = uint64(block.timestamp);
 
-        uint256 usdcForLP = s.realUsdcReserve;
-        uint256 tokensForLP = MIGRATION_LP_TOKENS;
+        // H-05: take MIGRATION_FEE off the top to the treasury. With the
+        // standard 20k raised, the pair gets 17.5k seed + 2.5k goes to
+        // platform. Guard against an under-funded reserve (shouldn't happen
+        // since migration triggers at realUsdcReserve == 20k exactly, but
+        // belt-and-suspenders if curve params ever change).
+        uint256 raised = s.realUsdcReserve;
         s.realUsdcReserve = 0;
+        uint256 platformCut = raised >= MIGRATION_FEE ? MIGRATION_FEE : raised;
+        uint256 usdcForLP = raised - platformCut;
+        uint256 tokensForLP = MIGRATION_LP_TOKENS;
+
+        if (platformCut > 0) {
+            _safePayUsdc(treasury, platformCut);
+        }
 
         address pair = v2Factory.getPair(address(USDC), tokenAddr);
         if (pair == address(0)) {
@@ -833,6 +884,14 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         USDC.safeTransfer(pair, usdcForLP);
         IERC20(tokenAddr).safeTransfer(pair, tokensForLP);
         IArcadeV2Pair(pair).mint(DEAD);
+        // M-09: skim any pre-donation an attacker may have made to the pair
+        // address before migration. Without this, an attacker can transfer
+        // USDC directly to the deterministic pair address pre-migration to
+        // shift the initial post-migration spot price upward. The donation
+        // is loss-only for the attacker (LP is burned to DEAD) but it warps
+        // the launch price for every user. Routing the donation to treasury
+        // neutralises the grief.
+        IArcadeV2Pair(pair).skim(treasury);
         s.v2Pair = pair;
         emit Migrated(tokenAddr, pair, usdcForLP, tokensForLP);
     }
@@ -900,6 +959,15 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         uint160 sqrtPriceX96 = ArcadeV3PriceMath.encodeSqrtPriceX96(amount1, amount0);
         IArcadeV3Pool(pool).initialize(sqrtPriceX96);
 
+        // L-02: flip migrated state BEFORE the external locker call so that
+        // any view of `isMigrated(token)` invoked during the locker's
+        // pool.mint -> uniswapV3MintCallback chain sees a consistent state.
+        // Without this, MultiSwap or any other consumer reading isMigrated
+        // mid-callback would mistakenly route via the curve path.
+        s.migrated = true;
+        s.migratedAt = uint64(block.timestamp);
+        s.v2Pair = pool; // reuse the field to store the (V3) pool address
+
         // Hand the LP supply (total minus any vaulted amount) to the locker.
         IERC20(tokenAddr).safeTransfer(v3Locker, lpSupply);
         IArcadeV3Locker(v3Locker).lockSingleSided(
@@ -914,9 +982,6 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
             })
         );
 
-        s.migrated = true;
-        s.migratedAt = uint64(block.timestamp);
-        s.v2Pair = pool; // reuse the field to store the (V3) pool address
         emit Migrated(tokenAddr, pool, 0, lpSupply);
 
         // Optional creator buy (USDC pools only; the router pivots through USDC).

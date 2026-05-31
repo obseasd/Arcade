@@ -45,6 +45,10 @@ interface IArcadeV4LaunchpadMin {
         uint16 creatorBps;
     }
     function getLaunch(address token) external view returns (Launch memory);
+    /// @notice The single hook address baked into every V4 launchpad pool.
+    ///         MultiSwap reads this to whitelist the only hook it's allowed
+    ///         to forward swaps through (H-06).
+    function HOOK() external view returns (address);
 }
 
 /// @dev Minimal slice of `ArcadeV4SwapRouter` we need to route a V4 leg.
@@ -116,6 +120,8 @@ contract ArcadeMultiSwap is ReentrancyGuard {
     error InsufficientOutput();
     error ZeroAmount();
     error ZeroAddress();
+    error UnknownHook();
+    error PoolNotInitialized();
 
     event MultiSwap(
         address indexed sender,
@@ -212,13 +218,17 @@ contract ArcadeMultiSwap is ReentrancyGuard {
     ///      therefore trades only on a V4 pool. Cheap: a single SLOAD on the
     ///      launchpad's `launches` mapping. Short-circuits to false when the
     ///      V4 stack isn't wired into this aggregator.
+    ///      L-09: also requires the launch's PoolKey to be initialized
+    ///      (currency0 != 0). A registered-but-not-yet-initialized launch
+    ///      would otherwise route to a zeroed PoolKey and revert opaquely.
     function _isV4LaunchToken(address token) internal view returns (bool) {
         if (address(v4Launchpad) == address(0) || address(v4Router) == address(0)) return false;
         if (token == address(USDC)) return false; // USDC never the launch token
         // getLaunch returns a zeroed Launch struct (token == address(0)) when
         // the address isn't registered.
         IArcadeV4LaunchpadMin.Launch memory l = v4Launchpad.getLaunch(token);
-        return l.token == token;
+        if (l.token != token) return false;
+        return l.poolKey.currency0 != address(0);
     }
 
     /// @dev Picks the best route for a single (tokenIn -> tokenOut) leg and
@@ -253,7 +263,10 @@ contract ArcadeMultiSwap is ReentrancyGuard {
         bool outMigrated = launchpad.isMigrated(tokenOut);
         if (inMigrated || outMigrated) {
             IERC20(tokenIn).forceApprove(address(launchpad), amountIn);
-            return launchpad.swapMigratedRoute(tokenIn, tokenOut, amountIn, 0, deadline);
+            uint256 out = launchpad.swapMigratedRoute(tokenIn, tokenOut, amountIn, 0, deadline);
+            // M-08 / L-05: reset launchpad allowance after the call.
+            IERC20(tokenIn).forceApprove(address(launchpad), 0);
+            return out;
         }
 
         return _swapV2(tokenIn, tokenOut, amountIn, /*viaUsdc=*/ true, deadline);
@@ -302,14 +315,24 @@ contract ArcadeMultiSwap is ReentrancyGuard {
     ///      key's currency sort.
     function _swapV4Single(address tokenIn, address tokenOut, uint256 amountIn)
         internal
-        returns (uint256)
+        returns (uint256 amountOut)
     {
         address v4Token = tokenIn == address(USDC) ? tokenOut : tokenIn;
         IArcadeV4LaunchpadMin.Launch memory l = v4Launchpad.getLaunch(v4Token);
+        // L-09: refuse a swap against an uninitialized PoolKey. _isV4LaunchToken
+        // already filters most cases but this is the last-line guard.
+        if (l.poolKey.currency0 == address(0)) revert PoolNotInitialized();
+        // H-06: only forward the swap if the PoolKey's hook matches the V4
+        // launchpad's pinned HOOK. Without this, a future launchpad upgrade
+        // that lets creators choose hooks would let arbitrary code (with
+        // BEFORE_SWAP_RETURNS_DELTA permission) run on user funds. We read
+        // the expected hook from the launchpad on every call so a hook
+        // migration doesn't require redeploying MultiSwap.
+        if (l.poolKey.hooks != v4Launchpad.HOOK()) revert UnknownHook();
         // zeroForOne == true iff tokenIn is currency0 of the pool.
         bool zeroForOne = tokenIn == l.poolKey.currency0;
         IERC20(tokenIn).forceApprove(address(v4Router), amountIn);
-        return v4Router.exactInputSingle(
+        amountOut = v4Router.exactInputSingle(
             l.poolKey,
             zeroForOne,
             amountIn,
@@ -317,12 +340,17 @@ contract ArcadeMultiSwap is ReentrancyGuard {
             address(this),
             0  // sqrtPriceLimitX96 = unlimited within tick range
         );
+        // M-08 / L-05: reset allowance to zero so a partial pull doesn't
+        // leave a stale approval on the router across calls. Anti-sniper
+        // hook can reduce the input the pool actually consumes via
+        // BeforeSwapDelta, so amountIn-consumed >= 0 is the typical case.
+        IERC20(tokenIn).forceApprove(address(v4Router), 0);
     }
 
     /// @dev Helper for the two V2 paths (direct or via USDC).
     function _swapV2(address tokenIn, address tokenOut, uint256 amountIn, bool viaUsdc, uint256 deadline)
         internal
-        returns (uint256)
+        returns (uint256 amountOut)
     {
         IERC20(tokenIn).forceApprove(address(v2Router), amountIn);
         address[] memory path;
@@ -339,19 +367,26 @@ contract ArcadeMultiSwap is ReentrancyGuard {
         uint256[] memory amounts = v2Router.swapExactTokensForTokens(
             amountIn, 0, path, address(this), deadline
         );
-        return amounts[path.length - 1];
+        amountOut = amounts[path.length - 1];
+        // M-08 / L-05: reset allowance after the swap.
+        IERC20(tokenIn).forceApprove(address(v2Router), 0);
     }
 
     /// @dev Route a leg through the V3 router. Single hop if the other side is
     /// USDC (USDC-paired Clanker V3 pool), two-hop pivoting through USDC
     /// otherwise (eg ClankerA -> USDC -> ClankerB).
-    function _swapV3(address tokenIn, address tokenOut, uint256 amountIn, uint256 deadline) internal returns (uint256) {
+    function _swapV3(address tokenIn, address tokenOut, uint256 amountIn, uint256 deadline)
+        internal
+        returns (uint256 amountOut)
+    {
         if (address(v3Router) == address(0)) revert ZeroAddress();
         IERC20(tokenIn).forceApprove(address(v3Router), amountIn);
         if (tokenIn == address(USDC) || tokenOut == address(USDC)) {
-            return v3Router.exactInputSingle(tokenIn, tokenOut, V3_FEE, address(this), amountIn, 0, deadline);
+            amountOut = v3Router.exactInputSingle(tokenIn, tokenOut, V3_FEE, address(this), amountIn, 0, deadline);
+        } else {
+            amountOut = v3Router.exactInputThroughUsdc(tokenIn, tokenOut, V3_FEE, address(this), amountIn, 0, deadline);
         }
-        return v3Router.exactInputThroughUsdc(tokenIn, tokenOut, V3_FEE, address(this), amountIn, 0, deadline);
+        IERC20(tokenIn).forceApprove(address(v3Router), 0);
     }
 
     // ====================== Views ======================
@@ -361,10 +396,10 @@ contract ArcadeMultiSwap is ReentrancyGuard {
      * total output and a parallel array of per-input outputs so the UI can
      * highlight which legs contribute most. Pure-view: does not change state.
      *
-     * Quoting V3 routes requires a live `eth_call` to the V3 quoter (or pool)
-     * which we can't do from a pure view here. The UI should call the V3
-     * quoter directly for those legs; this view returns 0 for legs that go
-     * through V3.
+     * Quoting V3 or V4 routes requires a live `eth_call` to the respective
+     * quoter which we can't do from a pure view here. The UI should call the
+     * V3 / V4 quoter directly for those legs; this view returns 0 for any
+     * leg that touches a V3 or V4 launch token (M-07).
      */
     function quoteSwapToSingle(Input[] calldata inputs, address tokenOut)
         external
@@ -387,8 +422,13 @@ contract ArcadeMultiSwap is ReentrancyGuard {
     }
 
     function _quoteOne(address tokenIn, address tokenOut, uint256 amountIn) internal view returns (uint256) {
-        // V3 routes need a separate quoter call (return 0 here, UI fills in).
+        // M-07: V3 AND V4 routes need a separate quoter call. Without this
+        // short-circuit, a V4 leg would fall through to the V2 path which
+        // would either revert (no V2 pair for the V4 token) or return 0 -
+        // indistinguishable from "no liquidity" in the UI. Return 0 with
+        // the documented contract: UI must merge in V3/V4 quoter results.
         if (_isV3LaunchToken(tokenIn) || _isV3LaunchToken(tokenOut)) return 0;
+        if (_isV4LaunchToken(tokenIn) || _isV4LaunchToken(tokenOut)) return 0;
 
         bool oneSideUsdc = tokenIn == address(USDC) || tokenOut == address(USDC);
         if (oneSideUsdc || v2Factory.getPair(tokenIn, tokenOut) != address(0)) {
