@@ -59,6 +59,37 @@ export const PRESETS: PresetDef[] = [
       ],
     },
   },
+  {
+    // Uniswap V4 launches use ONE single-sided position locked from just
+    // above the starting tick all the way to MAX_TICK. The full pool supply
+    // (after the optional creator allocation deduction) sits in that one
+    // range. There's no choice of multiple bands - the locker bakes it in.
+    //
+    // Anti-sniper tax decay isn't modeled in the math layer (it's a hook,
+    // not a position shape), but the description below tells the user what
+    // to expect during the first N minutes after launch.
+    id: "v4-single-sided",
+    label: "V4 Single-Sided",
+    description:
+      "V4 anti-sniper launch: full supply in ONE position from launch price up. Creator allocation up to 10%; the rest locks single-sided. Early buys pay a decaying snipe tax (configured on the wizard, not here).",
+    config: {
+      totalSupply: 1_000_000_000,
+      startingMcap: 50_000,
+      feeBps: 100,
+      // Creator allocation goes out of the pool (modeled as vault carve-out so
+      // the chart shows fewer tokens in the bonding range). Default 0%; the
+      // user can tweak via the sidebar to see the impact on price discovery.
+      airdropPct: 0,
+      vaultPct: 0,
+      presalePct: 0,
+      positions: [
+        // tickUpper = MAX_TICK (~887272), expressed as mcap. Picked at $10B
+        // so the chart axis stays readable; a real V4 position extends to
+        // ~e^(MAX_TICK * 1e-4) * startingMcap which dwarfs the screen.
+        { lowerMcap: 50_000, upperMcap: 10_000_000_000, pctOfPool: 1 },
+      ],
+    },
+  },
 ];
 
 export const DEFAULT_PRESET_ID = "standard";
