@@ -361,7 +361,7 @@ function ErrorState({ error }: { error: string }) {
     slot_bps_zero: "Slot has zero share.",
     onchain_read_failed: "Could not read on-chain state.",
     nothing_to_claim:
-      "No fees are credited to this slot yet. Once the token has trade volume, fees will be routed here and you can claim them.",
+      "No fees credited to this slot yet. If the token has had trades, the fees are still pending in the V3 pool — visit the token page and click \"Claim Fees\" to flush them into the escrow, then come back here.",
   }[error] ?? error;
   return (
     <div className="mx-auto max-w-md px-4 py-12 sm:px-6">

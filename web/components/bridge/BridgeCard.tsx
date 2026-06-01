@@ -632,7 +632,7 @@ export function BridgeCard() {
             {step.kind === "burning" && `Sending USDC from ${srcChain.name}…`}
             {step.kind === "attesting" &&
               (attestingSlow
-                ? `Still waiting for Circle (${formatElapsed(attestElapsedSec)})…`
+                ? `Waiting for Circle (${formatElapsed(attestElapsedSec)})…`
                 : "Waiting for Circle attestation…")}
           </button>
         )}
@@ -662,7 +662,7 @@ export function BridgeCard() {
                   ? `Sending USDC on ${srcChain.name}…`
                   : step.kind === "attesting"
                     ? attestingSlow
-                      ? `Still waiting for Circle (${formatElapsed(attestElapsedSec)} elapsed, usual ${etaLabel(srcChain.id, fastTransfer)}). We keep polling every 6s, no action needed.`
+                      ? `Waiting for Circle (${formatElapsed(attestElapsedSec)} elapsed, usual ${etaLabel(srcChain.id, fastTransfer)}). No action needed.`
                       : `Waiting for Circle's attestation (${etaLabel(srcChain.id, fastTransfer)})…`
                     : step.kind === "minting"
                       ? `Ready to claim on ${dstChain.name}. Click the button above.`

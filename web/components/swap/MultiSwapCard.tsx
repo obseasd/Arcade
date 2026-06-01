@@ -249,6 +249,11 @@ export function MultiSwapCard({ tab, onTabChange }: MultiSwapCardProps) {
 
   // ----- Validation -----
   const hasAnyAmount = tupleArgs.length > 0;
+  // True when at least one input row exists with no amount typed (user is
+  // mid-edit). We use this to soften the "No valid trades" warning when the
+  // user just hasn't finished entering amounts yet, so it doesn't look like
+  // a routing error when it's really a "fill the form first" situation.
+  const hasEmptyRow = inputs.length > tupleArgs.length;
   const insufficientByIndex = inputs.map((row, i) => {
     try {
       const raw = row.amountStr ? parseUnits(row.amountStr, row.token.decimals ?? 18) : 0n;
@@ -431,7 +436,11 @@ export function MultiSwapCard({ tab, onTabChange }: MultiSwapCardProps) {
             {quoteQ.isFetching ? (
               <span>Fetching prices…</span>
             ) : totalOutRaw === 0n ? (
-              <span className="text-arc-warn">No valid trades to execute</span>
+              hasEmptyRow ? (
+                <span>Enter amounts for all inputs</span>
+              ) : (
+                <span className="text-arc-warn">No valid trades to execute</span>
+              )
             ) : (
               <span>
                 Min received{" "}
@@ -463,7 +472,9 @@ export function MultiSwapCard({ tab, onTabChange }: MultiSwapCardProps) {
                   : quoteQ.isFetching
                     ? "Fetching prices…"
                     : totalOutRaw === 0n
-                      ? "No valid trades to execute"
+                      ? hasEmptyRow
+                        ? "Enter amounts"
+                        : "No valid trades to execute"
                       : `Swap ${tupleArgs.length} tokens`}
       </button>
 
@@ -650,11 +661,33 @@ function OutputBox({
           )}
         </button>
       </div>
-      <div className="text-4xl font-medium leading-tight tabular-nums text-arc-text">
+      <div
+        className={cn(
+          "min-w-0 overflow-x-auto whitespace-nowrap font-medium leading-tight tabular-nums text-arc-text",
+          outputSizeClass(amountStr || "0.0"),
+        )}
+      >
         {amountStr || "0.0"}
       </div>
     </div>
   );
+}
+
+/**
+ * Step the output font size down as the rendered amount grows. Mirrors
+ * `sizeFromLength` in AmountInput so the output box never overflows the
+ * card when a small input swaps to a 1e18-precision token (eg 27,917
+ * full-decimals TEST). The whitespace-nowrap + overflow-x-auto on the
+ * parent gives the user a horizontal scroll as a last resort below
+ * text-base.
+ */
+function outputSizeClass(s: string): string {
+  const n = s.length;
+  if (n <= 10) return "text-4xl";
+  if (n <= 16) return "text-3xl";
+  if (n <= 22) return "text-2xl";
+  if (n <= 28) return "text-xl";
+  return "text-base";
 }
 
 function QuickButton({
