@@ -17,6 +17,7 @@ import { useV2Tokens } from "@/lib/hooks/useV2Tokens";
 import { useV3Tokens } from "@/lib/hooks/useV3Tokens";
 import { V3_QUOTER_ABI } from "@/lib/abis/v3";
 import { pushToast } from "@/lib/toast";
+import { addActivity } from "@/lib/activityFeed";
 import { TokenIcon } from "@/components/ui/TokenIcon";
 import { MultiTokenSelectModal } from "@/components/ui/MultiTokenSelectModal";
 import { TokenSelectModal, type TokenOption } from "@/components/ui/TokenSelectModal";
@@ -328,11 +329,22 @@ export function MultiSwapCard({ tab, onTabChange }: MultiSwapCardProps) {
       setTx({ status: "idle" });
       setInputs([]);
       balanceCalls.refetch();
+      const outFormatted = formatTokenAmount(totalOutRaw, decimalsOut, 6);
+      addActivity({
+        type: tupleArgs.length > 1 ? "multiswap" : "swap",
+        account,
+        token: outputToken.address,
+        label: tupleArgs.length > 1
+          ? `Multi-swap to $${outputToken.symbol}`
+          : `Swapped to $${outputToken.symbol}`,
+        value: `${outFormatted} ${outputToken.symbol}`,
+        txHash: hash,
+      });
       pushToast({
         kind: "swap",
         tokenAddress: outputToken.address,
         tokenSymbol: outputToken.symbol,
-        amountFormatted: formatTokenAmount(totalOutRaw, decimalsOut, 6),
+        amountFormatted: outFormatted,
       });
     } catch (e: any) {
       setTx({ status: "error", message: e?.shortMessage || e?.message || "Multi-swap failed" });

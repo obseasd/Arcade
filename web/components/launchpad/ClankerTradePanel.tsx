@@ -12,6 +12,7 @@ import { TokenIcon } from "@/components/ui/TokenIcon";
 import { TxStatus, type TxState } from "@/components/ui/TxStatus";
 import { useApproveIfNeeded } from "@/lib/hooks/useApproveIfNeeded";
 import { pushToast } from "@/lib/toast";
+import { addActivity } from "@/lib/activityFeed";
 import { cn, formatToken, formatUSDC } from "@/lib/utils";
 
 interface Props {
@@ -136,15 +137,23 @@ export function ClankerTradePanel({ token, symbol, pool, image, onTradeSuccess }
       onTradeSuccess?.();
       const outTokenSymbol = side === "buy" ? symbol : "USDC";
       const outDecimals = side === "buy" ? LAUNCHPAD_TOKEN_DECIMALS : USDC_DECIMALS;
+      const outFormatted = side === "buy"
+        ? formatToken(estimatedOut, outDecimals, 6)
+        : formatUSDC(estimatedOut, outDecimals, 6);
+      addActivity({
+        type: side,
+        account,
+        token,
+        label: side === "buy" ? `Bought $${symbol}` : `Sold $${symbol}`,
+        value: `${outFormatted} ${outTokenSymbol}`,
+        txHash: hash,
+      });
       pushToast({
         kind: "swap",
         tokenAddress: side === "buy" ? token : ADDRESSES.usdc,
         tokenSymbol: outTokenSymbol,
         tokenImage: side === "buy" ? image : undefined,
-        amountFormatted:
-          side === "buy"
-            ? formatToken(estimatedOut, outDecimals, 6)
-            : formatUSDC(estimatedOut, outDecimals, 6),
+        amountFormatted: outFormatted,
       });
     } catch (e: any) {
       setTx({ status: "error", message: e?.shortMessage || e?.message || "Trade failed" });

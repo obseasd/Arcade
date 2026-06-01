@@ -11,6 +11,7 @@ import { ADDRESSES, CREATION_FEE_USDC, LaunchMode } from "@/lib/constants";
 import { encodeMetadataDataUri, resolveIpfs } from "@/lib/metadata";
 import { useApproveIfNeeded } from "@/lib/hooks/useApproveIfNeeded";
 import { pushToast } from "@/lib/toast";
+import { addActivity } from "@/lib/activityFeed";
 import { TxStatus, type TxState } from "@/components/ui/TxStatus";
 import { RecipientEditModal } from "@/components/bridge/RecipientEditModal";
 import { cn, formatAddress, formatUSDC } from "@/lib/utils";
@@ -510,6 +511,16 @@ function CreateTokenInner() {
       }
 
       setTx({ status: "idle" });
+      if (account && newAddr) {
+        addActivity({
+          type: "launch",
+          account,
+          token: newAddr,
+          label: "Token launched",
+          value: `$${symbol.trim() || "TOKEN"}`,
+          txHash: hash,
+        });
+      }
       pushToast({
         kind: "swap",
         tokenAddress: newAddr ?? undefined,

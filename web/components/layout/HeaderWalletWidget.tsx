@@ -22,6 +22,12 @@ import { ADDRESSES, USDC_DECIMALS } from "@/lib/constants";
 import { TWITTER_ESCROW_V3_ABI } from "@/lib/abis/twitterEscrowV3";
 import { loadBridgeHistory, type HistoryEntry } from "@/lib/bridgeHistory";
 import { listPendingClaims, type PendingTwitterClaim } from "@/lib/pendingClaims";
+import {
+    ACTIVITY_FEED_CHANGE_EVENT,
+    iconForActivity,
+    loadActivity,
+    type ActivityEntry,
+} from "@/lib/activityFeed";
 import { pushToast } from "@/lib/toast";
 import { cn, formatUSDC } from "@/lib/utils";
 import { TokenIcon } from "@/components/ui/TokenIcon";
@@ -326,16 +332,29 @@ export function HeaderWalletWidget() {
 function ActivityFeed({ address, onLinkClick }: { address: Address; onLinkClick: () => void }) {
     const [bridges, setBridges] = useState<HistoryEntry[]>([]);
     const [claims, setClaims] = useState<PendingTwitterClaim[]>([]);
+    const [appActivity, setAppActivity] = useState<ActivityEntry[]>([]);
 
     useEffect(() => {
-        setBridges(loadBridgeHistory());
-        setClaims(listPendingClaims(address));
-        const handler = () => {
+        const refresh = () => {
             setBridges(loadBridgeHistory());
             setClaims(listPendingClaims(address));
+            setAppActivity(loadActivity(address));
         };
-        window.addEventListener("storage", handler);
-        return () => window.removeEventListener("storage", handler);
+        refresh();
+        // Cross-tab updates (the native storage event only fires for OTHER
+        // tabs). Same-tab updates come through our custom events from the
+        // bridge / pending-claims / activity-feed modules.
+        const onStorage = () => refresh();
+        window.addEventListener("storage", onStorage);
+        window.addEventListener(ACTIVITY_FEED_CHANGE_EVENT, onStorage);
+        window.addEventListener("arcade-bridge-history-changed", onStorage);
+        window.addEventListener("arcade-pending-claims-change", onStorage);
+        return () => {
+            window.removeEventListener("storage", onStorage);
+            window.removeEventListener(ACTIVITY_FEED_CHANGE_EVENT, onStorage);
+            window.removeEventListener("arcade-bridge-history-changed", onStorage);
+            window.removeEventListener("arcade-pending-claims-change", onStorage);
+        };
     }, [address]);
 
     // Merge + sort by recency. Cap at 3 rows so the panel stays compact.
@@ -351,9 +370,14 @@ function ActivityFeed({ address, onLinkClick }: { address: Address; onLinkClick:
                 ts: c.savedAt * 1000,
                 row: c,
             })),
+            ...appActivity.slice(0, 3).map((a) => ({
+                kind: "app" as const,
+                ts: a.timestamp,
+                row: a,
+            })),
         ];
         return all.sort((a, b) => b.ts - a.ts).slice(0, 3);
-    }, [bridges, claims]);
+    }, [bridges, claims, appActivity]);
 
     if (items.length === 0) {
         return (
@@ -371,8 +395,10 @@ function ActivityFeed({ address, onLinkClick }: { address: Address; onLinkClick:
                 {items.map((it, i) =>
                     it.kind === "bridge" ? (
                         <BridgeRow key={i} entry={it.row} />
-                    ) : (
+                    ) : it.kind === "claim" ? (
                         <ClaimRow key={i} entry={it.row} />
+                    ) : (
+                        <AppActivityRow key={i} entry={it.row} />
                     ),
                 )}
             </div>
@@ -431,6 +457,19 @@ function BridgeRow({ entry }: { entry: HistoryEntry }) {
                 <div className="truncate text-xs font-medium text-arc-text">{amountStr} USDC</div>
             </div>
             <div className="shrink-0 text-sm text-arc-text-faint">{formatAgo(entry.burnedAt)}</div>
+        </div>
+    );
+}
+
+function AppActivityRow({ entry }: { entry: ActivityEntry }) {
+    return (
+        <div className="flex items-center gap-2.5">
+            <ActivityIcon src={iconForActivity(entry.type)} alt={entry.type} />
+            <div className="min-w-0 flex-1">
+                <div className="truncate text-sm text-arc-text-faint">{entry.label}</div>
+                <div className="truncate text-xs font-medium text-arc-text">{entry.value}</div>
+            </div>
+            <div className="shrink-0 text-sm text-arc-text-faint">{formatAgo(entry.timestamp)}</div>
         </div>
     );
 }

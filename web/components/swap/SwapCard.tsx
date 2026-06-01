@@ -16,6 +16,7 @@ import { useV3Tokens } from "@/lib/hooks/useV3Tokens";
 import { useUsdValue } from "@/lib/hooks/useTokenUsdPrice";
 import { useSwapRoute } from "@/lib/hooks/useSwapRoute";
 import { pushToast } from "@/lib/toast";
+import { addActivity } from "@/lib/activityFeed";
 import { TokenIcon } from "@/components/ui/TokenIcon";
 import { AutoTokenIcon } from "@/components/ui/AutoTokenIcon";
 import { TokenSelectModal, TokenOption } from "@/components/ui/TokenSelectModal";
@@ -390,11 +391,22 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
       balanceIn.refetch();
       balanceOut.refetch();
 
+      const outFormatted = formatTokenAmount(finalAmountOut, decimalsOut, 6);
+      if (account) {
+        addActivity({
+          type: "swap",
+          account,
+          token: tokenOut.address,
+          label: `Swapped to $${tokenOut.symbol}`,
+          value: `${outFormatted} ${tokenOut.symbol}`,
+          txHash: hash,
+        });
+      }
       pushToast({
         kind: "swap",
         tokenAddress: tokenOut.address,
         tokenSymbol: tokenOut.symbol,
-        amountFormatted: formatTokenAmount(finalAmountOut, decimalsOut, 6),
+        amountFormatted: outFormatted,
       });
     } catch (e: any) {
       setTx({ status: "error", message: e?.shortMessage || e?.message || "Swap failed" });

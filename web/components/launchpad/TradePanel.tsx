@@ -11,6 +11,7 @@ import { TokenIcon } from "@/components/ui/TokenIcon";
 import { TxStatus, type TxState } from "@/components/ui/TxStatus";
 import { useApproveIfNeeded } from "@/lib/hooks/useApproveIfNeeded";
 import { pushToast } from "@/lib/toast";
+import { addActivity } from "@/lib/activityFeed";
 import { cn, formatToken, formatUSDC } from "@/lib/utils";
 
 interface Props {
@@ -145,15 +146,25 @@ export function TradePanel({ token, symbol, migrated, image, onTradeSuccess }: P
       usdcBalance.refetch();
       tokenBalance.refetch();
       onTradeSuccess?.();
+      const outFormatted = side === "buy"
+        ? formatToken(estimatedOut, LAUNCHPAD_TOKEN_DECIMALS, 6)
+        : formatUSDC(estimatedOut, USDC_DECIMALS, 6);
+      if (account) {
+        addActivity({
+          type: side,
+          account,
+          token,
+          label: side === "buy" ? `Bought $${symbol}` : `Sold $${symbol}`,
+          value: side === "buy" ? `${outFormatted} ${symbol}` : `${outFormatted} USDC`,
+          txHash: hash,
+        });
+      }
       pushToast({
         kind: "swap",
         tokenAddress: side === "buy" ? token : ADDRESSES.usdc,
         tokenSymbol: side === "buy" ? symbol : "USDC",
         tokenImage: side === "buy" ? image : undefined,
-        amountFormatted:
-          side === "buy"
-            ? formatToken(estimatedOut, LAUNCHPAD_TOKEN_DECIMALS, 6)
-            : formatUSDC(estimatedOut, USDC_DECIMALS, 6),
+        amountFormatted: outFormatted,
       });
     } catch (e: any) {
       setTx({ status: "error", message: e?.shortMessage || e?.message || "Trade failed" });
