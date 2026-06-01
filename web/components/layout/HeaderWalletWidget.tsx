@@ -7,10 +7,12 @@ import {
     ChevronDown,
     Copy,
     Download,
+    FileText,
     LineChart,
     LogOut,
     Power,
     Send,
+    Shield,
     X,
 } from "lucide-react";
 import Link from "next/link";
@@ -189,6 +191,16 @@ export function HeaderWalletWidget() {
                                     </button>
 
                                     <div className="flex shrink-0 items-center gap-1">
+                                        {isEscrowOwner && (
+                                            <Link
+                                                href="/admin/escrow"
+                                                onClick={() => setMenuOpen(false)}
+                                                title="Admin"
+                                                className="rounded-lg p-2 text-arc-text-muted transition-colors hover:bg-white/5 hover:text-arc-text"
+                                            >
+                                                <Shield className="h-4 w-4" />
+                                            </Link>
+                                        )}
                                         <Link
                                             href="/lp-simulator"
                                             onClick={() => setMenuOpen(false)}
@@ -213,9 +225,11 @@ export function HeaderWalletWidget() {
                                                     <PowerMenuItem
                                                         icon={<ArrowRightLeft className="h-3.5 w-3.5" />}
                                                         onClick={() => {
-                                                            openConnectModal();
+                                                            // Close the panel BEFORE the connect modal opens
+                                                            // so the user doesn't see two overlapping menus.
                                                             setPowerOpen(false);
                                                             setMenuOpen(false);
+                                                            openConnectModal();
                                                         }}
                                                     >
                                                         Changer de wallet
@@ -223,9 +237,9 @@ export function HeaderWalletWidget() {
                                                     <PowerMenuItem
                                                         icon={<LogOut className="h-3.5 w-3.5" />}
                                                         onClick={() => {
-                                                            disconnect();
                                                             setPowerOpen(false);
                                                             setMenuOpen(false);
+                                                            disconnect();
                                                         }}
                                                         variant="danger"
                                                     >
@@ -244,52 +258,43 @@ export function HeaderWalletWidget() {
                                     </div>
                                 </div>
 
-                                {/* Send / Receive shortcuts */}
+                                {/* Send / Receive shortcuts.
+                                    Lighter blue (sky-400) per design ask - the deeper
+                                    arc-cta-hover was too dark / close to the panel bg. */}
                                 <div className="grid grid-cols-2 gap-2 px-4 pb-3">
                                     <button
                                         onClick={() => {
                                             openAccountModal();
                                             setMenuOpen(false);
                                         }}
-                                        className="flex flex-col items-center justify-center gap-1.5 rounded-xl bg-arc-cta-hover/15 px-3 py-4 text-arc-cta-hover transition-colors hover:bg-arc-cta-hover/25"
+                                        className="flex flex-col items-center justify-center gap-1.5 rounded-xl bg-sky-400/10 px-3 py-4 text-sky-400 transition-colors hover:bg-sky-400/20"
                                     >
                                         <Send className="h-5 w-5" />
                                         <span className="text-sm font-medium">Envoyer</span>
                                     </button>
                                     <button
                                         onClick={() => setReceiveOpen(true)}
-                                        className="flex flex-col items-center justify-center gap-1.5 rounded-xl bg-arc-cta-hover/15 px-3 py-4 text-arc-cta-hover transition-colors hover:bg-arc-cta-hover/25"
+                                        className="flex flex-col items-center justify-center gap-1.5 rounded-xl bg-sky-400/10 px-3 py-4 text-sky-400 transition-colors hover:bg-sky-400/20"
                                     >
                                         <Download className="h-5 w-5" />
                                         <span className="text-sm font-medium">Recevoir</span>
                                     </button>
                                 </div>
 
-                                {/* View wallet / portfolio link */}
-                                <div className="px-4 pb-1">
+                                {/* View wallet / portfolio link.
+                                    Compact centered text-only link per design ask -
+                                    the bordered button shape was visually competing
+                                    with the action buttons above it. */}
+                                <div className="flex justify-center px-4 pb-1">
                                     <Link
                                         href="/my-tokens"
                                         onClick={() => setMenuOpen(false)}
-                                        className="flex items-center justify-between rounded-xl border border-arc-border bg-arc-bg-elevated px-4 py-2.5 text-sm font-medium text-arc-text transition-colors hover:bg-white/5"
+                                        className="inline-flex items-center gap-1 rounded-md px-3 py-1.5 text-xs font-medium text-arc-text-muted transition-colors hover:text-arc-text"
                                     >
                                         Voir le portefeuille
-                                        <ArrowRight className="h-4 w-4" />
+                                        <ArrowRight className="h-3 w-3" />
                                     </Link>
                                 </div>
-
-                                {/* Admin shortcut (owner-only, hidden by default) */}
-                                {isEscrowOwner && (
-                                    <div className="px-4 pt-2">
-                                        <Link
-                                            href="/admin/escrow"
-                                            onClick={() => setMenuOpen(false)}
-                                            className="flex items-center justify-between rounded-xl border border-arc-cta-hover/30 bg-arc-cta-hover/5 px-4 py-2 text-xs font-medium text-arc-cta-hover transition-colors hover:bg-arc-cta-hover/15"
-                                        >
-                                            Admin · Escrow
-                                            <ArrowRight className="h-3.5 w-3.5" />
-                                        </Link>
-                                    </div>
-                                )}
 
                                 {/* Activity feed */}
                                 <ActivityFeed address={address} onLinkClick={() => setMenuOpen(false)} />
@@ -333,26 +338,26 @@ function ActivityFeed({ address, onLinkClick }: { address: Address; onLinkClick:
         return () => window.removeEventListener("storage", handler);
     }, [address]);
 
-    // Merge + sort by recency. Cap at 4 rows so the panel stays compact.
+    // Merge + sort by recency. Cap at 3 rows so the panel stays compact.
     const items = useMemo(() => {
         const all = [
-            ...bridges.slice(0, 4).map((b) => ({
+            ...bridges.slice(0, 3).map((b) => ({
                 kind: "bridge" as const,
                 ts: b.burnedAt,
                 row: b,
             })),
-            ...claims.slice(0, 4).map((c) => ({
+            ...claims.slice(0, 3).map((c) => ({
                 kind: "claim" as const,
                 ts: c.savedAt * 1000,
                 row: c,
             })),
         ];
-        return all.sort((a, b) => b.ts - a.ts).slice(0, 4);
+        return all.sort((a, b) => b.ts - a.ts).slice(0, 3);
     }, [bridges, claims]);
 
     if (items.length === 0) {
         return (
-            <div className="mt-3 border-t border-arc-border/40 px-4 py-4">
+            <div className="px-4 pb-4 pt-3">
                 <div className="mb-2 text-xs font-semibold text-arc-text">Activité récente</div>
                 <div className="text-[11px] text-arc-text-faint">No activity yet.</div>
             </div>
@@ -360,7 +365,7 @@ function ActivityFeed({ address, onLinkClick }: { address: Address; onLinkClick:
     }
 
     return (
-        <div className="mt-3 border-t border-arc-border/40 px-4 py-4">
+        <div className="px-4 pb-4 pt-3">
             <div className="mb-2 text-xs font-semibold text-arc-text">Activité récente</div>
             <div className="space-y-2">
                 {items.map((it, i) =>
@@ -385,6 +390,10 @@ function ActivityFeed({ address, onLinkClick }: { address: Address; onLinkClick:
     );
 }
 
+// Per design: the VALUE goes white, the action label goes muted, the
+// time-ago text is bumped ~+40% (10px → 14px ≈ text-sm) so the user
+// can scan it at a glance. Leading icon on the left of each row;
+// placeholder lucide icons for now, user is bringing custom logos.
 function BridgeRow({ entry }: { entry: HistoryEntry }) {
     const amountStr = (() => {
         try {
@@ -400,12 +409,15 @@ function BridgeRow({ entry }: { entry: HistoryEntry }) {
               ? "Bridge échoué"
               : "Bridge en attente";
     return (
-        <div className="flex items-center justify-between gap-2 text-[11px]">
-            <div className="min-w-0">
-                <div className="truncate text-arc-text">{status}</div>
-                <div className="truncate text-[10px] text-arc-text-faint">{amountStr} USDC</div>
+        <div className="flex items-center gap-2.5">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-arc-cta-hover/15 text-arc-cta-hover">
+                <ArrowRightLeft className="h-4 w-4" />
             </div>
-            <div className="shrink-0 text-[10px] text-arc-text-faint">{formatAgo(entry.burnedAt)}</div>
+            <div className="min-w-0 flex-1">
+                <div className="truncate text-[11px] text-arc-text-faint">{status}</div>
+                <div className="truncate text-xs font-medium text-arc-text">{amountStr} USDC</div>
+            </div>
+            <div className="shrink-0 text-sm text-arc-text-faint">{formatAgo(entry.burnedAt)}</div>
         </div>
     );
 }
@@ -413,16 +425,17 @@ function BridgeRow({ entry }: { entry: HistoryEntry }) {
 function ClaimRow({ entry }: { entry: PendingTwitterClaim }) {
     const ready = Math.floor(Date.now() / 1000) >= entry.executeAfter;
     return (
-        <div className="flex items-center justify-between gap-2 text-[11px]">
-            <div className="min-w-0">
-                <div className="truncate text-arc-text">
+        <div className="flex items-center gap-2.5">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-arc-cta-hover/15 text-arc-cta-hover">
+                <FileText className="h-4 w-4" />
+            </div>
+            <div className="min-w-0 flex-1">
+                <div className="truncate text-[11px] text-arc-text-faint">
                     {ready ? "Twitter claim prêt" : "Twitter claim en attente"}
                 </div>
-                <div className="truncate text-[10px] text-arc-text-faint">@{entry.handle}</div>
+                <div className="truncate text-xs font-medium text-arc-text">@{entry.handle}</div>
             </div>
-            <div className="shrink-0 text-[10px] text-arc-text-faint">
-                {formatAgo(entry.savedAt * 1000)}
-            </div>
+            <div className="shrink-0 text-sm text-arc-text-faint">{formatAgo(entry.savedAt * 1000)}</div>
         </div>
     );
 }
