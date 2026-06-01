@@ -4,19 +4,22 @@ import { useAccountModal } from "@rainbow-me/rainbowkit";
 import {
     ArrowLeft,
     ArrowRight,
+    Calendar,
+    Check,
     Copy,
     Download,
     ExternalLink,
+    Filter,
     MoreHorizontal,
     Rocket,
+    Search,
     Send,
     Share2,
     ShoppingCart,
-    TrendingUp,
     Wallet,
 } from "lucide-react";
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
     Area,
     AreaChart,
@@ -38,6 +41,7 @@ import { WalletIcon } from "@/components/wallet/WalletIcon";
 import { LAUNCHPAD_TOKEN_DECIMALS, USDC_DECIMALS } from "@/lib/constants";
 import { useLaunchpadTokens } from "@/lib/hooks/useLaunchpadTokens";
 import { useMyHoldings, type HoldingInfo } from "@/lib/hooks/useMyHoldings";
+import { useTokenImage } from "@/lib/hooks/useTokenImage";
 import { loadBridgeHistory, type HistoryEntry } from "@/lib/bridgeHistory";
 import { listPendingClaims, type PendingTwitterClaim } from "@/lib/pendingClaims";
 import { iconForActivity, loadActivity, type ActivityEntry } from "@/lib/activityFeed";
@@ -282,6 +286,9 @@ function OverviewTab({
 
     const currentUsd = Number(totalHoldingsUsd) / 1e6;
     const series = useMemo(() => generatePlaceholderSeries(currentUsd), [currentUsd]);
+    // Count is shown in the Recent activity card subtitle so the user gets
+    // a quick "how much have I done" signal without expanding the tab.
+    const activityCount = useMemo(() => buildActivity(account).length, [account]);
 
     // Daily change: compare last to ~24h ago in the placeholder. Real value
     // would come from the indexer; this exists so the layout has the right
@@ -390,43 +397,36 @@ function OverviewTab({
                 <div className="space-y-4 lg:col-span-1">
                     <div className="grid grid-cols-2 gap-3">
                         <ActionTile
-                            icon={<Send className="h-4 w-4" />}
+                            icon={<Send className="h-[18px] w-[18px]" />}
                             label="Send"
                             onClick={() => openAccountModal?.()}
                             disabled={!openAccountModal}
                         />
                         <ActionTile
-                            icon={<Download className="h-4 w-4" />}
+                            icon={<Download className="h-[18px] w-[18px]" />}
                             label="Receive"
                             onClick={() => setReceiveOpen(true)}
                         />
                         <ActionTile
-                            icon={<ShoppingCart className="h-4 w-4" />}
+                            icon={<ShoppingCart className="h-[18px] w-[18px]" />}
                             label="Buy"
                             href="/swap"
                         />
                         <ActionTile
-                            icon={<MoreHorizontal className="h-4 w-4" />}
+                            icon={<MoreHorizontal className="h-[18px] w-[18px]" />}
                             label="More"
                             disabled
                         />
                     </div>
 
-                    <div className="arc-card p-5 sm:p-6">
-                        <div className="mb-3 flex items-center justify-between">
-                            <div className="flex items-center gap-2 text-sm font-semibold">
-                                <TrendingUp className="h-4 w-4" />
-                                Performance
-                            </div>
-                        </div>
+                    {/* Flat (no card chrome) so it reads as a section within
+                        the side panel, matching Uniswap's portfolio sidebar. */}
+                    <div className="px-1 pt-1">
+                        <div className="mb-3 text-sm font-semibold">Performance</div>
                         <div className="space-y-2">
                             <PerfLine label="Unrealized return" value={unrealized} pct={dailyPct} />
                             <PerfLine label="Realized return" value={realized} />
                             <PerfLine label="Total return" value={total} />
-                        </div>
-                        <div className="mt-3 text-[10px] text-arc-text-faint">
-                            Placeholder. Real P/L needs the indexer to derive cost basis from
-                            historical trades.
                         </div>
                     </div>
                 </div>
@@ -458,7 +458,12 @@ function OverviewTab({
                 <div className="lg:col-span-1">
                     <div className="arc-card p-5 sm:p-6">
                         <div className="mb-3 flex items-center justify-between">
-                            <div className="text-sm font-semibold">Recent activity</div>
+                            <div>
+                                <div className="text-sm font-semibold">Recent activity</div>
+                                <div className="text-xs text-arc-text-faint">
+                                    {activityCount} transaction{activityCount === 1 ? "" : "s"}
+                                </div>
+                            </div>
                             <button
                                 onClick={onShowAllActivity}
                                 className="inline-flex items-center gap-1 rounded-xl border border-arc-border px-3 py-1.5 text-xs text-arc-text-muted hover:bg-white/5 hover:text-arc-text"
@@ -506,7 +511,7 @@ function ActionTile({
     const inner = (
         <>
             {icon}
-            <span className="text-sm font-medium">{label}</span>
+            <span className="text-[15px] font-medium">{label}</span>
         </>
     );
     if (href && !disabled) {
@@ -611,18 +616,23 @@ function TokensTablePreview({ holdings }: { holdings: HoldingInfo[] }) {
         );
     }
     return (
-        <div className="overflow-x-auto">
+        // Negative side margins pull the table flush with the card so the
+        // per-row hover background can extend past the inner padding (matches
+        // Uniswap's portfolio table where the hover bar reaches the card edge).
+        // Within the rows we re-apply gutter padding via px-3 on first/last
+        // cells so the P/L column never sits flush with the card border.
+        <div className="-mx-3 overflow-x-auto sm:-mx-4">
             <table className="w-full text-sm">
-                <thead className="border-b border-arc-border/60 text-[10px] uppercase tracking-wider text-arc-text-muted">
+                <thead className="text-[10px] uppercase tracking-wider text-arc-text-muted">
                     <tr>
-                        <th className="py-2 pr-3 text-left font-medium">Token</th>
+                        <th className="px-3 py-2 text-left font-medium sm:px-4">Token</th>
                         <th className="px-3 py-2 text-right font-medium">Price</th>
                         <th className="px-3 py-2 text-right font-medium">Balance</th>
                         <th className="px-3 py-2 text-right font-medium">Value</th>
-                        <th className="py-2 pl-3 text-right font-medium">Unrealized P/L</th>
+                        <th className="px-3 py-2 text-right font-medium sm:px-4">Unrealized P/L</th>
                     </tr>
                 </thead>
-                <tbody className="divide-y divide-arc-border/40">
+                <tbody>
                     {holdings.map((h) => (
                         <TokenRow key={h.token.address} holding={h} />
                     ))}
@@ -637,6 +647,9 @@ function TokenRow({ holding }: { holding: HoldingInfo }) {
     const value = holding.valueUsdcRaw ?? 0n;
     const balanceFormatted = formatToken(balance, LAUNCHPAD_TOKEN_DECIMALS, 4);
     const valueFormatted = formatUSDC(value, USDC_DECIMALS, 2);
+    // Resolves the token's metadata image (ipfs:// JSON  raw image). The
+    // hook caches by URI so multiple rows + the wallet widget don't refetch.
+    const { image } = useTokenImage(holding.token.address);
     // Price = value / balance, expressed in USD per token. The on-chain math
     // is integer-only so we compute float in display: (valueRaw / 1e6) /
     // (balance / 1e18). Skip when either side is zero.
@@ -652,15 +665,15 @@ function TokenRow({ holding }: { holding: HoldingInfo }) {
         }
     }
     return (
-        <tr className="text-sm">
-            <td className="py-3 pr-3">
+        <tr className="rounded-lg text-sm transition-colors hover:bg-white/[0.04]">
+            <td className="px-3 py-3 sm:px-4">
                 <Link
                     href={`/launchpad/${holding.token.address}`}
                     className="flex min-w-0 items-center gap-2 hover:underline"
                 >
                     <TokenIcon
                         symbol={holding.token.symbol}
-                        image={undefined}
+                        image={image}
                         size={28}
                     />
                     <div className="min-w-0">
@@ -678,7 +691,7 @@ function TokenRow({ holding }: { holding: HoldingInfo }) {
             <td className="px-3 py-3 text-right tabular-nums text-arc-text">
                 ${valueFormatted}
             </td>
-            <td className="py-3 pl-3 text-right tabular-nums text-arc-text-faint">
+            <td className="px-3 py-3 text-right tabular-nums text-arc-text-faint sm:px-4">
                 <span className="text-[10px]">(indexer)</span>
             </td>
         </tr>
@@ -766,41 +779,237 @@ interface UnifiedActivityItem {
     explorerUrl?: string;
 }
 
-function ActivityTab({ account }: { account: Address }) {
-    const items = useMemo(() => buildActivity(account), [account]);
+type ActivityTypeFilter =
+    | "all"
+    | "swaps"
+    | "sends"
+    | "receives"
+    | "wraps"
+    | "withdrawals"
+    | "approvals"
+    | "pools-created"
+    | "added-liquidity"
+    | "removed-liquidity"
+    | "claimed-fees"
+    | "mints";
 
-    if (items.length === 0) {
-        return (
-            <div className="arc-card p-6 text-center sm:p-12">
-                <p className="text-sm text-arc-text-muted">
-                    No activity yet. Bridge, swap, or launch a token to populate this feed.
-                </p>
-            </div>
-        );
+type ActivityTimeFilter = "all" | "24h" | "7d" | "30d";
+
+const TYPE_OPTIONS: { value: ActivityTypeFilter; label: string }[] = [
+    { value: "all", label: "All types" },
+    { value: "swaps", label: "Swaps" },
+    { value: "sends", label: "Sends" },
+    { value: "receives", label: "Receives" },
+    { value: "wraps", label: "Wraps" },
+    { value: "withdrawals", label: "Withdrawals" },
+    { value: "approvals", label: "Approvals" },
+    { value: "pools-created", label: "Pools created" },
+    { value: "added-liquidity", label: "Added liquidity" },
+    { value: "removed-liquidity", label: "Removed liquidity" },
+    { value: "claimed-fees", label: "Claimed fees" },
+    { value: "mints", label: "Mints" },
+];
+
+const TIME_OPTIONS: { value: ActivityTimeFilter; label: string }[] = [
+    { value: "all", label: "All time" },
+    { value: "24h", label: "24 hours" },
+    { value: "7d", label: "7 days" },
+    { value: "30d", label: "30 days" },
+];
+
+/**
+ * Maps Uniswap's category vocabulary onto the in-app activity feed. Many
+ * Uniswap categories (Wraps, Approvals, Added/Removed liquidity, etc.) have
+ * no equivalent on-chain action we track client-side yet, so they currently
+ * return zero matches; the Ponder indexer will fill them in.
+ */
+function matchesActivityType(item: UnifiedActivityItem, filter: ActivityTypeFilter): boolean {
+    if (filter === "all") return true;
+    const t = item.type.toLowerCase();
+    switch (filter) {
+        case "swaps":
+            return item.kind === "app" && ["buy", "sell", "swap", "multiswap"].includes(t);
+        case "receives":
+            return item.kind === "bridge";
+        case "pools-created":
+        case "mints":
+            return item.kind === "app" && t === "launch";
+        case "claimed-fees":
+            return item.kind === "claim" || (item.kind === "app" && t === "claim-fees");
+        default:
+            return false;
     }
+}
+
+function matchesActivityTime(item: UnifiedActivityItem, filter: ActivityTimeFilter): boolean {
+    if (filter === "all") return true;
+    const windows: Record<Exclude<ActivityTimeFilter, "all">, number> = {
+        "24h": 24 * 60 * 60 * 1000,
+        "7d": 7 * 24 * 60 * 60 * 1000,
+        "30d": 30 * 24 * 60 * 60 * 1000,
+    };
+    return item.ts >= Date.now() - windows[filter];
+}
+
+function matchesActivitySearch(item: UnifiedActivityItem, search: string): boolean {
+    if (!search) return true;
+    const q = search.toLowerCase();
+    return (
+        item.type.toLowerCase().includes(q) ||
+        item.label.toLowerCase().includes(q) ||
+        item.value.toLowerCase().includes(q)
+    );
+}
+
+function ActivityTab({ account }: { account: Address }) {
+    const [typeFilter, setTypeFilter] = useState<ActivityTypeFilter>("all");
+    const [timeFilter, setTimeFilter] = useState<ActivityTimeFilter>("all");
+    const [search, setSearch] = useState("");
+
+    const allItems = useMemo(() => buildActivity(account), [account]);
+    const items = useMemo(
+        () =>
+            allItems.filter(
+                (it) =>
+                    matchesActivityType(it, typeFilter) &&
+                    matchesActivityTime(it, timeFilter) &&
+                    matchesActivitySearch(it, search),
+            ),
+        [allItems, typeFilter, timeFilter, search],
+    );
+
+    const typeLabel = TYPE_OPTIONS.find((o) => o.value === typeFilter)?.label ?? "All types";
+    const timeLabel = TIME_OPTIONS.find((o) => o.value === timeFilter)?.label ?? "All time";
 
     return (
-        <div className="arc-card overflow-hidden">
-            <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                    <thead className="border-b border-arc-border/60 text-[10px] uppercase tracking-wider text-arc-text-muted">
-                        <tr>
-                            <th className="px-4 py-3 text-left font-medium">Time</th>
-                            <th className="px-4 py-3 text-left font-medium">Type</th>
-                            <th className="px-4 py-3 text-left font-medium">Amount</th>
-                            <th className="px-4 py-3 text-left font-medium">Reference</th>
-                        </tr>
-                    </thead>
-                    <tbody className="divide-y divide-arc-border/40">
-                        {items.map((it) => (
-                            <ActivityRowFull key={it.id} item={it} />
-                        ))}
-                    </tbody>
-                </table>
+        <div className="space-y-4">
+            <div className="flex flex-wrap items-center gap-2">
+                <FilterMenu
+                    icon={<Filter className="h-3.5 w-3.5" />}
+                    label={typeLabel}
+                    options={TYPE_OPTIONS}
+                    value={typeFilter}
+                    onChange={(v) => setTypeFilter(v as ActivityTypeFilter)}
+                />
+                <FilterMenu
+                    icon={<Calendar className="h-3.5 w-3.5" />}
+                    label={timeLabel}
+                    options={TIME_OPTIONS}
+                    value={timeFilter}
+                    onChange={(v) => setTimeFilter(v as ActivityTimeFilter)}
+                />
+                <div className="relative ml-auto w-full sm:w-72">
+                    <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-arc-text-faint" />
+                    <input
+                        type="search"
+                        value={search}
+                        onChange={(e) => setSearch(e.target.value)}
+                        placeholder="Search activity"
+                        className="w-full rounded-xl border border-arc-border bg-arc-bg-elevated py-2 pl-9 pr-3 text-xs text-arc-text placeholder:text-arc-text-faint focus:border-arc-cta-hover/50 focus:outline-none"
+                    />
+                </div>
             </div>
-            <div className="border-t border-arc-border/40 px-4 py-3 text-[10px] text-arc-text-faint">
-                Local activity only. Full on-chain history unlocks with the indexer.
-            </div>
+
+            {items.length === 0 ? (
+                <div className="arc-card p-6 text-center sm:p-12">
+                    <p className="text-sm text-arc-text-muted">
+                        {allItems.length === 0
+                            ? "No activity yet. Bridge, swap, or launch a token to populate this feed."
+                            : "No activity matches the current filters."}
+                    </p>
+                </div>
+            ) : (
+                <div className="arc-card overflow-hidden">
+                    <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                            <thead className="border-b border-arc-border/60 text-[10px] uppercase tracking-wider text-arc-text-muted">
+                                <tr>
+                                    <th className="px-4 py-3 text-left font-medium">Time</th>
+                                    <th className="px-4 py-3 text-left font-medium">Type</th>
+                                    <th className="px-4 py-3 text-left font-medium">Amount</th>
+                                    <th className="px-4 py-3 text-left font-medium">Reference</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-arc-border/40">
+                                {items.map((it) => (
+                                    <ActivityRowFull key={it.id} item={it} />
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                    <div className="border-t border-arc-border/40 px-4 py-3 text-[10px] text-arc-text-faint">
+                        Local activity only. Full on-chain history unlocks with the indexer.
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+}
+
+/**
+ * Compact pill-shaped filter trigger with a popover menu. Click-outside
+ * closes the menu. Used for the Type and Time filters on the Activity tab.
+ */
+function FilterMenu({
+    icon,
+    label,
+    options,
+    value,
+    onChange,
+}: {
+    icon: React.ReactNode;
+    label: string;
+    options: { value: string; label: string }[];
+    value: string;
+    onChange: (v: string) => void;
+}) {
+    const [open, setOpen] = useState(false);
+    const ref = useRef<HTMLDivElement | null>(null);
+
+    useEffect(() => {
+        if (!open) return;
+        const onDocClick = (e: MouseEvent) => {
+            if (!ref.current?.contains(e.target as Node)) setOpen(false);
+        };
+        document.addEventListener("mousedown", onDocClick);
+        return () => document.removeEventListener("mousedown", onDocClick);
+    }, [open]);
+
+    return (
+        <div ref={ref} className="relative">
+            <button
+                onClick={() => setOpen((v) => !v)}
+                className={cn(
+                    "inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-medium transition-colors",
+                    open
+                        ? "border-arc-cta-hover/50 bg-arc-bg-elevated text-arc-text"
+                        : "border-arc-border bg-arc-bg-elevated text-arc-text hover:border-arc-cta-hover/40",
+                )}
+            >
+                <span className="text-arc-text-faint">{icon}</span>
+                {label}
+                <span className={cn("text-arc-text-faint transition-transform", open && "rotate-180")}>▾</span>
+            </button>
+            {open && (
+                <div className="absolute left-0 top-full z-30 mt-1 w-52 overflow-hidden rounded-xl border border-arc-border bg-arc-bg-elevated shadow-arc-card">
+                    {options.map((opt) => (
+                        <button
+                            key={opt.value}
+                            onClick={() => {
+                                onChange(opt.value);
+                                setOpen(false);
+                            }}
+                            className={cn(
+                                "flex w-full items-center justify-between px-3 py-2 text-left text-xs transition-colors hover:bg-white/5",
+                                opt.value === value ? "text-arc-text" : "text-arc-text-muted",
+                            )}
+                        >
+                            <span>{opt.label}</span>
+                            {opt.value === value && <Check className="h-3 w-3 text-arc-cta-hover" />}
+                        </button>
+                    ))}
+                </div>
+            )}
         </div>
     );
 }
