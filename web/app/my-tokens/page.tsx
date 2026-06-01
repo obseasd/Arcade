@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, Rocket, Wallet } from "lucide-react";
+import { ArrowLeft, Briefcase, Rocket, Wallet } from "lucide-react";
 import Link from "next/link";
 import { useMemo } from "react";
 import { useAccount } from "wagmi";
@@ -61,11 +61,40 @@ export default function MyTokensPage() {
       </div>
 
       {!account ? (
-        <div className="arc-card p-12 text-center text-sm text-arc-text-muted">
+        <div className="arc-card p-6 text-center sm:p-12 text-sm text-arc-text-muted">
           Connect your wallet to see your tokens.
         </div>
       ) : (
         <div className="space-y-10">
+          {/* Portfolio hero: total USD value of every token this wallet
+              currently holds (launched + bought, deduped). Hides when the
+              wallet has nothing yet so a new user doesn't see "$0.00". */}
+          {totalHoldingsUsd > 0n && (
+            <div className="arc-card p-6 sm:p-8">
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 text-xs uppercase tracking-wider text-arc-text-muted">
+                    <Briefcase className="h-3.5 w-3.5" />
+                    Portfolio value
+                  </div>
+                  <div className="mt-2 truncate text-4xl font-semibold tabular-nums sm:text-5xl">
+                    ${(Number(totalHoldingsUsd) / 1e6).toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                  </div>
+                  <div className="mt-1 text-xs text-arc-text-faint">
+                    Across {holdings.length} token{holdings.length === 1 ? "" : "s"}
+                    {mine.length > 0 && ` · ${mine.length} launched`}
+                  </div>
+                </div>
+                <Link
+                  href="/swap"
+                  className="hidden shrink-0 rounded-xl bg-arc-cta-hover/15 px-4 py-2 text-xs font-medium text-arc-cta-hover transition-colors hover:bg-arc-cta-hover/25 sm:inline-flex sm:items-center"
+                >
+                  Trade
+                </Link>
+              </div>
+            </div>
+          )}
+
           {/* Earnings summary - self-hides if the wallet has no V3 locker
               positions and zero pending balance. */}
           <CreatorEarningsCard />
@@ -172,7 +201,7 @@ function Section({
       {loading ? (
         <div className="arc-card p-8 text-center text-sm text-arc-text-muted">Loading…</div>
       ) : empty ? (
-        <div className="arc-card p-12 text-center">
+        <div className="arc-card p-6 text-center sm:p-12">
           {empty.icon}
           <p className="text-sm text-arc-text-muted">{empty.message}</p>
           {empty.cta}

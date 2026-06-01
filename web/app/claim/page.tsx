@@ -9,6 +9,7 @@ import { useAccount, usePublicClient, useReadContract, useWriteContract } from "
 import { erc20Abi } from "viem";
 import { TWITTER_ESCROW_V3_ABI } from "@/lib/abis/twitterEscrowV3";
 import { V3_LOCKER_ABI } from "@/lib/abis/v3";
+import { removePendingClaim, savePendingClaim } from "@/lib/pendingClaims";
 import { ADDRESSES, LAUNCHPAD_TOKEN_DECIMALS, USDC_DECIMALS } from "@/lib/constants";
 import { pushToast } from "@/lib/toast";
 import { cn, formatAddress, formatToken, formatUSDC } from "@/lib/utils";
@@ -201,12 +202,35 @@ function ClaimPageInner() {
       });
       if (publicClient) await publicClient.waitForTransactionReceipt({ hash: authorizeHash });
 
+      // Persist the claim so the user can come back after the timelock
+      // window elapses. Without this they'd lose the URL params after a
+      // redirect and a fresh OAuth would mint a colliding nonce. Keyed by
+      // (account, token, slotIndex) so re-running the flow on the same slot
+      // overwrites the old entry.
+      savePendingClaim({
+        account: account as Address,
+        token: token!,
+        positionId: positionId.toString(),
+        slotIndex: slotIndex.toString(),
+        recipient: recipient!,
+        pairedToken: pairedToken!,
+        pairedAmount: pairedAmount.toString(),
+        clankerToken: clankerToken!,
+        clankerAmount: clankerAmount.toString(),
+        deadline: deadline.toString(),
+        nonce: nonce!,
+        sig: sig!,
+        executeAfter: Math.floor(Date.now() / 1000) + timelockSec,
+        handle: handle ?? "",
+        savedAt: Math.floor(Date.now() / 1000),
+      });
+
       // --- Step 2: execute the claim (if timelock is 0, immediately) ---
       if (timelockSec > 0) {
         pushToast({
           kind: "info",
-          title: "Authorized",
-          message: `Come back in ${Math.ceil(timelockSec / 60)} min to finish the claim.`,
+          title: "Step 1 done — claim authorized",
+          message: `Your pending claim is saved. A banner on the token page will let you finalize it in ${Math.ceil(timelockSec / 60)} min.`,
         });
         router.replace(`/launchpad/${token}`);
         return;
@@ -219,6 +243,8 @@ function ClaimPageInner() {
         args: [nonce!],
       });
       if (publicClient) await publicClient.waitForTransactionReceipt({ hash: claimHash });
+      // Clean up the pending-claim banner now that the claim is settled.
+      removePendingClaim(account as Address, token!, slotIndex.toString());
       pushToast({
         kind: "info",
         title: "Claim confirmed",

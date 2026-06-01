@@ -20,6 +20,7 @@ import { PriceChart } from "@/components/launchpad/PriceChart";
 import { TradePanel } from "@/components/launchpad/TradePanel";
 import { ClankerTradePanel } from "@/components/launchpad/ClankerTradePanel";
 import { CreatorTokenPanel } from "@/components/launchpad/CreatorTokenPanel";
+import { PendingClaimBanner } from "@/components/launchpad/PendingClaimBanner";
 import { TokenActivityPanel } from "@/components/launchpad/TokenActivityPanel";
 import { Comments } from "@/components/launchpad/Comments";
 import { Tooltip } from "@/components/ui/Tooltip";
@@ -200,6 +201,18 @@ export default function TokenDetailPage() {
         <ArrowLeft className="h-4 w-4" /> Launchpad
       </Link>
 
+      {/* Resume banners for any pending Twitter claims this wallet authorized.
+          One per slot index; empty entries return null. With MAX_RECIPIENTS=4
+          in the locker, 4 lookups is always upper-bounded. */}
+      {isClanker && (
+        <div className="mb-6 space-y-2">
+          <PendingClaimBanner token={token} slotIndex={0n} />
+          <PendingClaimBanner token={token} slotIndex={1n} />
+          <PendingClaimBanner token={token} slotIndex={2n} />
+          <PendingClaimBanner token={token} slotIndex={3n} />
+        </div>
+      )}
+
       <div className="grid gap-6 lg:grid-cols-3">
         {/* Left: header + chart + comments */}
         <div className="space-y-6 lg:col-span-2">
@@ -214,7 +227,7 @@ export default function TokenDetailPage() {
                 symbol={symbol}
                 image={image}
                 size={80}
-                className="h-20 w-20 rounded-2xl border border-arc-border"
+                className="h-16 w-16 rounded-2xl border border-arc-border sm:h-20 sm:w-20"
               />
               {/* Hidden span left for layout-stability when useTokenImage
                   initially returns undefined and image hasn't resolved yet. */}
@@ -225,7 +238,7 @@ export default function TokenDetailPage() {
               )}
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-baseline gap-2">
-                  <h1 className="truncate text-2xl font-semibold">{name}</h1>
+                  <h1 className="truncate text-xl font-semibold sm:text-2xl">{name}</h1>
                   <span className="tabular-nums text-arc-text-muted">${symbol}</span>
                   {Number(state?.mode ?? 0) === 2 ? (
                     <span className="rounded-full border border-arc-cta-hover/40 bg-arc-cta-hover/15 px-2 py-0.5 text-xs font-medium text-arc-text">

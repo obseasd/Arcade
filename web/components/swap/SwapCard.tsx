@@ -711,7 +711,7 @@ function TokenBox({
           if (parts.length > 2) return;
           onAmountChange(v);
         }}
-        className="arc-input w-full bg-transparent text-4xl font-medium leading-tight"
+        className="arc-input w-full bg-transparent text-3xl font-medium leading-tight sm:text-4xl"
       />
 
       {/* Footer: USD + balance | HALF/MAX or fee */}
