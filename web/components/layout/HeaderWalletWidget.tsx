@@ -230,11 +230,19 @@ export function HeaderWalletWidget() {
                                                     <PowerMenuItem
                                                         icon={<ArrowRightLeft className="h-3.5 w-3.5" />}
                                                         onClick={() => {
-                                                            // Close the panel BEFORE the connect modal opens
-                                                            // so the user doesn't see two overlapping menus.
+                                                            // RainbowKit's openConnectModal is a no-op while
+                                                            // the user is already connected, so a literal "switch
+                                                            // wallet" requires disconnecting first and then
+                                                            // re-opening the connect modal once the disconnected
+                                                            // state propagates through wagmi (50-100ms in
+                                                            // practice). Close our menus immediately so the
+                                                            // modal doesn't open behind them.
                                                             setPowerOpen(false);
                                                             setMenuOpen(false);
-                                                            openConnectModal();
+                                                            disconnect();
+                                                            setTimeout(() => {
+                                                                openConnectModal?.();
+                                                            }, 150);
                                                         }}
                                                     >
                                                         Changer de wallet
