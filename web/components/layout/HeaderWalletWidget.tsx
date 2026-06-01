@@ -401,11 +401,11 @@ function ActivityFeed({ address, onLinkClick }: { address: Address; onLinkClick:
 //     claims, deploys, and any other contract-interaction tx
 function ActivityIcon({ src, alt }: { src: string; alt: string }) {
     return (
-        // Bare PNG, no background container. Size bumped +20% (h-5 → h-6,
-        // 20px → 24px) so the icon reads at a glance without competing
-        // with the colored block frame.
+        // Bare PNG, no background container. Sized to match the two-line
+        // text block on the row (text-sm + text-xs = ~36px stacked) so
+        // the icon visually anchors the row instead of floating small.
         // eslint-disable-next-line @next/next/no-img-element
-        <img src={src} alt={alt} className="h-6 w-6 shrink-0 object-contain" />
+        <img src={src} alt={alt} className="h-10 w-10 shrink-0 object-contain" />
     );
 }
 
