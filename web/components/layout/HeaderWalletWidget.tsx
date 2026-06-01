@@ -228,7 +228,7 @@ export function HeaderWalletWidget() {
                                         <Link
                                             href="/lp-simulator"
                                             onClick={() => setMenuOpen(false)}
-                                            title="LP Simulator"
+                                            title="LP simulator"
                                             className="rounded-lg p-2 text-arc-text-muted transition-colors hover:bg-white/5 hover:text-arc-text"
                                         >
                                             <LineChart className="h-4 w-4" />
@@ -261,7 +261,7 @@ export function HeaderWalletWidget() {
                                                             disconnect();
                                                         }}
                                                     >
-                                                        Changer de wallet
+                                                        Switch wallet
                                                     </PowerMenuItem>
                                                     <PowerMenuItem
                                                         icon={<LogOut className="h-3.5 w-3.5" />}
@@ -272,7 +272,7 @@ export function HeaderWalletWidget() {
                                                         }}
                                                         variant="danger"
                                                     >
-                                                        Déconnecter
+                                                        Disconnect
                                                     </PowerMenuItem>
                                                 </div>
                                             )}
@@ -299,14 +299,14 @@ export function HeaderWalletWidget() {
                                         className="flex flex-col items-center justify-center gap-1.5 rounded-xl bg-sky-400/10 px-3 py-4 text-sky-400 transition-colors hover:bg-sky-400/20"
                                     >
                                         <Send className="h-5 w-5" />
-                                        <span className="text-sm font-medium">Envoyer</span>
+                                        <span className="text-sm font-medium">Send</span>
                                     </button>
                                     <button
                                         onClick={() => setReceiveOpen(true)}
                                         className="flex flex-col items-center justify-center gap-1.5 rounded-xl bg-sky-400/10 px-3 py-4 text-sky-400 transition-colors hover:bg-sky-400/20"
                                     >
                                         <Download className="h-5 w-5" />
-                                        <span className="text-sm font-medium">Recevoir</span>
+                                        <span className="text-sm font-medium">Receive</span>
                                     </button>
                                 </div>
 
@@ -321,7 +321,7 @@ export function HeaderWalletWidget() {
                                         onClick={() => setMenuOpen(false)}
                                         className="inline-flex items-center gap-1 rounded-md px-3 py-1.5 text-xs font-medium text-arc-text-muted transition-colors hover:text-arc-text"
                                     >
-                                        Voir le portefeuille
+                                        View portfolio
                                         <ArrowRight className="h-3 w-3" />
                                     </Link>
                                 </div>
@@ -406,7 +406,7 @@ function ActivityFeed({ address, onLinkClick }: { address: Address; onLinkClick:
     if (items.length === 0) {
         return (
             <div className="px-4 pb-4">
-                <div className="mb-2 text-xs font-semibold text-arc-text">Activité récente</div>
+                <div className="mb-2 text-xs font-semibold text-arc-text">Recent activity</div>
                 <div className="text-[11px] text-arc-text-faint">No activity yet.</div>
             </div>
         );
@@ -414,7 +414,7 @@ function ActivityFeed({ address, onLinkClick }: { address: Address; onLinkClick:
 
     return (
         <div className="px-4 pb-4">
-            <div className="mb-2 text-xs font-semibold text-arc-text">Activité récente</div>
+            <div className="mb-2 text-xs font-semibold text-arc-text">Recent activity</div>
             <div className="space-y-2">
                 {items.map((it, i) =>
                     it.kind === "bridge" ? (
@@ -433,7 +433,7 @@ function ActivityFeed({ address, onLinkClick }: { address: Address; onLinkClick:
                 onClick={onLinkClick}
                 className="mt-3 flex items-center justify-center gap-1 rounded-xl border border-arc-border px-4 py-2 text-[11px] font-medium text-arc-text-muted transition-colors hover:bg-white/5 hover:text-arc-text"
             >
-                Voir toute l&apos;activité
+                View all activity
                 <ArrowRight className="h-3 w-3" />
             </Link>
         </div>
@@ -469,10 +469,10 @@ function BridgeRow({ entry }: { entry: HistoryEntry }) {
     })();
     const status =
         entry.status === "minted"
-            ? "Bridge confirmé"
+            ? "Bridge confirmed"
             : entry.status === "failed"
-              ? "Bridge échoué"
-              : "Bridge en attente";
+              ? "Bridge failed"
+              : "Bridge pending";
     return (
         <div className="flex items-center gap-2.5">
             <ActivityIcon src="/bridge.png" alt="Bridge" />
@@ -505,7 +505,7 @@ function ClaimRow({ entry }: { entry: PendingTwitterClaim }) {
             <ActivityIcon src="/contract.png" alt="Contract" />
             <div className="min-w-0 flex-1">
                 <div className="truncate text-sm text-arc-text-faint">
-                    {ready ? "Twitter claim prêt" : "Twitter claim en attente"}
+                    {ready ? "Twitter claim ready" : "Twitter claim pending"}
                 </div>
                 <div className="truncate text-xs font-medium text-arc-text">@{entry.handle}</div>
             </div>
@@ -543,13 +543,13 @@ function ReceiveModal({
                 onClick={(e) => e.stopPropagation()}
             >
                 <div className="flex items-center justify-between">
-                    <h2 className="text-base font-semibold text-arc-text">Recevoir</h2>
+                    <h2 className="text-base font-semibold text-arc-text">Receive</h2>
                     <button onClick={onClose} className="text-arc-text-faint hover:text-arc-text">
                         <X className="h-4 w-4" />
                     </button>
                 </div>
                 <p className="mt-1 text-xs text-arc-text-muted">
-                    Partage cette adresse pour recevoir USDC ou tokens sur Arc.
+                    Share this address to receive USDC or tokens on Arc.
                 </p>
                 <div className="mt-4 break-all rounded-xl border border-arc-border bg-arc-surface px-3 py-3 font-mono text-xs text-arc-text">
                     {address}
@@ -559,11 +559,11 @@ function ReceiveModal({
                     className="arc-button-primary mt-4 flex w-full items-center justify-center gap-2 py-2.5 text-sm"
                 >
                     <Copy className="h-4 w-4" />
-                    Copier l&apos;adresse
+                    Copy address
                 </button>
                 <p className="mt-3 text-[11px] text-arc-text-faint">
-                    Vérifie toujours que tu es sur Arc testnet (chainId 5042002) avant que
-                    l&apos;envoyeur ne broadcast.
+                    Always verify you&apos;re on Arc testnet (chainId 5042002) before the sender
+                    broadcasts.
                 </p>
             </div>
         </div>
