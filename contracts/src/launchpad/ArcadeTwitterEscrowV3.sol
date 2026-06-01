@@ -90,6 +90,15 @@ contract ArcadeTwitterEscrowV3 is Ownable2Step, Pausable, ReentrancyGuard {
     ///         setClaimTimelock post-deploy.
     uint64 public constant DEFAULT_TIMELOCK = 1 hours;
 
+    /// @notice After this many seconds of no `creditSlot` activity on a
+    ///         (positionId, slotIndex), the owner can forfeit any credited
+    ///         balance via `forfeitStaleClaim`. Designed for the abandoned-
+    ///         handle case: Twitter user never appears, the platform owner
+    ///         can route the locked balance elsewhere (treasury, refund to
+    ///         creator, charity) instead of letting it sit forever. The
+    ///         180-day default gives a real claimant ample time to surface.
+    uint64 public constant FORFEIT_DELAY = 180 days;
+
     // ====================== Mutable security primitives ======================
 
     /// @notice Backend signer. Mutable so a compromised key can be rotated
@@ -112,6 +121,11 @@ contract ArcadeTwitterEscrowV3 is Ownable2Step, Pausable, ReentrancyGuard {
     /// @notice Sum of `balances[*][*][token]` across all slots. Used by
     ///         `rescue` to refuse touching user-earmarked balances.
     mapping(address token => uint256) public creditedTotal;
+
+    /// @notice Timestamp of the last `creditSlot` call for each
+    ///         (positionId, slotIndex). Anchors the FORFEIT_DELAY window
+    ///         for `forfeitStaleClaim`. 0 means never credited.
+    mapping(uint256 positionId => mapping(uint256 slotIndex => uint64)) public lastCreditedAt;
 
     // ====================== Claim state ======================
 
@@ -153,6 +167,15 @@ contract ArcadeTwitterEscrowV3 is Ownable2Step, Pausable, ReentrancyGuard {
     event TrustedSignerUpdated(address indexed previous, address indexed next);
     event RotationFailed(uint256 indexed positionId, uint256 indexed slotIndex, bytes reason);
     event LockerSet(address indexed locker);
+    event Forfeited(
+        uint256 indexed positionId,
+        uint256 indexed slotIndex,
+        address indexed to,
+        address pairedToken,
+        uint256 pairedAmount,
+        address clankerToken,
+        uint256 clankerAmount
+    );
 
     // ====================== Errors ======================
 
@@ -177,6 +200,7 @@ contract ArcadeTwitterEscrowV3 is Ownable2Step, Pausable, ReentrancyGuard {
     error NothingToClaim();
     error RenounceDisabled();
     error SlotAlreadyClaimed();
+    error NotStaleYet();
 
     // ====================== Construction ======================
 
@@ -252,6 +276,11 @@ contract ArcadeTwitterEscrowV3 is Ownable2Step, Pausable, ReentrancyGuard {
         if (claimed[positionId][slotIndex]) revert SlotAlreadyClaimed();
         balances[positionId][slotIndex][token] += amount;
         creditedTotal[token] += amount;
+        // Anchor the staleness clock at every credit. As long as the locker
+        // routes fees here, the slot stays "active" and never becomes
+        // forfeit-eligible. Only goes idle when no one is collecting fees
+        // anymore (token abandoned, etc).
+        lastCreditedAt[positionId][slotIndex] = uint64(block.timestamp);
         emit Credited(positionId, slotIndex, token, amount);
     }
 
@@ -484,6 +513,60 @@ contract ArcadeTwitterEscrowV3 is Ownable2Step, Pausable, ReentrancyGuard {
         if (amount > free) revert ExceedsFreeBalance();
         IERC20(token).safeTransfer(to, amount);
         emit Rescued(token, to, amount);
+    }
+
+    /**
+     * @notice Forfeit a stale slot's accumulated balance to a chosen recipient.
+     *         Designed for the abandoned-handle case: the Twitter user never
+     *         surfaces to claim. After `FORFEIT_DELAY` seconds (180 days) of
+     *         no `creditSlot` activity on the slot, the owner can route the
+     *         credited balance elsewhere (treasury, refund to creator, charity).
+     *
+     *         Marks the slot as `claimed=true` to align with H-03: future
+     *         creditSlot calls revert and the locker's try/catch will route
+     *         any later fees through its own pendingWithdrawals ledger
+     *         instead, where `pullFromLocker` can recover them.
+     *
+     *         Refuses to operate while a claim is still pending (call `veto`
+     *         first if needed) and refuses if both balances are already zero.
+     */
+    function forfeitStaleClaim(
+        uint256 positionId,
+        uint256 slotIndex,
+        address pairedToken,
+        address clankerToken,
+        address to
+    ) external onlyOwner {
+        if (to == address(0)) revert ZeroAddress();
+        if (claimed[positionId][slotIndex]) revert AlreadyClaimed();
+        if (hasPending[positionId][slotIndex]) revert SlotPending();
+
+        uint64 last = lastCreditedAt[positionId][slotIndex];
+        if (last == 0) revert NothingToClaim();
+        if (block.timestamp < uint256(last) + uint256(FORFEIT_DELAY)) revert NotStaleYet();
+
+        uint256 paired = pairedToken != address(0) ? balances[positionId][slotIndex][pairedToken] : 0;
+        // Same-token aliasing: if pairedToken == clankerToken, only count
+        // the balance once (mirrors F-10 safety net).
+        uint256 clanker = (clankerToken != address(0) && clankerToken != pairedToken)
+            ? balances[positionId][slotIndex][clankerToken]
+            : 0;
+        if (paired == 0 && clanker == 0) revert NothingToClaim();
+
+        claimed[positionId][slotIndex] = true;
+
+        if (paired > 0) {
+            balances[positionId][slotIndex][pairedToken] = 0;
+            creditedTotal[pairedToken] -= paired;
+            IERC20(pairedToken).safeTransfer(to, paired);
+        }
+        if (clanker > 0) {
+            balances[positionId][slotIndex][clankerToken] = 0;
+            creditedTotal[clankerToken] -= clanker;
+            IERC20(clankerToken).safeTransfer(to, clanker);
+        }
+
+        emit Forfeited(positionId, slotIndex, to, pairedToken, paired, clankerToken, clanker);
     }
 
     /// @notice H-08: pull tokens credited to this contract in the locker's

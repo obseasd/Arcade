@@ -4,6 +4,7 @@ import {
     AlertTriangle,
     ArrowLeft,
     CheckCircle2,
+    Clock,
     Lock,
     LogIn,
     Pause,
@@ -120,6 +121,7 @@ function AdminBody() {
                 <SignerCard />
                 <PullFromLockerCard />
                 <LockerRotationCard />
+                <ForfeitCard />
                 <RescueCard />
                 <OwnershipCard />
             </div>
@@ -544,6 +546,166 @@ function LockerRotationCard() {
                     {submitting === "admin" ? "Sending…" : "Rotate admin"}
                 </button>
             </div>
+        </Card>
+    );
+}
+
+// ===================== Forfeit stale claim =====================
+
+function ForfeitCard() {
+    const escrow = ADDRESSES.twitterEscrow;
+    const { writeContractAsync } = useWriteContract();
+    const [positionIdStr, setPositionIdStr] = useState("");
+    const [slotIndexStr, setSlotIndexStr] = useState("");
+    const [pairedStr, setPairedStr] = useState<string>(ADDRESSES.usdc);
+    const [clankerStr, setClankerStr] = useState<string>("");
+    const [toStr, setToStr] = useState<string>("");
+    const [submitting, setSubmitting] = useState(false);
+
+    const forfeitDelayQ = useReadContract({
+        address: escrow,
+        abi: TWITTER_ESCROW_V3_ABI,
+        functionName: "FORFEIT_DELAY",
+    });
+    const delaySec = Number((forfeitDelayQ.data as bigint | undefined) ?? 0n);
+
+    const idsValid = positionIdStr.trim() !== "" && slotIndexStr.trim() !== "";
+    const positionId = idsValid ? BigInt(positionIdStr.trim()) : 0n;
+    const slotIndex = idsValid ? BigInt(slotIndexStr.trim()) : 0n;
+
+    // Read on-chain state of the slot to show the operator what they're
+    // about to forfeit. Disabled until the position/slot pair is filled in.
+    const lastCreditedAtQ = useReadContract({
+        address: escrow,
+        abi: TWITTER_ESCROW_V3_ABI,
+        functionName: "lastCreditedAt",
+        args: [positionId, slotIndex],
+        query: { enabled: idsValid },
+    });
+    const claimedQ = useReadContract({
+        address: escrow,
+        abi: TWITTER_ESCROW_V3_ABI,
+        functionName: "claimed",
+        args: [positionId, slotIndex],
+        query: { enabled: idsValid },
+    });
+    const lastSec = Number((lastCreditedAtQ.data as bigint | undefined) ?? 0n);
+    const slotClaimed = !!(claimedQ.data as boolean | undefined);
+    const eligibleAtSec = lastSec > 0 ? lastSec + delaySec : 0;
+    const nowSec = Math.floor(Date.now() / 1000);
+    const stale = lastSec > 0 && nowSec >= eligibleAtSec;
+
+    const valid =
+        idsValid
+        && isAddress(pairedStr.trim())
+        && (clankerStr.trim() === "" || isAddress(clankerStr.trim()))
+        && isAddress(toStr.trim());
+
+    const onSubmit = async () => {
+        if (!valid) return;
+        if (!window.confirm(
+            `Forfeit slot ${slotIndexStr} of position ${positionIdStr}? `
+            + `Credited balances will be transferred to ${toStr.trim()} and the slot marked claimed (future creditSlot calls will revert). This is irreversible.`,
+        )) return;
+        setSubmitting(true);
+        try {
+            const clankerArg = (clankerStr.trim() === "" ? "0x0000000000000000000000000000000000000000" : clankerStr.trim()) as Address;
+            await writeContractAsync({
+                address: escrow,
+                abi: TWITTER_ESCROW_V3_ABI,
+                functionName: "forfeitStaleClaim",
+                args: [positionId, slotIndex, pairedStr.trim() as Address, clankerArg, toStr.trim() as Address],
+            });
+            pushToast({ kind: "info", title: "Slot forfeited", message: "Future creditSlot for this slot will revert." });
+            await lastCreditedAtQ.refetch();
+            await claimedQ.refetch();
+        } catch (e: any) {
+            pushToast({ kind: "error", title: "Failed", message: e?.shortMessage ?? e?.message });
+        } finally {
+            setSubmitting(false);
+        }
+    };
+
+    return (
+        <Card title="Forfeit stale claim" icon={<Clock className="h-4 w-4 text-arc-warn" />}>
+            <p className="text-xs text-arc-text-muted">
+                After {Math.floor(delaySec / 86400)} days of no <code>creditSlot</code>{" "}
+                activity on a slot, the owner can route the credited balance to a chosen
+                address. Designed for abandoned Twitter handles (account deleted, never
+                claimed, etc.). Slot is marked claimed after forfeit so the locker&apos;s
+                future credit attempts revert (and fall through to its{" "}
+                <code>pendingWithdrawals</code> ledger, recoverable via <code>pullFromLocker</code>).
+            </p>
+            <div className="mt-3 grid grid-cols-2 gap-2">
+                <input
+                    type="number"
+                    min={0}
+                    placeholder="positionId"
+                    value={positionIdStr}
+                    onChange={(e) => setPositionIdStr(e.target.value)}
+                    className="arc-input rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2 text-sm"
+                />
+                <input
+                    type="number"
+                    min={0}
+                    placeholder="slotIndex"
+                    value={slotIndexStr}
+                    onChange={(e) => setSlotIndexStr(e.target.value)}
+                    className="arc-input rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2 text-sm"
+                />
+            </div>
+            <input
+                type="text"
+                placeholder="Paired token address (typically USDC)"
+                value={pairedStr}
+                onChange={(e) => setPairedStr(e.target.value)}
+                className="arc-input mt-2 w-full rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2 font-mono text-xs"
+            />
+            <input
+                type="text"
+                placeholder="Clanker / launch token address (optional)"
+                value={clankerStr}
+                onChange={(e) => setClankerStr(e.target.value)}
+                className="arc-input mt-2 w-full rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2 font-mono text-xs"
+            />
+            <input
+                type="text"
+                placeholder="Recipient (treasury, creator, charity…)"
+                value={toStr}
+                onChange={(e) => setToStr(e.target.value)}
+                className="arc-input mt-2 w-full rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2 font-mono text-xs"
+            />
+
+            {idsValid && (
+                <div className="mt-3 rounded-xl border border-arc-border bg-arc-bg-elevated p-3 text-xs">
+                    {slotClaimed ? (
+                        <div className="text-arc-warn">Slot is already marked claimed - forfeit will revert.</div>
+                    ) : lastSec === 0 ? (
+                        <div className="text-arc-text-muted">Slot has never been credited. Nothing to forfeit.</div>
+                    ) : stale ? (
+                        <div className="text-arc-success">
+                            Slot is stale (last credit {Math.floor((nowSec - lastSec) / 86400)} days ago). Eligible to forfeit.
+                        </div>
+                    ) : (
+                        <div className="text-arc-text-muted">
+                            Slot is still active. Eligible in {Math.ceil((eligibleAtSec - nowSec) / 86400)} more days
+                            (last credit {Math.floor((nowSec - lastSec) / 86400)} days ago).
+                        </div>
+                    )}
+                </div>
+            )}
+
+            <button
+                onClick={onSubmit}
+                disabled={!valid || submitting || (idsValid && !stale)}
+                className={cn(
+                    "mt-3 inline-flex items-center gap-2 rounded-xl bg-arc-warn/15 px-4 py-2 text-sm font-semibold text-arc-warn",
+                    (!valid || submitting || (idsValid && !stale)) && "opacity-60",
+                )}
+            >
+                <Clock className="h-4 w-4" />
+                {submitting ? "Sending…" : "Forfeit slot"}
+            </button>
         </Card>
     );
 }

@@ -658,6 +658,123 @@ contract ArcadeTwitterEscrowV3Test is Test {
         assertEq(locker.lastPositionId(), 2);
         assertEq(locker.lastSlotIndex(), 1);
     }
+
+    // ============= Forfeit stale claim (180-day abandonment recovery) =====
+
+    function test_forfeit_revertsBeforeDelay() public {
+        _credit(1, 0, address(usdc), 100);
+        // Even 179 days later, can't forfeit yet.
+        vm.warp(block.timestamp + 179 days);
+        vm.prank(OWNER);
+        vm.expectRevert(ArcadeTwitterEscrowV3.NotStaleYet.selector);
+        escrow.forfeitStaleClaim(1, 0, address(usdc), address(clanker), address(0xCAFE));
+    }
+
+    function test_forfeit_succeedsAfterDelay() public {
+        _credit(1, 0, address(usdc), 100);
+        _credit(1, 0, address(clanker), 200);
+
+        address sink = address(0xCAFE);
+
+        // Past 180 days, owner forfeits both pots to sink.
+        vm.warp(block.timestamp + 181 days);
+        vm.prank(OWNER);
+        escrow.forfeitStaleClaim(1, 0, address(usdc), address(clanker), sink);
+
+        assertEq(usdc.balanceOf(sink), 100, "USDC forfeited");
+        assertEq(clanker.balanceOf(sink), 200, "CLANKER forfeited");
+        assertEq(escrow.balances(1, 0, address(usdc)), 0, "USDC balance zeroed");
+        assertEq(escrow.balances(1, 0, address(clanker)), 0, "CLANKER balance zeroed");
+        assertEq(escrow.creditedTotal(address(usdc)), 0, "creditedTotal USDC zeroed");
+        assertEq(escrow.creditedTotal(address(clanker)), 0, "creditedTotal CLANKER zeroed");
+        assertTrue(escrow.claimed(1, 0), "slot marked claimed - blocks future creditSlot");
+    }
+
+    function test_forfeit_creditExtendsTheClock() public {
+        // First credit at t=0.
+        _credit(1, 0, address(usdc), 50);
+
+        // 179 days later, more fees credited - resets the staleness clock.
+        vm.warp(block.timestamp + 179 days);
+        _credit(1, 0, address(usdc), 50);
+
+        // 1 more day later: would be stale from FIRST credit, but second one
+        // extended the clock. Still NotStaleYet.
+        vm.warp(block.timestamp + 1 days);
+        vm.prank(OWNER);
+        vm.expectRevert(ArcadeTwitterEscrowV3.NotStaleYet.selector);
+        escrow.forfeitStaleClaim(1, 0, address(usdc), address(clanker), address(0xCAFE));
+    }
+
+    function test_forfeit_revertsIfNeverCredited() public {
+        vm.warp(block.timestamp + 365 days);
+        vm.prank(OWNER);
+        vm.expectRevert(ArcadeTwitterEscrowV3.NothingToClaim.selector);
+        escrow.forfeitStaleClaim(99, 7, address(usdc), address(clanker), address(0xCAFE));
+    }
+
+    function test_forfeit_revertsIfBothBalancesZero() public {
+        // Edge: credit then claim it normally, then time passes. Balance is 0
+        // but lastCreditedAt was set - we still want NothingToClaim, not
+        // NotStaleYet.
+        _credit(1, 0, address(usdc), 100);
+        bytes32 nonce = bytes32("preclaim");
+        uint256 deadline = block.timestamp + 365 days;
+        bytes memory sig = _signClaim(1, 0, recipient, address(usdc), 100, address(0), 0, deadline, nonce);
+        escrow.authorize(1, 0, recipient, address(usdc), 100, address(0), 0, deadline, nonce, sig);
+        vm.warp(block.timestamp + escrow.claimTimelock() + 1);
+        escrow.claimByTwitter(nonce);
+
+        // Balance now 0. Try forfeit after 180 days.
+        vm.warp(block.timestamp + 181 days);
+        vm.prank(OWNER);
+        // Slot is already claimed via the normal path, forfeit refuses.
+        vm.expectRevert(ArcadeTwitterEscrowV3.AlreadyClaimed.selector);
+        escrow.forfeitStaleClaim(1, 0, address(usdc), address(clanker), address(0xCAFE));
+    }
+
+    function test_forfeit_revertsWhilePendingClaim() public {
+        _credit(1, 0, address(usdc), 100);
+
+        vm.warp(block.timestamp + 200 days);
+
+        // Owner can't forfeit while there's a pending claim. They must veto first.
+        bytes32 nonce = bytes32("pending");
+        uint256 deadline = block.timestamp + 365 days;
+        bytes memory sig = _signClaim(1, 0, recipient, address(usdc), 100, address(0), 0, deadline, nonce);
+        escrow.authorize(1, 0, recipient, address(usdc), 100, address(0), 0, deadline, nonce, sig);
+
+        vm.prank(OWNER);
+        vm.expectRevert(ArcadeTwitterEscrowV3.SlotPending.selector);
+        escrow.forfeitStaleClaim(1, 0, address(usdc), address(clanker), address(0xCAFE));
+    }
+
+    function test_forfeit_onlyOwner() public {
+        _credit(1, 0, address(usdc), 100);
+        vm.warp(block.timestamp + 200 days);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, address(this)));
+        escrow.forfeitStaleClaim(1, 0, address(usdc), address(clanker), address(0xCAFE));
+    }
+
+    function test_forfeit_rejectsZeroRecipient() public {
+        _credit(1, 0, address(usdc), 100);
+        vm.warp(block.timestamp + 200 days);
+        vm.prank(OWNER);
+        vm.expectRevert(ArcadeTwitterEscrowV3.ZeroAddress.selector);
+        escrow.forfeitStaleClaim(1, 0, address(usdc), address(clanker), address(0));
+    }
+
+    function test_forfeit_blocksFutureCreditSlot() public {
+        _credit(1, 0, address(usdc), 100);
+        vm.warp(block.timestamp + 200 days);
+        vm.prank(OWNER);
+        escrow.forfeitStaleClaim(1, 0, address(usdc), address(clanker), address(0xCAFE));
+
+        // After forfeit the slot is marked claimed; locker's later credit attempt reverts.
+        vm.prank(address(locker));
+        vm.expectRevert(ArcadeTwitterEscrowV3.SlotAlreadyClaimed.selector);
+        escrow.creditSlot(1, 0, address(usdc), 50);
+    }
 }
 
 /// @notice MockLocker extension that supports the withdrawPending ABI used

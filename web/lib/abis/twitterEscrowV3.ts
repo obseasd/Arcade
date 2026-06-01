@@ -84,6 +84,23 @@ export const TWITTER_ESCROW_V3_ABI = [
     },
     {
         type: "function",
+        name: "FORFEIT_DELAY",
+        stateMutability: "view",
+        inputs: [],
+        outputs: [{ name: "", type: "uint64" }],
+    },
+    {
+        type: "function",
+        name: "lastCreditedAt",
+        stateMutability: "view",
+        inputs: [
+            { name: "positionId", type: "uint256" },
+            { name: "slotIndex", type: "uint256" },
+        ],
+        outputs: [{ name: "", type: "uint64" }],
+    },
+    {
+        type: "function",
         name: "LOCKER",
         stateMutability: "view",
         inputs: [],
@@ -214,6 +231,19 @@ export const TWITTER_ESCROW_V3_ABI = [
         ],
         outputs: [],
     },
+    {
+        type: "function",
+        name: "forfeitStaleClaim",
+        stateMutability: "nonpayable",
+        inputs: [
+            { name: "positionId", type: "uint256" },
+            { name: "slotIndex", type: "uint256" },
+            { name: "pairedToken", type: "address" },
+            { name: "clankerToken", type: "address" },
+            { name: "to", type: "address" },
+        ],
+        outputs: [],
+    },
     // Ownable2Step: two-step ownership transfer. transferOwnership stages
     // the new owner as `pendingOwner`; the new owner must call
     // acceptOwnership() from their own wallet to finalize.
@@ -270,6 +300,7 @@ export const TWITTER_ESCROW_V3_ABI = [
     { type: "error", name: "NothingToClaim", inputs: [] },
     { type: "error", name: "RenounceDisabled", inputs: [] },
     { type: "error", name: "SlotAlreadyClaimed", inputs: [] },
+    { type: "error", name: "NotStaleYet", inputs: [] },
 
     // ===== Events =====
     {
