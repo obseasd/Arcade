@@ -214,6 +214,39 @@ export const TWITTER_ESCROW_V3_ABI = [
         ],
         outputs: [],
     },
+    // Ownable2Step: two-step ownership transfer. transferOwnership stages
+    // the new owner as `pendingOwner`; the new owner must call
+    // acceptOwnership() from their own wallet to finalize.
+    {
+        type: "function",
+        name: "transferOwnership",
+        stateMutability: "nonpayable",
+        inputs: [{ name: "newOwner", type: "address" }],
+        outputs: [],
+    },
+    {
+        type: "function",
+        name: "acceptOwnership",
+        stateMutability: "nonpayable",
+        inputs: [],
+        outputs: [],
+    },
+    {
+        type: "function",
+        name: "pendingOwner",
+        stateMutability: "view",
+        inputs: [],
+        outputs: [{ name: "", type: "address" }],
+    },
+    // M-03: this reverts with RenounceDisabled() but the ABI entry lets us
+    // decode the error name cleanly if anyone ever calls it.
+    {
+        type: "function",
+        name: "renounceOwnership",
+        stateMutability: "nonpayable",
+        inputs: [],
+        outputs: [],
+    },
 
     // ===== Errors (decoded by viem on revert) =====
     { type: "error", name: "Expired", inputs: [] },

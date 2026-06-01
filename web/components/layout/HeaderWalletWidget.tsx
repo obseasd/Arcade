@@ -1,12 +1,13 @@
 "use client";
 
 import { ConnectButton } from "@rainbow-me/rainbowkit";
-import { ChevronDown, Copy, ExternalLink, LineChart, LogOut, Rocket } from "lucide-react";
+import { ChevronDown, Copy, ExternalLink, LineChart, LogOut, Rocket, Settings } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { erc20Abi } from "viem";
 import { useAccount, useDisconnect, useReadContract } from "wagmi";
 import { ADDRESSES, USDC_DECIMALS } from "@/lib/constants";
+import { TWITTER_ESCROW_V3_ABI } from "@/lib/abis/twitterEscrowV3";
 import { pushToast } from "@/lib/toast";
 import { cn, formatUSDC } from "@/lib/utils";
 import { TokenIcon } from "@/components/ui/TokenIcon";
@@ -40,6 +41,22 @@ export function HeaderWalletWidget() {
     args: address ? [address] : undefined,
     query: { enabled: !!address, refetchInterval: 8000 },
   });
+
+  // Show the admin menu item ONLY when the connected wallet matches the
+  // escrow's owner. View-only "spoofers" (Etherscan-style "Login as", browser
+  // dev tools) would also see the menu but every admin action requires a
+  // real signature anyway, so the disclosure is harmless: all the data the
+  // admin page reads is already public via cast call.
+  const escrowOwnerQ = useReadContract({
+    address: ADDRESSES.twitterEscrow,
+    abi: TWITTER_ESCROW_V3_ABI,
+    functionName: "owner",
+    query: { enabled: !!ADDRESSES.twitterEscrow },
+  });
+  const isEscrowOwner =
+    !!address
+    && !!escrowOwnerQ.data
+    && (escrowOwnerQ.data as string).toLowerCase() === address.toLowerCase();
   const raw = (balanceQ.data as bigint | undefined) ?? 0n;
   const amountWhole = formatUSDC(raw, USDC_DECIMALS, 0);
   const usdValue = formatUSDC(raw, USDC_DECIMALS, 2);
@@ -151,6 +168,15 @@ export function HeaderWalletWidget() {
                 >
                   LP Simulator
                 </MenuItem>
+                {isEscrowOwner && (
+                  <MenuItem
+                    icon={<Settings className="h-3.5 w-3.5" />}
+                    href="/admin/escrow"
+                    onClick={() => setMenuOpen(false)}
+                  >
+                    Admin
+                  </MenuItem>
+                )}
                 <MenuItem
                   icon={<ExternalLink className="h-3.5 w-3.5" />}
                   onClick={() => {

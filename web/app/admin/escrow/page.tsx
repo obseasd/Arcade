@@ -1,0 +1,745 @@
+"use client";
+
+import {
+    AlertTriangle,
+    ArrowLeft,
+    CheckCircle2,
+    Lock,
+    LogIn,
+    Pause,
+    Play,
+    RefreshCw,
+    Shield,
+    UserCog,
+} from "lucide-react";
+import Link from "next/link";
+import { useState } from "react";
+import { Address, isAddress, parseUnits, zeroAddress } from "viem";
+import { useAccount, useReadContract, useWriteContract } from "wagmi";
+import { TWITTER_ESCROW_V3_ABI } from "@/lib/abis/twitterEscrowV3";
+import { ADDRESSES, USDC_DECIMALS } from "@/lib/constants";
+import { pushToast } from "@/lib/toast";
+import { cn, formatAddress, formatUSDC } from "@/lib/utils";
+
+/**
+ * Owner-only escrow admin panel. Gated client-side by checking the
+ * connected wallet against `escrow.owner()`. The contract enforces the
+ * real authorization on every write so a "wallet spoof" can only see
+ * the same view data that is already public via `cast call`.
+ *
+ * Layout: each subsystem (timelock, signer, pause, rescue, locker
+ * rotation, ownership) is its own card so the operator can scan the
+ * page top-to-bottom during incident response.
+ */
+export default function EscrowAdminPage() {
+    const { address: account } = useAccount();
+    const escrow = ADDRESSES.twitterEscrow;
+
+    const ownerQ = useReadContract({
+        address: escrow,
+        abi: TWITTER_ESCROW_V3_ABI,
+        functionName: "owner",
+        query: { enabled: !!escrow },
+    });
+    const owner = ownerQ.data as Address | undefined;
+    const isOwner =
+        !!account && !!owner && owner.toLowerCase() === account.toLowerCase();
+
+    if (!account) {
+        return (
+            <UnauthorizedShell
+                title="Connect your wallet"
+                body="The escrow admin panel is gated on the escrow contract's owner. Connect with the owner wallet to continue."
+            />
+        );
+    }
+
+    if (!isOwner) {
+        return (
+            <UnauthorizedShell
+                title="Not the escrow owner"
+                body={
+                    <span>
+                        This wallet is <code>{formatAddress(account)}</code>. The escrow owner
+                        is <code>{owner ? formatAddress(owner) : "(loading)"}</code>. Switch
+                        wallets to access admin controls.
+                    </span>
+                }
+            />
+        );
+    }
+
+    return <AdminBody />;
+}
+
+function UnauthorizedShell({ title, body }: { title: string; body: React.ReactNode }) {
+    return (
+        <div className="mx-auto max-w-2xl px-4 py-12 sm:px-6">
+            <Link
+                href="/"
+                className="mb-6 inline-flex items-center gap-2 text-sm text-arc-text-muted transition-colors hover:text-arc-text"
+            >
+                <ArrowLeft className="h-4 w-4" /> Home
+            </Link>
+            <div className="arc-card p-6">
+                <div className="flex items-center gap-2 text-arc-warn">
+                    <Shield className="h-5 w-5" />
+                    <h1 className="text-lg font-semibold">{title}</h1>
+                </div>
+                <p className="mt-3 text-sm text-arc-text-muted">{body}</p>
+            </div>
+        </div>
+    );
+}
+
+function AdminBody() {
+    return (
+        <div className="mx-auto max-w-3xl px-4 py-10 sm:px-6">
+            <Link
+                href="/"
+                className="mb-6 inline-flex items-center gap-2 text-sm text-arc-text-muted transition-colors hover:text-arc-text"
+            >
+                <ArrowLeft className="h-4 w-4" /> Home
+            </Link>
+
+            <div className="mb-8 flex items-start gap-3">
+                <Shield className="mt-1 h-6 w-6 text-arc-cta-hover" />
+                <div>
+                    <h1 className="text-3xl font-semibold sm:text-4xl">Escrow admin</h1>
+                    <p className="mt-1 text-sm text-arc-text-muted">
+                        Operational controls for the ArcadeTwitterEscrow V3 contract. Every
+                        write transaction is gated on-chain by <code>onlyOwner</code>.
+                    </p>
+                </div>
+            </div>
+
+            <div className="space-y-5">
+                <StatusCard />
+                <PauseCard />
+                <TimelockCard />
+                <SignerCard />
+                <PullFromLockerCard />
+                <LockerRotationCard />
+                <RescueCard />
+                <OwnershipCard />
+            </div>
+        </div>
+    );
+}
+
+// ===================== Status =====================
+
+function StatusCard() {
+    const escrow = ADDRESSES.twitterEscrow;
+    const pausedQ = useReadContract({
+        address: escrow,
+        abi: TWITTER_ESCROW_V3_ABI,
+        functionName: "paused",
+    });
+    const timelockQ = useReadContract({
+        address: escrow,
+        abi: TWITTER_ESCROW_V3_ABI,
+        functionName: "claimTimelock",
+    });
+    const signerQ = useReadContract({
+        address: escrow,
+        abi: TWITTER_ESCROW_V3_ABI,
+        functionName: "trustedSigner",
+    });
+    const ownerQ = useReadContract({
+        address: escrow,
+        abi: TWITTER_ESCROW_V3_ABI,
+        functionName: "owner",
+    });
+    const lockerQ = useReadContract({
+        address: escrow,
+        abi: TWITTER_ESCROW_V3_ABI,
+        functionName: "LOCKER",
+    });
+
+    const paused = !!(pausedQ.data as boolean | undefined);
+    const timelockSec = Number((timelockQ.data as bigint | undefined) ?? 0n);
+
+    return (
+        <Card title="Status" icon={<CheckCircle2 className="h-4 w-4" />}>
+            <Row label="Address" value={escrow} mono />
+            <Row label="Owner" value={(ownerQ.data as Address | undefined) ?? "(loading)"} mono />
+            <Row
+                label="Trusted signer"
+                value={(signerQ.data as Address | undefined) ?? "(loading)"}
+                mono
+            />
+            <Row label="Locker (wired)" value={(lockerQ.data as Address | undefined) ?? "(loading)"} mono />
+            <Row
+                label="Paused"
+                value={
+                    <span className={paused ? "text-arc-warn" : "text-arc-success"}>
+                        {paused ? "YES — claims blocked" : "no"}
+                    </span>
+                }
+            />
+            <Row
+                label="Claim timelock"
+                value={`${Math.floor(timelockSec / 3600)}h ${Math.floor((timelockSec % 3600) / 60)}m ${timelockSec % 60}s (${timelockSec} sec)`}
+            />
+        </Card>
+    );
+}
+
+// ===================== Pause =====================
+
+function PauseCard() {
+    const escrow = ADDRESSES.twitterEscrow;
+    const { writeContractAsync } = useWriteContract();
+    const [submitting, setSubmitting] = useState(false);
+    const pausedQ = useReadContract({
+        address: escrow,
+        abi: TWITTER_ESCROW_V3_ABI,
+        functionName: "paused",
+    });
+    const paused = !!(pausedQ.data as boolean | undefined);
+
+    const onToggle = async () => {
+        setSubmitting(true);
+        try {
+            await writeContractAsync({
+                address: escrow,
+                abi: TWITTER_ESCROW_V3_ABI,
+                functionName: paused ? "unpause" : "pause",
+            });
+            await pausedQ.refetch();
+            pushToast({ kind: "info", title: paused ? "Escrow unpaused" : "Escrow paused" });
+        } catch (e: any) {
+            pushToast({ kind: "error", title: "Failed", message: e?.shortMessage ?? e?.message });
+        } finally {
+            setSubmitting(false);
+        }
+    };
+
+    return (
+        <Card
+            title={paused ? "Unpause" : "Pause"}
+            icon={paused ? <Play className="h-4 w-4" /> : <Pause className="h-4 w-4" />}
+        >
+            <p className="text-xs text-arc-text-muted">
+                Pause freezes new <code>authorize</code> calls and <code>claimByTwitter</code>{" "}
+                payouts. <code>creditSlot</code>, <code>veto</code>, and the admin functions
+                stay live so the locker keeps depositing and you can still respond to incidents.
+            </p>
+            <button
+                onClick={onToggle}
+                disabled={submitting}
+                className={cn(
+                    "mt-4 inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold",
+                    paused ? "bg-arc-success/15 text-arc-success" : "bg-arc-warn/15 text-arc-warn",
+                    submitting && "opacity-60",
+                )}
+            >
+                {paused ? <Play className="h-4 w-4" /> : <Pause className="h-4 w-4" />}
+                {submitting ? "Sending…" : paused ? "Unpause escrow" : "Pause escrow"}
+            </button>
+        </Card>
+    );
+}
+
+// ===================== Timelock =====================
+
+function TimelockCard() {
+    const escrow = ADDRESSES.twitterEscrow;
+    const { writeContractAsync } = useWriteContract();
+    const timelockQ = useReadContract({
+        address: escrow,
+        abi: TWITTER_ESCROW_V3_ABI,
+        functionName: "claimTimelock",
+    });
+    const minQ = useReadContract({
+        address: escrow,
+        abi: TWITTER_ESCROW_V3_ABI,
+        functionName: "MIN_TIMELOCK",
+    });
+    const maxQ = useReadContract({
+        address: escrow,
+        abi: TWITTER_ESCROW_V3_ABI,
+        functionName: "MAX_TIMELOCK",
+    });
+    const currentSec = Number((timelockQ.data as bigint | undefined) ?? 0n);
+    const minSec = Number((minQ.data as bigint | undefined) ?? 3600n);
+    const maxSec = Number((maxQ.data as bigint | undefined) ?? 604800n);
+
+    const [hoursStr, setHoursStr] = useState(String(Math.max(1, Math.round(currentSec / 3600))));
+    const [submitting, setSubmitting] = useState(false);
+
+    const requestedSec = (() => {
+        const h = Number(hoursStr);
+        return Number.isFinite(h) ? Math.round(h * 3600) : 0;
+    })();
+    const valid = requestedSec >= minSec && requestedSec <= maxSec;
+
+    const onSubmit = async () => {
+        if (!valid) return;
+        setSubmitting(true);
+        try {
+            await writeContractAsync({
+                address: escrow,
+                abi: TWITTER_ESCROW_V3_ABI,
+                functionName: "setClaimTimelock",
+                args: [BigInt(requestedSec)],
+            });
+            await timelockQ.refetch();
+            pushToast({ kind: "info", title: "Timelock updated" });
+        } catch (e: any) {
+            pushToast({ kind: "error", title: "Failed", message: e?.shortMessage ?? e?.message });
+        } finally {
+            setSubmitting(false);
+        }
+    };
+
+    return (
+        <Card title="Claim timelock" icon={<Lock className="h-4 w-4" />}>
+            <p className="text-xs text-arc-text-muted">
+                Window between <code>authorize</code> and the earliest{" "}
+                <code>claimByTwitter</code>. The veto power lives here. Defaults to 1 hour at
+                deploy; raise to 24h or 48h once the operator runbook is solid. Bounded between
+                <span className="font-medium text-arc-text"> {Math.floor(minSec / 3600)}h </span>
+                and
+                <span className="font-medium text-arc-text"> {Math.floor(maxSec / 86400)}d </span>
+                on-chain.
+            </p>
+            <div className="mt-3 text-sm">
+                Current:{" "}
+                <span className="font-semibold tabular-nums">
+                    {Math.floor(currentSec / 3600)}h {Math.floor((currentSec % 3600) / 60)}m
+                </span>
+            </div>
+            <div className="mt-4 flex items-center gap-2">
+                <input
+                    type="number"
+                    min={1}
+                    max={168}
+                    step={1}
+                    value={hoursStr}
+                    onChange={(e) => setHoursStr(e.target.value)}
+                    className="arc-input w-24 rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2 text-sm"
+                />
+                <span className="text-xs text-arc-text-muted">hours</span>
+                <button
+                    onClick={onSubmit}
+                    disabled={!valid || submitting}
+                    className={cn("arc-button-primary ml-auto px-4 py-2 text-sm", (!valid || submitting) && "opacity-60")}
+                >
+                    {submitting ? "Sending…" : "Update timelock"}
+                </button>
+            </div>
+            {!valid && (
+                <p className="mt-2 text-xs text-arc-danger">
+                    Must be between {Math.floor(minSec / 3600)}h and {Math.floor(maxSec / 3600)}h.
+                </p>
+            )}
+        </Card>
+    );
+}
+
+// ===================== Trusted signer =====================
+
+function SignerCard() {
+    const escrow = ADDRESSES.twitterEscrow;
+    const { writeContractAsync } = useWriteContract();
+    const signerQ = useReadContract({
+        address: escrow,
+        abi: TWITTER_ESCROW_V3_ABI,
+        functionName: "trustedSigner",
+    });
+    const current = signerQ.data as Address | undefined;
+    const [next, setNext] = useState("");
+    const [submitting, setSubmitting] = useState(false);
+    const valid = isAddress(next.trim()) && next.trim() !== zeroAddress;
+
+    const onSubmit = async () => {
+        if (!valid) return;
+        if (!window.confirm(`Rotate trusted signer to ${next.trim()}? Existing pending claims authorized with the old signer will still be valid until they consume.`)) return;
+        setSubmitting(true);
+        try {
+            await writeContractAsync({
+                address: escrow,
+                abi: TWITTER_ESCROW_V3_ABI,
+                functionName: "setTrustedSigner",
+                args: [next.trim() as Address],
+            });
+            await signerQ.refetch();
+            setNext("");
+            pushToast({ kind: "info", title: "Signer rotated" });
+        } catch (e: any) {
+            pushToast({ kind: "error", title: "Failed", message: e?.shortMessage ?? e?.message });
+        } finally {
+            setSubmitting(false);
+        }
+    };
+
+    return (
+        <Card title="Trusted signer" icon={<UserCog className="h-4 w-4" />}>
+            <p className="text-xs text-arc-text-muted">
+                The EIP-712 backend signer. Rotate when the Vercel key is suspected
+                compromised. <span className="font-medium text-arc-warn">In-flight pending
+                claims that have already passed authorize remain executable</span> until the
+                timelock window elapses; pause + veto each one if needed.
+            </p>
+            <Row label="Current" value={current ?? "(loading)"} mono />
+            <div className="mt-4 flex items-center gap-2">
+                <input
+                    type="text"
+                    placeholder="0x… new signer address"
+                    value={next}
+                    onChange={(e) => setNext(e.target.value)}
+                    className="arc-input flex-1 rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2 font-mono text-xs"
+                />
+                <button
+                    onClick={onSubmit}
+                    disabled={!valid || submitting}
+                    className={cn("arc-button-primary px-4 py-2 text-sm", (!valid || submitting) && "opacity-60")}
+                >
+                    {submitting ? "Sending…" : "Rotate"}
+                </button>
+            </div>
+        </Card>
+    );
+}
+
+// ===================== Pull from locker =====================
+
+function PullFromLockerCard() {
+    const escrow = ADDRESSES.twitterEscrow;
+    const { writeContractAsync } = useWriteContract();
+    const [tokenInput, setTokenInput] = useState<string>(ADDRESSES.usdc);
+    const [submitting, setSubmitting] = useState(false);
+    const valid = isAddress(tokenInput.trim());
+
+    const onSubmit = async () => {
+        if (!valid) return;
+        setSubmitting(true);
+        try {
+            await writeContractAsync({
+                address: escrow,
+                abi: TWITTER_ESCROW_V3_ABI,
+                functionName: "pullFromLocker",
+                args: [tokenInput.trim() as Address],
+            });
+            pushToast({ kind: "info", title: "Pulled from locker" });
+        } catch (e: any) {
+            pushToast({ kind: "error", title: "Failed", message: e?.shortMessage ?? e?.message });
+        } finally {
+            setSubmitting(false);
+        }
+    };
+
+    return (
+        <Card title="Pull from locker (H-08 recovery)" icon={<RefreshCw className="h-4 w-4" />}>
+            <p className="text-xs text-arc-text-muted">
+                Withdraws tokens that the locker credited to the escrow&apos;s pending-payments
+                ledger (e.g. a transfer that briefly failed inline and got credited via the
+                fallback). The pulled tokens land in the escrow&apos;s free balance and can
+                then be moved with the rescue function below. Idempotent: calling for a
+                token with zero pending balance reverts cleanly.
+            </p>
+            <div className="mt-4 flex items-center gap-2">
+                <input
+                    type="text"
+                    value={tokenInput}
+                    onChange={(e) => setTokenInput(e.target.value)}
+                    className="arc-input flex-1 rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2 font-mono text-xs"
+                />
+                <button
+                    onClick={onSubmit}
+                    disabled={!valid || submitting}
+                    className={cn("arc-button-primary px-4 py-2 text-sm", (!valid || submitting) && "opacity-60")}
+                >
+                    {submitting ? "Sending…" : "Pull"}
+                </button>
+            </div>
+        </Card>
+    );
+}
+
+// ===================== Locker rotation =====================
+
+function LockerRotationCard() {
+    const escrow = ADDRESSES.twitterEscrow;
+    const { writeContractAsync } = useWriteContract();
+    const [positionIdStr, setPositionIdStr] = useState("");
+    const [slotIndexStr, setSlotIndexStr] = useState("");
+    const [addr, setAddr] = useState("");
+    const [submitting, setSubmitting] = useState<"recipient" | "admin" | null>(null);
+
+    const validAddr = isAddress(addr.trim());
+    const validIds = positionIdStr.trim() !== "" && slotIndexStr.trim() !== "";
+    const canSubmit = validAddr && validIds;
+
+    const run = async (which: "recipient" | "admin") => {
+        if (!canSubmit) return;
+        setSubmitting(which);
+        try {
+            await writeContractAsync({
+                address: escrow,
+                abi: TWITTER_ESCROW_V3_ABI,
+                functionName: which === "recipient" ? "rotateLockerRecipient" : "rotateLockerAdmin",
+                args: [BigInt(positionIdStr.trim()), BigInt(slotIndexStr.trim()), addr.trim() as Address],
+            });
+            pushToast({
+                kind: "info",
+                title: `Rotated ${which}`,
+            });
+        } catch (e: any) {
+            pushToast({ kind: "error", title: "Failed", message: e?.shortMessage ?? e?.message });
+        } finally {
+            setSubmitting(null);
+        }
+    };
+
+    return (
+        <Card title="Locker rotation (M-12 recovery)" icon={<UserCog className="h-4 w-4" />}>
+            <p className="text-xs text-arc-text-muted">
+                Forwards <code>updateRecipient</code> / <code>updateAdmin</code> calls to the
+                V3 locker for slots whose owner is the escrow contract (the typical
+                Twitter-attributed slot). Useful when the post-claim auto-rotation in
+                <code> claimByTwitter</code> failed in the try/catch and the slot is stuck
+                pointing at the escrow.
+            </p>
+            <div className="mt-3 grid grid-cols-2 gap-2">
+                <input
+                    type="number"
+                    min={0}
+                    placeholder="positionId"
+                    value={positionIdStr}
+                    onChange={(e) => setPositionIdStr(e.target.value)}
+                    className="arc-input rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2 text-sm"
+                />
+                <input
+                    type="number"
+                    min={0}
+                    placeholder="slotIndex"
+                    value={slotIndexStr}
+                    onChange={(e) => setSlotIndexStr(e.target.value)}
+                    className="arc-input rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2 text-sm"
+                />
+            </div>
+            <input
+                type="text"
+                placeholder="0x… new recipient / admin"
+                value={addr}
+                onChange={(e) => setAddr(e.target.value)}
+                className="arc-input mt-2 w-full rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2 font-mono text-xs"
+            />
+            <div className="mt-3 flex gap-2">
+                <button
+                    onClick={() => run("recipient")}
+                    disabled={!canSubmit || submitting !== null}
+                    className={cn("arc-button-primary flex-1 px-4 py-2 text-sm", (!canSubmit || submitting !== null) && "opacity-60")}
+                >
+                    {submitting === "recipient" ? "Sending…" : "Rotate recipient"}
+                </button>
+                <button
+                    onClick={() => run("admin")}
+                    disabled={!canSubmit || submitting !== null}
+                    className={cn("arc-button-primary flex-1 px-4 py-2 text-sm", (!canSubmit || submitting !== null) && "opacity-60")}
+                >
+                    {submitting === "admin" ? "Sending…" : "Rotate admin"}
+                </button>
+            </div>
+        </Card>
+    );
+}
+
+// ===================== Rescue =====================
+
+function RescueCard() {
+    const escrow = ADDRESSES.twitterEscrow;
+    const { writeContractAsync } = useWriteContract();
+    const [tokenInput, setTokenInput] = useState<string>(ADDRESSES.usdc);
+    const [toInput, setToInput] = useState("");
+    const [amountStr, setAmountStr] = useState("");
+    const [submitting, setSubmitting] = useState(false);
+
+    const isUsdc = tokenInput.trim().toLowerCase() === ADDRESSES.usdc.toLowerCase();
+    const decimals = isUsdc ? USDC_DECIMALS : 18;
+    let amountRaw = 0n;
+    try {
+        amountRaw = amountStr ? parseUnits(amountStr, decimals) : 0n;
+    } catch {}
+
+    const valid =
+        isAddress(tokenInput.trim())
+        && isAddress(toInput.trim())
+        && amountRaw > 0n;
+
+    const onSubmit = async () => {
+        if (!valid) return;
+        if (!window.confirm(`Rescue ${amountStr} ${isUsdc ? "USDC" : "tokens"} to ${toInput.trim()}? The contract enforces that this can't touch credited slot balances, but double-check the inputs.`)) return;
+        setSubmitting(true);
+        try {
+            await writeContractAsync({
+                address: escrow,
+                abi: TWITTER_ESCROW_V3_ABI,
+                functionName: "rescue",
+                args: [tokenInput.trim() as Address, toInput.trim() as Address, amountRaw],
+            });
+            pushToast({ kind: "info", title: "Rescue sent" });
+            setAmountStr("");
+        } catch (e: any) {
+            pushToast({ kind: "error", title: "Failed", message: e?.shortMessage ?? e?.message });
+        } finally {
+            setSubmitting(false);
+        }
+    };
+
+    return (
+        <Card title="Rescue" icon={<AlertTriangle className="h-4 w-4 text-arc-warn" />}>
+            <p className="text-xs text-arc-text-muted">
+                Sweep tokens NOT earmarked by <code>creditedTotal[token]</code>. Used for dust,
+                accidentally-sent tokens, or to recover tokens pulled from the locker. The
+                <code> rescue()</code> guard refuses any amount that would dip into credited
+                user balances, so this is bounded by design.
+            </p>
+            <div className="mt-3 space-y-2">
+                <input
+                    type="text"
+                    placeholder="Token address"
+                    value={tokenInput}
+                    onChange={(e) => setTokenInput(e.target.value)}
+                    className="arc-input w-full rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2 font-mono text-xs"
+                />
+                <input
+                    type="text"
+                    placeholder="Recipient address"
+                    value={toInput}
+                    onChange={(e) => setToInput(e.target.value)}
+                    className="arc-input w-full rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2 font-mono text-xs"
+                />
+                <input
+                    type="text"
+                    inputMode="decimal"
+                    placeholder={`Amount in ${isUsdc ? "USDC" : "tokens"}`}
+                    value={amountStr}
+                    onChange={(e) => setAmountStr(e.target.value.replace(/[^0-9.]/g, ""))}
+                    className="arc-input w-full rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2 text-sm"
+                />
+            </div>
+            <button
+                onClick={onSubmit}
+                disabled={!valid || submitting}
+                className={cn(
+                    "mt-3 inline-flex items-center gap-2 rounded-xl bg-arc-warn/15 px-4 py-2 text-sm font-semibold text-arc-warn",
+                    (!valid || submitting) && "opacity-60",
+                )}
+            >
+                <AlertTriangle className="h-4 w-4" />
+                {submitting ? "Sending…" : "Rescue"}
+            </button>
+        </Card>
+    );
+}
+
+// ===================== Ownership =====================
+
+function OwnershipCard() {
+    const escrow = ADDRESSES.twitterEscrow;
+    const { writeContractAsync } = useWriteContract();
+    const [next, setNext] = useState("");
+    const [submitting, setSubmitting] = useState(false);
+    const valid = isAddress(next.trim()) && next.trim() !== zeroAddress;
+
+    const onSubmit = async () => {
+        if (!valid) return;
+        if (!window.confirm(`Initiate ownership transfer to ${next.trim()}? Ownable2Step requires the NEW owner to call acceptOwnership() before the transfer completes.`)) return;
+        setSubmitting(true);
+        try {
+            await writeContractAsync({
+                address: escrow,
+                abi: TWITTER_ESCROW_V3_ABI,
+                functionName: "transferOwnership",
+                args: [next.trim() as Address],
+            });
+            pushToast({
+                kind: "info",
+                title: "Transfer pending",
+                message: "The new owner must call acceptOwnership() to finalize.",
+            });
+            setNext("");
+        } catch (e: any) {
+            pushToast({ kind: "error", title: "Failed", message: e?.shortMessage ?? e?.message });
+        } finally {
+            setSubmitting(false);
+        }
+    };
+
+    return (
+        <Card title="Transfer ownership" icon={<LogIn className="h-4 w-4" />}>
+            <p className="text-xs text-arc-text-muted">
+                Uses Ownable2Step: this kicks off the transfer, the new owner must then call
+                <code> acceptOwnership()</code> from their own wallet to finalize. The
+                <code> renounceOwnership()</code> path is intentionally disabled
+                (<code>RenounceDisabled</code> revert) to prevent the contract from being
+                stranded.
+            </p>
+            <div className="mt-4 flex items-center gap-2">
+                <input
+                    type="text"
+                    placeholder="0x… new owner (typically a Safe multisig)"
+                    value={next}
+                    onChange={(e) => setNext(e.target.value)}
+                    className="arc-input flex-1 rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2 font-mono text-xs"
+                />
+                <button
+                    onClick={onSubmit}
+                    disabled={!valid || submitting}
+                    className={cn("arc-button-primary px-4 py-2 text-sm", (!valid || submitting) && "opacity-60")}
+                >
+                    {submitting ? "Sending…" : "Initiate transfer"}
+                </button>
+            </div>
+        </Card>
+    );
+}
+
+// ===================== shared primitives =====================
+
+function Card({
+    title,
+    icon,
+    children,
+}: {
+    title: string;
+    icon?: React.ReactNode;
+    children: React.ReactNode;
+}) {
+    return (
+        <div className="arc-card p-5">
+            <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-arc-text">
+                {icon}
+                {title}
+            </div>
+            <div className="space-y-2 text-sm">{children}</div>
+        </div>
+    );
+}
+
+function Row({
+    label,
+    value,
+    mono = false,
+}: {
+    label: string;
+    value: React.ReactNode;
+    mono?: boolean;
+}) {
+    return (
+        <div className="flex items-start justify-between gap-3 text-xs">
+            <span className="shrink-0 text-arc-text-muted">{label}</span>
+            <span className={cn("truncate text-right text-arc-text", mono && "font-mono")}>
+                {value}
+            </span>
+        </div>
+    );
+}
+
+// Silence unused-import lint for formatUSDC; we keep it as a helper for the
+// rescue card preview if/when we add balance preview later.
+void formatUSDC;
