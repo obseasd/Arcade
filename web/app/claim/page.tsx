@@ -360,6 +360,8 @@ function ErrorState({ error }: { error: string }) {
     no_position: "Token has no V3 locked position.",
     slot_bps_zero: "Slot has zero share.",
     onchain_read_failed: "Could not read on-chain state.",
+    nothing_to_claim:
+      "No fees are credited to this slot yet. Once the token has trade volume, fees will be routed here and you can claim them.",
   }[error] ?? error;
   return (
     <div className="mx-auto max-w-md px-4 py-12 sm:px-6">

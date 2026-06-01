@@ -252,6 +252,17 @@ export async function GET(req: NextRequest) {
     return redirectBackWithError(origin, "onchain_read_failed");
   }
 
+  // M-11: refuse to sign a (0, 0) claim. The escrow contract reverts on this
+  // path with NothingToClaim, but the user UX is much cleaner if we catch it
+  // server-side and explain WHY (nothing has been credited to this slot yet).
+  // Without this guard, a Twitter-verified user could authorize-and-claim an
+  // empty slot, permanently marking it `claimed=true` and stranding every
+  // future credit (H-03 catches the later credits, but the slot itself can't
+  // be re-claimed). Best to never sign in the first place.
+  if (pairedAmount === 0n && clankerAmount === 0n) {
+    return redirectBackWithError(origin, "nothing_to_claim");
+  }
+
   // 4) Sign EIP-712 Claim with the backend wallet.
   const account = privateKeyToAccount(backendPk);
   const nonce = `0x${crypto.randomBytes(32).toString("hex")}` as `0x${string}`;

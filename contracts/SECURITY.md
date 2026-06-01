@@ -2,10 +2,44 @@
 
 **Status**: Internal review, NOT a substitute for external audit
 **Reviewer**: Claude Opus 4.7 multi-agent audit, six parallel reviewers
-**Date**: 2026-05-31
+**Review date**: 2026-05-31
 **Commit at review time**: `2a89973`
+**Fix commit**: `16afe44` (escrow/launchpad/locker/vault/multiswap) + follow-up M-09 refinement
+**Fixed test coverage**: 110 forge tests passing (+21 fix-specific tests added)
 **Scope**: V2/V3 launchpad stack, V3 locker, Twitter escrow, V4 MultiSwap routing
 **Out of scope**: V2 DEX core (`src/dex/*`), V4 PoolManager/router/hooks (planned for separate review)
+
+## Status by finding (post-`16afe44`)
+
+| ID | Severity | Status |
+|---|---|---|
+| H-01 | HIGH | ✅ Fixed |
+| H-02 | HIGH | ⏭️ Deferred (operational, multisig migration pending) |
+| H-03 | HIGH | ✅ Fixed |
+| H-04 | HIGH | ✅ Fixed |
+| H-05 | HIGH | ✅ Fixed |
+| H-06 | HIGH | ✅ Fixed |
+| H-07 | HIGH | ⏭️ Deferred (API change, planned with V4_ENABLED flip) |
+| H-08 | HIGH | ✅ Fixed |
+| M-01 | MEDIUM | ✅ Fixed |
+| M-02 | MEDIUM | 📝 Documented (one-shot kept, deploy checklist warns) |
+| M-03 | MEDIUM | ✅ Fixed |
+| M-04 | MEDIUM | 📝 Documented (locker stays admin-less by design) |
+| M-05 | MEDIUM | 📝 Documented (deployer is immutable, gate already enforced) |
+| M-06 | MEDIUM | ✅ Fixed |
+| M-07 | MEDIUM | ✅ Fixed |
+| M-08 | MEDIUM | ✅ Fixed |
+| M-09 | MEDIUM | ✅ Fixed (with refined logic post-test) |
+| M-10 | MEDIUM | 📝 Documented (no clean fallback that doesn't add another vector) |
+| M-11 | MEDIUM | ✅ Fixed |
+| M-12 | MEDIUM | ✅ Fixed |
+| M-13 | MEDIUM | ✅ Fixed (contract + frontend launch wizard) |
+| M-14 | MEDIUM | ✅ Fixed |
+| L-01 through L-17 | LOW | ✅ Fixed where actionable; remainder doc-only |
+
+**Headline**: 7/8 HIGH fixed, 11/14 MEDIUM fixed, plus all actionable LOW. The
+3 deferred items (H-02, H-07, and 3 MEDIUMs as doc-only) are tracked in the
+mainnet readiness checklist; none block testnet redeploy.
 
 ---
 

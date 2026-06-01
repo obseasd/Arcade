@@ -272,6 +272,71 @@ contract ArcadeMultiSwapV4Test is Test {
         assertEq(v4Router.callCount(), 0);
     }
 
+    // =================== H-06: hook whitelist enforced ===================
+
+    function test_H06_swap_revertsOnUnknownHook() public {
+        // Register a NEW V4 launch whose PoolKey carries an attacker-chosen
+        // hook address. The aggregator should refuse the swap because the
+        // launchpad's HOOK() returns 0xCAFE (set in setUp), not 0xBAD.
+        MockV4LaunchToken badToken = new MockV4LaunchToken("Bad", "BAD");
+        (address c0, address c1) = address(badToken) < address(usdc)
+            ? (address(badToken), address(usdc))
+            : (address(usdc), address(badToken));
+        V4PoolKey memory badKey = V4PoolKey({
+            currency0: c0, currency1: c1, fee: 10_000, tickSpacing: 200, hooks: address(0xBAD)
+        });
+        v4Launchpad.register(address(badToken), badKey);
+
+        badToken.mint(user, 1_000e18);
+        vm.prank(user);
+        badToken.approve(address(multiSwap), type(uint256).max);
+
+        _reset();
+        _push(address(badToken), 10e18);
+
+        vm.prank(user);
+        vm.expectRevert(ArcadeMultiSwap.UnknownHook.selector);
+        multiSwap.swapToSingle(inputsBuf, address(usdc), 0, block.timestamp + 60);
+    }
+
+    function test_H06_swap_acceptsCorrectHook() public {
+        // Sanity: the standard happy path (hook matches HOOK()) still works.
+        // Reuses the v4Token registered in setUp with hooks = 0xCAFE.
+        _reset();
+        _push(address(usdc), 1_000e6);
+        v4Router.setQuote(address(usdc), address(v4Token), 42e18);
+        vm.prank(user);
+        multiSwap.swapToSingle(inputsBuf, address(v4Token), 0, block.timestamp + 60);
+    }
+
+    // =================== L-09: uninitialized pool guard ===================
+
+    function test_L09_isV4LaunchToken_returnsFalseForUninitialized() public {
+        // A V4 launch registered with a zeroed PoolKey (currency0 == 0) is
+        // treated as "not V4-routable yet" by _isV4LaunchToken, so a swap
+        // touching it falls through to the V2/V3 path (which will revert
+        // for a token without a V2 pair). The user gets a clean error,
+        // not an opaque V4 router revert.
+        MockV4LaunchToken pending = new MockV4LaunchToken("Pending", "PND");
+        V4PoolKey memory zeroKey = V4PoolKey({
+            currency0: address(0), currency1: address(0), fee: 0, tickSpacing: 0, hooks: address(0)
+        });
+        v4Launchpad.register(address(pending), zeroKey);
+
+        pending.mint(user, 1_000e18);
+        vm.prank(user);
+        pending.approve(address(multiSwap), type(uint256).max);
+
+        _reset();
+        _push(address(pending), 10e18);
+        vm.prank(user);
+        // Falls to V2 path which has no pair -> revert. The important assert
+        // is that v4Router callCount remains 0 (the V4 dispatch was skipped).
+        vm.expectRevert();
+        multiSwap.swapToSingle(inputsBuf, address(usdc), 0, block.timestamp + 60);
+        assertEq(v4Router.callCount(), 0, "no V4 dispatch for uninitialized launch");
+    }
+
     // =================== Helper ===================
 
     function _readCall(uint256 i)

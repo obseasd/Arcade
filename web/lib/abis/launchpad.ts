@@ -129,6 +129,9 @@ export const LAUNCHPAD_ABI = [
   { type: "function", name: "TOTAL_SUPPLY", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] },
   { type: "function", name: "CURVE_SUPPLY", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] },
   { type: "function", name: "CREATION_FEE", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] },
+  // H-05: platform fee skimmed at migration (2,500 USDC). LP seed = realUsdcReserve - MIGRATION_FEE.
+  { type: "function", name: "MIGRATION_FEE", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] },
+  { type: "function", name: "MIGRATION_LP_TOKENS", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] },
 
   // ===== Writes =====
   {

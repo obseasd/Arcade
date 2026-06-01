@@ -380,4 +380,86 @@ contract ArcadeLaunchpadTest is Test {
         uint256 mcap1 = launchpad.marketCap(token);
         assertGt(mcap1, mcap0, "mcap should grow");
     }
+
+    // ============= H-05: migration platform fee skim =====================
+
+    function test_H05_migrationFeeSkimmedToTreasury() public {
+        address token = _createToken();
+        uint256 treasuryBefore = usdc.balanceOf(treasury);
+
+        // Drain the curve. Track buyer fees separately from the migration fee.
+        vm.startPrank(alice);
+        usdc.approve(address(launchpad), type(uint256).max);
+        launchpad.buy(token, 100_000 * 10 ** 6, 0);
+        vm.stopPrank();
+
+        ArcadeLaunchpad.TokenState memory state = launchpad.getTokenState(token);
+        assertTrue(state.migrated, "migrated");
+
+        uint256 pairUsdc = usdc.balanceOf(state.v2Pair);
+        uint256 treasuryAfter = usdc.balanceOf(treasury);
+
+        // Treasury receives BOTH the trade fees (50% of 1% on each buy) AND
+        // the migration fee (2,500 USDC) on the migrating buy. The V2 pair
+        // holds the LP seed. Allow up to 2 wei drift on the seed value to
+        // account for the documented L-17 capped-buy ceiling (1-2 wei the
+        // curve rounds in the contract's favour at migration boundary).
+        uint256 expectedSeed = 20_000 * 10 ** 6 - launchpad.MIGRATION_FEE();
+        assertApproxEqAbs(pairUsdc, expectedSeed, 2, "V2 pair seeded with raised - MIGRATION_FEE +/- dust");
+        assertGe(treasuryAfter - treasuryBefore, launchpad.MIGRATION_FEE(), "treasury got at least MIGRATION_FEE");
+    }
+
+    // ============= M-09: V2 pair pre-donation skim ========================
+
+    function test_M09_v2PairPreDonationSkimmedToTreasury() public {
+        address token = _createToken();
+
+        // Pre-create the V2 pair (anyone can do this on Uniswap V2 forks) so
+        // we have an address to donate USDC to.
+        address pair = factory.createPair(address(usdc), token);
+
+        // Attacker donation pre-migration. Loss-only grief for the attacker
+        // (LP is burned to DEAD) but warps the seeded price - skim neutralises.
+        uint256 donation = 5_000 * 10 ** 6;
+        vm.startPrank(bob);
+        usdc.approve(address(launchpad), type(uint256).max);
+        usdc.transfer(pair, donation);
+        vm.stopPrank();
+
+        uint256 treasuryBefore = usdc.balanceOf(treasury);
+
+        // Trigger migration.
+        vm.startPrank(alice);
+        usdc.approve(address(launchpad), type(uint256).max);
+        launchpad.buy(token, 100_000 * 10 ** 6, 0);
+        vm.stopPrank();
+
+        uint256 pairUsdc = usdc.balanceOf(pair);
+        // After mint(DEAD) + pair.skim(treasury), the pair should hold the
+        // intended LP seed (raised - MIGRATION_FEE +/- 2 wei capped-buy drift).
+        // The donation went to the treasury via skim.
+        uint256 expectedSeed = 20_000 * 10 ** 6 - launchpad.MIGRATION_FEE();
+        assertApproxEqAbs(pairUsdc, expectedSeed, 2, "pair holds only intended LP seed");
+        // Treasury got the migration fee + the donation back.
+        assertGe(
+            usdc.balanceOf(treasury) - treasuryBefore,
+            launchpad.MIGRATION_FEE() + donation,
+            "treasury got both fee and skimmed donation"
+        );
+    }
+
+    // ============= L-12: setV3Infra rejects zero addresses ===============
+
+    function test_L12_setV3Infra_rejectsZero() public {
+        // Build a fresh launchpad so v3Locker is still address(0).
+        ArcadeLaunchpad fresh = new ArcadeLaunchpad(
+            IERC20(address(usdc)), factory, address(router), treasury, IArcadeV3Factory(address(0)), address(0)
+        );
+        vm.expectRevert(ArcadeLaunchpad.ZeroAmount.selector);
+        fresh.setV3Infra(address(0), address(0xBEEF), address(0xCAFE));
+        vm.expectRevert(ArcadeLaunchpad.ZeroAmount.selector);
+        fresh.setV3Infra(address(0xBEEF), address(0), address(0xCAFE));
+        vm.expectRevert(ArcadeLaunchpad.ZeroAmount.selector);
+        fresh.setV3Infra(address(0xBEEF), address(0xCAFE), address(0));
+    }
 }

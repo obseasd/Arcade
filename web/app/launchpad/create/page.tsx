@@ -189,6 +189,17 @@ function CreateTokenInner() {
         }
       } else if (!isAddress(r.recipient.trim())) {
         return `Recipient ${i + 1}: invalid address.`;
+      } else if (
+        escrowSet
+        && r.recipient.trim().toLowerCase() === ADDRESSES.twitterEscrow.toLowerCase()
+      ) {
+        // M-13: the contract enforces recipient==escrow iff admin==escrow.
+        // The "Attribute to Twitter" toggle is the only correct way to opt
+        // into routing through the escrow. Typing the escrow address into a
+        // non-Twitter slot would either revert on-chain (admin != escrow)
+        // OR worse, route fees to a slot with no Twitter binding, stranding
+        // them forever. Block at the UI layer for a clean error.
+        return `Recipient ${i + 1}: use the "Attribute to Twitter" toggle instead of pasting the escrow address.`;
       }
       if (r.pct <= 0) return `Recipient ${i + 1}: share must be greater than 0%.`;
       sum += r.pct;

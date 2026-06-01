@@ -49,4 +49,15 @@ export const MULTISWAP_ABI = [
       { name: "totalOut", type: "uint256", indexed: false },
     ],
   },
+  // Errors (so viem decodes reverts to human-readable names instead of 0x...).
+  { type: "error", name: "EmptyInputs", inputs: [] },
+  { type: "error", name: "TooManyInputs", inputs: [] },
+  { type: "error", name: "DeadlinePassed", inputs: [] },
+  { type: "error", name: "InsufficientOutput", inputs: [] },
+  { type: "error", name: "ZeroAmount", inputs: [] },
+  { type: "error", name: "ZeroAddress", inputs: [] },
+  // H-06: a V4 leg whose PoolKey carries a hook that isn't the launchpad's HOOK().
+  { type: "error", name: "UnknownHook", inputs: [] },
+  // L-09: a V4 leg pointing at a registered-but-not-initialized launch (zeroed PoolKey).
+  { type: "error", name: "PoolNotInitialized", inputs: [] },
 ] as const;

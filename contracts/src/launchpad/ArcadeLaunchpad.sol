@@ -881,17 +881,28 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         if (pair == address(0)) {
             pair = v2Factory.createPair(address(USDC), tokenAddr);
         }
-        USDC.safeTransfer(pair, usdcForLP);
+        // M-09: neutralise any pre-donation an attacker may have made to the
+        // pair's deterministic address before migration. We pay only the
+        // difference between intended LP seed and the existing balance, so
+        // the pair always ends up with exactly `usdcForLP` (or `preBalance`,
+        // whichever is larger) post-mint. Any saved USDC goes to the
+        // treasury, neutralising the price-shift grief vector. Skim AFTER
+        // mint cleans up any donation that arrives between getPair and mint.
+        uint256 preBalance = USDC.balanceOf(pair);
+        uint256 toTransfer = usdcForLP > preBalance ? usdcForLP - preBalance : 0;
+        if (toTransfer > 0) {
+            USDC.safeTransfer(pair, toTransfer);
+        }
         IERC20(tokenAddr).safeTransfer(pair, tokensForLP);
         IArcadeV2Pair(pair).mint(DEAD);
-        // M-09: skim any pre-donation an attacker may have made to the pair
-        // address before migration. Without this, an attacker can transfer
-        // USDC directly to the deterministic pair address pre-migration to
-        // shift the initial post-migration spot price upward. The donation
-        // is loss-only for the attacker (LP is burned to DEAD) but it warps
-        // the launch price for every user. Routing the donation to treasury
-        // neutralises the grief.
         IArcadeV2Pair(pair).skim(treasury);
+        // The portion of our intended seed that the attacker's donation
+        // already covered is now ours to redirect. Pay it to the treasury
+        // alongside the migration fee.
+        uint256 saved = usdcForLP - toTransfer;
+        if (saved > 0) {
+            _safePayUsdc(treasury, saved);
+        }
         s.v2Pair = pair;
         emit Migrated(tokenAddr, pair, usdcForLP, tokensForLP);
     }

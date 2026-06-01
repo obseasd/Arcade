@@ -71,6 +71,33 @@ export const V3_LOCKER_ABI = [
     inputs: [{ name: "token", type: "address" }],
     outputs: [{ type: "uint256" }],
   },
+  // M-13: launch wizard cross-checks slot recipients against this address
+  // and warns / auto-corrects when only one of (recipient, admin) is the
+  // escrow. Mirrors the on-chain invariant.
+  {
+    type: "function",
+    name: "twitterEscrow",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ type: "address" }],
+  },
+  {
+    type: "function",
+    name: "withdrawPending",
+    stateMutability: "nonpayable",
+    inputs: [{ name: "token", type: "address" }],
+    outputs: [{ name: "amount", type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "pendingWithdrawals",
+    stateMutability: "view",
+    inputs: [
+      { name: "token", type: "address" },
+      { name: "recipient", type: "address" },
+    ],
+    outputs: [{ type: "uint256" }],
+  },
   {
     type: "function",
     name: "collectFees",
