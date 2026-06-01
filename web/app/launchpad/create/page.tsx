@@ -3,7 +3,7 @@
 import { ArrowLeft, X, Image as ImageIcon, Upload, ChevronDown, Pencil, Check } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import { decodeEventLog, encodeAbiParameters, erc20Abi, isAddress, parseUnits, zeroAddress, type Address } from "viem";
 import { useAccount, usePublicClient, useReadContract, useWriteContract } from "wagmi";
 import { LAUNCHPAD_ABI } from "@/lib/abis/launchpad";
@@ -311,8 +311,18 @@ function CreateTokenInner() {
 
   const valid = name.trim().length > 0 && symbol.trim().length > 0 && symbol.trim().length <= 12;
 
+  // Synchronous guard against double-click on the Launch button. The
+  // `tx.status === "pending"` check in the `disabled` prop is correct, but
+  // React batches renders, so two fast clicks can both fire onSubmit BEFORE
+  // the disabled state propagates to the DOM. A ref is updated synchronously
+  // and survives across event ticks, blocking concurrent submissions and the
+  // resulting double creation-fee waste.
+  const submitting = useRef(false);
+
   const onSubmit = async () => {
     if (!account || !valid) return;
+    if (submitting.current) return;
+    submitting.current = true;
     setTx({ status: "pending", message: "Approving USDC creation fee…" });
     try {
       // Creator buy (V3 only): the launchpad pulls this USDC on top of the fee.
@@ -514,6 +524,8 @@ function CreateTokenInner() {
       }
     } catch (e: any) {
       setTx({ status: "error", message: e?.shortMessage || e?.message || "Failed to launch" });
+    } finally {
+      submitting.current = false;
     }
   };
 
