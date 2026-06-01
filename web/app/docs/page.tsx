@@ -29,6 +29,8 @@ export default function DocsPage() {
         <a href="#trading" className="text-arc-primary hover:underline">8. Trading + migration</a>
         <a href="#contracts" className="text-arc-primary hover:underline">9. Contracts</a>
         <a href="#trust" className="text-arc-primary hover:underline">10. Trust model</a>
+        <a href="#security" className="text-arc-primary hover:underline">11. Security</a>
+        <a href="#faq" className="text-arc-primary hover:underline">12. FAQ</a>
       </nav>
 
       <Section id="overview" title="1. Overview">
@@ -159,15 +161,17 @@ export default function DocsPage() {
       <Section id="trading" title="8. Trading and migration">
         <p>
           <b>Pump / Arcade:</b> trades route through <code>launchpad.buy/sell</code> while on
-          the curve. When <code>realUsdcReserve</code> hits <code>MIGRATION_USDC_TARGET</code>{" "}
-          (20,000 USDC), the contract auto-deploys a V2 pair, seeds it, and burns the LP
-          tokens. Post-migration, trades route through V2 with a small royalty back to creator
-          and platform.
+          the curve. When <code>realUsdcReserve</code> hits 20,000 USDC, the contract takes a{" "}
+          <b>2,500 USDC migration fee</b> to treasury, seeds a fresh V2 pair with the remaining
+          17,500 USDC + 200M tokens (= 800M curve sold + 200M LP), and burns the LP tokens to{" "}
+          <code>0x...dEaD</code>. Post-migration, trades route through V2 with a small royalty
+          back to creator and platform.
         </p>
         <p>
           <b>Clanker:</b> trades go through the V3 router and quoter directly against the locked
           single-sided pool. No migration. Fees accrue continuously and are claimable via{" "}
-          <code>locker.collectFees(positionId)</code>.
+          <code>locker.collectFees(positionId)</code>, which is permissionless: anyone can call
+          it. Twitter-attributed slots route through the escrow's per-slot accounting.
         </p>
       </Section>
 
@@ -207,6 +211,78 @@ export default function DocsPage() {
           <li>If the signer key is compromised, an attacker could divert pending balances of Twitter-attributed slots. Mainnet rollout will migrate the signer to a 2-of-3 Safe multisig and optionally an HSM-backed key</li>
           <li>Past tx history (Arc Blockscout) and the immutable contracts are the source of truth</li>
         </ul>
+      </Section>
+
+      <Section id="security" title="11. Security">
+        <p>
+          The full V2/V3 stack went through an internal multi-agent audit pass before
+          mainnet. 8 HIGH and 14 MEDIUM findings, 6 HIGHs and 11 MEDIUMs fixed in commit{" "}
+          <code>16afe44</code>; the rest are scoped to multisig migration or the V4 hook
+          rollout. Highlights:
+        </p>
+        <ul className="mt-2 list-disc space-y-1 pl-5">
+          <li>Twitter escrow now ships with a 1-hour <code>claimTimelock</code> by default and rejects setter values below 1h (owner can&apos;t accidentally disable the veto window)</li>
+          <li>Claim transfers the full current balance, not the snapshotted signed amount; signed amounts act as a floor. Fees credited during the timelock window land in the same claim instead of getting stranded</li>
+          <li>Slot recipient/admin pairing is enforced both in the launch wizard and in the launchpad contract: an escrow-routed slot must have escrow as admin too</li>
+          <li>MultiSwap whitelists the V4 launchpad&apos;s hook address; an arbitrary hook can&apos;t be routed through the aggregator</li>
+          <li>Migration takes a fixed 2,500 USDC platform fee before seeding the V2 pair, and skims any pre-donation back to the treasury so an attacker can&apos;t warp the initial post-migration spot price by donating to the deterministic pair address</li>
+        </ul>
+        <p>
+          Full report:{" "}
+          <Link href="https://github.com/obseasd/Arcade/blob/main/contracts/SECURITY.md" className="text-arc-primary hover:underline" target="_blank" rel="noopener noreferrer">
+            contracts/SECURITY.md
+          </Link>. External audit and a multisig migration are scheduled before mainnet.
+        </p>
+      </Section>
+
+      <Section id="faq" title="12. FAQ">
+        <h3 className="mt-4 font-semibold text-arc-text">Why is USDC the gas token?</h3>
+        <p>
+          Arc is Circle&apos;s EVM L1, designed so that the only thing you ever need is USDC.
+          Gas, swaps, and launch fees all denominate in USDC. No bridging round-trip for ETH
+          before you can transact.
+        </p>
+
+        <h3 className="mt-4 font-semibold text-arc-text">What&apos;s a Clanker?</h3>
+        <p>
+          Clanker is the launch mode where the full token supply gets locked in a Uniswap V3
+          single-sided position at creation. There&apos;s no bonding curve, the token trades
+          immediately, and 80% of perpetual LP fees route to the creator&apos;s recipient
+          slots forever (20% to the platform). The principal stays locked - the position
+          can never be withdrawn.
+        </p>
+
+        <h3 className="mt-4 font-semibold text-arc-text">Why does migration trigger at exactly $20k?</h3>
+        <p>
+          The bonding curve uses virtual reserves (5,000 USDC + 1B token virtual liquidity)
+          so that the integer math hits the curve fill exactly when 20,000 USDC of net trade
+          volume has been raised. 2,500 USDC goes to the treasury as migration fee, the
+          remaining 17,500 USDC + 200M tokens seed a V2 pool, the LP is burned to the
+          dead address. Post-migration mcap depends on subsequent V2 trades.
+        </p>
+
+        <h3 className="mt-4 font-semibold text-arc-text">Why does my Twitter claim say "Sync &amp; claim fees"?</h3>
+        <p>
+          Fees accumulate in the V3 pool first, not directly in the escrow. Someone has to
+          call <code>locker.collectFees(positionId)</code> to flush them. When you Twitter-
+          claim a slot that has no escrow balance yet, the claim page automatically runs the
+          sync as the first wallet transaction (you pay the gas), then the authorize as the
+          second. After the timelock elapses, the final claim sweeps everything.
+        </p>
+
+        <h3 className="mt-4 font-semibold text-arc-text">Can I cancel a launch?</h3>
+        <p>
+          No. Once a token is created on the launchpad, it exists forever. You can stop
+          interacting with it (no one can force you to keep its UI listed), but the
+          ERC20 contract on chain is permanent.
+        </p>
+
+        <h3 className="mt-4 font-semibold text-arc-text">What happens to dust on the curve?</h3>
+        <p>
+          Tiny buys below 100 wei pay zero fee (integer floor on the 1% calc), and any
+          sub-microsecond rounding at the migration boundary stays in the contract&apos;s
+          favour. None of it is exploitable for material gain.
+        </p>
       </Section>
 
       <div className="mt-12 rounded-2xl border border-arc-border bg-arc-bg-elevated p-4 text-xs text-arc-text-muted">

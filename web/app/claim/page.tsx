@@ -8,6 +8,7 @@ import { Address, formatUnits, isAddress } from "viem";
 import { useAccount, usePublicClient, useReadContract, useWriteContract } from "wagmi";
 import { erc20Abi } from "viem";
 import { TWITTER_ESCROW_V3_ABI } from "@/lib/abis/twitterEscrowV3";
+import { V3_LOCKER_ABI } from "@/lib/abis/v3";
 import { ADDRESSES, LAUNCHPAD_TOKEN_DECIMALS, USDC_DECIMALS } from "@/lib/constants";
 import { pushToast } from "@/lib/toast";
 import { cn, formatAddress, formatToken, formatUSDC } from "@/lib/utils";
@@ -107,6 +108,32 @@ function ClaimPageInner() {
   });
   const timelockSec = Number((timelockQ.data as bigint | undefined) ?? 0n);
 
+  // Live escrow balances for both pots. If both are zero AND signed amounts
+  // are zero too, the user landed here without anyone having called
+  // locker.collectFees yet - the fees are sitting in the V3 pool. We then
+  // run collectFees from the user's wallet as a "sync" step before the
+  // authorize tx, so the contract's M-11 (`balances both 0`) check passes
+  // and authorize succeeds. With H-04 sweep semantic the final claimByTwitter
+  // transfers whatever balance is credited at that moment, signed amounts
+  // act as a minimum (zero here).
+  const balancePairedQ = useReadContract({
+    address: escrow,
+    abi: TWITTER_ESCROW_V3_ABI,
+    functionName: "balances",
+    args: [positionId, slotIndex, pairedToken!],
+    query: { enabled: !!escrow && !!pairedToken },
+  });
+  const balanceClankerQ = useReadContract({
+    address: escrow,
+    abi: TWITTER_ESCROW_V3_ABI,
+    functionName: "balances",
+    args: [positionId, slotIndex, clankerToken!],
+    query: { enabled: !!escrow && !!clankerToken },
+  });
+  const livePaired = (balancePairedQ.data as bigint | undefined) ?? 0n;
+  const liveClanker = (balanceClankerQ.data as bigint | undefined) ?? 0n;
+  const needsSync = livePaired === 0n && liveClanker === 0n;
+
   const expired = Date.now() / 1000 > Number(deadline);
 
   /**
@@ -135,6 +162,25 @@ function ClaimPageInner() {
     }
     setSubmitting(true);
     try {
+      // --- Optional pre-step: sync fees from V3 pool to escrow ---
+      // Triggered when nobody has called locker.collectFees yet, so the
+      // escrow's per-slot balance is still 0 and a direct authorize would
+      // revert with NothingToClaim. The collectFees call is permissionless;
+      // the user pays the gas and the locker writes the slot's share into
+      // escrow.balances via creditSlot, after which authorize succeeds.
+      if (needsSync) {
+        pushToast({ kind: "info", title: "Syncing fees from pool…" });
+        const syncHash = await writeContractAsync({
+          address: ADDRESSES.v3Locker,
+          abi: V3_LOCKER_ABI,
+          functionName: "collectFees",
+          args: [positionId],
+        });
+        if (publicClient) await publicClient.waitForTransactionReceipt({ hash: syncHash });
+        await balancePairedQ.refetch();
+        await balanceClankerQ.refetch();
+      }
+
       // --- Step 1: authorize the claim on-chain ---
       const authorizeHash = await writeContractAsync({
         address: escrow,
@@ -213,15 +259,28 @@ function ClaimPageInner() {
         </div>
 
         <div className="mt-4 space-y-2">
+          {/* Show the LIVE escrow balance for each pot (what the claim will
+              actually sweep, per H-04). Signed amounts are floors and may
+              be zero when fees still sit in the V3 pool - the sync step
+              below brings them in. */}
           <Row label={`${pairedSymbol} pending`} value={
             isPairedUsdc
-              ? `$${formatUSDC(pairedAmount, pairedDecimals, 4)}`
-              : `${formatUnits(pairedAmount, pairedDecimals)} ${pairedSymbol}`
+              ? `$${formatUSDC(livePaired, pairedDecimals, 4)}`
+              : `${formatUnits(livePaired, pairedDecimals)} ${pairedSymbol}`
           } />
-          <Row label={`${tokenSymbol} pending`} value={`${formatToken(clankerAmount, LAUNCHPAD_TOKEN_DECIMALS, 2)} ${tokenSymbol}`} />
+          <Row label={`${tokenSymbol} pending`} value={`${formatToken(liveClanker, LAUNCHPAD_TOKEN_DECIMALS, 2)} ${tokenSymbol}`} />
           <Row label="Recipient" value={formatAddress(recipient!)} />
           <Row label="Deadline" value={new Date(Number(deadline) * 1000).toLocaleString()} />
         </div>
+
+        {needsSync && !alreadyClaimed && !expired && (
+          <div className="mt-4 rounded-xl border border-arc-cta-hover/30 bg-arc-cta-hover/5 p-3 text-xs text-arc-text-muted">
+            Fees are still pending in the V3 pool. The claim button below
+            will run two wallet transactions: first <span className="font-medium text-arc-text">sync from pool</span>,
+            then <span className="font-medium text-arc-text">authorize claim</span>.
+            After that the {timelockSec > 0 ? `${Math.ceil(timelockSec / 60)}-min` : "0-min"} timelock starts.
+          </div>
+        )}
 
         {alreadyClaimed && (
           <div className="mt-4 rounded-xl border border-arc-warn/30 bg-arc-warn/10 p-3 text-xs text-arc-warn">
@@ -252,7 +311,9 @@ function ClaimPageInner() {
                 ? "Already claimed"
                 : expired
                   ? "Expired"
-                  : "Claim fees"}
+                  : needsSync
+                    ? "Sync & claim fees"
+                    : "Claim fees"}
         </button>
         <p className="mt-2 text-[10px] text-arc-text-faint">
           Submitting this transaction transfers the pending fees to your wallet and updates the on-chain

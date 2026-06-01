@@ -252,16 +252,25 @@ export async function GET(req: NextRequest) {
     return redirectBackWithError(origin, "onchain_read_failed");
   }
 
-  // M-11: refuse to sign a (0, 0) claim. The escrow contract reverts on this
-  // path with NothingToClaim, but the user UX is much cleaner if we catch it
-  // server-side and explain WHY (nothing has been credited to this slot yet).
-  // Without this guard, a Twitter-verified user could authorize-and-claim an
-  // empty slot, permanently marking it `claimed=true` and stranding every
-  // future credit (H-03 catches the later credits, but the slot itself can't
-  // be re-claimed). Best to never sign in the first place.
-  if (pairedAmount === 0n && clankerAmount === 0n) {
-    return redirectBackWithError(origin, "nothing_to_claim");
-  }
+  // Sign even when (pairedAmount, clankerAmount) is (0, 0). Two reasons:
+  //
+  // (a) H-04 sweep semantic: claimByTwitter transfers the FULL current
+  //     `balances[slot][token]`, not the signed amounts. The signed amounts
+  //     are floors (the contract enforces balance >= signed at authorize).
+  //     So signing for 0 is fine as long as the live balance ends up > 0
+  //     by authorize time, and the user gets everything credited.
+  //
+  // (b) Pool-pending fees: if no one has called locker.collectFees() yet,
+  //     escrow.balances is 0 even though there's value sitting in the V3
+  //     pool. The /claim page handles this by showing a "Sync fees from
+  //     pool" step that the user runs from their own wallet BEFORE the
+  //     on-chain authorize, after which the contract's M-11 check
+  //     (`balances both 0`) no longer fires and authorize succeeds.
+  //
+  // The escrow's M-11 invariant still protects against authorizing a slot
+  // with zero balance (NothingToClaim revert), so the user can never brick
+  // a slot by signing a (0, 0) claim when nothing is credited - they just
+  // need to sync first.
 
   // 4) Sign EIP-712 Claim with the backend wallet.
   const account = privateKeyToAccount(backendPk);
