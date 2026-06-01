@@ -1,6 +1,6 @@
 "use client";
 
-import { ConnectButton } from "@rainbow-me/rainbowkit";
+import { ConnectButton, useConnectModal } from "@rainbow-me/rainbowkit";
 import {
     ArrowRight,
     ArrowRightLeft,
@@ -51,10 +51,29 @@ import { TokenIcon } from "@/components/ui/TokenIcon";
 export function HeaderWalletWidget() {
     const { address, connector } = useAccount();
     const { disconnect } = useDisconnect();
+    // Hook variant of openConnectModal that survives outside the
+    // ConnectButton.Custom render prop. RainbowKit only marks it as
+    // callable when the user is NOT connected, which we rely on in the
+    // "Changer de wallet" flow below.
+    const { openConnectModal: openConnectModalHook } = useConnectModal();
     const [menuOpen, setMenuOpen] = useState(false);
     const [powerOpen, setPowerOpen] = useState(false);
     const [receiveOpen, setReceiveOpen] = useState(false);
+    // When the user clicks "Changer de wallet" we set this flag, call
+    // disconnect(), and let the useEffect below open the connect modal
+    // as soon as RainbowKit registers the disconnected state. Setting
+    // a flag + reacting in an effect is more reliable than a fixed
+    // setTimeout because the wagmi state update timing varies by
+    // connector.
+    const [pendingSwitchWallet, setPendingSwitchWallet] = useState(false);
     const menuRef = useRef<HTMLDivElement | null>(null);
+
+    useEffect(() => {
+        if (pendingSwitchWallet && !address && openConnectModalHook) {
+            openConnectModalHook();
+            setPendingSwitchWallet(false);
+        }
+    }, [pendingSwitchWallet, address, openConnectModalHook]);
 
     // Close the panel + the power submenu when clicking outside.
     useEffect(() => {
@@ -230,19 +249,16 @@ export function HeaderWalletWidget() {
                                                     <PowerMenuItem
                                                         icon={<ArrowRightLeft className="h-3.5 w-3.5" />}
                                                         onClick={() => {
-                                                            // RainbowKit's openConnectModal is a no-op while
-                                                            // the user is already connected, so a literal "switch
-                                                            // wallet" requires disconnecting first and then
-                                                            // re-opening the connect modal once the disconnected
-                                                            // state propagates through wagmi (50-100ms in
-                                                            // practice). Close our menus immediately so the
-                                                            // modal doesn't open behind them.
+                                                            // Two-step flow: close menus, mark a "pending switch"
+                                                            // flag, disconnect. The useEffect upstairs opens the
+                                                            // RainbowKit connect modal the moment `address`
+                                                            // becomes undefined and `openConnectModalHook`
+                                                            // becomes callable. Replaces the previous fixed
+                                                            // setTimeout that wasn't reliable across connectors.
                                                             setPowerOpen(false);
                                                             setMenuOpen(false);
+                                                            setPendingSwitchWallet(true);
                                                             disconnect();
-                                                            setTimeout(() => {
-                                                                openConnectModal?.();
-                                                            }, 150);
                                                         }}
                                                     >
                                                         Changer de wallet
