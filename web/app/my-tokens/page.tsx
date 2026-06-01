@@ -206,13 +206,20 @@ function PortfolioHeader({
 
 function PortfolioTabs({ current, onChange }: { current: TabKey; onChange: (k: TabKey) => void }) {
     return (
-        <div className="mb-6 flex gap-1 border-b border-arc-border/60">
+        // gap-6 between tabs replaces the previous per-tab px-4. Removing the
+        // horizontal padding flushes the first tab against the page's left
+        // gutter so "Overview" sits under "0x...My portfolio" instead of
+        // being indented. The active underline uses bottom-0 + h-0.5: its
+        // bottom edge meets the container's bottom (border-b), so the blue
+        // sits flush against the gray separator and visually "pushes" by
+        // exactly the gray line's 1px.
+        <div className="mb-6 flex gap-6 border-b border-arc-border/60">
             {TABS.map((t) => (
                 <button
                     key={t.key}
                     onClick={() => onChange(t.key)}
                     className={cn(
-                        "relative px-4 py-3 text-sm font-medium transition-colors",
+                        "relative py-3 text-sm font-medium transition-colors",
                         current === t.key
                             ? "text-arc-text"
                             : "text-arc-text-muted hover:text-arc-text",
@@ -220,7 +227,7 @@ function PortfolioTabs({ current, onChange }: { current: TabKey; onChange: (k: T
                 >
                     {t.label}
                     {current === t.key && (
-                        <span className="absolute inset-x-2 bottom-[-1px] h-0.5 rounded-full bg-arc-cta-hover" />
+                        <span className="absolute inset-x-0 bottom-0 h-0.5 rounded-full bg-arc-cta-hover" />
                     )}
                 </button>
             ))}
