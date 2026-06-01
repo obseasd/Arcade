@@ -401,10 +401,11 @@ function ActivityFeed({ address, onLinkClick }: { address: Address; onLinkClick:
 //     claims, deploys, and any other contract-interaction tx
 function ActivityIcon({ src, alt }: { src: string; alt: string }) {
     return (
-        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-arc-cta-hover/15">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={src} alt={alt} className="h-5 w-5 object-contain" />
-        </div>
+        // Bare PNG, no background container. Size bumped +20% (h-5 → h-6,
+        // 20px → 24px) so the icon reads at a glance without competing
+        // with the colored block frame.
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={src} alt={alt} className="h-6 w-6 shrink-0 object-contain" />
     );
 }
 
