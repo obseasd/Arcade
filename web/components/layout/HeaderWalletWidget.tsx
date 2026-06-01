@@ -12,7 +12,6 @@ import {
     Power,
     Send,
     Shield,
-    X,
 } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -31,6 +30,8 @@ import {
 import { pushToast } from "@/lib/toast";
 import { cn, formatUSDC } from "@/lib/utils";
 import { TokenIcon } from "@/components/ui/TokenIcon";
+import { WalletIcon } from "@/components/wallet/WalletIcon";
+import { ReceiveModal } from "@/components/wallet/ReceiveModal";
 
 /**
  * Header wallet widget. Two-part trigger (USDC balance | wallet chip) that
@@ -335,7 +336,6 @@ export function HeaderWalletWidget() {
                             <ReceiveModal
                                 address={address}
                                 onClose={() => setReceiveOpen(false)}
-                                onCopy={copyAddress}
                             />
                         )}
                     </div>
@@ -522,54 +522,6 @@ function formatAgo(ts: number): string {
     return `${Math.floor(seconds / 86400)}d`;
 }
 
-// ===================== Receive modal =====================
-
-function ReceiveModal({
-    address,
-    onClose,
-    onCopy,
-}: {
-    address: Address;
-    onClose: () => void;
-    onCopy: () => void;
-}) {
-    return (
-        <div
-            className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm"
-            onClick={onClose}
-        >
-            <div
-                className="w-[360px] max-w-[calc(100vw-2rem)] rounded-2xl border border-arc-border bg-arc-bg-elevated p-5 shadow-arc-card"
-                onClick={(e) => e.stopPropagation()}
-            >
-                <div className="flex items-center justify-between">
-                    <h2 className="text-base font-semibold text-arc-text">Receive</h2>
-                    <button onClick={onClose} className="text-arc-text-faint hover:text-arc-text">
-                        <X className="h-4 w-4" />
-                    </button>
-                </div>
-                <p className="mt-1 text-xs text-arc-text-muted">
-                    Share this address to receive USDC or tokens on Arc.
-                </p>
-                <div className="mt-4 break-all rounded-xl border border-arc-border bg-arc-surface px-3 py-3 font-mono text-xs text-arc-text">
-                    {address}
-                </div>
-                <button
-                    onClick={onCopy}
-                    className="arc-button-primary mt-4 flex w-full items-center justify-center gap-2 py-2.5 text-sm"
-                >
-                    <Copy className="h-4 w-4" />
-                    Copy address
-                </button>
-                <p className="mt-3 text-[11px] text-arc-text-faint">
-                    Always verify you&apos;re on Arc testnet (chainId 5042002) before the sender
-                    broadcasts.
-                </p>
-            </div>
-        </div>
-    );
-}
-
 // ===================== shared primitives =====================
 
 function PowerMenuItem({
@@ -598,30 +550,6 @@ function PowerMenuItem({
             </span>
             {children}
         </button>
-    );
-}
-
-function WalletIcon({ icon, name, size = 24 }: { icon?: string; name: string; size?: number }) {
-    if (icon) {
-        // eslint-disable-next-line @next/next/no-img-element
-        return (
-            <img
-                src={icon}
-                alt={name}
-                width={size}
-                height={size}
-                style={{ width: size, height: size }}
-                className="rounded-lg"
-            />
-        );
-    }
-    return (
-        <div
-            style={{ width: size, height: size }}
-            className="flex items-center justify-center rounded-lg bg-gradient-to-br from-arc-primary to-arc-cta text-xs font-bold text-white"
-        >
-            {name.slice(0, 1).toUpperCase()}
-        </div>
     );
 }
 

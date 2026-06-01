@@ -1,13 +1,17 @@
 "use client";
 
+import { useAccountModal } from "@rainbow-me/rainbowkit";
 import {
     ArrowLeft,
     ArrowRight,
     Copy,
+    Download,
     ExternalLink,
     MoreHorizontal,
     Rocket,
+    Send,
     Share2,
+    ShoppingCart,
     TrendingUp,
     Wallet,
 } from "lucide-react";
@@ -29,6 +33,8 @@ import { CreatorFeesPanel } from "@/components/pool/CreatorFeesPanel";
 import { PendingWithdrawalsCard } from "@/components/pool/PendingWithdrawalsCard";
 import { VaultClaimPanel } from "@/components/pool/VaultClaimPanel";
 import { TokenIcon } from "@/components/ui/TokenIcon";
+import { ReceiveModal } from "@/components/wallet/ReceiveModal";
+import { WalletIcon } from "@/components/wallet/WalletIcon";
 import { LAUNCHPAD_TOKEN_DECIMALS, USDC_DECIMALS } from "@/lib/constants";
 import { useLaunchpadTokens } from "@/lib/hooks/useLaunchpadTokens";
 import { useMyHoldings, type HoldingInfo } from "@/lib/hooks/useMyHoldings";
@@ -50,10 +56,16 @@ const TABS: { key: TabKey; label: string }[] = [
 ];
 
 export default function MyTokensPage() {
-    const { address: account } = useAccount();
+    const { address: account, connector } = useAccount();
     const { tokens, isLoading } = useLaunchpadTokens();
     const { holdings, isLoading: holdingsLoading } = useMyHoldings();
     const [tab, setTab] = useState<TabKey>("overview");
+
+    // connector.icon is the connector-supplied logo (data URI for Backpack,
+    // MetaMask, etc.). Falls back to a gradient letter circle inside
+    // WalletIcon when absent.
+    const walletIconSrc = (connector as { icon?: string } | undefined)?.icon;
+    const walletName = connector?.name ?? "Wallet";
 
     const mine = useMemo(() => {
         if (!account) return [];
@@ -78,7 +90,11 @@ export default function MyTokensPage() {
                 <ArrowLeft className="h-4 w-4" /> Launchpad
             </Link>
 
-            <PortfolioHeader account={account} />
+            <PortfolioHeader
+                account={account}
+                walletIconSrc={walletIconSrc}
+                walletName={walletName}
+            />
 
             <PortfolioTabs current={tab} onChange={setTab} />
 
@@ -112,7 +128,15 @@ export default function MyTokensPage() {
 
 // ============================ Header ============================
 
-function PortfolioHeader({ account }: { account: Address | undefined }) {
+function PortfolioHeader({
+    account,
+    walletIconSrc,
+    walletName,
+}: {
+    account: Address | undefined;
+    walletIconSrc?: string;
+    walletName: string;
+}) {
     const explorerUrl = account
         ? `https://testnet.arcscan.app/address/${account}`
         : undefined;
@@ -130,9 +154,12 @@ function PortfolioHeader({ account }: { account: Address | undefined }) {
     return (
         <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-3">
-                <div className="flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-br from-arc-primary to-arc-cta text-base font-bold text-white">
-                    {account ? account.slice(2, 3).toUpperCase() : "?"}
-                </div>
+                <WalletIcon
+                    icon={walletIconSrc}
+                    name={account ? walletName : "?"}
+                    size={40}
+                    shape="full"
+                />
                 <div>
                     <div className="text-lg font-semibold sm:text-xl">
                         {account ? formatAddress(account) : "Not connected"}
@@ -243,6 +270,9 @@ function OverviewTab({
     onShowAllTokens: () => void;
     onShowAllActivity: () => void;
 }) {
+    const { openAccountModal } = useAccountModal();
+    const [receiveOpen, setReceiveOpen] = useState(false);
+
     const currentUsd = Number(totalHoldingsUsd) / 1e6;
     const series = useMemo(() => generatePlaceholderSeries(currentUsd), [currentUsd]);
 
@@ -255,170 +285,260 @@ function OverviewTab({
     const dailyDown = dailyDelta < 0;
 
     // Performance placeholders. Unrealized = "what holdings are worth now
-    // minus a notional cost basis we don't have"; we surface a small portion
-    // of the current value as a fake unrealized return. Realized = 0 since
-    // we don't track historical trades. Total = sum. The indexer will
-    // replace this with real numbers.
+    // minus a notional cost basis we don't have"; we surface the chart's
+    // implied move as a stand-in. Realized = 0 since we don't track
+    // historical trades. Total = sum. The indexer will replace this with
+    // real numbers.
     const unrealized = dailyDelta;
     const realized = 0;
     const total = unrealized + realized;
 
     return (
-        <div className="grid gap-6 lg:grid-cols-3">
-            {/* Left: hero + chart + performance + previews */}
-            <div className="space-y-6 lg:col-span-2">
-                <div className="arc-card p-5 sm:p-6">
-                    <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                            <div className="truncate text-4xl font-semibold tabular-nums sm:text-5xl">
-                                ${currentUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })}
-                            </div>
-                            <div
-                                className={cn(
-                                    "mt-1 flex items-center gap-1 text-xs",
-                                    dailyDown ? "text-arc-danger" : "text-arc-success",
-                                )}
-                            >
-                                {dailyDown ? "▼" : "▲"}{" "}
-                                ${Math.abs(dailyDelta).toLocaleString(undefined, { maximumFractionDigits: 2 })}{" "}
-                                ({dailyPct.toFixed(2)}%) today
-                                <span className="ml-2 text-arc-text-faint">· placeholder, waiting for indexer</span>
+        <>
+            <div className="grid gap-6 lg:grid-cols-3">
+                {/* Row 1 left: hero + chart (spans 2 columns) */}
+                <div className="lg:col-span-2">
+                    <div className="arc-card p-5 sm:p-6">
+                        <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                                <div className="truncate text-4xl font-semibold tabular-nums sm:text-5xl">
+                                    ${currentUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                                </div>
+                                <div
+                                    className={cn(
+                                        "mt-1 flex items-center gap-1 text-xs",
+                                        dailyDown ? "text-arc-danger" : "text-arc-success",
+                                    )}
+                                >
+                                    {dailyDown ? "▼" : "▲"}{" "}
+                                    ${Math.abs(dailyDelta).toLocaleString(undefined, { maximumFractionDigits: 2 })}{" "}
+                                    ({dailyPct.toFixed(2)}%) today
+                                    <span className="ml-2 text-arc-text-faint">· placeholder, waiting for indexer</span>
+                                </div>
                             </div>
                         </div>
+
+                        <div className="mt-4 h-40 w-full">
+                            <ResponsiveContainer width="100%" height="100%">
+                                <AreaChart data={series}>
+                                    <defs>
+                                        <linearGradient id="portfolioFill" x1="0" y1="0" x2="0" y2="1">
+                                            <stop offset="0%" stopColor="#15508F" stopOpacity={0.4} />
+                                            <stop offset="100%" stopColor="#15508F" stopOpacity={0} />
+                                        </linearGradient>
+                                    </defs>
+                                    <XAxis dataKey="x" hide />
+                                    <YAxis hide domain={["dataMin", "dataMax"]} />
+                                    <RechartsTooltip
+                                        cursor={false}
+                                        contentStyle={{
+                                            background: "rgba(6, 26, 54, 0.95)",
+                                            border: "1px solid rgba(40, 60, 90, 0.6)",
+                                            borderRadius: 8,
+                                            fontSize: 11,
+                                            padding: "4px 8px",
+                                        }}
+                                        formatter={(v: number) => [`$${v.toFixed(2)}`, ""]}
+                                        labelFormatter={() => ""}
+                                    />
+                                    <Area
+                                        type="monotone"
+                                        dataKey="y"
+                                        stroke="#15508F"
+                                        strokeWidth={2}
+                                        fill="url(#portfolioFill)"
+                                        isAnimationActive={false}
+                                    />
+                                </AreaChart>
+                            </ResponsiveContainer>
+                        </div>
+
+                        {/* Timeframe row (visual only) */}
+                        <div className="mt-3 flex items-center gap-1 text-xs text-arc-text-muted">
+                            {["1H", "1D", "1W", "1M", "1Y", "All"].map((label) => (
+                                <button
+                                    key={label}
+                                    disabled
+                                    className={cn(
+                                        "rounded-md px-2 py-1 font-medium",
+                                        label === "1D"
+                                            ? "bg-arc-cta-hover/15 text-arc-cta-hover"
+                                            : "text-arc-text-faint",
+                                    )}
+                                >
+                                    {label}
+                                </button>
+                            ))}
+                            <span className="ml-2 text-[10px] text-arc-text-faint">
+                                real history unlocks with the indexer
+                            </span>
+                        </div>
+                    </div>
+                </div>
+
+                {/* Row 1 right: 2x2 action grid + Performance card stacked.
+                    Matches Uniswap portfolio's side-panel layout (Send /
+                    Receive / Buy / More squares with the performance
+                    breakdown below). */}
+                <div className="space-y-4 lg:col-span-1">
+                    <div className="grid grid-cols-2 gap-3">
+                        <ActionTile
+                            icon={<Send className="h-4 w-4" />}
+                            label="Send"
+                            onClick={() => openAccountModal?.()}
+                            disabled={!openAccountModal}
+                        />
+                        <ActionTile
+                            icon={<Download className="h-4 w-4" />}
+                            label="Receive"
+                            onClick={() => setReceiveOpen(true)}
+                        />
+                        <ActionTile
+                            icon={<ShoppingCart className="h-4 w-4" />}
+                            label="Buy"
+                            href="/swap"
+                        />
+                        <ActionTile
+                            icon={<MoreHorizontal className="h-4 w-4" />}
+                            label="More"
+                            disabled
+                        />
                     </div>
 
-                    <div className="mt-4 h-40 w-full">
-                        <ResponsiveContainer width="100%" height="100%">
-                            <AreaChart data={series}>
-                                <defs>
-                                    <linearGradient id="portfolioFill" x1="0" y1="0" x2="0" y2="1">
-                                        <stop offset="0%" stopColor="#15508F" stopOpacity={0.4} />
-                                        <stop offset="100%" stopColor="#15508F" stopOpacity={0} />
-                                    </linearGradient>
-                                </defs>
-                                <XAxis dataKey="x" hide />
-                                <YAxis hide domain={["dataMin", "dataMax"]} />
-                                <RechartsTooltip
-                                    cursor={false}
-                                    contentStyle={{
-                                        background: "rgba(6, 26, 54, 0.95)",
-                                        border: "1px solid rgba(40, 60, 90, 0.6)",
-                                        borderRadius: 8,
-                                        fontSize: 11,
-                                        padding: "4px 8px",
-                                    }}
-                                    formatter={(v: number) => [`$${v.toFixed(2)}`, ""]}
-                                    labelFormatter={() => ""}
-                                />
-                                <Area
-                                    type="monotone"
-                                    dataKey="y"
-                                    stroke="#15508F"
-                                    strokeWidth={2}
-                                    fill="url(#portfolioFill)"
-                                    isAnimationActive={false}
-                                />
-                            </AreaChart>
-                        </ResponsiveContainer>
+                    <div className="arc-card p-5 sm:p-6">
+                        <div className="mb-3 flex items-center justify-between">
+                            <div className="flex items-center gap-2 text-sm font-semibold">
+                                <TrendingUp className="h-4 w-4" />
+                                Performance
+                            </div>
+                        </div>
+                        <div className="space-y-2">
+                            <PerfLine label="Unrealized return" value={unrealized} pct={dailyPct} />
+                            <PerfLine label="Realized return" value={realized} />
+                            <PerfLine label="Total return" value={total} />
+                        </div>
+                        <div className="mt-3 text-[10px] text-arc-text-faint">
+                            Placeholder. Real P/L needs the indexer to derive cost basis from
+                            historical trades.
+                        </div>
                     </div>
+                </div>
 
-                    {/* Timeframe row (visual only) */}
-                    <div className="mt-3 flex items-center gap-1 text-xs text-arc-text-muted">
-                        {["1H", "1D", "1W", "1M", "1Y", "All"].map((label) => (
+                {/* Row 2 left: tokens preview (spans 2 columns). At the same
+                    vertical level as Recent activity on the right. */}
+                <div className="lg:col-span-2">
+                    <div className="arc-card p-5 sm:p-6">
+                        <div className="mb-3 flex items-center justify-between">
+                            <div>
+                                <div className="text-sm font-semibold">Tokens</div>
+                                <div className="text-xs text-arc-text-faint">
+                                    {holdings.length} held{launchedCount > 0 ? ` · ${launchedCount} launched` : ""}
+                                </div>
+                            </div>
                             <button
-                                key={label}
-                                disabled
-                                className={cn(
-                                    "rounded-md px-2 py-1 font-medium",
-                                    label === "1D"
-                                        ? "bg-arc-cta-hover/15 text-arc-cta-hover"
-                                        : "text-arc-text-faint",
-                                )}
+                                onClick={onShowAllTokens}
+                                className="inline-flex items-center gap-1 rounded-xl border border-arc-border px-3 py-1.5 text-xs text-arc-text-muted hover:bg-white/5 hover:text-arc-text"
                             >
-                                {label}
+                                View all tokens
+                                <ArrowRight className="h-3 w-3" />
                             </button>
-                        ))}
-                        <span className="ml-2 text-[10px] text-arc-text-faint">
-                            real history unlocks with the indexer
-                        </span>
-                    </div>
-                </div>
-
-                {/* Performance card */}
-                <div className="arc-card p-5 sm:p-6">
-                    <div className="mb-3 flex items-center gap-2 text-sm font-semibold">
-                        <TrendingUp className="h-4 w-4" />
-                        Performance
-                    </div>
-                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-                        <PerfRow label="Unrealized return" value={unrealized} />
-                        <PerfRow label="Realized return" value={realized} />
-                        <PerfRow label="Total return" value={total} />
-                    </div>
-                    <div className="mt-3 text-[10px] text-arc-text-faint">
-                        Placeholder — real P/L requires the indexer to compute cost basis
-                        from historical trades.
-                    </div>
-                </div>
-
-                {/* Tokens preview */}
-                <div className="arc-card p-5 sm:p-6">
-                    <div className="mb-3 flex items-center justify-between">
-                        <div>
-                            <div className="text-sm font-semibold">Tokens</div>
-                            <div className="text-xs text-arc-text-faint">
-                                {holdings.length} held{launchedCount > 0 ? ` · ${launchedCount} launched` : ""}
-                            </div>
                         </div>
-                        <button
-                            onClick={onShowAllTokens}
-                            className="inline-flex items-center gap-1 rounded-xl border border-arc-border px-3 py-1.5 text-xs text-arc-text-muted hover:bg-white/5 hover:text-arc-text"
-                        >
-                            View all tokens
-                            <ArrowRight className="h-3 w-3" />
-                        </button>
+                        <TokensTablePreview holdings={holdings.slice(0, 5)} />
                     </div>
-                    <TokensTablePreview holdings={holdings.slice(0, 5)} />
                 </div>
-            </div>
 
-            {/* Right column: recent activity */}
-            <div className="space-y-6 lg:col-span-1">
-                <div className="arc-card p-5 sm:p-6">
-                    <div className="mb-3 flex items-center justify-between">
-                        <div>
+                {/* Row 2 right: recent activity */}
+                <div className="lg:col-span-1">
+                    <div className="arc-card p-5 sm:p-6">
+                        <div className="mb-3 flex items-center justify-between">
                             <div className="text-sm font-semibold">Recent activity</div>
+                            <button
+                                onClick={onShowAllActivity}
+                                className="inline-flex items-center gap-1 rounded-xl border border-arc-border px-3 py-1.5 text-xs text-arc-text-muted hover:bg-white/5 hover:text-arc-text"
+                            >
+                                View all
+                                <ArrowRight className="h-3 w-3" />
+                            </button>
                         </div>
-                        <button
-                            onClick={onShowAllActivity}
-                            className="inline-flex items-center gap-1 rounded-xl border border-arc-border px-3 py-1.5 text-xs text-arc-text-muted hover:bg-white/5 hover:text-arc-text"
-                        >
-                            View all
-                            <ArrowRight className="h-3 w-3" />
-                        </button>
+                        <ActivityList account={account} limit={6} />
                     </div>
-                    <ActivityList account={account} limit={6} />
                 </div>
             </div>
-        </div>
+
+            {receiveOpen && (
+                <ReceiveModal address={account} onClose={() => setReceiveOpen(false)} />
+            )}
+        </>
     );
 }
 
-function PerfRow({ label, value }: { label: string; value: number }) {
+/**
+ * Square action button used in the Overview side panel. Mirrors the wallet
+ * widget's Send/Receive look so the two surfaces feel related. `href` makes
+ * it a Link, otherwise it's a button with onClick.
+ */
+function ActionTile({
+    icon,
+    label,
+    onClick,
+    href,
+    disabled,
+}: {
+    icon: React.ReactNode;
+    label: string;
+    onClick?: () => void;
+    href?: string;
+    disabled?: boolean;
+}) {
+    const className = cn(
+        "flex flex-col items-center justify-center gap-1.5 rounded-xl px-3 py-5 transition-colors",
+        disabled
+            ? "cursor-not-allowed bg-sky-400/5 text-sky-400/40"
+            : "bg-sky-400/10 text-sky-400 hover:bg-sky-400/20",
+    );
+    const inner = (
+        <>
+            {icon}
+            <span className="text-sm font-medium">{label}</span>
+        </>
+    );
+    if (href && !disabled) {
+        return (
+            <Link href={href} className={className}>
+                {inner}
+            </Link>
+        );
+    }
+    return (
+        <button onClick={onClick} disabled={disabled} className={className}>
+            {inner}
+        </button>
+    );
+}
+
+/**
+ * Single-line performance row: label on the left, value on the right,
+ * matching Uniswap's compact side-panel layout. `pct` adds a small
+ * parenthesised percent next to the value when present.
+ */
+function PerfLine({ label, value, pct }: { label: string; value: number; pct?: number }) {
     const positive = value > 0;
     const negative = value < 0;
     return (
-        <div className="rounded-xl border border-arc-border bg-arc-bg-elevated p-3">
-            <div className="text-[10px] uppercase tracking-wider text-arc-text-muted">{label}</div>
-            <div
+        <div className="flex items-center justify-between">
+            <span className="text-xs text-arc-text-muted">{label}</span>
+            <span
                 className={cn(
-                    "mt-1 text-lg font-semibold tabular-nums",
+                    "flex items-center gap-1 text-sm font-semibold tabular-nums",
                     positive ? "text-arc-success" : negative ? "text-arc-danger" : "text-arc-text",
                 )}
             >
-                {positive ? "+" : ""}
-                ${value.toLocaleString(undefined, { maximumFractionDigits: 2 })}
-            </div>
+                {negative ? "▼ " : positive ? "▲ " : ""}
+                ${Math.abs(value).toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                {pct !== undefined && pct !== 0 && (
+                    <span className="text-arc-text-muted">({pct.toFixed(2)}%)</span>
+                )}
+            </span>
         </div>
     );
 }
@@ -513,7 +633,7 @@ function TokenRow({ holding }: { holding: HoldingInfo }) {
     // Price = value / balance, expressed in USD per token. The on-chain math
     // is integer-only so we compute float in display: (valueRaw / 1e6) /
     // (balance / 1e18). Skip when either side is zero.
-    let priceStr = "—";
+    let priceStr = "-";
     if (balance > 0n && value > 0n) {
         const balanceFloat = Number(formatUnits(balance, LAUNCHPAD_TOKEN_DECIMALS));
         const valueFloat = Number(formatUnits(value, USDC_DECIMALS));
@@ -552,7 +672,7 @@ function TokenRow({ holding }: { holding: HoldingInfo }) {
                 ${valueFormatted}
             </td>
             <td className="py-3 pl-3 text-right tabular-nums text-arc-text-faint">
-                — <span className="text-[10px]">(indexer)</span>
+                <span className="text-[10px]">(indexer)</span>
             </td>
         </tr>
     );
@@ -672,7 +792,7 @@ function ActivityTab({ account }: { account: Address }) {
                 </table>
             </div>
             <div className="border-t border-arc-border/40 px-4 py-3 text-[10px] text-arc-text-faint">
-                Local activity only — full on-chain history unlocks with the indexer.
+                Local activity only. Full on-chain history unlocks with the indexer.
             </div>
         </div>
     );
@@ -706,14 +826,14 @@ function ActivityRowFull({ item }: { item: UnifiedActivityItem }) {
                         <ExternalLink className="h-3 w-3" />
                     </a>
                 ) : (
-                    <span className="text-[10px] text-arc-text-faint">—</span>
+                    <span className="text-[10px] text-arc-text-faint">·</span>
                 )}
             </td>
         </tr>
     );
 }
 
-// Shared Overview/Activity helpers — single-source-of-truth for merging
+// Shared Overview/Activity helpers, single source of truth for merging
 // the three localStorage feeds. Once Ponder is wired this collapses to a
 // single GraphQL query and these adapters can be deleted.
 function buildActivity(account: Address): UnifiedActivityItem[] {
