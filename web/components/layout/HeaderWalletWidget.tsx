@@ -401,7 +401,7 @@ function ActivityFeed({ address, onLinkClick }: { address: Address; onLinkClick:
 //     claims, deploys, and any other contract-interaction tx
 function ActivityIcon({ src, alt }: { src: string; alt: string }) {
     return (
-        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-arc-cta-hover/15">
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-arc-cta-hover/15">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src={src} alt={alt} className="h-5 w-5 object-contain" />
         </div>
