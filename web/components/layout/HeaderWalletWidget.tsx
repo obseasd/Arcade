@@ -7,7 +7,6 @@ import {
     ChevronDown,
     Copy,
     Download,
-    FileText,
     LineChart,
     LogOut,
     Power,
@@ -284,8 +283,9 @@ export function HeaderWalletWidget() {
                                 {/* View wallet / portfolio link.
                                     Compact centered text-only link per design ask -
                                     the bordered button shape was visually competing
-                                    with the action buttons above it. */}
-                                <div className="flex justify-center px-4 pb-1">
+                                    with the action buttons above it. pb-2 below to
+                                    match the in-feed row spacing (space-y-2 = 8px). */}
+                                <div className="flex justify-center px-4 pb-2">
                                     <Link
                                         href="/my-tokens"
                                         onClick={() => setMenuOpen(false)}
@@ -357,7 +357,7 @@ function ActivityFeed({ address, onLinkClick }: { address: Address; onLinkClick:
 
     if (items.length === 0) {
         return (
-            <div className="px-4 pb-4 pt-3">
+            <div className="px-4 pb-4">
                 <div className="mb-2 text-xs font-semibold text-arc-text">Activité récente</div>
                 <div className="text-[11px] text-arc-text-faint">No activity yet.</div>
             </div>
@@ -365,7 +365,7 @@ function ActivityFeed({ address, onLinkClick }: { address: Address; onLinkClick:
     }
 
     return (
-        <div className="px-4 pb-4 pt-3">
+        <div className="px-4 pb-4">
             <div className="mb-2 text-xs font-semibold text-arc-text">Activité récente</div>
             <div className="space-y-2">
                 {items.map((it, i) =>
@@ -390,10 +390,24 @@ function ActivityFeed({ address, onLinkClick }: { address: Address; onLinkClick:
     );
 }
 
-// Per design: the VALUE goes white, the action label goes muted, the
-// time-ago text is bumped ~+40% (10px → 14px ≈ text-sm) so the user
-// can scan it at a glance. Leading icon on the left of each row;
-// placeholder lucide icons for now, user is bringing custom logos.
+// Per design:
+//   - VALUE goes white (the concrete number / handle)
+//   - action LABEL goes faint and is 20% larger than the value so the
+//     activity type is what jumps out first when scanning the feed
+//   - time-ago text is bumped ~+40% (was text-[10px] → text-sm) so it
+//     reads at a glance
+//   - leading icon on the left uses the user-supplied PNGs in /public
+//     (bridge.png, contract.png, swap.png). Generic "contract" covers
+//     claims, deploys, and any other contract-interaction tx
+function ActivityIcon({ src, alt }: { src: string; alt: string }) {
+    return (
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-arc-cta-hover/15">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={src} alt={alt} className="h-5 w-5 object-contain" />
+        </div>
+    );
+}
+
 function BridgeRow({ entry }: { entry: HistoryEntry }) {
     const amountStr = (() => {
         try {
@@ -410,11 +424,9 @@ function BridgeRow({ entry }: { entry: HistoryEntry }) {
               : "Bridge en attente";
     return (
         <div className="flex items-center gap-2.5">
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-arc-cta-hover/15 text-arc-cta-hover">
-                <ArrowRightLeft className="h-4 w-4" />
-            </div>
+            <ActivityIcon src="/bridge.png" alt="Bridge" />
             <div className="min-w-0 flex-1">
-                <div className="truncate text-[11px] text-arc-text-faint">{status}</div>
+                <div className="truncate text-sm text-arc-text-faint">{status}</div>
                 <div className="truncate text-xs font-medium text-arc-text">{amountStr} USDC</div>
             </div>
             <div className="shrink-0 text-sm text-arc-text-faint">{formatAgo(entry.burnedAt)}</div>
@@ -426,11 +438,9 @@ function ClaimRow({ entry }: { entry: PendingTwitterClaim }) {
     const ready = Math.floor(Date.now() / 1000) >= entry.executeAfter;
     return (
         <div className="flex items-center gap-2.5">
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-arc-cta-hover/15 text-arc-cta-hover">
-                <FileText className="h-4 w-4" />
-            </div>
+            <ActivityIcon src="/contract.png" alt="Contract" />
             <div className="min-w-0 flex-1">
-                <div className="truncate text-[11px] text-arc-text-faint">
+                <div className="truncate text-sm text-arc-text-faint">
                     {ready ? "Twitter claim prêt" : "Twitter claim en attente"}
                 </div>
                 <div className="truncate text-xs font-medium text-arc-text">@{entry.handle}</div>
