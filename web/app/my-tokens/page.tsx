@@ -10,7 +10,6 @@ import {
     Download,
     ExternalLink,
     Filter,
-    Forward,
     MoreHorizontal,
     Rocket,
     Search,
@@ -177,7 +176,13 @@ function PortfolioHeader({
                         onClick={onShare}
                         className="inline-flex items-center gap-2 rounded-xl border border-arc-border bg-arc-bg-elevated px-4 py-2.5 text-[15px] font-medium text-arc-text transition-colors hover:bg-white/5"
                     >
-                        <Forward className="h-[18px] w-[18px]" />
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                            src="/share.png"
+                            alt=""
+                            aria-hidden
+                            className="h-[18px] w-[18px] object-contain"
+                        />
                         Share
                     </button>
                 )}
