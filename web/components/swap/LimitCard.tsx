@@ -1,9 +1,10 @@
 "use client";
 
-import { ArrowDownUp, ChevronDown, Info } from "lucide-react";
-import { useMemo, useState } from "react";
-import { erc20Abi, parseUnits, zeroAddress } from "viem";
+import { ArrowDownUp, ChevronDown } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { erc20Abi, formatUnits, parseUnits, zeroAddress, type Address } from "viem";
 import { useAccount, useReadContract, useWriteContract } from "wagmi";
+import { ROUTER_ABI } from "@/lib/abis/dex";
 import { ADDRESSES, LIMIT_ORDERS_ENABLED, USDC_DECIMALS } from "@/lib/constants";
 import { useV2Tokens } from "@/lib/hooks/useV2Tokens";
 import { useV3Tokens } from "@/lib/hooks/useV3Tokens";
@@ -15,6 +16,17 @@ import { addActivity } from "@/lib/activityFeed";
 import { pushToast } from "@/lib/toast";
 import { SwapTabs, type SwapTab } from "./SwapTabs";
 import { cn, formatToken, formatUSDC } from "@/lib/utils";
+
+/**
+ * Format a number as a price string. Strips trailing zeros and the trailing
+ * dot. Caps at 6 significant fractional digits to avoid scientific notation
+ * for very small prices typical of fresh launchpad tokens.
+ */
+function formatPriceStr(price: number, maxDecimals = 6): string {
+    if (!isFinite(price) || price === 0) return "";
+    const str = price.toFixed(maxDecimals);
+    return str.replace(/\.?0+$/, "");
+}
 
 const USDC_TOKEN: TokenOption = {
     address: ADDRESSES.usdc,
@@ -162,6 +174,63 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
         }
     }, [tokenOut, triggerPrice, srcAmountBn, inDec, outDec]);
 
+    // Spot price quote: how many tokenOut per 1 tokenIn at current pool reserves.
+    // Used to populate triggerPrice on token pick + drive the Market Price button.
+    // We query getAmountsOut(1 unit of tokenIn) which approximates the spot price
+    // (true spot would be reserveOut/reserveIn but the swap fee makes that
+    // suboptimal as a trigger; users want the actual execution price).
+    const oneInBn = useMemo(() => 10n ** BigInt(inDec), [inDec]);
+    const spotPath = useMemo<readonly Address[]>(() => {
+        if (!tokenOut) return [];
+        return [tokenIn.address, tokenOut.address] as const;
+    }, [tokenIn.address, tokenOut]);
+    const spotQ = useReadContract({
+        address: ADDRESSES.router,
+        abi: ROUTER_ABI,
+        functionName: "getAmountsOut",
+        args: tokenOut ? [oneInBn, spotPath] : undefined,
+        query: { enabled: !!tokenOut, refetchInterval: 15_000 },
+    });
+    const spotOutBn = useMemo<bigint | undefined>(() => {
+        const arr = spotQ.data as readonly bigint[] | undefined;
+        if (!arr || arr.length < 2) return undefined;
+        return arr[arr.length - 1];
+    }, [spotQ.data]);
+
+    const marketPriceNum = useMemo(() => {
+        if (!spotOutBn || !tokenOut) return 0;
+        return Number(formatUnits(spotOutBn, outDec));
+    }, [spotOutBn, tokenOut, outDec]);
+    const marketPriceStr = useMemo(() => formatPriceStr(marketPriceNum), [marketPriceNum]);
+
+    // Triger-vs-market delta: positive when limit price asks more than market.
+    const triggerVsMarketPct = useMemo(() => {
+        if (!triggerPrice || marketPriceNum <= 0) return 0;
+        const t = Number(triggerPrice);
+        if (!isFinite(t) || t <= 0) return 0;
+        return (t / marketPriceNum - 1) * 100;
+    }, [triggerPrice, marketPriceNum]);
+
+    // Estimated output the maker would receive if the order fills at the trigger
+    // price (NOT a swap quote, this is the bound encoded in dstMinAmount). The
+    // For field shows this so users see what their order is asking for.
+    const forDisplay = useMemo(() => {
+        if (!tokenOut) return "";
+        if (dstMinAmountBn > 0n) return formatToken(dstMinAmountBn, outDec, 4);
+        return "";
+    }, [tokenOut, dstMinAmountBn, outDec]);
+
+    // Auto-populate triggerPrice with the current market price the first time
+    // tokenOut becomes available, so the For field is meaningful immediately.
+    // Subsequent token swaps (the up-down arrow) re-trigger via the empty-after-
+    // swap reset already in swapDirection().
+    useEffect(() => {
+        if (tokenOut && marketPriceStr && !triggerPrice) {
+            setTriggerPrice(marketPriceStr);
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [tokenOut?.address, marketPriceStr]);
+
     const { allowance, ensureAllowance } = useApproveIfNeeded(
         tokenIn.address,
         ADDRESSES.orbsTwap,
@@ -283,12 +352,6 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
         <div className="arc-card p-5 sm:p-6">
                 <div className="mb-4 flex items-center justify-between">
                     <SwapTabs tab={tab} onTabChange={onTabChange} />
-                    <button
-                        title="Limit orders are settled on-chain by the Orbs TWAP protocol against Arcade's V2 pools. The order book lives entirely on Arc. 0% Arcade fees."
-                        className="text-arc-text-muted hover:text-arc-text"
-                    >
-                        <Info className="h-4 w-4" />
-                    </button>
                 </div>
 
                 <TokenRow
@@ -312,18 +375,30 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
                 <TokenRow
                     label="For"
                     token={tokenOut}
-                    amount=""
+                    amount={forDisplay}
                     disabled
-                    placeholder="Pick output token"
+                    placeholder={tokenOut ? "0.0" : "Pick output token"}
                     onTokenPick={() => setPickerOpen("out")}
                 />
 
                 <div className="mt-4 rounded-xl border border-arc-border bg-arc-bg-elevated p-4">
                     <div className="mb-2 flex items-center justify-between">
                         <div className="text-xs text-arc-text-muted">{triggerLabel}</div>
-                        <div className="text-[10px] text-arc-text-faint">
-                            {tokenOut ? tokenOut.symbol : "USDC"}/{tokenIn.symbol}
-                        </div>
+                        <button
+                            type="button"
+                            onClick={() => {
+                                if (marketPriceStr) setTriggerPrice(marketPriceStr);
+                            }}
+                            disabled={!marketPriceStr}
+                            className={cn(
+                                "rounded-lg border border-arc-border bg-arc-bg-elevated px-2 py-1 text-[10px] font-medium transition-colors",
+                                marketPriceStr
+                                    ? "text-arc-text-muted hover:bg-white/5 hover:text-arc-text"
+                                    : "cursor-not-allowed text-arc-text-faint opacity-50",
+                            )}
+                        >
+                            Market Price
+                        </button>
                     </div>
                     <div className="flex items-center justify-between gap-3">
                         <input
@@ -341,10 +416,20 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
                             </div>
                         )}
                     </div>
-                    {dstMinAmountBn > 0n && tokenOut && (
+                    {tokenOut && marketPriceStr && (
                         <div className="mt-2 text-[10px] text-arc-text-faint">
-                            You receive at least{" "}
-                            {formatToken(dstMinAmountBn, tokenOut.decimals, 4)} {tokenOut.symbol}
+                            Current market: {marketPriceStr} {tokenOut.symbol}/{tokenIn.symbol}
+                        </div>
+                    )}
+                    {tokenOut && marketPriceStr && triggerPrice && triggerVsMarketPct !== 0 && (
+                        <div
+                            className={cn(
+                                "mt-1 text-[10px]",
+                                triggerVsMarketPct > 0 ? "text-arc-success" : "text-arc-warn",
+                            )}
+                        >
+                            Your limit price is {Math.abs(triggerVsMarketPct).toFixed(2)}%{" "}
+                            {triggerVsMarketPct > 0 ? "higher" : "lower"} than market
                         </div>
                     )}
                 </div>
