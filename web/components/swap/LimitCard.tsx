@@ -473,7 +473,7 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
     };
 
     return (
-        <div className="arc-card p-5 sm:p-6">
+        <div className="arc-card relative p-5">
                 <div className="mb-4 flex items-center justify-between">
                     <SwapTabs tab={tab} onTabChange={onTabChange} />
                     <SlippagePopover
@@ -488,20 +488,35 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
                 </div>
 
                 <TokenRow
-                    label="I want to sell"
+                    label="From"
                     token={tokenIn}
                     amount={amountIn}
                     onAmountChange={onSrcAmountChange}
                     balance={balance}
+                    showHalfMax={!!account && balance > 0n}
+                    onHalf={() => {
+                        try {
+                            onSrcAmountChange(formatUnits(balance / 2n, inDec));
+                        } catch {
+                            /* noop */
+                        }
+                    }}
+                    onMax={() => {
+                        try {
+                            onSrcAmountChange(formatUnits(balance, inDec));
+                        } catch {
+                            /* noop */
+                        }
+                    }}
                     onTokenPick={() => setPickerOpen("in")}
                 />
 
-                <div className="my-2 flex justify-center">
+                <div className="relative z-10 -my-2 flex justify-center">
                     <button
                         onClick={swapDirection}
-                        className="rounded-xl border border-arc-border bg-arc-bg-elevated p-2 text-arc-text-muted hover:text-arc-text"
+                        className="rounded-xl border border-arc-border bg-arc-surface-2/40 p-2 backdrop-blur-md transition-all hover:bg-arc-surface-3/60 active:scale-95"
                     >
-                        <ArrowDownUp className="h-4 w-4" />
+                        <ArrowDownUp className="h-4 w-4 text-arc-text" />
                     </button>
                 </div>
 
@@ -604,7 +619,7 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
 
                 <div className="mt-4">
                     <div className="mb-2 text-xs text-arc-text-muted">Expiry</div>
-                    <div className="flex flex-wrap gap-2">
+                    <div className="flex flex-wrap gap-1.5">
                         {EXPIRY_PRESETS.map((p) => (
                             <button
                                 key={p.id}
@@ -664,12 +679,22 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
     );
 }
 
+/**
+ * Token amount row used by the Limit card. Mirrors the chrome of the regular
+ * SwapCard's TokenBox so the two cards line up to the pixel when the user
+ * switches tabs: same outer border + transparency, same header layout (label
+ * on the left, token chip on the right), same input scale, same footer slot
+ * that holds the balance and HALF/MAX buttons.
+ */
 function TokenRow({
     label,
     token,
     amount,
     onAmountChange,
     balance,
+    showHalfMax,
+    onHalf,
+    onMax,
     onTokenPick,
     disabled,
     placeholder,
@@ -679,49 +704,101 @@ function TokenRow({
     amount: string;
     onAmountChange?: (s: string) => void;
     balance?: bigint;
+    showHalfMax?: boolean;
+    onHalf?: () => void;
+    onMax?: () => void;
     onTokenPick: () => void;
     disabled?: boolean;
     placeholder?: string;
 }) {
+    const decimals = token?.decimals ?? 18;
+    const balLabel =
+        token && balance !== undefined
+            ? decimals === USDC_DECIMALS
+                ? formatUSDC(balance, decimals, 2)
+                : formatToken(balance, decimals, 4)
+            : undefined;
+
     return (
-        <div className="rounded-xl border border-arc-border bg-arc-bg-elevated p-4">
-            <div className="mb-2 flex items-center justify-between">
-                <div className="text-xs text-arc-text-muted">{label}</div>
-                {balance !== undefined && token && (
-                    <div className="text-[10px] text-arc-text-faint">
-                        Balance:{" "}
-                        {token.symbol === "USDC"
-                            ? formatUSDC(balance, USDC_DECIMALS, 2)
-                            : formatToken(balance, token.decimals, 4)}
-                    </div>
-                )}
-            </div>
-            <div className="flex items-center justify-between gap-3">
-                <input
-                    type="text"
-                    inputMode="decimal"
-                    value={amount}
-                    onChange={(e) => onAmountChange?.(e.target.value)}
-                    placeholder={placeholder ?? "0.0"}
-                    disabled={disabled}
-                    className="w-full bg-transparent text-3xl font-medium text-arc-text outline-none"
-                />
+        <div className="rounded-2xl border border-arc-border bg-white/[0.015] p-5 transition-colors focus-within:border-arc-border-strong">
+            {/* Header: label + token chip */}
+            <div className="mb-3 flex items-center justify-between">
+                <span className="text-sm text-arc-text-muted">{label}</span>
                 <button
                     onClick={onTokenPick}
-                    className="flex shrink-0 items-center gap-2 rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2 text-sm hover:bg-white/5"
+                    className="group flex items-center gap-2 rounded-xl bg-arc-surface-2 px-3 py-2 text-base font-semibold transition-colors hover:bg-arc-surface-3"
                 >
                     {token ? (
                         <>
-                            <AutoTokenIcon address={token.address} symbol={token.symbol} size={18} />
+                            <AutoTokenIcon address={token.address} symbol={token.symbol} size={24} />
                             <span>{token.symbol}</span>
+                            <ChevronDown className="h-4 w-4 text-arc-text-muted transition-transform group-hover:text-arc-text" />
                         </>
                     ) : (
-                        <span className="text-arc-text-muted">Select</span>
+                        <>
+                            <span>Select token</span>
+                            <ChevronDown className="h-4 w-4 text-arc-text-muted" />
+                        </>
                     )}
-                    <ChevronDown className="h-3 w-3 text-arc-text-faint" />
                 </button>
             </div>
+
+            {/* Amount input */}
+            <input
+                type="text"
+                inputMode="decimal"
+                value={amount}
+                onChange={(e) => onAmountChange?.(e.target.value)}
+                placeholder={placeholder ?? "0.0"}
+                disabled={disabled}
+                className="arc-input w-full bg-transparent text-3xl font-medium leading-tight sm:text-4xl"
+            />
+
+            {/* Footer: balance left, HALF/MAX right */}
+            {(balLabel || showHalfMax) && (
+                <div className="mt-3 flex items-center justify-between text-xs">
+                    <div className="flex items-center gap-2 text-arc-text-muted">
+                        {balLabel && token && (
+                            <span className="text-arc-text-faint">
+                                {balLabel} {token.symbol}
+                            </span>
+                        )}
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                        {showHalfMax && (
+                            <>
+                                <QuickButton onClick={onHalf}>HALF</QuickButton>
+                                <QuickButton onClick={onMax}>MAX</QuickButton>
+                            </>
+                        )}
+                    </div>
+                </div>
+            )}
         </div>
+    );
+}
+
+function QuickButton({
+    onClick,
+    children,
+}: {
+    onClick?: () => void;
+    children: React.ReactNode;
+}) {
+    return (
+        <button
+            onClick={onClick}
+            disabled={!onClick}
+            className={cn(
+                "rounded-md px-2 py-1 text-[11px] font-semibold uppercase tracking-wide transition-all",
+                "bg-arc-surface text-arc-text-muted",
+                "hover:bg-arc-cta hover:text-white",
+                "active:scale-90 active:bg-arc-cta-hover",
+                "disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-arc-surface disabled:hover:text-arc-text-muted",
+            )}
+        >
+            {children}
+        </button>
     );
 }
 
