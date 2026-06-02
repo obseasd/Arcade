@@ -10,11 +10,11 @@ import {
     Download,
     ExternalLink,
     Filter,
+    Forward,
     MoreHorizontal,
     Rocket,
     Search,
     Send,
-    Share2,
     ShoppingCart,
     Wallet,
 } from "lucide-react";
@@ -141,10 +141,6 @@ function PortfolioHeader({
     walletIconSrc?: string;
     walletName: string;
 }) {
-    const explorerUrl = account
-        ? `https://testnet.arcscan.app/address/${account}`
-        : undefined;
-
     const onShare = async () => {
         if (!account) return;
         try {
@@ -173,33 +169,17 @@ function PortfolioHeader({
             </div>
             <div className="flex items-center gap-2">
                 {account && (
-                    <>
-                        <button
-                            onClick={onShare}
-                            className="inline-flex items-center gap-1.5 rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-1.5 text-xs font-medium text-arc-text transition-colors hover:bg-white/5"
-                        >
-                            <Share2 className="h-3.5 w-3.5" />
-                            Share
-                        </button>
-                        {explorerUrl && (
-                            <a
-                                href={explorerUrl}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                title="View on Arcscan"
-                                className="inline-flex items-center justify-center rounded-xl border border-arc-border bg-arc-bg-elevated p-1.5 text-arc-text-muted transition-colors hover:bg-white/5 hover:text-arc-text"
-                            >
-                                <ExternalLink className="h-3.5 w-3.5" />
-                            </a>
-                        )}
-                        <button
-                            title="More"
-                            disabled
-                            className="inline-flex items-center justify-center rounded-xl border border-arc-border bg-arc-bg-elevated p-1.5 text-arc-text-faint opacity-50"
-                        >
-                            <MoreHorizontal className="h-3.5 w-3.5" />
-                        </button>
-                    </>
+                    // Single Share button, sized ~30% larger than the previous
+                    // chip (px-3 py-1.5 text-xs h-3.5 → px-4 py-2.5 text-[15px]
+                    // h-[18px]). Forward icon better matches the macOS-style
+                    // curved share arrow than Share2's three-node node graph.
+                    <button
+                        onClick={onShare}
+                        className="inline-flex items-center gap-2 rounded-xl border border-arc-border bg-arc-bg-elevated px-4 py-2.5 text-[15px] font-medium text-arc-text transition-colors hover:bg-white/5"
+                    >
+                        <Forward className="h-[18px] w-[18px]" />
+                        Share
+                    </button>
                 )}
             </div>
         </div>
@@ -210,13 +190,10 @@ function PortfolioHeader({
 
 function PortfolioTabs({ current, onChange }: { current: TabKey; onChange: (k: TabKey) => void }) {
     return (
-        // gap-6 between tabs replaces the previous per-tab px-4. Removing the
-        // horizontal padding flushes the first tab against the page's left
-        // gutter so "Overview" sits under "0x...My portfolio" instead of
-        // being indented. The active underline uses bottom-0 + h-0.5: its
-        // bottom edge meets the container's bottom (border-b), so the blue
-        // sits flush against the gray separator and visually "pushes" by
-        // exactly the gray line's 1px.
+        // First tab flush-left with no px-4; gap-6 supplies inter-tab space.
+        // Active indicator: 3px (was 2px, +30% per design) and pushed down by
+        // 1px so it slightly overlaps the gray separator line instead of
+        // sitting cleanly above it.
         <div className="mb-6 flex gap-6 border-b border-arc-border/60">
             {TABS.map((t) => (
                 <button
@@ -231,7 +208,7 @@ function PortfolioTabs({ current, onChange }: { current: TabKey; onChange: (k: T
                 >
                     {t.label}
                     {current === t.key && (
-                        <span className="absolute inset-x-0 bottom-0 h-0.5 rounded-full bg-arc-cta-hover" />
+                        <span className="absolute inset-x-0 -bottom-px h-[3px] rounded-full bg-arc-cta-hover" />
                     )}
                 </button>
             ))}
@@ -619,17 +596,17 @@ function TokensTablePreview({ holdings }: { holdings: HoldingInfo[] }) {
         // Negative side margins pull the table flush with the card so the
         // per-row hover background can extend past the inner padding (matches
         // Uniswap's portfolio table where the hover bar reaches the card edge).
-        // Within the rows we re-apply gutter padding via px-3 on first/last
-        // cells so the P/L column never sits flush with the card border.
+        // Header cells share a subtle bg-white/[0.04] pill (rounded on first
+        // and last cells only) so the column labels read as a unified row.
         <div className="-mx-3 overflow-x-auto sm:-mx-4">
             <table className="w-full text-sm">
-                <thead className="text-[10px] uppercase tracking-wider text-arc-text-muted">
+                <thead className="text-[11px] uppercase tracking-wider text-arc-text-muted">
                     <tr>
-                        <th className="px-3 py-2 text-left font-medium sm:px-4">Token</th>
-                        <th className="px-3 py-2 text-right font-medium">Price</th>
-                        <th className="px-3 py-2 text-right font-medium">Balance</th>
-                        <th className="px-3 py-2 text-right font-medium">Value</th>
-                        <th className="px-3 py-2 text-right font-medium sm:px-4">Unrealized P/L</th>
+                        <th className="rounded-l-xl bg-white/[0.04] px-3 py-3 text-left font-medium sm:px-4">Token</th>
+                        <th className="bg-white/[0.04] px-3 py-3 text-right font-medium">Price</th>
+                        <th className="bg-white/[0.04] px-3 py-3 text-right font-medium">Balance</th>
+                        <th className="bg-white/[0.04] px-3 py-3 text-right font-medium">Value</th>
+                        <th className="rounded-r-xl bg-white/[0.04] px-3 py-3 text-right font-medium sm:px-4">Unrealized P/L</th>
                     </tr>
                 </thead>
                 <tbody>
