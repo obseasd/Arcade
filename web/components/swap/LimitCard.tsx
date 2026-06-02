@@ -6,6 +6,7 @@ import { erc20Abi, parseUnits, zeroAddress } from "viem";
 import { useAccount, useReadContract, useWriteContract } from "wagmi";
 import { ADDRESSES, LIMIT_ORDERS_ENABLED, USDC_DECIMALS } from "@/lib/constants";
 import { useV2Tokens } from "@/lib/hooks/useV2Tokens";
+import { useV3Tokens } from "@/lib/hooks/useV3Tokens";
 import { useApproveIfNeeded } from "@/lib/hooks/useApproveIfNeeded";
 import { TokenSelectModal, TokenOption } from "@/components/ui/TokenSelectModal";
 import { AutoTokenIcon } from "@/components/ui/AutoTokenIcon";
@@ -67,6 +68,7 @@ interface LimitCardProps {
 export function LimitCard({ tab, onTabChange }: LimitCardProps) {
     const { address: account } = useAccount();
     const { tokens: v2Tokens } = useV2Tokens();
+    const { tokens: v3Tokens } = useV3Tokens();
 
     const [tokenIn, setTokenIn] = useState<TokenOption>(USDC_TOKEN);
     const [tokenOut, setTokenOut] = useState<TokenOption | undefined>(undefined);
@@ -79,20 +81,40 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
     const [pickerOpen, setPickerOpen] = useState<"in" | "out" | null>(null);
     const [submitting, setSubmitting] = useState(false);
 
+    // Same combined V2 + V3 + USDC list the regular Swap tab uses, deduped.
+    // V2 tokens are settleable through Orbs ExchangeV2 (routes our V2 router);
+    // V3 / Clanker tokens are surfaced for completeness even though limit
+    // orders against pure V3 single-sided pools will not fill via the Orbs
+    // taker until we deploy a V3-aware exchange adapter. We include them so
+    // users can at least see all their launchpad holdings in the picker.
     const tokenOptions = useMemo<TokenOption[]>(() => {
-        const opts: TokenOption[] = [USDC_TOKEN];
-        for (const t of v2Tokens) {
-            if (t.address.toLowerCase() === ADDRESSES.usdc.toLowerCase()) continue;
-            opts.push({
+        const seen = new Set<string>();
+        const out: TokenOption[] = [];
+        const merged = [
+            USDC_TOKEN,
+            ...v2Tokens.map((t) => ({
                 address: t.address,
                 symbol: t.symbol ?? "TOKEN",
                 name: t.name ?? "Token",
-                decimals: 18,
+                decimals: t.decimals ?? 18,
                 pinned: false,
-            });
+            })),
+            ...v3Tokens.map((t) => ({
+                address: t.address,
+                symbol: t.symbol ?? "TOKEN",
+                name: t.name ?? "Token",
+                decimals: t.decimals ?? 18,
+                pinned: false,
+            })),
+        ];
+        for (const t of merged) {
+            const k = t.address.toLowerCase();
+            if (seen.has(k)) continue;
+            seen.add(k);
+            out.push(t);
         }
-        return opts;
-    }, [v2Tokens]);
+        return out;
+    }, [v2Tokens, v3Tokens]);
 
     const balanceQ = useReadContract({
         address: tokenIn.address,
