@@ -1,7 +1,8 @@
 "use client";
 
 import { ArrowDownUp, ChevronDown } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import Image from "next/image";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { erc20Abi, formatUnits, parseUnits, zeroAddress, type Address } from "viem";
 import { useAccount, useReadContract, useWriteContract } from "wagmi";
 import { ROUTER_ABI } from "@/lib/abis/dex";
@@ -87,12 +88,24 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
     const [tokenOut, setTokenOut] = useState<TokenOption | undefined>(undefined);
     const [amountIn, setAmountIn] = useState("");
     const [triggerPrice, setTriggerPrice] = useState("");
+    const [forAmount, setForAmount] = useState("");
     const [expiryId, setExpiryId] = useState<ExpiryId>("7d");
     const [customDays, setCustomDays] = useState("0");
     const [customHours, setCustomHours] = useState("0");
     const [customMinutes, setCustomMinutes] = useState("10");
     const [pickerOpen, setPickerOpen] = useState<"in" | "out" | null>(null);
     const [submitting, setSubmitting] = useState(false);
+    // Slippage tolerance applied below the trigger price to compute the
+    // dstMinAmount floor in the on-chain Ask. 0.5% default matches the
+    // regular Swap card.
+    const [slippageBps, setSlippageBps] = useState(50);
+    const [slippageCustom, setSlippageCustom] = useState("");
+    const [showSettings, setShowSettings] = useState(false);
+    // Ref used to dedupe the bidirectional sync between triggerPrice and
+    // forAmount: when one of them is updated as a derived side-effect of
+    // editing the other, the corresponding useEffect skips the next sync
+    // pass to avoid a feedback loop.
+    const skipNextSyncRef = useRef<"none" | "for" | "trigger">("none");
 
     // Same combined V2 + V3 + USDC list the regular Swap tab uses, deduped.
     // V2 tokens are settleable through Orbs ExchangeV2 (routes our V2 router);
@@ -163,17 +176,26 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
         }
     }, [amountIn, inDec]);
 
-    const dstMinAmountBn = useMemo(() => {
+    // Expected output = srcAmount * triggerPrice, in BigInt at outDec precision.
+    // This is what the For field shows when it is derived (not user-edited).
+    const expectedOutBn = useMemo(() => {
         if (!tokenOut || !triggerPrice || Number(triggerPrice) <= 0) return 0n;
         try {
-            // dstMinAmount = srcAmount * triggerPrice (parsed in dst decimals).
-            // We compute: floor(srcAmount * triggerPrice * 10^dstDec / 10^srcDec)
             const triggerBn = parseUnits(triggerPrice, outDec);
             return (srcAmountBn * triggerBn) / 10n ** BigInt(inDec);
         } catch {
             return 0n;
         }
     }, [tokenOut, triggerPrice, srcAmountBn, inDec, outDec]);
+
+    // dstMinAmount = expected output reduced by slippage tolerance. This is
+    // the on-chain floor in the Ask struct. Maker is willing to accept
+    // anywhere between this floor and the expected output; takers compete
+    // above the floor.
+    const dstMinAmountBn = useMemo(() => {
+        if (expectedOutBn === 0n) return 0n;
+        return (expectedOutBn * BigInt(10_000 - slippageBps)) / 10_000n;
+    }, [expectedOutBn, slippageBps]);
 
     // Spot price quote: how many tokenOut per 1 tokenIn at current pool reserves.
     // Used to populate triggerPrice on token pick + drive the Market Price button.
@@ -246,14 +268,62 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
         return (t / marketPriceNum - 1) * 100;
     }, [triggerPrice, marketPriceNum]);
 
-    // Estimated output the maker would receive if the order fills at the trigger
-    // price (NOT a swap quote, this is the bound encoded in dstMinAmount). The
-    // For field shows this so users see what their order is asking for.
-    const forDisplay = useMemo(() => {
-        if (!tokenOut) return "";
-        if (dstMinAmountBn > 0n) return formatToken(dstMinAmountBn, outDec, 4);
-        return "";
-    }, [tokenOut, dstMinAmountBn, outDec]);
+    // Bidirectional sync between forAmount and triggerPrice.
+    //
+    // The user can edit any of: srcAmount, triggerPrice, forAmount.
+    // Math: forAmount = srcAmount * triggerPrice (in token units).
+    // So we have two independent variables and the third is derived.
+    //
+    // We always treat srcAmount as user-driven (it's the input the maker
+    // commits). Between triggerPrice and forAmount, the one the user just
+    // typed is independent and the other gets recomputed. The ref
+    // skipNextSyncRef is used to break the otherwise-infinite loop when
+    // one of them updates the other.
+
+    const onSrcAmountChange = (s: string) => {
+        setAmountIn(s);
+        // forAmount auto-derives from the sync effect below.
+    };
+
+    const onTriggerChange = (s: string) => {
+        setTriggerPrice(s);
+        skipNextSyncRef.current = "trigger"; // upcoming forAmount derivation is from this edit
+    };
+
+    const onForChange = (s: string) => {
+        setForAmount(s);
+        // Derive a new triggerPrice = forAmount / srcAmount. Mark the sync
+        // ref so the trigger->forAmount effect below does not snap forAmount
+        // back to the derived value.
+        skipNextSyncRef.current = "for";
+        if (!amountIn || Number(amountIn) <= 0) {
+            setTriggerPrice("");
+            return;
+        }
+        const src = Number(amountIn);
+        const fr = Number(s);
+        if (!isFinite(src) || !isFinite(fr) || fr <= 0) {
+            setTriggerPrice("");
+            return;
+        }
+        setTriggerPrice(formatPriceStr(fr / src, 8));
+    };
+
+    // When srcAmount or triggerPrice changes (and we are not currently inside
+    // a user-typed-into-For loop), recompute forAmount from the derived math.
+    useEffect(() => {
+        if (skipNextSyncRef.current === "for") {
+            skipNextSyncRef.current = "none";
+            return;
+        }
+        if (!tokenOut || expectedOutBn === 0n) {
+            setForAmount("");
+            return;
+        }
+        setForAmount(formatToken(expectedOutBn, outDec, 6).replace(/,/g, ""));
+        skipNextSyncRef.current = "none";
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [amountIn, triggerPrice, tokenOut?.address, expectedOutBn, outDec]);
 
     // Auto-populate triggerPrice with the current market price when the user
     // first interacts with the form: picks tokenOut, types into srcAmount, or
@@ -267,6 +337,19 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [tokenOut?.address, marketPriceStr, srcAmountBn]);
+
+    const onSlippagePreset = (bps: number) => {
+        setSlippageBps(bps);
+        setSlippageCustom("");
+    };
+    const onSlippageCustom = (v: string) => {
+        const cleaned = v.replace(/[^0-9.]/g, "");
+        setSlippageCustom(cleaned);
+        const n = Number(cleaned);
+        if (isFinite(n) && n >= 0 && n <= 50) {
+            setSlippageBps(Math.round(n * 100));
+        }
+    };
 
     const { allowance, ensureAllowance } = useApproveIfNeeded(
         tokenIn.address,
@@ -298,6 +381,8 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
         setTokenOut(newOut);
         setAmountIn("");
         setTriggerPrice("");
+        setForAmount("");
+        skipNextSyncRef.current = "none";
     };
 
     const onSubmit = async () => {
@@ -389,13 +474,22 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
         <div className="arc-card p-5 sm:p-6">
                 <div className="mb-4 flex items-center justify-between">
                     <SwapTabs tab={tab} onTabChange={onTabChange} />
+                    <SlippagePopover
+                        open={showSettings}
+                        onToggle={() => setShowSettings((s) => !s)}
+                        onClose={() => setShowSettings(false)}
+                        slippageBps={slippageBps}
+                        slippageCustom={slippageCustom}
+                        onPreset={onSlippagePreset}
+                        onCustom={onSlippageCustom}
+                    />
                 </div>
 
                 <TokenRow
                     label="I want to sell"
                     token={tokenIn}
                     amount={amountIn}
-                    onAmountChange={setAmountIn}
+                    onAmountChange={onSrcAmountChange}
                     balance={balance}
                     onTokenPick={() => setPickerOpen("in")}
                 />
@@ -412,8 +506,8 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
                 <TokenRow
                     label="For"
                     token={tokenOut}
-                    amount={forDisplay}
-                    disabled
+                    amount={forAmount}
+                    onAmountChange={onForChange}
                     placeholder={tokenOut ? "0.0" : "Pick output token"}
                     onTokenPick={() => setPickerOpen("out")}
                 />
@@ -442,7 +536,7 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
                             type="text"
                             inputMode="decimal"
                             value={triggerPrice}
-                            onChange={(e) => setTriggerPrice(e.target.value)}
+                            onChange={(e) => onTriggerChange(e.target.value)}
                             placeholder="0.0"
                             className="w-full bg-transparent text-2xl font-medium text-arc-text outline-none"
                         />
@@ -470,6 +564,23 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
                         </div>
                     )}
                 </div>
+
+                {/* Route + min-amount-out row. The route label is informative only
+                    (Orbs ExchangeV2 currently routes through ArcadeV2Router for V2
+                    tokens; V3 indication exists for honesty even though the V3
+                    settlement adapter is not deployed). Min amount is the floor
+                    encoded in the on-chain Ask after slippage tolerance. */}
+                {tokenOut && expectedOutBn > 0n && (
+                    <div className="mt-3 flex items-center justify-between rounded-xl border border-arc-border bg-arc-bg-elevated px-4 py-2.5 text-[11px]">
+                        <span className="text-arc-text-muted">
+                            via Arcade {isV3Path ? "V3" : "V2"}
+                        </span>
+                        <span className="text-arc-text">
+                            Min: {formatToken(dstMinAmountBn, outDec, 4)}{" "}
+                            <span className="text-arc-text-muted">{tokenOut.symbol}</span>
+                        </span>
+                    </div>
+                )}
 
                 <div className="mt-4">
                     <div className="mb-2 text-xs text-arc-text-muted">Expiry</div>
@@ -613,6 +724,134 @@ function CustomNumInput({
                 className="w-full bg-transparent text-base font-medium text-arc-text outline-none"
             />
             <div className="text-[10px] uppercase tracking-wider text-arc-text-faint">{label}</div>
+        </div>
+    );
+}
+
+const SLIPPAGE_PRESETS_BPS = [10, 50, 100];
+
+/**
+ * Transaction settings popover for the Limit card. Lets the maker configure
+ * the slippage tolerance applied below the trigger price when computing the
+ * on-chain dstMinAmount floor. Mirrors the regular Swap card's slippage UX
+ * so the controls feel consistent.
+ */
+function SlippagePopover({
+    open,
+    onToggle,
+    onClose,
+    slippageBps,
+    slippageCustom,
+    onPreset,
+    onCustom,
+}: {
+    open: boolean;
+    onToggle: () => void;
+    onClose: () => void;
+    slippageBps: number;
+    slippageCustom: string;
+    onPreset: (bps: number) => void;
+    onCustom: (v: string) => void;
+}) {
+    const ref = useRef<HTMLDivElement>(null);
+
+    useEffect(() => {
+        if (!open) return;
+        const onDocClick = (e: MouseEvent) => {
+            if (ref.current && !ref.current.contains(e.target as Node)) onClose();
+        };
+        document.addEventListener("mousedown", onDocClick);
+        return () => document.removeEventListener("mousedown", onDocClick);
+    }, [open, onClose]);
+
+    useEffect(() => {
+        if (!open) return;
+        const onKey = (e: KeyboardEvent) => {
+            if (e.key === "Escape") onClose();
+        };
+        window.addEventListener("keydown", onKey);
+        return () => window.removeEventListener("keydown", onKey);
+    }, [open, onClose]);
+
+    return (
+        <div ref={ref} className="relative">
+            <button
+                onClick={onToggle}
+                aria-expanded={open}
+                className={cn(
+                    "rounded-lg p-2 transition-colors",
+                    open
+                        ? "bg-arc-bg-elevated text-arc-text"
+                        : "text-arc-text-muted hover:bg-arc-bg-elevated hover:text-arc-text",
+                )}
+                title="Transaction settings"
+            >
+                <Image
+                    src="/slider.png"
+                    alt="Settings"
+                    width={18}
+                    height={18}
+                    className="h-4 w-4 opacity-80"
+                />
+            </button>
+            {open && (
+                <div className="absolute right-0 top-full z-20 mt-2 w-72 rounded-2xl border border-arc-border bg-black/45 p-4 shadow-arc-card backdrop-blur-2xl">
+                    <div className="mb-3 text-sm font-semibold text-arc-text">
+                        Transaction settings
+                    </div>
+                    <div className="mb-2 text-xs text-arc-text-muted">
+                        Slippage tolerance
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                        {SLIPPAGE_PRESETS_BPS.map((bps) => {
+                            const active = slippageCustom === "" && slippageBps === bps;
+                            return (
+                                <button
+                                    key={bps}
+                                    onClick={() => onPreset(bps)}
+                                    className={cn(
+                                        "rounded-full px-3 py-1.5 text-xs font-semibold transition-colors",
+                                        active
+                                            ? "bg-arc-cta text-white"
+                                            : "bg-arc-bg-elevated text-arc-text-muted hover:bg-white/5 hover:text-arc-text",
+                                    )}
+                                >
+                                    {bps / 100}%
+                                </button>
+                            );
+                        })}
+                        <div
+                            className={cn(
+                                "ml-auto flex items-center gap-0.5 rounded-full border px-2.5 py-1 transition-colors",
+                                slippageCustom !== ""
+                                    ? "border-arc-cta-hover bg-arc-bg-elevated"
+                                    : "border-arc-border bg-arc-bg-elevated",
+                            )}
+                        >
+                            <input
+                                type="text"
+                                inputMode="decimal"
+                                value={slippageCustom}
+                                onChange={(e) => onCustom(e.target.value)}
+                                placeholder="0.50"
+                                className="w-12 bg-transparent text-right text-xs text-arc-text outline-none"
+                            />
+                            <span className="text-[10px] text-arc-text-muted">%</span>
+                        </div>
+                    </div>
+                    {slippageBps > 500 && (
+                        <div className="mt-3 rounded-lg border border-arc-warn/30 bg-arc-warn/10 p-2 text-[11px] text-arc-warn">
+                            High slippage. Your minimum output is more than 5% below
+                            the trigger price.
+                        </div>
+                    )}
+                    <div className="mt-3 text-[10px] text-arc-text-faint">
+                        Limit orders fill at or above the trigger price; slippage is
+                        the floor below the trigger you are willing to accept on the
+                        on-chain Ask.
+                    </div>
+                </div>
+            )}
         </div>
     );
 }
