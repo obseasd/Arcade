@@ -1,0 +1,252 @@
+{
+  "version": 1,
+  "generatedBy": "contracts/test/fixtures/generate.mjs",
+  "source": "contracts/src/launchpad/ArcadeLaunchpad.sol _computeBuy / sell",
+  "constants": {
+    "VIRTUAL_USDC_RESERVE": "5000000000",
+    "VIRTUAL_TOKEN_RESERVE": "1000000000000000000000000000",
+    "CURVE_SUPPLY": "800000000000000000000000000",
+    "TOTAL_SUPPLY": "1000000000000000000000000000",
+    "MIGRATION_LP_TOKENS": "200000000000000000000000000",
+    "K_CONSTANT": "5000000000000000000000000000000000000",
+    "TRADE_FEE_BPS": 100,
+    "FEE_DENOMINATOR": 10000,
+    "MIGRATION_FEE": "2500000000"
+  },
+  "buyVectors": [
+    {
+      "name": "tiny-buy-empty-curve",
+      "input": {
+        "tokensSold": "0",
+        "realUsdcReserve": "0",
+        "grossUsdcIn": "1000000"
+      },
+      "output": {
+        "tokensOut": "197960803760855350640574",
+        "actualGross": "1000000",
+        "refund": "0",
+        "tokensSoldAfter": "197960803760855350640574",
+        "realUsdcReserveAfter": "990000"
+      }
+    },
+    {
+      "name": "small-buy-empty-curve",
+      "input": {
+        "tokensSold": "0",
+        "realUsdcReserve": "0",
+        "grossUsdcIn": "100000000"
+      },
+      "output": {
+        "tokensOut": "19415571680721710139242989",
+        "actualGross": "100000000",
+        "refund": "0",
+        "tokensSoldAfter": "19415571680721710139242989",
+        "realUsdcReserveAfter": "99000000"
+      }
+    },
+    {
+      "name": "large-buy-empty-curve",
+      "input": {
+        "tokensSold": "0",
+        "realUsdcReserve": "0",
+        "grossUsdcIn": "5000000000"
+      },
+      "output": {
+        "tokensOut": "497487437185929648241206031",
+        "actualGross": "5000000000",
+        "refund": "0",
+        "tokensSoldAfter": "497487437185929648241206031",
+        "realUsdcReserveAfter": "4950000000"
+      }
+    },
+    {
+      "name": "mid-curve-buy",
+      "input": {
+        "tokensSold": "200000000000000000000000000",
+        "realUsdcReserve": "1250000000",
+        "grossUsdcIn": "100000000"
+      },
+      "output": {
+        "tokensOut": "12474405418176090722948496",
+        "actualGross": "100000000",
+        "refund": "0",
+        "tokensSoldAfter": "212474405418176090722948496",
+        "realUsdcReserveAfter": "1349000000"
+      }
+    },
+    {
+      "name": "near-graduation-buy",
+      "input": {
+        "tokensSold": "700000000000000000000000000",
+        "realUsdcReserve": "16666666666",
+        "grossUsdcIn": "100000000"
+      },
+      "output": {
+        "tokensOut": "70280411037881691686842633",
+        "actualGross": "100000000",
+        "refund": "0",
+        "tokensSoldAfter": "770280411037881691686842633",
+        "realUsdcReserveAfter": "16765666666"
+      }
+    },
+    {
+      "name": "exact-graduation-buy",
+      "input": {
+        "tokensSold": "750000000000000000000000000",
+        "realUsdcReserve": "18750000000",
+        "grossUsdcIn": "5000000000"
+      },
+      "output": {
+        "tokensOut": "50000000000000000000000000",
+        "actualGross": "1262626263",
+        "refund": "3737373737",
+        "tokensSoldAfter": "800000000000000000000000000",
+        "realUsdcReserveAfter": "20000000001"
+      }
+    },
+    {
+      "name": "cap-hit-massive-buy",
+      "input": {
+        "tokensSold": "0",
+        "realUsdcReserve": "0",
+        "grossUsdcIn": "30000000000"
+      },
+      "output": {
+        "tokensOut": "800000000000000000000000000",
+        "actualGross": "20202020203",
+        "refund": "9797979797",
+        "tokensSoldAfter": "800000000000000000000000000",
+        "realUsdcReserveAfter": "20000000001"
+      }
+    },
+    {
+      "name": "dust-rounding-sensitivity",
+      "input": {
+        "tokensSold": "0",
+        "realUsdcReserve": "0",
+        "grossUsdcIn": "1"
+      },
+      "output": {
+        "tokensOut": "199999999960000001",
+        "actualGross": "1",
+        "refund": "0",
+        "tokensSoldAfter": "199999999960000001",
+        "realUsdcReserveAfter": "1"
+      }
+    }
+  ],
+  "sellVectors": [
+    {
+      "name": "tiny-sell",
+      "input": {
+        "tokensSold": "1000000000000000000000000",
+        "realUsdcReserve": "5000000",
+        "tokensIn": "1000000000000000000"
+      },
+      "output": {
+        "usdcOut": "-4950",
+        "grossOut": "-4999",
+        "fee": "-49",
+        "tokensSoldAfter": "999999000000000000000000",
+        "realUsdcReserveAfter": "5004999"
+      }
+    },
+    {
+      "name": "normal-sell-early-curve",
+      "input": {
+        "tokensSold": "100000000000000000000000000",
+        "realUsdcReserve": "555555555",
+        "tokensIn": "10000000000000000000000000"
+      },
+      "output": {
+        "usdcOut": "60439561",
+        "grossOut": "61050061",
+        "fee": "610500",
+        "tokensSoldAfter": "90000000000000000000000000",
+        "realUsdcReserveAfter": "494505494"
+      }
+    },
+    {
+      "name": "sell-near-graduation",
+      "input": {
+        "tokensSold": "700000000000000000000000000",
+        "realUsdcReserve": "16666666666",
+        "tokensIn": "50000000000000000000000000"
+      },
+      "output": {
+        "usdcOut": "7307142858",
+        "grossOut": "7380952381",
+        "fee": "73809523",
+        "tokensSoldAfter": "650000000000000000000000000",
+        "realUsdcReserveAfter": "9285714285"
+      }
+    },
+    {
+      "name": "dust-sell",
+      "input": {
+        "tokensSold": "1000000000000000000",
+        "realUsdcReserve": "5",
+        "tokensIn": "1"
+      },
+      "output": {
+        "usdcOut": "0",
+        "grossOut": "0",
+        "fee": "0",
+        "tokensSoldAfter": "999999999999999999",
+        "realUsdcReserveAfter": "5"
+      }
+    }
+  ],
+  "roundTripVectors": [
+    {
+      "name": "small-round-trip",
+      "buy": {
+        "grossIn": "100000000",
+        "tokensOut": "19415571680721710139242989",
+        "actualGross": "100000000"
+      },
+      "sell": {
+        "tokensIn": "19415571680721710139242989",
+        "usdcOut": "98010000",
+        "grossOut": "99000000"
+      },
+      "invariant": {
+        "description": "user pays buyIn, receives usdcOut. usdcOut MUST be strictly less than buyIn (curve always wins).",
+        "userPaid": "100000000",
+        "userReceived": "98010000",
+        "curveProfit": "1990000",
+        "holdsInvariant": true
+      }
+    },
+    {
+      "name": "medium-round-trip",
+      "buy": {
+        "grossIn": "1000000000",
+        "tokensOut": "165275459098497495826377296",
+        "actualGross": "1000000000"
+      },
+      "sell": {
+        "tokensIn": "165275459098497495826377296",
+        "usdcOut": "980100000",
+        "grossOut": "990000000"
+      },
+      "invariant": {
+        "description": "user pays buyIn, receives usdcOut. usdcOut MUST be strictly less than buyIn (curve always wins).",
+        "userPaid": "1000000000",
+        "userReceived": "980100000",
+        "curveProfit": "19900000",
+        "holdsInvariant": true
+      }
+    }
+  ],
+  "invariants": [
+    "VIRTUAL_USDC_RESERVE * VIRTUAL_TOKEN_RESERVE == K_CONSTANT (5e36)",
+    "tokensSold + tokensInLP <= TOTAL_SUPPLY at all times",
+    "tokensSold <= CURVE_SUPPLY at all times (graduation hard cap)",
+    "Round-trip invariant: user_received_USDC < user_paid_USDC always",
+    "Buy rounding: tokensOut = floor((K * netIn) / (currentUsdc * (currentUsdc + netIn)))",
+    "Sell rounding: usdcOut = floor((currentUsdc * tokensIn) / (currentTokens + tokensIn)) minus 1% fee",
+    "Graduation trigger: realUsdcReserve reaches 20_000 USDC exactly (modulo cap-path rounding)",
+    "MIGRATION_FEE (2500 USDC) taken off the top at graduation, remainder (17500 USDC) + MIGRATION_LP_TOKENS (200M) seeds the AMM pool"
+  ]
+}
