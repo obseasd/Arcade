@@ -45,7 +45,17 @@ export function SwapContainer() {
       </div>
 
       {tab === "limit" && account && LIMIT_ORDERS_ENABLED && (
-        <div className="fixed right-6 top-28 z-30 hidden w-[360px] xl:block">
+        // Anchored to the right side of the LimitCard: vertically aligned
+        // with the in-card "Swap Limit Multi Token Swap" tabs (~200px from
+        // viewport top, matching navbar + container py-20 + card p-6 + tab
+        // row center), horizontally placed 24px to the right of the card.
+        // The card is 490px wide centered, so panel's right offset is
+        // calc(50% - 490/2 - 24 - 360) = calc(50% - 629px) which scales
+        // cleanly across xl+ viewports.
+        <div
+          className="fixed z-30 hidden w-[360px] xl:block"
+          style={{ top: 200, right: "calc(50% - 629px)" }}
+        >
           <LimitOrdersPanel account={account} variant="floating" />
         </div>
       )}
