@@ -5,7 +5,8 @@ import { useEffect, useMemo, useState } from "react";
 import { erc20Abi, formatUnits, parseUnits, zeroAddress, type Address } from "viem";
 import { useAccount, useReadContract, useWriteContract } from "wagmi";
 import { ROUTER_ABI } from "@/lib/abis/dex";
-import { ADDRESSES, LIMIT_ORDERS_ENABLED, USDC_DECIMALS } from "@/lib/constants";
+import { V3_QUOTER_ABI } from "@/lib/abis/v3";
+import { ADDRESSES, LIMIT_ORDERS_ENABLED, USDC_DECIMALS, V3_FEE } from "@/lib/constants";
 import { useV2Tokens } from "@/lib/hooks/useV2Tokens";
 import { useV3Tokens } from "@/lib/hooks/useV3Tokens";
 import { useApproveIfNeeded } from "@/lib/hooks/useApproveIfNeeded";
@@ -176,26 +177,60 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
 
     // Spot price quote: how many tokenOut per 1 tokenIn at current pool reserves.
     // Used to populate triggerPrice on token pick + drive the Market Price button.
-    // We query getAmountsOut(1 unit of tokenIn) which approximates the spot price
-    // (true spot would be reserveOut/reserveIn but the swap fee makes that
-    // suboptimal as a trigger; users want the actual execution price).
+    // Two queries fire in parallel and we use whichever returns first:
+    //   - V2: ArcadeV2Router.getAmountsOut(1 unit) for tokens that migrated.
+    //   - V3: ArcadeV3Quoter.quoteExactInputSingle(1 unit) for CLANKER_V3 launches.
+    // wagmi disables the irrelevant call automatically based on the isV3Token
+    // check below, so we only ever ping the right router.
     const oneInBn = useMemo(() => 10n ** BigInt(inDec), [inDec]);
     const spotPath = useMemo<readonly Address[]>(() => {
         if (!tokenOut) return [];
         return [tokenIn.address, tokenOut.address] as const;
     }, [tokenIn.address, tokenOut]);
-    const spotQ = useReadContract({
+
+    // V3 token detection: a token is V3 iff it appears in useV3Tokens output
+    // (which is sourced from launchpad mode == CLANKER_V3) AND is not also in
+    // useV2Tokens (migration would put it in v2Tokens).
+    const isV3Out = useMemo<boolean>(() => {
+        if (!tokenOut) return false;
+        const addrLower = tokenOut.address.toLowerCase();
+        return (
+            !v2Tokens.some((t) => t.address.toLowerCase() === addrLower) &&
+            v3Tokens.some((t) => t.address.toLowerCase() === addrLower)
+        );
+    }, [tokenOut, v2Tokens, v3Tokens]);
+    const isV3In = useMemo<boolean>(() => {
+        const addrLower = tokenIn.address.toLowerCase();
+        return (
+            !v2Tokens.some((t) => t.address.toLowerCase() === addrLower) &&
+            v3Tokens.some((t) => t.address.toLowerCase() === addrLower)
+        );
+    }, [tokenIn.address, v2Tokens, v3Tokens]);
+    const isV3Path = isV3Out || isV3In;
+
+    const v2SpotQ = useReadContract({
         address: ADDRESSES.router,
         abi: ROUTER_ABI,
         functionName: "getAmountsOut",
         args: tokenOut ? [oneInBn, spotPath] : undefined,
-        query: { enabled: !!tokenOut, refetchInterval: 15_000 },
+        query: { enabled: !!tokenOut && !isV3Path, refetchInterval: 15_000 },
     });
+    const v3SpotQ = useReadContract({
+        address: ADDRESSES.v3Quoter,
+        abi: V3_QUOTER_ABI,
+        functionName: "quoteExactInputSingle",
+        args: tokenOut ? [tokenIn.address, tokenOut.address, V3_FEE, oneInBn] : undefined,
+        query: { enabled: !!tokenOut && isV3Path, refetchInterval: 15_000 },
+    });
+
     const spotOutBn = useMemo<bigint | undefined>(() => {
-        const arr = spotQ.data as readonly bigint[] | undefined;
+        if (isV3Path) {
+            return v3SpotQ.data as bigint | undefined;
+        }
+        const arr = v2SpotQ.data as readonly bigint[] | undefined;
         if (!arr || arr.length < 2) return undefined;
         return arr[arr.length - 1];
-    }, [spotQ.data]);
+    }, [isV3Path, v2SpotQ.data, v3SpotQ.data]);
 
     const marketPriceNum = useMemo(() => {
         if (!spotOutBn || !tokenOut) return 0;
@@ -220,16 +255,18 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
         return "";
     }, [tokenOut, dstMinAmountBn, outDec]);
 
-    // Auto-populate triggerPrice with the current market price the first time
-    // tokenOut becomes available, so the For field is meaningful immediately.
-    // Subsequent token swaps (the up-down arrow) re-trigger via the empty-after-
-    // swap reset already in swapDirection().
+    // Auto-populate triggerPrice with the current market price when the user
+    // first interacts with the form: picks tokenOut, types into srcAmount, or
+    // the market price quote finally lands. Only auto-fills when triggerPrice
+    // is empty so a user-typed value is never overwritten. Subsequent token
+    // swaps via the up-down arrow clear triggerPrice in swapDirection() which
+    // re-triggers this effect on the new pair.
     useEffect(() => {
-        if (tokenOut && marketPriceStr && !triggerPrice) {
+        if (tokenOut && marketPriceStr && !triggerPrice && srcAmountBn > 0n) {
             setTriggerPrice(marketPriceStr);
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [tokenOut?.address, marketPriceStr]);
+    }, [tokenOut?.address, marketPriceStr, srcAmountBn]);
 
     const { allowance, ensureAllowance } = useApproveIfNeeded(
         tokenIn.address,
