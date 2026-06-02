@@ -27,7 +27,19 @@ export const ADDRESSES = {
   v4StateView: safeAddress(process.env.NEXT_PUBLIC_V4_STATE_VIEW_ADDRESS),
   v4Quoter: safeAddress(process.env.NEXT_PUBLIC_V4_QUOTER_ADDRESS),
   v4Router: safeAddress(process.env.NEXT_PUBLIC_V4_ROUTER_ADDRESS),
+  // --- Orbs TWAP / dLIMIT stack (limit orders, Arc testnet) ---
+  /** TWAP main contract. Receives ask() calls, holds the order book. */
+  orbsTwap: safeAddress(process.env.NEXT_PUBLIC_ORBS_TWAP_ADDRESS),
+  /** ExchangeV2 adapter wrapping ArcadeV2Router. Used by takers at fill time. */
+  orbsExchangeV2: safeAddress(process.env.NEXT_PUBLIC_ORBS_EXCHANGE_V2_ADDRESS),
+  /** Lens read-only helper for the frontend. */
+  orbsLens: safeAddress(process.env.NEXT_PUBLIC_ORBS_LENS_ADDRESS),
 } as const;
+
+/** True iff Orbs limit orders are wired in this env. Gates the Limit tab. */
+export const LIMIT_ORDERS_ENABLED: boolean =
+  !!process.env.NEXT_PUBLIC_ORBS_TWAP_ADDRESS &&
+  !!process.env.NEXT_PUBLIC_ORBS_EXCHANGE_V2_ADDRESS;
 
 /** True iff the V4 stack is enabled in this env. Gates every V4 UI
  *  surface; renders nothing instead of throwing when addresses are unset. */
