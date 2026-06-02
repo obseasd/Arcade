@@ -1,8 +1,8 @@
 # Arcade
 
-DEX (Uniswap V2 fork) + bonding-curve launchpad on **Arc testnet** (Circle's EVM L1, chain `5042002`).
+USDC-native AMM and fair-launch tokenization engine on **Arc testnet** (Circle's EVM L1, chain `5042002`).
 
-USDC is the native gas token on Arc and the default quote currency for all pools and curves. A (non-official) WETH is also wired in as an optional Clanker pool pairing.
+Capital formation primitive for stablecoin-native markets: bonding-curve token issuance, Uniswap V2 fork AMM, locked single-sided V3 LP for migrated tokens, and Twitter-handle reward escrow. Every fee, every settlement, every protocol revenue line is denominated in USDC. A (non-official) WETH is wired in as an optional Clanker pool pairing.
 
 ## Layout
 

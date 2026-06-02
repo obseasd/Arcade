@@ -15,7 +15,7 @@ export default function DocsPage() {
         </span>
       </h1>
       <p className="mt-2 text-sm text-arc-text-muted">
-        How the launchpad, the DEX, the Twitter attribution flow, and the locked-LP vault work.
+        How the AMM, the bonding-curve token issuance engine, the Twitter attribution flow, and the locked-LP vault work.
       </p>
 
       <nav className="mt-8 grid gap-2 rounded-2xl border border-arc-border bg-arc-bg-elevated p-4 text-sm">
@@ -35,14 +35,19 @@ export default function DocsPage() {
 
       <Section id="overview" title="1. Overview">
         <p>
-          Arcade is a USDC-quoted token launchpad and DEX deployed on Arc, Circle&apos;s EVM L1.
-          Three launch flavors live under the same launchpad contract: <b>Pump</b> and{" "}
-          <b>Arcade</b> bonding curves that auto-migrate to V2 on fill, and <b>Clanker</b>{" "}
-          locked single-sided V3 LP that&apos;s tradeable from launch.
+          Arcade is a USDC-native AMM and fair-launch tokenization engine
+          deployed on Arc, Circle&apos;s EVM L1. The protocol is a capital
+          formation primitive for stablecoin-native markets: anyone can issue
+          a token via a bonding curve denominated in USDC, trade it during the
+          curve phase, and on graduation migrate liquidity to an AMM pool. Three
+          launch flavors live under the same launchpad contract: <b>Pump</b> and{" "}
+          <b>Arcade</b> bonding curves that auto-migrate to V2 on fill, and{" "}
+          <b>Clanker</b> locked single-sided V3 LP that&apos;s tradeable from
+          launch.
         </p>
         <p>
-          Native gas token is USDC (6 decimals). Wallets are standard Ethereum (secp256k1).
-          Arc chainId is 5042002.
+          Native gas token is USDC (6 decimals). Wallets are standard Ethereum
+          (secp256k1). Arc chainId is 5042002.
         </p>
       </Section>
 

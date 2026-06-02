@@ -17,14 +17,14 @@ export const metadata: Metadata = {
     template: "%s on Arcade",
   },
   description:
-    "Swap stablecoins and launch tokens on Arc, Circle's EVM L1. Bonding-curve launchpad and Uniswap V3 locked-LP launches, USDC-quoted.",
+    "USDC-native AMM and fair-launch tokenization on Arc, Circle's EVM L1. Capital formation primitive for stablecoin-native markets: bonding-curve token issuance, AMM trading, locked-LP fee distribution.",
   icons: {
     icon: "/arcade.png",
     apple: "/arcade.png",
   },
   openGraph: {
     title: "Arcade",
-    description: "DEX and token launchpad on Arc.",
+    description: "USDC-native AMM and fair-launch tokenization on Arc.",
     url: "https://arcade.trading",
     siteName: "Arcade",
     images: ["/arcade.png"],
@@ -37,7 +37,7 @@ export const metadata: Metadata = {
     // OG image generated via /api/og.
     card: "summary_large_image",
     title: "Arcade",
-    description: "DEX and token launchpad on Arc.",
+    description: "USDC-native AMM and fair-launch tokenization on Arc.",
     images: ["/arcade.png"],
     site: "@arcade",
   },

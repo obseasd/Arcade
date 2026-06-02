@@ -3,6 +3,8 @@
 import {
     AlertTriangle,
     ArrowLeft,
+    ArrowRight,
+    BarChart3,
     CheckCircle2,
     Clock,
     Lock,
@@ -113,6 +115,28 @@ function AdminBody() {
                     </p>
                 </div>
             </div>
+
+            <Link
+                href="/stats"
+                className="mb-6 flex items-center justify-between gap-4 rounded-2xl border border-arc-cta-hover/30 bg-arc-cta-hover/5 p-4 transition-colors hover:bg-arc-cta-hover/10 sm:p-5"
+            >
+                <div className="flex items-start gap-3">
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-arc-cta-hover/15 text-arc-cta-hover">
+                        <BarChart3 className="h-5 w-5" />
+                    </div>
+                    <div>
+                        <div className="text-sm font-semibold text-arc-text">
+                            View public stats dashboard
+                        </div>
+                        <div className="mt-0.5 text-xs text-arc-text-muted">
+                            USDC gas paid, transactions routed, unique wallets, tokens
+                            launched. The canonical attribution surface for Circle and Arc
+                            partners.
+                        </div>
+                    </div>
+                </div>
+                <ArrowRight className="h-4 w-4 shrink-0 text-arc-cta-hover" />
+            </Link>
 
             <div className="space-y-5">
                 <StatusCard />
