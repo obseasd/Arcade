@@ -1,15 +1,15 @@
 "use client";
 
-import { ArrowDownUp, ChevronDown, Info, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
-import { erc20Abi, formatUnits, parseUnits, zeroAddress, type Address } from "viem";
-import { useAccount, usePublicClient, useReadContract, useWriteContract } from "wagmi";
+import { ArrowDownUp, ChevronDown, Info } from "lucide-react";
+import { useMemo, useState } from "react";
+import { erc20Abi, parseUnits, zeroAddress } from "viem";
+import { useAccount, useReadContract, useWriteContract } from "wagmi";
 import { ADDRESSES, LIMIT_ORDERS_ENABLED, USDC_DECIMALS } from "@/lib/constants";
 import { useV2Tokens } from "@/lib/hooks/useV2Tokens";
 import { useApproveIfNeeded } from "@/lib/hooks/useApproveIfNeeded";
 import { TokenSelectModal, TokenOption } from "@/components/ui/TokenSelectModal";
 import { AutoTokenIcon } from "@/components/ui/AutoTokenIcon";
-import { ORBS_TWAP_ABI, decodeOrderStatus } from "@/lib/abis/orbsTwap";
+import { ORBS_TWAP_ABI } from "@/lib/abis/orbsTwap";
 import { addActivity } from "@/lib/activityFeed";
 import { pushToast } from "@/lib/toast";
 import { SwapTabs, type SwapTab } from "./SwapTabs";
@@ -67,7 +67,6 @@ interface LimitCardProps {
 export function LimitCard({ tab, onTabChange }: LimitCardProps) {
     const { address: account } = useAccount();
     const { tokens: v2Tokens } = useV2Tokens();
-    const publicClient = usePublicClient();
 
     const [tokenIn, setTokenIn] = useState<TokenOption>(USDC_TOKEN);
     const [tokenOut, setTokenOut] = useState<TokenOption | undefined>(undefined);
@@ -259,8 +258,7 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
     };
 
     return (
-        <>
-            <div className="arc-card p-5 sm:p-6">
+        <div className="arc-card p-5 sm:p-6">
                 <div className="mb-4 flex items-center justify-between">
                     <SwapTabs tab={tab} onTabChange={onTabChange} />
                     <button
@@ -371,28 +369,23 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
                     0% Arcade fees, no hidden spread. Order lives on-chain on Arc. Cancel anytime.
                 </div>
 
-                {pickerOpen && (
-                    <TokenSelectModal
-                        open={!!pickerOpen}
-                        onClose={() => setPickerOpen(null)}
-                        onSelect={(t: TokenOption) => {
-                            if (pickerOpen === "in") setTokenIn(t);
-                            else setTokenOut(t);
-                            setPickerOpen(null);
-                        }}
-                        tokens={tokenOptions.filter(
-                            (t) =>
-                                t.address !==
-                                (pickerOpen === "in" ? tokenOut?.address : tokenIn.address),
-                        )}
-                    />
-                )}
-            </div>
-
-            {account && LIMIT_ORDERS_ENABLED && (
-                <OpenOrdersPanel account={account} v2Tokens={v2Tokens} />
+            {pickerOpen && (
+                <TokenSelectModal
+                    open={!!pickerOpen}
+                    onClose={() => setPickerOpen(null)}
+                    onSelect={(t: TokenOption) => {
+                        if (pickerOpen === "in") setTokenIn(t);
+                        else setTokenOut(t);
+                        setPickerOpen(null);
+                    }}
+                    tokens={tokenOptions.filter(
+                        (t) =>
+                            t.address !==
+                            (pickerOpen === "in" ? tokenOut?.address : tokenIn.address),
+                    )}
+                />
             )}
-        </>
+        </div>
     );
 }
 
@@ -477,231 +470,5 @@ function CustomNumInput({
             />
             <div className="text-[10px] uppercase tracking-wider text-arc-text-faint">{label}</div>
         </div>
-    );
-}
-
-/**
- * Open Orders + Order History panel. Reads the on-chain order book directly
- * via twap.orderIdsByMaker(account) and twap.order(id) for each. No backend.
- */
-function OpenOrdersPanel({
-    account,
-    v2Tokens,
-}: {
-    account: Address;
-    v2Tokens: ReturnType<typeof useV2Tokens>["tokens"];
-}) {
-    const [tab, setTab] = useState<"open" | "history">("open");
-    const [now, setNow] = useState(Math.floor(Date.now() / 1000));
-
-    useEffect(() => {
-        const t = setInterval(() => setNow(Math.floor(Date.now() / 1000)), 5000);
-        return () => clearInterval(t);
-    }, []);
-
-    const idsQ = useReadContract({
-        address: ADDRESSES.orbsTwap,
-        abi: ORBS_TWAP_ABI,
-        functionName: "orderIdsByMaker",
-        args: [account],
-        query: { refetchInterval: 15_000 },
-    });
-    const ids = ((idsQ.data as bigint[] | undefined) ?? []).map((b) => Number(b));
-
-    const tokenMap = useMemo(() => {
-        const m = new Map<string, { symbol: string; decimals: number }>();
-        m.set(ADDRESSES.usdc.toLowerCase(), { symbol: "USDC", decimals: USDC_DECIMALS });
-        for (const t of v2Tokens) {
-            m.set(t.address.toLowerCase(), { symbol: t.symbol ?? "TOKEN", decimals: 18 });
-        }
-        return m;
-    }, [v2Tokens]);
-
-    return (
-        <div className="arc-card mt-4 p-5 sm:p-6">
-            <div className="mb-4 flex items-center gap-4">
-                <button
-                    onClick={() => setTab("open")}
-                    className={cn(
-                        "text-sm font-semibold transition-colors",
-                        tab === "open" ? "text-arc-text" : "text-arc-text-muted hover:text-arc-text",
-                    )}
-                >
-                    Open Orders
-                </button>
-                <button
-                    onClick={() => setTab("history")}
-                    className={cn(
-                        "text-sm font-semibold transition-colors",
-                        tab === "history" ? "text-arc-text" : "text-arc-text-muted hover:text-arc-text",
-                    )}
-                >
-                    Order History
-                </button>
-                <button
-                    onClick={() => idsQ.refetch()}
-                    className="ml-auto rounded-lg border border-arc-border bg-arc-bg-elevated px-3 py-1 text-xs text-arc-text-muted hover:text-arc-text"
-                >
-                    Refresh
-                </button>
-            </div>
-
-            {ids.length === 0 ? (
-                <div className="py-6 text-center text-xs text-arc-text-faint">
-                    {tab === "open" ? "No open orders." : "No order history."}
-                </div>
-            ) : (
-                <div className="space-y-2">
-                    {ids
-                        .slice()
-                        .reverse()
-                        .map((id) => (
-                            <OrderRow
-                                key={id}
-                                id={id}
-                                now={now}
-                                tab={tab}
-                                tokenMap={tokenMap}
-                            />
-                        ))}
-                </div>
-            )}
-        </div>
-    );
-}
-
-function OrderRow({
-    id,
-    now,
-    tab,
-    tokenMap,
-}: {
-    id: number;
-    now: number;
-    tab: "open" | "history";
-    tokenMap: Map<string, { symbol: string; decimals: number }>;
-}) {
-    const orderQ = useReadContract({
-        address: ADDRESSES.orbsTwap,
-        abi: ORBS_TWAP_ABI,
-        functionName: "order",
-        args: [BigInt(id)],
-        query: { refetchInterval: 15_000 },
-    });
-
-    const { writeContractAsync, isPending } = useWriteContract();
-
-    if (!orderQ.data) {
-        return (
-            <div className="rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-3 text-xs text-arc-text-faint">
-                Loading order #{id}...
-            </div>
-        );
-    }
-
-    type OrderTuple = {
-        id: bigint;
-        status: number;
-        time: number;
-        filledTime: number;
-        srcFilledAmount: bigint;
-        maker: Address;
-        ask: {
-            exchange: Address;
-            srcToken: Address;
-            dstToken: Address;
-            srcAmount: bigint;
-            srcBidAmount: bigint;
-            dstMinAmount: bigint;
-            deadline: number;
-            bidDelay: number;
-            fillDelay: number;
-            data: `0x${string}`;
-        };
-    };
-    const order = orderQ.data as OrderTuple;
-    const state = decodeOrderStatus(order.status, now);
-
-    if (tab === "open" && state !== "open") return null;
-    if (tab === "history" && state === "open") return null;
-
-    const src = tokenMap.get(order.ask.srcToken.toLowerCase()) ?? { symbol: "?", decimals: 18 };
-    const dst = tokenMap.get(order.ask.dstToken.toLowerCase()) ?? { symbol: "?", decimals: 18 };
-
-    const filledPct = order.ask.srcAmount > 0n
-        ? Number((order.srcFilledAmount * 1000n) / order.ask.srcAmount) / 10
-        : 0;
-
-    const onCancel = async () => {
-        try {
-            await writeContractAsync({
-                address: ADDRESSES.orbsTwap,
-                abi: ORBS_TWAP_ABI,
-                functionName: "cancel",
-                args: [BigInt(id)],
-            });
-            pushToast({ kind: "info", title: `Order #${id} cancelled` });
-            orderQ.refetch();
-        } catch (e) {
-            const msg = e instanceof Error ? e.message : "Cancel failed";
-            pushToast({ kind: "error", title: "Cancel failed", message: msg.slice(0, 120) });
-        }
-    };
-
-    return (
-        <div className="rounded-xl border border-arc-border bg-arc-bg-elevated px-4 py-3">
-            <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2 text-xs">
-                        <span className="text-arc-text-faint">#{id}</span>
-                        <StatusPill state={state} />
-                    </div>
-                    <div className="mt-1 truncate text-sm text-arc-text">
-                        Sell {formatToken(order.ask.srcAmount, src.decimals, 4)} {src.symbol} for{" "}
-                        {dst.symbol} (≥ {formatToken(order.ask.dstMinAmount, dst.decimals, 4)})
-                    </div>
-                    {filledPct > 0 && (
-                        <div className="mt-1 text-[10px] text-arc-text-faint">
-                            Filled: {filledPct.toFixed(1)}%
-                        </div>
-                    )}
-                    {state === "open" && (
-                        <div className="mt-1 text-[10px] text-arc-text-faint">
-                            Expires:{" "}
-                            {order.ask.deadline > 0
-                                ? new Date(order.ask.deadline * 1000).toLocaleString()
-                                : "no expiry"}
-                        </div>
-                    )}
-                </div>
-                {state === "open" && (
-                    <button
-                        onClick={onCancel}
-                        disabled={isPending}
-                        className="flex shrink-0 items-center gap-1 rounded-lg border border-arc-danger/40 bg-arc-danger/10 px-2 py-1 text-[10px] text-arc-danger hover:bg-arc-danger/20 disabled:opacity-50"
-                        title="Cancel this order on-chain"
-                    >
-                        <X className="h-3 w-3" />
-                        Cancel
-                    </button>
-                )}
-            </div>
-        </div>
-    );
-}
-
-function StatusPill({ state }: { state: "open" | "expired" | "cancelled" | "completed" }) {
-    const color =
-        state === "open"
-            ? "bg-arc-success/15 text-arc-success"
-            : state === "completed"
-              ? "bg-sky-400/15 text-sky-400"
-              : state === "cancelled"
-                ? "bg-arc-text-faint/15 text-arc-text-faint"
-                : "bg-arc-warn/15 text-arc-warn";
-    return (
-        <span className={cn("rounded-md px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider", color)}>
-            {state}
-        </span>
     );
 }
