@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { SwapCard } from "./SwapCard";
 import { MultiSwapCard } from "./MultiSwapCard";
+import { LimitCard } from "./LimitCard";
 import type { SwapTab } from "./SwapTabs";
 
 export function SwapContainer() {
@@ -18,6 +19,8 @@ export function SwapContainer() {
     <div className="mx-auto max-w-[490px] px-4 py-8 sm:px-6 sm:py-20">
       {tab === "swap" ? (
         <SwapCard tab={tab} onTabChange={setTab} />
+      ) : tab === "limit" ? (
+        <LimitCard tab={tab} onTabChange={setTab} />
       ) : (
         <MultiSwapCard tab={tab} onTabChange={setTab} />
       )}
