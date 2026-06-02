@@ -287,26 +287,28 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
 
     const onTriggerChange = (s: string) => {
         setTriggerPrice(s);
-        skipNextSyncRef.current = "trigger"; // upcoming forAmount derivation is from this edit
+        // forAmount auto-derives from the sync effect below.
     };
 
     const onForChange = (s: string) => {
         setForAmount(s);
-        // Derive a new triggerPrice = forAmount / srcAmount. Mark the sync
-        // ref so the trigger->forAmount effect below does not snap forAmount
-        // back to the derived value.
+        // Editing For drives the srcAmount (how much USDC to sell). The
+        // trigger price stays fixed (that is the user's target rate; they
+        // are now adjusting how many tokens they want at that rate). Use
+        // skipNextSyncRef so the derived effect below does not overwrite
+        // forAmount when srcAmount lands.
         skipNextSyncRef.current = "for";
-        if (!amountIn || Number(amountIn) <= 0) {
-            setTriggerPrice("");
+        if (!triggerPrice || Number(triggerPrice) <= 0) {
+            setAmountIn("");
             return;
         }
-        const src = Number(amountIn);
+        const tp = Number(triggerPrice);
         const fr = Number(s);
-        if (!isFinite(src) || !isFinite(fr) || fr <= 0) {
-            setTriggerPrice("");
+        if (!isFinite(tp) || !isFinite(fr) || fr <= 0) {
+            setAmountIn("");
             return;
         }
-        setTriggerPrice(formatPriceStr(fr / src, 8));
+        setAmountIn(formatPriceStr(fr / tp, 8));
     };
 
     // When srcAmount or triggerPrice changes (and we are not currently inside
@@ -565,20 +567,38 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
                     )}
                 </div>
 
-                {/* Route + min-amount-out row. The route label is informative only
-                    (Orbs ExchangeV2 currently routes through ArcadeV2Router for V2
-                    tokens; V3 indication exists for honesty even though the V3
-                    settlement adapter is not deployed). Min amount is the floor
-                    encoded in the on-chain Ask after slippage tolerance. */}
+                {/* Route + min-out row. Inline (no card chrome) to match the
+                    regular Swap card's "via Arcade X" line exactly. Right side
+                    shows the slippage-adjusted floor encoded in the on-chain
+                    Ask, not the price ratio (limit orders care about the floor,
+                    market swaps care about the ratio). */}
                 {tokenOut && expectedOutBn > 0n && (
-                    <div className="mt-3 flex items-center justify-between rounded-xl border border-arc-border bg-arc-bg-elevated px-4 py-2.5 text-[11px]">
-                        <span className="text-arc-text-muted">
-                            via Arcade {isV3Path ? "V3" : "V2"}
-                        </span>
-                        <span className="text-arc-text">
-                            Min: {formatToken(dstMinAmountBn, outDec, 4)}{" "}
-                            <span className="text-arc-text-muted">{tokenOut.symbol}</span>
-                        </span>
+                    <div className="mt-4 flex items-center justify-between text-xs">
+                        <div className="flex items-center gap-1.5 text-arc-text-muted">
+                            <Image
+                                src="/route.png"
+                                alt=""
+                                width={14}
+                                height={14}
+                                className="h-3.5 w-3.5 opacity-75"
+                            />
+                            <span>via</span>
+                            <span className="font-medium text-arc-text">
+                                {isV3Path ? "Arcade V3" : "Arcade V2"}
+                            </span>
+                            {isV3Path && (
+                                <span className="ml-1 rounded-full border border-arc-success/40 bg-arc-success/10 px-1.5 py-0.5 text-[10px] font-medium text-arc-success">
+                                    locked-LP pool
+                                </span>
+                            )}
+                        </div>
+                        <div className="text-arc-text-muted tabular-nums">
+                            Min:{" "}
+                            <span className="text-arc-text">
+                                {formatToken(dstMinAmountBn, outDec, 4)}
+                            </span>{" "}
+                            {tokenOut.symbol}
+                        </div>
                     </div>
                 )}
 
