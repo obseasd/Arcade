@@ -1,0 +1,29 @@
+{
+  "name": "@orbs-network/twap",
+  "version": "2.7.29",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/orbs-network/twap.git"
+  },
+  "author": "Orbs",
+  "license": "MIT",
+  "dependencies": {},
+  "main": "index.js",
+  "files": [
+    "index.js",
+    "configs.json",
+    "twap.abi.json",
+    "lens.abi.json",
+    "taker.abi.json",
+    "LICENSE",
+    "TOS.md",
+    "README.md"
+  ],
+  "scripts": {
+    "clean": "forge clean",
+    "build": "npm run clean && forge build",
+    "prepublishOnly": "npm run build",
+    "test": "forge test"
+  },
+  "packageManager": "yarn@1.22.22+sha512.a6b2f7906b721bba3d67d4aff083df04dad64c399707841b7acf00f6b133b7ac24255f2652fa22ae3534329dc6180534e98d17432037ff6fd140556e2bb3137e"
+}

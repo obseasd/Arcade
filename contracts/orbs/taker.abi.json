@@ -1,0 +1,155 @@
+[
+    {
+        "type": "constructor",
+        "inputs": [],
+        "stateMutability": "nonpayable"
+    },
+    {
+        "type": "receive",
+        "stateMutability": "payable"
+    },
+    {
+        "type": "function",
+        "name": "allowed",
+        "inputs": [],
+        "outputs": [
+            {
+                "name": "",
+                "type": "address",
+                "internalType": "contract IAllowed"
+            }
+        ],
+        "stateMutability": "view"
+    },
+    {
+        "type": "function",
+        "name": "bid",
+        "inputs": [
+            {
+                "name": "id",
+                "type": "uint64",
+                "internalType": "uint64"
+            },
+            {
+                "name": "exchange",
+                "type": "address",
+                "internalType": "address"
+            },
+            {
+                "name": "dstFee",
+                "type": "uint256",
+                "internalType": "uint256"
+            },
+            {
+                "name": "slippagePercent",
+                "type": "uint32",
+                "internalType": "uint32"
+            },
+            {
+                "name": "data",
+                "type": "bytes",
+                "internalType": "bytes"
+            }
+        ],
+        "outputs": [],
+        "stateMutability": "nonpayable"
+    },
+    {
+        "type": "function",
+        "name": "fill",
+        "inputs": [
+            {
+                "name": "id",
+                "type": "uint64",
+                "internalType": "uint64"
+            },
+            {
+                "name": "fee",
+                "type": "address",
+                "internalType": "address"
+            },
+            {
+                "name": "dstSenderAmount",
+                "type": "uint256",
+                "internalType": "uint256"
+            },
+            {
+                "name": "feeSwapExchange",
+                "type": "address",
+                "internalType": "address"
+            },
+            {
+                "name": "feeSwapData",
+                "type": "bytes",
+                "internalType": "bytes"
+            }
+        ],
+        "outputs": [],
+        "stateMutability": "nonpayable"
+    },
+    {
+        "type": "function",
+        "name": "init",
+        "inputs": [
+            {
+                "name": "_twap",
+                "type": "address",
+                "internalType": "contract TWAP"
+            },
+            {
+                "name": "_allowed",
+                "type": "address",
+                "internalType": "contract IAllowed"
+            }
+        ],
+        "outputs": [],
+        "stateMutability": "nonpayable"
+    },
+    {
+        "type": "function",
+        "name": "rescue",
+        "inputs": [
+            {
+                "name": "token",
+                "type": "address",
+                "internalType": "address"
+            },
+            {
+                "name": "to",
+                "type": "address",
+                "internalType": "address"
+            },
+            {
+                "name": "amount",
+                "type": "uint256",
+                "internalType": "uint256"
+            }
+        ],
+        "outputs": [],
+        "stateMutability": "nonpayable"
+    },
+    {
+        "type": "function",
+        "name": "twap",
+        "inputs": [],
+        "outputs": [
+            {
+                "name": "",
+                "type": "address",
+                "internalType": "contract TWAP"
+            }
+        ],
+        "stateMutability": "view"
+    },
+    {
+        "type": "error",
+        "name": "NotAllowed",
+        "inputs": [
+            {
+                "name": "caller",
+                "type": "address",
+                "internalType": "address"
+            }
+        ]
+    }
+]

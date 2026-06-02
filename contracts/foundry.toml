@@ -18,7 +18,10 @@ fs_permissions = [{ access = "read-write", path = "./" }]
 # v3-core / v3-periphery are =0.7.6 and were authored without IR. Skip them in
 # the default (via_ir) build; they're compiled by the dedicated `v3` profile
 # below and deployed from their artifacts.
-skip = ["lib/v3-core/**", "lib/v3-periphery/**"]
+# orbs/ is the orbs-network/twap vendored repo (Solidity 0.8.16); compiled by
+# the dedicated `orbs` profile so it never gets pulled into the default 0.8.24
+# build.
+skip = ["lib/v3-core/**", "lib/v3-periphery/**", "orbs/**"]
 
 # Dedicated profile for the 0.7.6 layer: our own V3 contracts (v3src/) plus
 # the Uniswap V3 fork they depend on. Native V3 settings (0.7.6, legacy
@@ -70,6 +73,47 @@ remappings = [
     "permit2/=lib/v4-periphery/lib/permit2/",
     # v4-core's own deps. solmate is v4-core-only.
     "solmate/=lib/v4-core/lib/solmate/",
+]
+
+# Vendored orbs-network/twap (MIT, ~2022). Compiled standalone in 0.8.16 with
+# their own optimizer settings (1M runs, no IR) and their own forge-std + OZ
+# vendored under orbs/lib. We never edit anything under orbs/ ; this profile
+# only builds the artifacts so we can deploy TWAP + ExchangeV2 to Arc testnet
+# via their bundled DeployTWAP.s.sol + DeployExchange.s.sol scripts.
+#
+# Usage (from contracts/ dir):
+#   forge build --profile orbs
+#   forge script orbs/script/DeployExchange.s.sol --profile orbs \
+#     --rpc-url arc_testnet --broadcast \
+#     --private-key $PRIVATE_KEY
+#   forge script orbs/script/DeployTWAP.s.sol --profile orbs \
+#     --rpc-url arc_testnet --broadcast \
+#     --private-key $PRIVATE_KEY
+#
+# Required env vars:
+#   ROUTER   = ArcadeV2Router address (for ExchangeV2)
+#   ALLOWED  = comma-separated keeper addresses allowed to fill orders
+#   WETH     = MockWETH or sentinel for TWAP constructor (UI gates dstToken
+#              so the unwrap path is unreachable; any non-zero is fine)
+#   PRIVATE_KEY = deployer key
+[profile.orbs]
+src = "orbs/src"
+test = "orbs/test"
+script = "orbs/script"
+out = "out-orbs"
+libs = ["orbs/lib"]
+skip = []
+solc_version = "0.8.16"
+optimizer = true
+optimizer_runs = 1_000_000
+via_ir = false
+fs_permissions = [{ access = "read-write", path = "./" }]
+remappings = [
+    "@openzeppelin/contracts/=orbs/lib/openzeppelin-contracts/contracts/",
+    "openzeppelin-contracts/=orbs/lib/openzeppelin-contracts/contracts/",
+    "forge-std/=orbs/lib/forge-std/src/",
+    "ds-test/=orbs/lib/forge-std/lib/ds-test/src/",
+    "src/=orbs/src/",
 ]
 
 [fmt]
