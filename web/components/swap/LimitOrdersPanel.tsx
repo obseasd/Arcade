@@ -7,6 +7,8 @@ import { useReadContract, useReadContracts, useWriteContract } from "wagmi";
 import { ORBS_TWAP_ABI, decodeOrderStatus } from "@/lib/abis/orbsTwap";
 import { ADDRESSES, USDC_DECIMALS } from "@/lib/constants";
 import { useV2Tokens } from "@/lib/hooks/useV2Tokens";
+import { useV3Tokens } from "@/lib/hooks/useV3Tokens";
+import { AutoTokenIcon } from "@/components/ui/AutoTokenIcon";
 import { pushToast } from "@/lib/toast";
 import { cn, formatToken } from "@/lib/utils";
 
@@ -56,8 +58,15 @@ type OrderTuple = {
  */
 export function LimitOrdersPanel({ account, variant = "card", className }: Props) {
     const { tokens: v2Tokens } = useV2Tokens();
+    const { tokens: v3Tokens } = useV3Tokens();
     const [tab, setTab] = useState<"open" | "history">("open");
     const [now, setNow] = useState(Math.floor(Date.now() / 1000));
+    // Local spin state for the refresh button. We hold it true for at least
+    // 600ms so the user actually sees the icon animate even when the wagmi
+    // cache returns instantly. Tied to a count so consecutive clicks restart
+    // the animation rather than no-op when a refetch is still in flight.
+    const [refreshTick, setRefreshTick] = useState(0);
+    const [isRefreshing, setIsRefreshing] = useState(false);
 
     useEffect(() => {
         const t = setInterval(() => setNow(Math.floor(Date.now() / 1000)), 5000);
@@ -105,14 +114,22 @@ export function LimitOrdersPanel({ account, variant = "card", className }: Props
         [orders, now],
     );
 
+    // Resolve token metadata for any address that might show up in an order.
+    // Includes both V2 pool tokens AND V3 launch tokens so single-sided
+    // CLANKER_V3 tokens (e.g. OBS) render with their symbol and icon instead
+    // of falling back to "?". USDC is pinned for the gas/quote asset.
     const tokenMap = useMemo(() => {
         const m = new Map<string, { symbol: string; decimals: number }>();
         m.set(ADDRESSES.usdc.toLowerCase(), { symbol: "USDC", decimals: USDC_DECIMALS });
         for (const t of v2Tokens) {
             m.set(t.address.toLowerCase(), { symbol: t.symbol ?? "TOKEN", decimals: 18 });
         }
+        for (const t of v3Tokens) {
+            const k = t.address.toLowerCase();
+            if (!m.has(k)) m.set(k, { symbol: t.symbol ?? "TOKEN", decimals: 18 });
+        }
         return m;
-    }, [v2Tokens]);
+    }, [v2Tokens, v3Tokens]);
 
     const { writeContractAsync, isPending } = useWriteContract();
 
@@ -166,13 +183,24 @@ export function LimitOrdersPanel({ account, variant = "card", className }: Props
         }
     };
 
-    const shellClass =
-        variant === "floating"
-            ? "rounded-2xl border border-arc-gray/20 bg-black/40 backdrop-blur-2xl shadow-arc-card"
-            : "arc-card";
+    const onRefreshClick = async () => {
+        setRefreshTick((n) => n + 1);
+        setIsRefreshing(true);
+        try {
+            await Promise.all([idsQ.refetch(), ordersQ.refetch()]);
+        } finally {
+            // Hold the spin for a beat so the click registers visually even
+            // when wagmi resolves from cache instantly. 600ms feels snappy
+            // without dragging.
+            window.setTimeout(() => setIsRefreshing(false), 600);
+        }
+    };
 
     return (
-        <div className={cn(shellClass, "flex flex-col p-5 sm:p-6", className)}>
+        // Both variants now share the arc-card chrome (rounded-2xl + thin
+        // border + bg-black/15 + backdrop-blur-xl). Matching the LimitCard
+        // pixel for pixel was the explicit UX direction.
+        <div className={cn("arc-card flex flex-col p-5 sm:p-6", className)}>
             <div className="mb-4 flex items-center gap-4">
                 <button
                     onClick={() => setTab("open")}
@@ -197,14 +225,20 @@ export function LimitOrdersPanel({ account, variant = "card", className }: Props
                     Order History
                 </button>
                 <button
-                    onClick={() => {
-                        idsQ.refetch();
-                        ordersQ.refetch();
-                    }}
+                    onClick={onRefreshClick}
                     title="Refresh"
-                    className="ml-auto rounded-lg border border-arc-border bg-arc-bg-elevated p-1.5 text-arc-text-muted transition-colors hover:bg-white/5 hover:text-arc-text"
+                    className="ml-auto rounded-lg border border-arc-border bg-arc-bg-elevated p-1.5 text-arc-text-muted transition-colors hover:bg-white/5 hover:text-arc-text active:scale-95"
                 >
-                    <RefreshCw className="h-3.5 w-3.5" />
+                    {/* key=refreshTick forces a remount so the spin animation
+                        restarts on every click, even if the previous spin is
+                        still running. */}
+                    <RefreshCw
+                        key={refreshTick}
+                        className={cn(
+                            "h-3.5 w-3.5",
+                            isRefreshing && "animate-spin",
+                        )}
+                    />
                 </button>
             </div>
 
@@ -277,9 +311,40 @@ function OrderRow({
                         <span className="text-arc-text-faint">#{Number(order.id)}</span>
                         <StatusPill state={state} />
                     </div>
-                    <div className="mt-1 truncate text-sm text-arc-text">
-                        Sell {formatToken(order.ask.srcAmount, src.decimals, 4)} {src.symbol} for{" "}
-                        {dst.symbol} (≥ {formatToken(order.ask.dstMinAmount, dst.decimals, 4)})
+                    {/* Visual sell -> buy line with token icons. Matches the
+                        chrome of TokenRow chips in the Limit card so the user
+                        recognises the assets immediately. Each side is a
+                        whitespace-nowrap group so the icon-amount-symbol triple
+                        never breaks mid-token; the outer row wraps as a whole
+                        on narrow screens. */}
+                    <div className="mt-1.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-sm text-arc-text">
+                        <span className="flex items-center gap-1.5 whitespace-nowrap">
+                            <span className="text-arc-text-muted">Sell</span>
+                            <AutoTokenIcon
+                                address={order.ask.srcToken}
+                                symbol={src.symbol}
+                                size={16}
+                            />
+                            <span className="font-medium tabular-nums">
+                                {formatToken(order.ask.srcAmount, src.decimals, 4)}
+                            </span>
+                            <span>{src.symbol}</span>
+                        </span>
+                        <span className="flex items-center gap-1.5 whitespace-nowrap">
+                            <span className="text-arc-text-muted">for</span>
+                            <AutoTokenIcon
+                                address={order.ask.dstToken}
+                                symbol={dst.symbol}
+                                size={16}
+                            />
+                            <span>{dst.symbol}</span>
+                        </span>
+                    </div>
+                    <div className="mt-1 text-[11px] text-arc-text-muted tabular-nums">
+                        Min:{" "}
+                        <span className="text-arc-text">
+                            {formatToken(order.ask.dstMinAmount, dst.decimals, 4)} {dst.symbol}
+                        </span>
                     </div>
                     {filledPct > 0 && (
                         <div className="mt-1 text-[10px] text-arc-text-faint">
