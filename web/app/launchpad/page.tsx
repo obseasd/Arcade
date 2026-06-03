@@ -158,13 +158,22 @@ export default function LaunchpadIndexPage() {
                 v4
               </span>
             </h2>
-            <Link
-              href="/launchpad/v4hook/create"
-              className="flex items-center gap-1 text-xs text-arc-text-muted hover:text-arc-text"
-            >
-              New launch
-              <Plus className="h-3 w-3" />
-            </Link>
+            <div className="flex items-center gap-3">
+              <Link
+                href="/launchpad/v4hook/list"
+                className="flex items-center gap-1 text-xs text-arc-text-muted hover:text-arc-text"
+              >
+                View all
+                <ArrowRight className="h-3 w-3" />
+              </Link>
+              <Link
+                href="/launchpad/v4hook/create"
+                className="flex items-center gap-1 text-xs text-arc-text-muted hover:text-arc-text"
+              >
+                New launch
+                <Plus className="h-3 w-3" />
+              </Link>
+            </div>
           </div>
           {v4HookPreview.length === 0 ? (
             <Link

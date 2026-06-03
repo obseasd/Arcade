@@ -1,9 +1,9 @@
 "use client";
 
-import { X } from "lucide-react";
+import { Rocket, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { Modal } from "@/components/ui/Modal";
-import { LaunchMode, V4_ENABLED } from "@/lib/constants";
+import { LaunchMode, V4_ENABLED, V4_HOOK_ENABLED } from "@/lib/constants";
 import { cn } from "@/lib/utils";
 
 interface Props {
@@ -55,7 +55,13 @@ export function LaunchModeModal({ open, onClose }: Props) {
       <div
         className={cn(
           "grid grid-cols-1 gap-4 p-6",
-          V4_ENABLED ? "sm:grid-cols-4" : "sm:grid-cols-3",
+          // Dynamic column count based on which V4 surfaces are enabled.
+          // 3 base modes + optional V4 prototype + optional ArcadeHook.
+          V4_ENABLED && V4_HOOK_ENABLED
+            ? "sm:grid-cols-5"
+            : V4_ENABLED || V4_HOOK_ENABLED
+              ? "sm:grid-cols-4"
+              : "sm:grid-cols-3",
         )}
       >
         {MODES.map((m) => (
@@ -93,6 +99,30 @@ export function LaunchModeModal({ open, onClose }: Props) {
               <div className="text-xl font-semibold text-white">V4</div>
               <div className="mt-1 text-xs text-arc-text-muted">
                 Anti-sniper hook + single-sided locked LP
+              </div>
+            </div>
+          </button>
+        )}
+        {V4_HOOK_ENABLED && (
+          <button
+            onClick={() => {
+              onClose();
+              router.push("/launchpad/v4hook/create");
+            }}
+            className={cn(
+              "group relative flex h-44 items-end overflow-hidden rounded-2xl border border-arc-cta-hover/40 p-4 text-left transition-all",
+              "bg-gradient-to-br from-arc-cta/20 via-arc-surface-2/40 to-arc-cta-hover/10",
+              "hover:border-arc-cta-hover hover:shadow-arc-nav-glow active:scale-[0.98]",
+            )}
+          >
+            <span className="absolute right-3 top-3 rounded-md border border-arc-cta-hover/40 bg-arc-cta-hover/10 px-2 py-0.5 text-[10px] uppercase tracking-wider text-arc-cta-hover">
+              v4 hook
+            </span>
+            <Rocket className="absolute right-4 top-12 h-12 w-12 text-arc-cta-hover/30 transition-transform group-hover:scale-110" />
+            <div className="relative">
+              <div className="text-xl font-semibold text-white">ArcadeHook</div>
+              <div className="mt-1 text-xs text-arc-text-muted">
+                Unified V4 hook. Atomic graduation, locked LP, royalty splits.
               </div>
             </div>
           </button>

@@ -144,20 +144,26 @@ function Inner() {
     return (
         <div className="mx-auto max-w-5xl px-4 py-8 sm:px-6">
             {/* Header --------------------------------------------------- */}
-            <div className="mb-6 flex items-center gap-3">
+            <div className="mb-6 flex items-start gap-3 sm:items-center">
                 <Link
                     href="/launchpad"
-                    className="rounded-lg border border-arc-border bg-arc-surface p-2 hover:border-arc-primary/40"
+                    className="shrink-0 rounded-lg border border-arc-border bg-arc-surface p-2 hover:border-arc-primary/40"
                 >
                     <ArrowLeft className="h-4 w-4" />
                 </Link>
+                {/* On mobile we keep the icon smaller (48px) so the title gets
+                    room to breathe; sm+ bumps it back to the hero 64px size. */}
+                <div className="shrink-0">
+                    <TokenIcon symbol={symbol} image={image} size={48} />
+                </div>
                 <div className="flex-1 min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
-                        <TokenIcon symbol={symbol} image={image} size={32} />
-                        <h1 className="truncate text-2xl font-semibold">
+                        <h1 className="truncate text-xl font-semibold sm:text-3xl">
                             {name}{" "}
                             <span className="text-arc-text-muted">{symbol}</span>
                         </h1>
+                    </div>
+                    <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                         {mode !== undefined && (
                             <span className="rounded-md border border-arc-cta-hover/40 bg-arc-cta-hover/10 px-2 py-0.5 text-[10px] uppercase tracking-wider text-arc-cta-hover">
                                 {MODE_LABEL[mode]}
@@ -174,7 +180,7 @@ function Inner() {
                             />
                         )}
                     </div>
-                    <div className="mt-1 flex items-center gap-2 text-xs text-arc-text-faint">
+                    <div className="mt-2 flex items-center gap-2 text-xs text-arc-text-faint">
                         <span>{formatAddress(token)}</span>
                         <a
                             href={`https://explorer.testnet.arc.network/address/${token}`}
