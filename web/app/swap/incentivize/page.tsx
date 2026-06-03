@@ -103,7 +103,8 @@ export default function IncentivizePage() {
     const [excludedAddresses, setExcludedAddresses] = useState<string[]>([]);
     const [excludeDraft, setExcludeDraft] = useState("");
 
-    const [agreedToTerms, setAgreedToTerms] = useState(false);
+    // Agreement is implicit on click of the Launch button now that the
+    // disclaimer line below the form replaces the checkbox.
 
     // Auto-resolve a pool address for the two selected tokens (V2 first, V3
     // fallback). For the MVP we display "Pool found / not found" as a soft
@@ -153,8 +154,7 @@ export default function IncentivizePage() {
         durationHours >= 1 &&
         endDate > new Date() &&
         !!rewardToken &&
-        rewardAmountBn > 0n &&
-        agreedToTerms;
+        rewardAmountBn > 0n;
 
     // --- Reward balance for the connected wallet ----------------------
     const rewardBalanceQ = useReadContract({
@@ -207,7 +207,7 @@ export default function IncentivizePage() {
 
             <div className="space-y-6">
                 {/* Tokens ----------------------------------------------- */}
-                <section className="rounded-2xl border border-arc-border bg-arc-surface p-5 sm:p-6">
+                <section className="arc-card p-5 sm:p-6">
                     <h2 className="text-base font-semibold">Tokens</h2>
                     <p className="mt-1 text-xs text-arc-text-muted">
                         Which token pair would you like to add liquidity to?
@@ -227,7 +227,7 @@ export default function IncentivizePage() {
                 </section>
 
                 {/* Existing pools --------------------------------------- */}
-                <section className="rounded-2xl border border-arc-border bg-arc-surface p-5 sm:p-6">
+                <section className="arc-card p-5 sm:p-6">
                     <h2 className="text-base font-semibold">Existing pools</h2>
                     <p className="mt-1 text-xs text-arc-text-muted">
                         Select a pool to incentivize liquidity
@@ -289,7 +289,7 @@ export default function IncentivizePage() {
                 </section>
 
                 {/* Duration --------------------------------------------- */}
-                <section className="rounded-2xl border border-arc-border bg-arc-surface p-5 sm:p-6">
+                <section className="arc-card p-5 sm:p-6">
                     <h2 className="text-base font-semibold">Duration</h2>
                     <p className="mt-1 text-xs text-arc-text-muted">
                         The time period you want to distribute rewards within.
@@ -315,12 +315,12 @@ export default function IncentivizePage() {
                 </section>
 
                 {/* Rewards ---------------------------------------------- */}
-                <section className="rounded-2xl border border-arc-border bg-arc-surface p-5 sm:p-6">
+                <section className="arc-card p-5 sm:p-6">
                     <h2 className="text-base font-semibold">Rewards</h2>
                     <p className="mt-1 text-xs text-arc-text-muted">
                         How many rewards in total would you like to distribute?
                     </p>
-                    <div className="mt-4 rounded-2xl border border-arc-border bg-arc-bg-elevated p-4">
+                    <div className="mt-4 rounded-2xl border border-arc-border bg-white/[0.015] p-4">
                         <div className="mb-3 flex items-center justify-between">
                             <span className="text-sm text-arc-text-muted">Token</span>
                             <button
@@ -386,16 +386,10 @@ export default function IncentivizePage() {
                             Get in touch with us.
                         </a>
                     </p>
-
-                    <div className="mt-4 rounded-xl border border-arc-cta-hover/30 bg-arc-cta-hover/10 p-3 text-center text-xs text-arc-cta-hover">
-                        Please note that this feature is operated by our partner. Once a
-                        campaign is deployed, Arcade has no ability to cancel it or recover
-                        distributed tokens.
-                    </div>
                 </section>
 
                 {/* Exclude addresses ------------------------------------ */}
-                <section className="rounded-2xl border border-arc-border bg-arc-surface p-5 sm:p-6">
+                <section className="arc-card p-5 sm:p-6">
                     <div className="flex items-center justify-between">
                         <div>
                             <h2 className="text-base font-semibold">
@@ -406,7 +400,7 @@ export default function IncentivizePage() {
                                 want to reward.
                             </p>
                         </div>
-                        <div className="ml-3 flex shrink-0 items-center gap-1 rounded-xl border border-arc-border bg-arc-bg-elevated p-1">
+                        <div className="ml-3 flex shrink-0 items-center gap-1 rounded-xl border border-arc-border bg-white/[0.015] p-1">
                             <button
                                 onClick={() => setExcludeOn(true)}
                                 className={cn(
@@ -439,7 +433,7 @@ export default function IncentivizePage() {
                                     value={excludeDraft}
                                     onChange={(e) => setExcludeDraft(e.target.value)}
                                     placeholder="0x... address to exclude"
-                                    className="flex-1 rounded-lg border border-arc-border bg-arc-bg-elevated px-3 py-2 text-sm tabular-nums focus:border-arc-cta-hover focus:outline-none"
+                                    className="flex-1 rounded-lg border border-arc-border bg-white/[0.015] px-3 py-2 text-sm tabular-nums focus:border-arc-cta-hover focus:outline-none"
                                 />
                                 <button
                                     onClick={() => {
@@ -455,7 +449,7 @@ export default function IncentivizePage() {
                                         setExcludedAddresses((p) => [...p, s.toLowerCase()]);
                                         setExcludeDraft("");
                                     }}
-                                    className="inline-flex items-center gap-1 rounded-lg border border-arc-border bg-arc-bg-elevated px-3 py-2 text-xs font-medium text-arc-text transition-colors hover:bg-white/5"
+                                    className="inline-flex items-center gap-1 rounded-lg border border-arc-border bg-white/[0.015] px-3 py-2 text-xs font-medium text-arc-text transition-colors hover:bg-white/5"
                                 >
                                     <Plus className="h-3.5 w-3.5" />
                                     Add
@@ -489,18 +483,10 @@ export default function IncentivizePage() {
 
                 {/* Terms + Submit --------------------------------------- */}
                 <section className="space-y-4">
-                    <label className="flex items-start gap-2 text-xs text-arc-text-muted">
-                        <input
-                            type="checkbox"
-                            checked={agreedToTerms}
-                            onChange={(e) => setAgreedToTerms(e.target.checked)}
-                            className="mt-0.5 h-4 w-4 rounded border-arc-border bg-arc-bg-elevated text-arc-cta focus:ring-arc-cta-hover"
-                        />
-                        <span>
-                            By launching this campaign, you agree to the Arcade incentive program
-                            terms and acknowledge that distributed rewards cannot be recovered.
-                        </span>
-                    </label>
+                    <p className="text-center text-xs text-arc-text-muted">
+                        By launching this campaign, you agree to the Arcade incentive program
+                        terms and acknowledge that distributed rewards cannot be recovered.
+                    </p>
 
                     <button
                         onClick={onLaunch}
@@ -525,8 +511,6 @@ export default function IncentivizePage() {
                                       ? "Duration must be at least 1 hour"
                                       : insufficientBalance
                                         ? `Insufficient ${rewardToken.symbol}`
-                                        : !agreedToTerms
-                                          ? "Agree to the terms"
                                           : "Launch Campaign"}
                     </button>
 
@@ -576,7 +560,7 @@ function TokenPickerButton({
     return (
         <button
             onClick={onClick}
-            className="flex items-center justify-between rounded-2xl border border-arc-border bg-arc-bg-elevated px-4 py-4 text-left transition-colors hover:border-arc-cta-hover/40"
+            className="flex items-center justify-between rounded-2xl border border-arc-border bg-white/[0.015] px-4 py-4 text-left transition-colors hover:border-arc-cta-hover/40"
         >
             <span className="text-sm text-arc-text-muted">{label}</span>
             <span className="flex items-center gap-2 text-sm font-medium">
