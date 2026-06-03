@@ -192,10 +192,10 @@ export default function IncentivizePage() {
     return (
         <div className="mx-auto max-w-3xl px-4 py-10 sm:px-6">
             <Link
-                href="/positions"
+                href="/swap"
                 className="mb-6 inline-flex items-center gap-2 text-sm text-arc-text-muted transition-colors hover:text-arc-text"
             >
-                <ArrowLeft className="h-4 w-4" /> Positions
+                <ArrowLeft className="h-4 w-4" /> Swap
             </Link>
 
             <div className="mb-10 text-center">
