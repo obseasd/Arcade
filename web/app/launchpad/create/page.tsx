@@ -680,9 +680,12 @@ function CreateTokenInner() {
             {recipients.map((r, i) => {
               return (
               <div key={i} className="space-y-2 rounded-lg border border-arc-border bg-white/[0.03] p-3">
-                <div className="flex items-center gap-2">
+                {/* On mobile the 0x address input needs full width to be readable;
+                    the share input + delete button drop to their own row. On
+                    sm: and up we restore the inline layout. */}
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                   {r.isTwitter ? (
-                    <div className="flex flex-1 items-center gap-1 rounded-lg border border-arc-cta-hover/40 bg-arc-cta-hover/5 px-2 py-1.5">
+                    <div className="flex w-full items-center gap-1 rounded-lg border border-arc-cta-hover/40 bg-arc-cta-hover/5 px-2 py-1.5 sm:flex-1">
                       <span className="text-sm text-arc-text-muted">@</span>
                       <input
                         value={r.twitterHandle.replace(/^@/, "")}
@@ -698,25 +701,27 @@ function CreateTokenInner() {
                       value={r.recipient}
                       onChange={(e) => setRecipient(i, { recipient: e.target.value })}
                       placeholder="0x recipient"
-                      className="arc-input flex-1 rounded-lg border border-arc-border bg-arc-bg-elevated px-2 py-1.5 text-sm tabular-nums"
+                      className="arc-input w-full rounded-lg border border-arc-border bg-arc-bg-elevated px-2 py-1.5 text-sm tabular-nums sm:flex-1"
                     />
                   )}
-                  <input
-                    inputMode="numeric"
-                    value={r.pct}
-                    readOnly={recipients.length === 1}
-                    onChange={(e) => setRecipientPct(i, parseInt(e.target.value.replace(/[^0-9]/g, "") || "0", 10))}
-                    className="arc-input w-14 rounded-lg border border-arc-border bg-arc-bg-elevated px-2 py-1.5 text-right text-sm tabular-nums"
-                  />
-                  <span className="text-xs text-arc-text-muted">%</span>
-                  {recipients.length > 1 && (
-                    <button
-                      onClick={() => removeRecipient(i)}
-                      className="text-arc-text-faint transition-colors hover:text-arc-danger"
-                    >
-                      <X className="h-4 w-4" />
-                    </button>
-                  )}
+                  <div className="flex items-center justify-end gap-2 sm:justify-start">
+                    <input
+                      inputMode="numeric"
+                      value={r.pct}
+                      readOnly={recipients.length === 1}
+                      onChange={(e) => setRecipientPct(i, parseInt(e.target.value.replace(/[^0-9]/g, "") || "0", 10))}
+                      className="arc-input w-14 rounded-lg border border-arc-border bg-arc-bg-elevated px-2 py-1.5 text-right text-sm tabular-nums"
+                    />
+                    <span className="text-xs text-arc-text-muted">%</span>
+                    {recipients.length > 1 && (
+                      <button
+                        onClick={() => removeRecipient(i)}
+                        className="text-arc-text-faint transition-colors hover:text-arc-danger"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    )}
+                  </div>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
                   <PrefSelect value={r.pref} onChange={(v) => setRecipient(i, { pref: v })} />

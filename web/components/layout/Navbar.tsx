@@ -27,7 +27,7 @@ export function Navbar() {
 
   return (
     <header className="sticky top-0 z-40 bg-transparent">
-      <div className="mx-auto flex h-24 max-w-7xl items-center justify-between px-4 sm:px-6">
+      <div className="mx-auto flex h-20 max-w-7xl items-center justify-between px-4 sm:h-24 sm:px-6">
         {/* Left: logo */}
         <Link href="/" className="flex items-center gap-3">
           <Image
