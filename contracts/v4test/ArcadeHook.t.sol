@@ -6,6 +6,7 @@ import {Test, console2} from "forge-std/Test.sol";
 import {ArcadeHook} from "../v4src/ArcadeHook.sol";
 import {ArcadeV4Curve} from "../v4src/libraries/ArcadeV4Curve.sol";
 
+import {PoolManager} from "v4-core/PoolManager.sol";
 import {IHooks} from "v4-core/interfaces/IHooks.sol";
 import {IPoolManager} from "v4-core/interfaces/IPoolManager.sol";
 import {Hooks} from "v4-core/libraries/Hooks.sol";
@@ -38,25 +39,35 @@ import {TestERC20} from "v4-core/test/TestERC20.sol";
  */
 contract ArcadeHookTest is Test {
     ArcadeHook hook;
+    PoolManager pm;
     TestERC20 usdc;
 
-    address constant POOL_MANAGER = address(0xAAAAAA);
+    address poolManagerAddr;
     address constant LOCKED_VAULT = address(0xCAFE);
     address constant TREASURY = address(0xBEEF);
     address constant ESCROW = address(0xE5C);
     address constant OWNER = address(0x0123);
     address constant ALICE = address(0xA11CE);
 
+    /// @dev Permission bitmap from the spec: 10 callbacks claimed.
+    uint160 internal constant TARGET_FLAGS = uint160(0x3ECE);
+
     function setUp() public {
+        pm = new PoolManager(address(this));
+        poolManagerAddr = address(pm);
         usdc = new TestERC20(0);
-        hook = new ArcadeHook(
-            IPoolManager(POOL_MANAGER),
-            Currency.wrap(address(usdc)),
-            LOCKED_VAULT,
-            TREASURY,
-            ESCROW,
-            OWNER
+
+        // Deploy the hook at an address whose low 14 bits encode our claimed
+        // permissions. PoolManager validates this on every callback dispatch.
+        // We pick a fixed high-bit prefix so the address is deterministic per
+        // run and easy to assert in failure messages.
+        address hookAddr = address(uint160(0xCAFE0000 | TARGET_FLAGS));
+        deployCodeTo(
+            "ArcadeHook.sol:ArcadeHook",
+            abi.encode(IPoolManager(poolManagerAddr), Currency.wrap(address(usdc)), LOCKED_VAULT, TREASURY, ESCROW, OWNER),
+            hookAddr
         );
+        hook = ArcadeHook(hookAddr);
     }
 
     // -------------------------------------------------------------------
@@ -91,29 +102,29 @@ contract ArcadeHookTest is Test {
 
     function test_constructor_rejectsZeroUsdc() public {
         vm.expectRevert(ArcadeHook.ZeroAddress.selector);
-        new ArcadeHook(IPoolManager(POOL_MANAGER), Currency.wrap(address(0)), LOCKED_VAULT, TREASURY, ESCROW, OWNER);
+        new ArcadeHook(IPoolManager(poolManagerAddr), Currency.wrap(address(0)), LOCKED_VAULT, TREASURY, ESCROW, OWNER);
     }
 
     function test_constructor_rejectsZeroLockedVault() public {
         vm.expectRevert(ArcadeHook.ZeroAddress.selector);
-        new ArcadeHook(IPoolManager(POOL_MANAGER), Currency.wrap(address(usdc)), address(0), TREASURY, ESCROW, OWNER);
+        new ArcadeHook(IPoolManager(poolManagerAddr), Currency.wrap(address(usdc)), address(0), TREASURY, ESCROW, OWNER);
     }
 
     function test_constructor_rejectsZeroTreasury() public {
         vm.expectRevert(ArcadeHook.ZeroAddress.selector);
-        new ArcadeHook(IPoolManager(POOL_MANAGER), Currency.wrap(address(usdc)), LOCKED_VAULT, address(0), ESCROW, OWNER);
+        new ArcadeHook(IPoolManager(poolManagerAddr), Currency.wrap(address(usdc)), LOCKED_VAULT, address(0), ESCROW, OWNER);
     }
 
     function test_constructor_allowsZeroTwitterEscrow() public {
         // Escrow may be zero at bootstrap; admin wires it in later.
         ArcadeHook h = new ArcadeHook(
-            IPoolManager(POOL_MANAGER), Currency.wrap(address(usdc)), LOCKED_VAULT, TREASURY, address(0), OWNER
+            IPoolManager(poolManagerAddr), Currency.wrap(address(usdc)), LOCKED_VAULT, TREASURY, address(0), OWNER
         );
         assertEq(h.twitterEscrow(), address(0), "escrow allowed zero at init");
     }
 
     function test_constructor_setsImmutables() public view {
-        assertEq(address(hook.POOL_MANAGER()), POOL_MANAGER, "POOL_MANAGER");
+        assertEq(address(hook.POOL_MANAGER()), poolManagerAddr, "POOL_MANAGER");
         assertEq(Currency.unwrap(hook.USDC()), address(usdc), "USDC");
         assertEq(hook.LOCKED_VAULT(), LOCKED_VAULT, "LOCKED_VAULT");
         assertEq(hook.TREASURY(), TREASURY, "TREASURY");
@@ -130,7 +141,7 @@ contract ArcadeHookTest is Test {
         vm.startPrank(ALICE);
         usdc.approve(address(hook), type(uint256).max);
         uint256 treasuryBefore = usdc.balanceOf(TREASURY);
-        address tokenAddr = hook.createLaunch(
+        (address tokenAddr,) = hook.createLaunch(
             "Demo", "DEMO", "ipfs://demo", 0, address(0), 0, 0, 0
         );
         vm.stopPrank();
@@ -199,7 +210,7 @@ contract ArcadeHookTest is Test {
         usdc.mint(ALICE, 100e6);
         vm.startPrank(ALICE);
         usdc.approve(address(hook), type(uint256).max);
-        address tokenAddr = hook.createLaunch(
+        (address tokenAddr,) = hook.createLaunch(
             "Demo", "DEMO", "ipfs://demo", 0, address(0), 0, 1_000, 600
         );
         vm.stopPrank();
@@ -219,7 +230,7 @@ contract ArcadeHookTest is Test {
         usdc.mint(ALICE, 100e6);
         vm.startPrank(ALICE);
         usdc.approve(address(hook), type(uint256).max);
-        address tokenAddr = hook.createLaunch(
+        (address tokenAddr,) = hook.createLaunch(
             "Demo", "DEMO", "ipfs://demo", 0, address(0), 0, 2_000, 1_000
         );
         vm.stopPrank();
@@ -308,28 +319,43 @@ contract ArcadeHookTest is Test {
         hook.afterDonate(address(0), key, 0, 0, "");
     }
 
-    function test_stubbedCallbacks_returnSelectorAndZeroDelta() public {
+    // -------------------------------------------------------------------
+    // beforeInitialize access control (Round 3)
+    // -------------------------------------------------------------------
+
+    function test_beforeInitialize_revertsOnNonHookSender() public {
         PoolKey memory key = _emptyKey();
+        vm.prank(poolManagerAddr);
+        vm.expectRevert(ArcadeHook.OnlyLaunchpad.selector);
+        // sender argument != address(this) so the check rejects.
+        hook.beforeInitialize(address(0xDEAD), key, 0);
+    }
 
-        vm.prank(POOL_MANAGER);
-        bytes4 selBeforeInit = hook.beforeInitialize(address(0), key, 0);
-        assertEq(selBeforeInit, IHooks.beforeInitialize.selector);
+    function test_beforeInitialize_revertsOnNonUsdcPair() public {
+        PoolKey memory key = PoolKey({
+            currency0: Currency.wrap(address(0x1)),
+            currency1: Currency.wrap(address(0x2)),
+            fee: 10_000,
+            tickSpacing: 200,
+            hooks: IHooks(address(hook))
+        });
+        vm.prank(poolManagerAddr);
+        vm.expectRevert(ArcadeHook.NotUsdcPair.selector);
+        hook.beforeInitialize(address(hook), key, 0);
+    }
 
-        vm.prank(POOL_MANAGER);
-        bytes4 selAfterInit = hook.afterInitialize(address(0), key, 0, 0);
-        assertEq(selAfterInit, IHooks.afterInitialize.selector);
-
-        vm.prank(POOL_MANAGER);
-        SwapParams memory p = SwapParams({zeroForOne: true, amountSpecified: -1, sqrtPriceLimitX96: 0});
-        (bytes4 selBSwap, BeforeSwapDelta delta, uint24 fee) = hook.beforeSwap(address(0), key, p, "");
-        assertEq(selBSwap, IHooks.beforeSwap.selector);
-        assertEq(BeforeSwapDelta.unwrap(delta), 0, "zero delta on stub");
-        assertEq(fee, 0, "no dynamic fee yet");
-
-        vm.prank(POOL_MANAGER);
-        (bytes4 selASwap, int128 hookDelta) = hook.afterSwap(address(0), key, p, BalanceDelta.wrap(0), "");
-        assertEq(selASwap, IHooks.afterSwap.selector);
-        assertEq(hookDelta, int128(0), "no hook delta on stub");
+    function test_beforeInitialize_revertsOnUnregisteredToken() public {
+        // Pair with USDC but the other side is not in registeredLaunches.
+        PoolKey memory key = PoolKey({
+            currency0: Currency.wrap(address(usdc) < address(0x1) ? address(usdc) : address(0x1)),
+            currency1: Currency.wrap(address(usdc) < address(0x1) ? address(0x1) : address(usdc)),
+            fee: 10_000,
+            tickSpacing: 200,
+            hooks: IHooks(address(hook))
+        });
+        vm.prank(poolManagerAddr);
+        vm.expectRevert(ArcadeHook.LaunchNotRegistered.selector);
+        hook.beforeInitialize(address(hook), key, 0);
     }
 
     // -------------------------------------------------------------------

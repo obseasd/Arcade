@@ -15,6 +15,8 @@ import {ILaunchpadSnipe} from "./interfaces/IArcadeV4Launchpad.sol";
 import {IHooks} from "v4-core/interfaces/IHooks.sol";
 import {IPoolManager} from "v4-core/interfaces/IPoolManager.sol";
 import {Hooks} from "v4-core/libraries/Hooks.sol";
+import {LPFeeLibrary} from "v4-core/libraries/LPFeeLibrary.sol";
+import {TickMath} from "v4-core/libraries/TickMath.sol";
 import {Currency} from "v4-core/types/Currency.sol";
 import {PoolId, PoolIdLibrary} from "v4-core/types/PoolId.sol";
 import {PoolKey} from "v4-core/types/PoolKey.sol";
@@ -287,10 +289,15 @@ contract ArcadeHook is IHooks, Ownable2Step, Pausable, ReentrancyGuard, ILaunchp
     // -------------------------------------------------------------------
 
     /**
-     * @notice Register a new launch and deploy its ERC20. Pulls the flat
-     *         creation fee in USDC straight to treasury. The launch is now
-     *         eligible for `initializePool` (Round 3+); the curve does NOT
-     *         start until the pool is initialised.
+     * @notice Register a new launch, deploy its ERC20, AND initialise the V4
+     *         pool atomically. The hook holds the full token supply during
+     *         curving and trades it against the bonding curve in beforeSwap.
+     *         At graduation (Round 4), the unsold remainder becomes the LP
+     *         seed for a canonical AMM position.
+     *
+     *         Pulls the flat creation fee in USDC straight to treasury before
+     *         anything else, so a token never lands on-chain unless the
+     *         caller actually paid.
      *
      * @param name             ERC20 name
      * @param symbol           ERC20 symbol
@@ -314,17 +321,20 @@ contract ArcadeHook is IHooks, Ownable2Step, Pausable, ReentrancyGuard, ILaunchp
         uint16 creator2Bps,
         uint16 snipeStartBps,
         uint32 snipeDecaySeconds
-    ) external nonReentrant whenNotPaused returns (address tokenAddr) {
+    ) external nonReentrant whenNotPaused returns (address tokenAddr, PoolId poolId) {
         if (bytes(name).length == 0 || bytes(symbol).length == 0) revert EmptyName();
         if (mode > uint8(LaunchMode.CLANKER_V3)) revert InvalidMode();
         if (creator2Bps > 10_000) revert InvalidFeeOwner();
         if (snipeStartBps > MAX_SNIPE_START_BPS) revert InvalidSnipeBps();
         if (snipeStartBps > 0 && snipeDecaySeconds == 0) revert InvalidDecaySeconds();
 
-        // Pull the creation fee first so we don't waste a token deploy on a
-        // user who hasn't approved.
+        // Pull the creation fee first. If the user is short on USDC or hasn't
+        // approved we revert before deploying a token nobody can use.
         IERC20(Currency.unwrap(USDC)).safeTransferFrom(msg.sender, TREASURY, CREATION_FEE);
 
+        // Deploy the launch token with TOTAL_SUPPLY minted to the hook. The
+        // hook holds the supply during curving and ships tokens to buyers in
+        // beforeSwap. At graduation the remainder seeds the post-curve AMM.
         ArcadeLaunchToken token = new ArcadeLaunchToken(name, symbol, ArcadeV4Curve.TOTAL_SUPPLY, address(this));
         tokenAddr = address(token);
         if (registeredLaunches[tokenAddr]) revert AlreadyLaunched();
@@ -332,9 +342,35 @@ contract ArcadeHook is IHooks, Ownable2Step, Pausable, ReentrancyGuard, ILaunchp
         registeredLaunches[tokenAddr] = true;
         allTokens.push(tokenAddr);
 
-        // Snipe config is per-token, stored under the launch token address so
-        // `currentSnipeBps(token)` works from the hook's swap path with no
-        // additional state lookups.
+        // Build the canonical PoolKey for this launch and persist EVERYTHING
+        // beforeInitialize / afterInitialize / beforeSwap will need, BEFORE
+        // calling pm.initialize. This way the lifecycle callbacks find a
+        // fully-formed state and never have to defer.
+        PoolKey memory key = _buildPoolKey(tokenAddr);
+        poolId = key.toId();
+        poolIdOf[tokenAddr] = poolId;
+
+        curveStates[poolId] = CurveState({
+            virtualUsdcReserve: uint128(ArcadeV4Curve.VIRTUAL_USDC_RESERVE),
+            realUsdcReserve: 0,
+            tokensSold: 0,
+            mode: mode,
+            status: uint8(Status.Curving),
+            creator: msg.sender,
+            creator2: creator2,
+            creator2Bps: creator2Bps
+        });
+
+        feeOwners[poolId] = FeeOwner({
+            creator: msg.sender,
+            creator2: creator2,
+            creator2Bps: creator2Bps,
+            twitterEscrow: address(0), // wired separately when escrow is enabled per-launch
+            slotIndex: 0
+        });
+
+        // Snipe config keyed by token addr so currentSnipeBps reads cheaply
+        // from anti-sniper checks in beforeSwap / afterSwap.
         if (snipeStartBps > 0) {
             snipeConfigs[tokenAddr] = SnipeConfig({
                 startBps: snipeStartBps,
@@ -344,20 +380,16 @@ contract ArcadeHook is IHooks, Ownable2Step, Pausable, ReentrancyGuard, ILaunchp
             emit SnipeConfigured(tokenAddr, snipeStartBps, snipeDecaySeconds);
         }
 
-        // FeeOwner is stored under the token addr now; we move it to the
-        // PoolId mapping in beforeInitialize once the pool is created. Doing
-        // it here means a deferred initializePool still finds the owner cfg.
-        // We use a sentinel-style storage trick: createLaunch writes to a
-        // dedicated _pendingFeeOwners mapping that beforeInitialize promotes
-        // to feeOwners[poolId]. This is implemented in Round 3 alongside
-        // beforeInitialize; for the foundation pass we just emit the event
-        // so indexers can pick the launch up immediately.
-
         emit TokenLaunched(tokenAddr, msg.sender, mode, name, symbol, metadataURI);
-        // _pendingFeeOwners + bootstrap of fee config happen in Round 3.
-        // creator2 / creator2Bps stashed via a future internal helper there.
-        // Reference args to silence unused-warning during this scaffold.
-        (creator2, creator2Bps);
+
+        // Initialise the V4 pool. msg.sender on the PoolManager call site is
+        // this hook, which beforeInitialize relies on to gate creation to the
+        // canonical createLaunch path. We pick tick 0 as the start sqrtPrice;
+        // the curve hook overrides every swap so the AMM's starting price is
+        // irrelevant during the Curving phase.
+        POOL_MANAGER.initialize(key, TickMath.getSqrtPriceAtTick(0));
+
+        emit LaunchCreated(poolId, tokenAddr, msg.sender, mode);
     }
 
     // -------------------------------------------------------------------
@@ -413,20 +445,27 @@ contract ArcadeHook is IHooks, Ownable2Step, Pausable, ReentrancyGuard, ILaunchp
     // -------------------------------------------------------------------
 
     /// @inheritdoc IHooks
-    function beforeInitialize(address, /*sender*/ PoolKey calldata, /*key*/ uint160 /*sqrtPriceX96*/ )
+    function beforeInitialize(address sender, PoolKey calldata key, uint160 /*sqrtPriceX96*/ )
         external
         view
         override
         onlyPoolManager
         returns (bytes4)
     {
-        // Round 3 fills in:
-        //   - msg.sender check (already onlyPoolManager)
-        //   - sender == address(this) check (only the hook's own init flow)
-        //   - registeredLaunches[token] == true
-        //   - exactly one currency is USDC
-        // For the foundation, accept all calls so test scaffolding can spin up
-        // a pool without an end-to-end createLaunch flow.
+        // Only the hook's own createLaunch can spawn pools. Random callers
+        // hitting pm.initialize(key, ...) with our hook address would
+        // otherwise be able to register a pool with a token that isn't ours.
+        if (sender != address(this)) revert OnlyLaunchpad();
+
+        // Exactly one currency must be USDC. This guards against future
+        // accidental registration of a non-USDC pair under our hook.
+        bool c0IsUsdc = Currency.unwrap(key.currency0) == Currency.unwrap(USDC);
+        bool c1IsUsdc = Currency.unwrap(key.currency1) == Currency.unwrap(USDC);
+        if (c0IsUsdc == c1IsUsdc) revert NotUsdcPair();
+
+        address launchToken = c0IsUsdc ? Currency.unwrap(key.currency1) : Currency.unwrap(key.currency0);
+        if (!registeredLaunches[launchToken]) revert LaunchNotRegistered();
+
         return IHooks.beforeInitialize.selector;
     }
 
@@ -436,9 +475,10 @@ contract ArcadeHook is IHooks, Ownable2Step, Pausable, ReentrancyGuard, ILaunchp
         PoolKey calldata, /*key*/
         uint160, /*sqrtPriceX96*/
         int24 /*tick*/
-    ) external override onlyPoolManager returns (bytes4) {
-        // Round 3 fills in: emit LaunchCreated, lock CurveState immutable
-        // virtualUsdcReserve = 5_000e6, set status = Curving.
+    ) external view override onlyPoolManager returns (bytes4) {
+        // State for this pool (CurveState + FeeOwner + poolIdOf) was already
+        // populated atomically in createLaunch, before the initialize call.
+        // Nothing else to do here; the selector return is the contract.
         return IHooks.afterInitialize.selector;
     }
 
@@ -492,16 +532,147 @@ contract ArcadeHook is IHooks, Ownable2Step, Pausable, ReentrancyGuard, ILaunchp
     /// @inheritdoc IHooks
     function beforeSwap(
         address, /*sender*/
-        PoolKey calldata, /*key*/
+        PoolKey calldata key,
         SwapParams calldata, /*params*/
         bytes calldata /*hookData*/
     ) external view override onlyPoolManager returns (bytes4, BeforeSwapDelta, uint24) {
-        // Round 3 fills in:
-        //   - status Curving: run curve math via ArcadeV4Curve, return delta
-        //     that neutralises canonical AMM, set dynamic fee TRADE_FEE_BPS
-        //   - status GraduationStarted: revert GraduationInProgress
-        //   - status Graduated: apply anti-sniper if window active
+        PoolId poolId = key.toId();
+        CurveState storage state = curveStates[poolId];
+
+        // GraduationStarted: every concurrent swap during graduation reverts so
+        // there is exactly one tx that observes the transition. Round 4 sets
+        // and clears this status atomically inside its own graduation path.
+        if (state.status == uint8(Status.GraduationStarted)) revert GraduationInProgress();
+
+        // Curving: the pool has no LP during the bonding curve phase, so the
+        // V4 swap path cannot work (PoolManager.take would fail trying to
+        // pull USDC from a manager with no reserves). Force traders through
+        // the direct hook.buy / hook.sell entrypoints below which use plain
+        // ERC20 transferFrom, matching the V2 production launchpad's pattern.
+        if (state.status == uint8(Status.Curving)) revert LiquidityNotPermitted();
+
+        // Graduated: swaps go through the canonical AMM plus the post-grad
+        // royalty (Round 5). For the Round 3 pass the swap falls through to
+        // canonical with no hook contribution. Anti-sniper application is
+        // wired in Round 5 alongside the royalty path.
         return (IHooks.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
+    }
+
+    // -------------------------------------------------------------------
+    // Direct curve entrypoints (used during the Curving phase)
+    //
+    // The V4 swap mechanism is incompatible with a zero-liquidity custom
+    // curve: PoolManager.take fails if the manager has no underlying balance
+    // to forward, and adding LP during curving defeats the curve's purpose
+    // (LPs would extract value from buyers). Instead, the hook exposes its
+    // own buy / sell entrypoints that move USDC and launch tokens via plain
+    // ERC20 transferFrom + transfer. This mirrors the V2 production
+    // launchpad pattern and is what the Arcade frontend already speaks.
+    //
+    // Post-graduation (Round 4+), swaps return to the V4 router path because
+    // the graduated pool has real liquidity backing the AMM math.
+    // -------------------------------------------------------------------
+
+    /**
+     * @notice Buy launch tokens on the bonding curve. Pulls USDC from the
+     *         caller via transferFrom, executes the curve math, distributes
+     *         the curve fee per mode, and transfers tokens to the caller.
+     *
+     * @param token       Launch token (must be in registeredLaunches).
+     * @param amountIn    USDC the buyer is willing to spend (6 dp).
+     * @param minTokensOut Slippage floor on the tokens received.
+     * @return tokensOut  Tokens delivered to the caller.
+     * @return actualGross USDC actually consumed (== amountIn unless the
+     *                    buy hits the graduation cap, deferred to Round 4).
+     */
+    function buy(address token, uint256 amountIn, uint256 minTokensOut)
+        external
+        nonReentrant
+        whenNotPaused
+        returns (uint256 tokensOut, uint256 actualGross)
+    {
+        if (amountIn == 0) revert ZeroAmount();
+        if (!registeredLaunches[token]) revert LaunchNotRegistered();
+
+        PoolId poolId = poolIdOf[token];
+        CurveState storage state = curveStates[poolId];
+        if (state.status == uint8(Status.GraduationStarted)) revert GraduationInProgress();
+        if (state.status == uint8(Status.Graduated)) revert LiquidityNotPermitted();
+        if (state.mode == uint8(LaunchMode.CLANKER_V3)) revert InvalidMode();
+
+        ArcadeV4Curve.BuyResult memory r =
+            ArcadeV4Curve.simulateBuy(state.tokensSold, state.realUsdcReserve, amountIn);
+
+        // Round 4: cap-path buys trigger graduation. For the Round 3 cut we
+        // revert so the UI can prompt a graduation flow once Round 4 ships.
+        if (r.refund > 0) revert GraduationInProgress();
+        if (r.tokensOut == 0) revert ZeroAmount();
+        if (r.tokensOut < minTokensOut) revert ZeroAmount(); // slippage guard, reuses ZeroAmount
+
+        // Pull the gross USDC from the buyer into the hook.
+        IERC20(Currency.unwrap(USDC)).safeTransferFrom(msg.sender, address(this), r.actualGross);
+
+        // Distribute the curve fee out of the hook's accumulating balance.
+        _distributeCurveFee(state.mode, r.fee, state.creator, state.creator2, state.creator2Bps);
+
+        // Ship launch tokens to the buyer from the hook's balance.
+        IERC20(token).safeTransfer(msg.sender, r.tokensOut);
+
+        // State update last (CEI).
+        state.tokensSold += uint128(r.tokensOut);
+        state.realUsdcReserve += uint128(r.actualGross - r.fee);
+
+        emit CurveBuy(poolId, msg.sender, r.actualGross, r.tokensOut);
+        return (r.tokensOut, r.actualGross);
+    }
+
+    /**
+     * @notice Sell launch tokens back into the bonding curve. Pulls tokens
+     *         from the caller via transferFrom, executes the curve math,
+     *         distributes the curve fee per mode, and pays USDC to the
+     *         caller. Dust sells that round to zero output revert with
+     *         ZeroAmount rather than silently no-op'ing so the UI surfaces a
+     *         clear "too small to sell" message.
+     *
+     * @param token       Launch token (must be in registeredLaunches).
+     * @param tokensIn    Tokens the seller is sending in (18 dp).
+     * @param minUsdcOut  Slippage floor on the USDC received.
+     * @return usdcOut    USDC delivered to the caller (after curve fee).
+     */
+    function sell(address token, uint256 tokensIn, uint256 minUsdcOut)
+        external
+        nonReentrant
+        whenNotPaused
+        returns (uint256 usdcOut)
+    {
+        if (tokensIn == 0) revert ZeroAmount();
+        if (!registeredLaunches[token]) revert LaunchNotRegistered();
+
+        PoolId poolId = poolIdOf[token];
+        CurveState storage state = curveStates[poolId];
+        if (state.status == uint8(Status.GraduationStarted)) revert GraduationInProgress();
+        if (state.status == uint8(Status.Graduated)) revert LiquidityNotPermitted();
+        if (state.mode == uint8(LaunchMode.CLANKER_V3)) revert InvalidMode();
+
+        ArcadeV4Curve.SellResult memory r =
+            ArcadeV4Curve.simulateSell(state.tokensSold, state.realUsdcReserve, tokensIn);
+        if (r.usdcOut == 0) revert ZeroAmount();
+        if (r.usdcOut < minUsdcOut) revert ZeroAmount();
+
+        IERC20(token).safeTransferFrom(msg.sender, address(this), tokensIn);
+
+        // Distribute the curve fee out of the hook's accumulated USDC, then
+        // pay the net to the seller. The fee comes out FIRST so the seller's
+        // payout never includes USDC that's about to be re-routed to creator
+        // or treasury.
+        _distributeCurveFee(state.mode, r.fee, state.creator, state.creator2, state.creator2Bps);
+        IERC20(Currency.unwrap(USDC)).safeTransfer(msg.sender, r.usdcOut);
+
+        state.tokensSold -= uint128(tokensIn);
+        state.realUsdcReserve -= uint128(r.grossOut);
+
+        emit CurveSell(poolId, msg.sender, tokensIn, r.usdcOut);
+        return r.usdcOut;
     }
 
     /// @inheritdoc IHooks
@@ -511,11 +682,11 @@ contract ArcadeHook is IHooks, Ownable2Step, Pausable, ReentrancyGuard, ILaunchp
         SwapParams calldata, /*params*/
         BalanceDelta, /*delta*/
         bytes calldata /*hookData*/
-    ) external override onlyPoolManager returns (bytes4, int128) {
-        // Round 5 fills in:
-        //   - status Curving: no-op (fee taken inline in beforeSwap)
-        //   - status Graduated: split POST_GRAD_ROYALTY_BPS per mode,
-        //     try escrow.creditSlot wrapped in try/catch, else direct transfer
+    ) external view override onlyPoolManager returns (bytes4, int128) {
+        // Curving: curve fee was already taken inline in beforeSwap, so
+        // afterSwap has nothing to do.
+        // Graduated: Round 5 fills in the post-grad royalty + anti-sniper
+        // skim path here.
         return (IHooks.afterSwap.selector, int128(0));
     }
 
@@ -571,4 +742,49 @@ contract ArcadeHook is IHooks, Ownable2Step, Pausable, ReentrancyGuard, ILaunchp
     function getFeeOwner(PoolId poolId) external view returns (FeeOwner memory) {
         return feeOwners[poolId];
     }
+
+    // -------------------------------------------------------------------
+    // Internal helpers
+    // -------------------------------------------------------------------
+
+    /// @dev Canonical PoolKey for a launch. Sorts the currencies by address
+    ///      so currency0 < currency1 (v4 invariant), then sets the hook to
+    ///      this contract. POOL_FEE / TICK_SPACING are constants because
+    ///      every Arcade pool uses the same 1% / 200 layout (parity with the
+    ///      production V3 high-fee tier).
+    function _buildPoolKey(address launchToken) internal view returns (PoolKey memory key) {
+        address usdcAddr = Currency.unwrap(USDC);
+        (Currency c0, Currency c1) = usdcAddr < launchToken
+            ? (USDC, Currency.wrap(launchToken))
+            : (Currency.wrap(launchToken), USDC);
+        key = PoolKey({currency0: c0, currency1: c1, fee: 10_000, tickSpacing: 200, hooks: IHooks(address(this))});
+    }
+
+    /// @dev Mode-driven curve fee split. PUMP = 50/50, CLANKER = 70/30,
+    ///      CLANKER_V3 = n/a (no curve, swap reverts earlier).
+    ///      Transfers happen synchronously in USDC out of the hook's own
+    ///      balance, NOT via pm.take, because curve fees are bookkept in the
+    ///      hook's accumulating realUsdcReserve balance.
+    function _distributeCurveFee(uint8 mode, uint256 fee, address creator, address creator2, uint16 creator2Bps)
+        internal
+    {
+        if (fee == 0) return;
+        IERC20 usdc = IERC20(Currency.unwrap(USDC));
+
+        uint256 platformBps = mode == uint8(LaunchMode.CLANKER) ? 7_000 : 5_000;
+        uint256 platformCut = (fee * platformBps) / 10_000;
+        uint256 creatorCut = fee - platformCut;
+
+        if (creator2 != address(0) && creator2Bps > 0 && mode == uint8(LaunchMode.CLANKER)) {
+            uint256 c2Cut = (creatorCut * creator2Bps) / 10_000;
+            if (c2Cut > 0) {
+                usdc.safeTransfer(creator2, c2Cut);
+                creatorCut -= c2Cut;
+            }
+        }
+
+        if (platformCut > 0) usdc.safeTransfer(TREASURY, platformCut);
+        if (creatorCut > 0) usdc.safeTransfer(creator, creatorCut);
+    }
+
 }
