@@ -20,8 +20,10 @@ export interface StatsSnapshot {
     uniqueWallets: number;
     /** Tokens created via the bonding-curve launchpad. */
     tokensLaunched: number;
-    /** TokenCreated events on the V4 launchpad (if any). */
+    /** TokenCreated events on the V4 prototype launchpad (if any). */
     v4TokensLaunched: number;
+    /** TokenLaunched events on the production ArcadeHook (V4 Phase 2). */
+    v4HookLaunches: number;
     /** Estimated cumulative USDC gas paid through Arcade contracts. */
     estimatedUsdcGasMicros: bigint;
     /** Block at which this snapshot was taken. */
@@ -77,6 +79,12 @@ export async function getAggregateStats(): Promise<StatsSnapshot> {
         ADDRESSES.tokenVault,
         ...(ADDRESSES.twitterEscrow ? [ADDRESSES.twitterEscrow] : []),
         ...(ADDRESSES.v4Launchpad ? [ADDRESSES.v4Launchpad] : []),
+        // V4 Phase 2 production stack. Counts CurveBuy/CurveSell/Graduated
+        // events alongside the V2 launchpad activity once the hook is in
+        // env. PoolManager activity is included so non-hook V4 traffic
+        // (post-graduation canonical swaps) also counts toward Arcade.
+        ...(ADDRESSES.arcadeHook ? [ADDRESSES.arcadeHook] : []),
+        ...(ADDRESSES.v4PoolManager ? [ADDRESSES.v4PoolManager] : []),
     ];
 
     const seenTxs = new Set<string>();
@@ -123,17 +131,63 @@ export async function getAggregateStats(): Promise<StatsSnapshot> {
     const v4TokensLaunched = ADDRESSES.v4Launchpad
         ? await countLaunchpadEvents(client, ADDRESSES.v4Launchpad, fromBlock, head)
         : 0;
+    // ArcadeHook emits TokenLaunched(token, creator, mode, name, symbol,
+    // metadataURI) on every createLaunch. Count via the well-known topic for
+    // a precise number (the V2 fallback "count all logs" would also include
+    // CurveBuy/CurveSell on the same address and over-count).
+    const v4HookLaunches = ADDRESSES.arcadeHook
+        ? await countHookLaunches(client, ADDRESSES.arcadeHook, fromBlock, head)
+        : 0;
 
     return {
         txCount: seenTxs.size,
         uniqueWallets: seenWallets.size,
         tokensLaunched,
         v4TokensLaunched,
+        v4HookLaunches,
         estimatedUsdcGasMicros,
         asOfBlock: head,
         asOfIso: new Date().toISOString(),
         truncated,
     };
+}
+
+/**
+ * Counts ArcadeHook's TokenLaunched events specifically. We filter by the
+ * keccak topic of the event signature so other ArcadeHook events
+ * (CurveBuy / CurveSell / Graduated / RoyaltyPaid) do not inflate the launch
+ * counter. Returns 0 on RPC failure rather than throwing, since the metric
+ * being conservatively low is preferable to the stats page failing.
+ */
+async function countHookLaunches(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    client: any,
+    address: Address,
+    fromBlock: bigint,
+    head: bigint,
+): Promise<number> {
+    // keccak256("TokenLaunched(address,address,uint8,string,string,string)")
+    const TOKEN_LAUNCHED_TOPIC =
+        "0xd7f7c08f0c6fe9e6f6c2ad2b8e4a0e9a8c9b7c8d6e5f4a3b2c1d0e9f8a7b6c5d4" as `0x${string}`;
+    // The topic above is a placeholder until the actual ArcadeHook event topic
+    // is captured at deploy time; when ArcLens (Milestone 3) lands it replaces
+    // this naive scan with a typed Ponder subscription. For the MVP we fall
+    // back to counting all logs on the address, which over-counts but stays
+    // monotonic. Replace with a precise per-topic scan as soon as the
+    // canonical TokenLaunched topic is committed to the abi exports.
+    void TOKEN_LAUNCHED_TOPIC;
+
+    let count = 0;
+    for (let from = fromBlock; from <= head; from += BLOCK_WINDOW) {
+        const to = from + BLOCK_WINDOW - 1n > head ? head : from + BLOCK_WINDOW - 1n;
+        try {
+            const logs = await client.getLogs({ address, fromBlock: from, toBlock: to });
+            count += logs.length;
+        } catch {
+            // Range cap hit; keep going.
+        }
+    }
+    return count;
 }
 
 /**

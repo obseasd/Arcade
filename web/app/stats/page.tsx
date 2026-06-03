@@ -75,9 +75,16 @@ export default async function StatsPage() {
                 <MetricCard
                     icon={<Rocket className="h-5 w-5" />}
                     label="Tokens launched"
-                    value={(snap.tokensLaunched + snap.v4TokensLaunched).toLocaleString(
-                        "en-US",
-                    )}
+                    value={(
+                        snap.tokensLaunched +
+                        snap.v4TokensLaunched +
+                        snap.v4HookLaunches
+                    ).toLocaleString("en-US")}
+                    note={
+                        snap.v4HookLaunches > 0
+                            ? `Includes ${snap.v4HookLaunches.toLocaleString("en-US")} on the V4 ArcadeHook.`
+                            : undefined
+                    }
                 />
                 <MetricCard
                     icon={<Coins className="h-5 w-5" />}
