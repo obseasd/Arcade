@@ -395,10 +395,6 @@ export default function IncentivizePage() {
                             <h2 className="text-base font-semibold">
                                 Exclude any addresses from receiving rewards?
                             </h2>
-                            <p className="mt-1 text-xs text-arc-text-muted">
-                                Useful to skip team wallets, treasuries, or known LPs you do not
-                                want to reward.
-                            </p>
                         </div>
                         <div className="ml-3 flex shrink-0 items-center gap-1 rounded-xl border border-arc-border bg-white/[0.015] p-1">
                             <button
@@ -558,23 +554,28 @@ function TokenPickerButton({
     onClick: () => void;
 }) {
     return (
-        <button
-            onClick={onClick}
-            className="flex items-center justify-between rounded-2xl border border-arc-border bg-white/[0.015] px-4 py-4 text-left transition-colors hover:border-arc-cta-hover/40"
-        >
+        <div className="flex items-center justify-between rounded-2xl border border-arc-border bg-white/[0.015] px-4 py-4">
             <span className="text-sm text-arc-text-muted">{label}</span>
-            <span className="flex items-center gap-2 text-sm font-medium">
+            {/* Pill button styled exactly like the SwapCard token chip so the
+                picker UX is consistent between the swap and incentivize forms. */}
+            <button
+                onClick={onClick}
+                className="group flex items-center gap-2 rounded-xl bg-arc-surface-2 px-3 py-2 text-base font-semibold transition-colors hover:bg-arc-surface-3"
+            >
                 {token ? (
                     <>
-                        <AutoTokenIcon address={token.address} symbol={token.symbol} size={20} />
+                        <AutoTokenIcon address={token.address} symbol={token.symbol} size={24} />
                         <span>{token.symbol}</span>
+                        <ChevronDown className="h-4 w-4 text-arc-text-muted transition-transform group-hover:text-arc-text" />
                     </>
                 ) : (
-                    <span className="text-arc-text-muted">Select a token</span>
+                    <>
+                        <span>Select a token</span>
+                        <ChevronDown className="h-4 w-4 text-arc-text-muted" />
+                    </>
                 )}
-                <ChevronDown className="h-4 w-4 text-arc-text-muted" />
-            </span>
-        </button>
+            </button>
+        </div>
     );
 }
 
