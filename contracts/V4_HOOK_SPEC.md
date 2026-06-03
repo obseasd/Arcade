@@ -98,11 +98,17 @@ Address bit pattern (the CREATE2 salt mines for these exact bits):
 | 1   | AFTER_ADD_LIQUIDITY_RETURNS_DELTA   | YES  | Used for V4-native fee skim during grad seed  |
 | 0   | AFTER_REMOVE_LIQUIDITY_RETURNS_DELTA| NO   | Not needed                                    |
 
-Bitmap value: `0b11_1110_1110_1100` = `0x3EEC` = decimal 16108.
+Bitmap value: `0b11_1110_1100_1110` = `0x3ECE` = decimal 16078.
+
+(An earlier draft of this spec wrote `0x3EEC` which is a typo. The flag
+table above is the source of truth, and the correct hex encoding of
+bits {1,2,3,6,7,9,10,11,12,13} is `0x3ECE`. Bit 1 is set
+(AFTER_ADD_LIQUIDITY_RETURNS_DELTA, used for graduation-seed fee skim);
+bit 5 is NOT set (BEFORE_DONATE, intentionally disabled).)
 
 The mined address MUST satisfy:
 ```
-uint160(address(arcadeHook)) & 0x3FFF == 0x3EEC
+uint160(address(arcadeHook)) & 0x3FFF == 0x3ECE
 ```
 
 Mining strategy: CREATE2 salt search until the lowest 14 bits match the
