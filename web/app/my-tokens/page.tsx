@@ -27,8 +27,8 @@ import {
     XAxis,
     YAxis,
 } from "recharts";
-import { Address, formatUnits } from "viem";
-import { useAccount } from "wagmi";
+import { Address, erc20Abi, formatUnits } from "viem";
+import { useAccount, useReadContracts } from "wagmi";
 import { TokenCard } from "@/components/launchpad/TokenCard";
 import { CreatorEarningsCard } from "@/components/pool/CreatorEarningsCard";
 import { CreatorFeesPanel } from "@/components/pool/CreatorFeesPanel";
@@ -37,7 +37,9 @@ import { VaultClaimPanel } from "@/components/pool/VaultClaimPanel";
 import { TokenIcon } from "@/components/ui/TokenIcon";
 import { ReceiveModal } from "@/components/wallet/ReceiveModal";
 import { WalletIcon } from "@/components/wallet/WalletIcon";
-import { LAUNCHPAD_TOKEN_DECIMALS, USDC_DECIMALS } from "@/lib/constants";
+import { ARCADE_HOOK_STATUS } from "@/lib/abis/arcadeHook";
+import { LAUNCHPAD_TOKEN_DECIMALS, USDC_DECIMALS, V4_HOOK_ENABLED } from "@/lib/constants";
+import { useArcadeHookTokens, type ArcadeHookTokenInfo } from "@/lib/hooks/useArcadeHookTokens";
 import { useLaunchpadTokens } from "@/lib/hooks/useLaunchpadTokens";
 import { useMyHoldings, type HoldingInfo } from "@/lib/hooks/useMyHoldings";
 import { useTokenImage } from "@/lib/hooks/useTokenImage";
@@ -48,6 +50,15 @@ import { pushToast } from "@/lib/toast";
 import { cn, formatAddress, formatToken, formatUSDC } from "@/lib/utils";
 
 const CURVE_SUPPLY = 800_000_000n * 10n ** 18n;
+const V4_GRAD_USDC = 20_000n * 10n ** 6n;
+
+/** V4 hook holding: token info + raw balance (18 dp). No USD value yet
+ *  because the curve / pool price is not exposed as a single read; deferred
+ *  to the ArcLens indexer per the V4 hook frontend rollout plan. */
+interface ArcadeHookHolding {
+    token: ArcadeHookTokenInfo;
+    balance: bigint;
+}
 
 type TabKey = "overview" | "tokens" | "creator" | "activity";
 
@@ -62,6 +73,7 @@ export default function MyTokensPage() {
     const { address: account, connector } = useAccount();
     const { tokens, isLoading } = useLaunchpadTokens();
     const { holdings, isLoading: holdingsLoading } = useMyHoldings();
+    const { tokens: v4Tokens } = useArcadeHookTokens();
     const [tab, setTab] = useState<TabKey>("overview");
 
     // connector.icon is the connector-supplied logo (data URI for Backpack,
@@ -75,6 +87,47 @@ export default function MyTokensPage() {
         const acc = account.toLowerCase();
         return tokens.filter((t) => t.creator.toLowerCase() === acc);
     }, [tokens, account]);
+
+    // V4 launches created by this wallet. Filters useArcadeHookTokens by
+    // CurveState.creator since ArcadeHook records the launcher at createLaunch
+    // time and never mutates it.
+    const myV4Launches = useMemo(() => {
+        if (!account || !V4_HOOK_ENABLED) return [];
+        const acc = account.toLowerCase();
+        return v4Tokens.filter((t) => t.creator.toLowerCase() === acc);
+    }, [v4Tokens, account]);
+
+    // V4 holdings. Batch-read balanceOf(account) for every registered V4
+    // token; filter out the zeros so we only show what the user actually
+    // owns. Cheap on testnet (<= a few dozen V4 launches); when this gets
+    // expensive the ArcLens Ponder indexer can replace the multicall.
+    const v4BalanceCalls = useReadContracts({
+        contracts: account
+            ? v4Tokens.map((t) => ({
+                  address: t.address,
+                  abi: erc20Abi,
+                  functionName: "balanceOf" as const,
+                  args: [account] as const,
+              }))
+            : [],
+        query: { enabled: !!account && V4_HOOK_ENABLED && v4Tokens.length > 0 },
+    });
+    const myV4Holdings: ArcadeHookHolding[] = useMemo(() => {
+        if (!account || !v4BalanceCalls.data) return [];
+        const out: ArcadeHookHolding[] = [];
+        for (let i = 0; i < v4Tokens.length; i++) {
+            const r = v4BalanceCalls.data[i];
+            if (r?.status !== "success") continue;
+            const balance = r.result as bigint;
+            if (balance === 0n) continue;
+            out.push({ token: v4Tokens[i], balance });
+        }
+        // Sort by raw balance desc as a first approximation. A USD value
+        // estimate would require running the curve math per holding; defer to
+        // the indexer once it exposes a per-token price.
+        out.sort((a, b) => (b.balance > a.balance ? 1 : -1));
+        return out;
+    }, [account, v4Tokens, v4BalanceCalls.data]);
 
     const totalHoldingsUsd = useMemo(() => {
         let total = 0n;
@@ -119,9 +172,10 @@ export default function MyTokensPage() {
                     holdings={holdings}
                     totalHoldingsUsd={totalHoldingsUsd}
                     loading={holdingsLoading}
+                    v4Holdings={myV4Holdings}
                 />
             ) : tab === "creator" ? (
-                <CreatorTab mine={mine} loading={isLoading} />
+                <CreatorTab mine={mine} v4Mine={myV4Launches} loading={isLoading} />
             ) : (
                 <ActivityTab account={account} />
             )}
@@ -543,17 +597,20 @@ function TokensTab({
     holdings,
     totalHoldingsUsd,
     loading,
+    v4Holdings,
 }: {
     holdings: HoldingInfo[];
     totalHoldingsUsd: bigint;
     loading: boolean;
+    v4Holdings: ArcadeHookHolding[];
 }) {
-    if (loading && holdings.length === 0) {
+    const hasAnything = holdings.length > 0 || v4Holdings.length > 0;
+    if (loading && !hasAnything) {
         return (
             <div className="arc-card p-8 text-center text-sm text-arc-text-muted">Loading…</div>
         );
     }
-    if (holdings.length === 0) {
+    if (!hasAnything) {
         return (
             <div className="arc-card p-6 text-center sm:p-12">
                 <Wallet className="mx-auto mb-3 h-8 w-8 text-arc-text-faint" />
@@ -572,20 +629,160 @@ function TokensTab({
         );
     }
     return (
-        <div className="space-y-3">
-            <div className="text-xs text-arc-text-muted">
-                {holdings.length} token{holdings.length === 1 ? "" : "s"}
-                {totalHoldingsUsd > 0n && (
-                    <>
-                        {" · approx "}
-                        <span className="text-arc-text">
-                            ${(Number(totalHoldingsUsd) / 1e6).toLocaleString(undefined, { maximumFractionDigits: 2 })}
-                        </span>
-                    </>
-                )}
-            </div>
-            <TokensTablePreview holdings={holdings} />
+        <div className="space-y-6">
+            {holdings.length > 0 && (
+                <div className="space-y-3">
+                    <div className="text-xs text-arc-text-muted">
+                        {holdings.length} V2/V3 token{holdings.length === 1 ? "" : "s"}
+                        {totalHoldingsUsd > 0n && (
+                            <>
+                                {" · approx "}
+                                <span className="text-arc-text">
+                                    ${(Number(totalHoldingsUsd) / 1e6).toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                                </span>
+                            </>
+                        )}
+                    </div>
+                    <TokensTablePreview holdings={holdings} />
+                </div>
+            )}
+            {v4Holdings.length > 0 && (
+                <div className="space-y-3">
+                    <div className="text-xs text-arc-text-muted">
+                        {v4Holdings.length} ArcadeHook (V4) token{v4Holdings.length === 1 ? "" : "s"}
+                    </div>
+                    <ArcadeHookHoldingsList items={v4Holdings} />
+                </div>
+            )}
         </div>
+    );
+}
+
+function ArcadeHookCreatorCard({ token }: { token: ArcadeHookTokenInfo }) {
+    const { image } = useTokenImage(token.address);
+    const isGraduated = token.status === ARCADE_HOOK_STATUS.GRADUATED;
+    const raisedPct = useMemo(() => {
+        if (V4_GRAD_USDC === 0n) return 0;
+        const bps = (token.realUsdcReserve * 10_000n) / V4_GRAD_USDC;
+        return Math.min(100, Number(bps) / 100);
+    }, [token.realUsdcReserve]);
+
+    return (
+        <Link
+            href={`/launchpad/v4hook/${token.address}`}
+            className="arc-card flex flex-col gap-3 p-4 transition-colors hover:border-arc-cta-hover/40"
+        >
+            <div className="flex items-start gap-3">
+                <TokenIcon symbol={token.symbol ?? "?"} image={image} size={40} />
+                <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-semibold">
+                        {token.name ?? "Unnamed"}{" "}
+                        <span className="text-arc-text-muted">{token.symbol ?? ""}</span>
+                    </div>
+                    <div className="mt-0.5 truncate text-[10px] text-arc-text-faint">
+                        {formatAddress(token.address)}
+                    </div>
+                </div>
+                <span
+                    className={cn(
+                        "shrink-0 rounded-md border px-1.5 py-0.5 text-[9px] uppercase tracking-wider",
+                        isGraduated
+                            ? "border-arc-success/40 bg-arc-success/10 text-arc-success"
+                            : "border-arc-cta-hover/40 bg-arc-cta-hover/10 text-arc-cta-hover",
+                    )}
+                >
+                    {isGraduated ? "Graduated" : "Curving"}
+                </span>
+            </div>
+            <div>
+                <div className="mb-1 flex justify-between text-[10px] text-arc-text-faint">
+                    <span>{raisedPct.toFixed(1)}% to graduation</span>
+                    <span>
+                        {(Number(token.realUsdcReserve) / 1e6).toLocaleString(undefined, {
+                            maximumFractionDigits: 0,
+                        })}
+                        {" / 20k USDC"}
+                    </span>
+                </div>
+                <div className="relative h-1.5 overflow-hidden rounded-full bg-arc-bg-elevated">
+                    <div
+                        className={cn(
+                            "absolute left-0 top-0 h-full transition-all",
+                            isGraduated
+                                ? "bg-arc-success"
+                                : "bg-gradient-to-r from-arc-cta to-arc-cta-hover",
+                        )}
+                        style={{ width: `${isGraduated ? 100 : raisedPct}%` }}
+                    />
+                </div>
+            </div>
+        </Link>
+    );
+}
+
+function ArcadeHookHoldingsList({ items }: { items: ArcadeHookHolding[] }) {
+    return (
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {items.map((h) => (
+                <ArcadeHookHoldingCard key={h.token.address} holding={h} />
+            ))}
+        </div>
+    );
+}
+
+function ArcadeHookHoldingCard({ holding }: { holding: ArcadeHookHolding }) {
+    const { image } = useTokenImage(holding.token.address);
+    const isGraduated = holding.token.status === ARCADE_HOOK_STATUS.GRADUATED;
+    const raisedPct = useMemo(() => {
+        if (V4_GRAD_USDC === 0n) return 0;
+        const bps = (holding.token.realUsdcReserve * 10_000n) / V4_GRAD_USDC;
+        return Math.min(100, Number(bps) / 100);
+    }, [holding.token.realUsdcReserve]);
+
+    return (
+        <Link
+            href={`/launchpad/v4hook/${holding.token.address}`}
+            className="arc-card flex flex-col gap-3 p-4 transition-colors hover:border-arc-cta-hover/40"
+        >
+            <div className="flex items-start gap-3">
+                <TokenIcon symbol={holding.token.symbol ?? "?"} image={image} size={40} />
+                <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-semibold">
+                        {holding.token.name ?? "Unnamed"}{" "}
+                        <span className="text-arc-text-muted">{holding.token.symbol ?? ""}</span>
+                    </div>
+                    <div className="mt-0.5 text-[10px] text-arc-text-faint">
+                        {formatToken(holding.balance, LAUNCHPAD_TOKEN_DECIMALS, 2)} held
+                    </div>
+                </div>
+                <span
+                    className={cn(
+                        "shrink-0 rounded-md border px-1.5 py-0.5 text-[9px] uppercase tracking-wider",
+                        isGraduated
+                            ? "border-arc-success/40 bg-arc-success/10 text-arc-success"
+                            : "border-arc-cta-hover/40 bg-arc-cta-hover/10 text-arc-cta-hover",
+                    )}
+                >
+                    {isGraduated ? "Graduated" : "Curving"}
+                </span>
+            </div>
+            <div>
+                <div className="mb-1 flex justify-between text-[10px] text-arc-text-faint">
+                    <span>{raisedPct.toFixed(1)}% to graduation</span>
+                </div>
+                <div className="relative h-1.5 overflow-hidden rounded-full bg-arc-bg-elevated">
+                    <div
+                        className={cn(
+                            "absolute left-0 top-0 h-full transition-all",
+                            isGraduated
+                                ? "bg-arc-success"
+                                : "bg-gradient-to-r from-arc-cta to-arc-cta-hover",
+                        )}
+                        style={{ width: `${isGraduated ? 100 : raisedPct}%` }}
+                    />
+                </div>
+            </div>
+        </Link>
     );
 }
 
@@ -684,11 +881,14 @@ function TokenRow({ holding }: { holding: HoldingInfo }) {
 
 function CreatorTab({
     mine,
+    v4Mine,
     loading,
 }: {
     mine: ReturnType<typeof useLaunchpadTokens>["tokens"];
+    v4Mine: ArcadeHookTokenInfo[];
     loading: boolean;
 }) {
+    const hasAnyLaunch = mine.length > 0 || v4Mine.length > 0;
     return (
         <div className="space-y-8">
             <CreatorEarningsCard />
@@ -701,9 +901,9 @@ function CreatorTab({
                         Every token this wallet has created on the launchpad.
                     </p>
                 </div>
-                {loading ? (
+                {loading && !hasAnyLaunch ? (
                     <div className="arc-card p-8 text-center text-sm text-arc-text-muted">Loading…</div>
-                ) : mine.length === 0 ? (
+                ) : !hasAnyLaunch ? (
                     <div className="arc-card p-6 text-center sm:p-12">
                         <Rocket className="mx-auto mb-3 h-8 w-8 text-arc-text-faint" />
                         <p className="text-sm text-arc-text-muted">
@@ -717,11 +917,31 @@ function CreatorTab({
                         </Link>
                     </div>
                 ) : (
-                    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                        {mine.map((token) => (
-                            <TokenCard key={token.address} token={token} curveSupply={CURVE_SUPPLY} />
-                        ))}
-                    </div>
+                    <>
+                        {mine.length > 0 && (
+                            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                                {mine.map((token) => (
+                                    <TokenCard
+                                        key={token.address}
+                                        token={token}
+                                        curveSupply={CURVE_SUPPLY}
+                                    />
+                                ))}
+                            </div>
+                        )}
+                        {v4Mine.length > 0 && (
+                            <div className={mine.length > 0 ? "mt-6" : ""}>
+                                <div className="mb-3 text-xs uppercase tracking-wider text-arc-text-faint">
+                                    On the V4 hook ({v4Mine.length})
+                                </div>
+                                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                                    {v4Mine.map((t) => (
+                                        <ArcadeHookCreatorCard key={t.address} token={t} />
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+                    </>
                 )}
             </section>
 
