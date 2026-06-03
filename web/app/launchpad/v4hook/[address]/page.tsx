@@ -1,9 +1,9 @@
 "use client";
 
-import { ArrowLeft, ExternalLink, Lock, ShieldCheck, Sparkles } from "lucide-react";
+import { ArrowLeft, ExternalLink, Lock, ShieldCheck, ShieldOff, Sparkles, Clock } from "lucide-react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Address, erc20Abi, formatUnits, isAddress, parseUnits, zeroAddress } from "viem";
 import { useAccount, useReadContract, useWriteContract } from "wagmi";
 
@@ -92,6 +92,42 @@ function Inner() {
     const { metadata } = useTokenMetadata(valid ? token : undefined);
     const { image } = useTokenImage(valid ? token : undefined);
 
+    // Anti-sniper config: per-token (startBps, decaySeconds, launchedAt).
+    // Drives both the header pill and the buy-card warning during the
+    // decay window post-graduation.
+    const snipeQ = useReadContract({
+        address: ADDRESSES.arcadeHook,
+        abi: ARCADE_HOOK_ABI,
+        functionName: "snipeConfigs",
+        args: valid ? [token] : undefined,
+        query: { enabled: valid && V4_HOOK_ENABLED, refetchInterval: 15_000 },
+    });
+    const snipeRaw = snipeQ.data as readonly [number, number, bigint] | undefined;
+    const snipeStartBps = Number(snipeRaw?.[0] ?? 0);
+    const snipeDecaySeconds = Number(snipeRaw?.[1] ?? 0);
+    const snipeLaunchedAt = Number(snipeRaw?.[2] ?? 0n);
+
+    // Live tick so the countdown updates every second without manual state
+    // mutation on every render.
+    const [nowSec, setNowSec] = useState(() => Math.floor(Date.now() / 1000));
+    useEffect(() => {
+        const t = setInterval(() => setNowSec(Math.floor(Date.now() / 1000)), 1_000);
+        return () => clearInterval(t);
+    }, []);
+
+    const snipe = useMemo(() => {
+        if (snipeStartBps === 0 || snipeDecaySeconds === 0 || snipeLaunchedAt === 0) {
+            return { active: false, remainingSec: 0, currentBps: 0 };
+        }
+        const elapsed = nowSec - snipeLaunchedAt;
+        if (elapsed >= snipeDecaySeconds) {
+            return { active: false, remainingSec: 0, currentBps: 0 };
+        }
+        const remainingSec = snipeDecaySeconds - Math.max(0, elapsed);
+        const currentBps = Math.round((snipeStartBps * remainingSec) / snipeDecaySeconds);
+        return { active: true, remainingSec, currentBps };
+    }, [snipeStartBps, snipeDecaySeconds, snipeLaunchedAt, nowSec]);
+
     const name = (nameQ.data as string | undefined) ?? "Unnamed";
     const symbol = (symbolQ.data as string | undefined) ?? "?";
 
@@ -129,6 +165,13 @@ function Inner() {
                         )}
                         {status !== undefined && (
                             <StatusPill status={status} />
+                        )}
+                        {snipeStartBps > 0 && (
+                            <SnipePill
+                                active={snipe.active}
+                                currentBps={snipe.currentBps}
+                                remainingSec={snipe.remainingSec}
+                            />
                         )}
                     </div>
                     <div className="mt-1 flex items-center gap-2 text-xs text-arc-text-faint">
@@ -169,6 +212,44 @@ function Inner() {
 // -------------------------------------------------------------------
 // Status pill
 // -------------------------------------------------------------------
+
+function SnipePill({
+    active,
+    currentBps,
+    remainingSec,
+}: {
+    active: boolean;
+    currentBps: number;
+    remainingSec: number;
+}) {
+    if (!active) {
+        return (
+            <span className="inline-flex items-center gap-1 rounded-md border border-arc-text-faint/30 bg-arc-text-faint/10 px-2 py-0.5 text-[10px] uppercase tracking-wider text-arc-text-faint">
+                <ShieldOff className="h-3 w-3" />
+                Snipe expired
+            </span>
+        );
+    }
+    return (
+        <span className="inline-flex items-center gap-1 rounded-md border border-arc-warn/40 bg-arc-warn/10 px-2 py-0.5 text-[10px] uppercase tracking-wider text-arc-warn">
+            <ShieldCheck className="h-3 w-3" />
+            Snipe {(currentBps / 100).toFixed(2)}%
+            <Clock className="ml-0.5 h-3 w-3" />
+            {formatRemaining(remainingSec)}
+        </span>
+    );
+}
+
+function formatRemaining(seconds: number): string {
+    if (seconds <= 0) return "0s";
+    if (seconds < 60) return `${seconds}s`;
+    const minutes = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    if (minutes < 60) return s > 0 ? `${minutes}m ${s}s` : `${minutes}m`;
+    const hours = Math.floor(minutes / 60);
+    const m = minutes % 60;
+    return m > 0 ? `${hours}h ${m}m` : `${hours}h`;
+}
 
 function StatusPill({ status }: { status: number }) {
     if (status === ARCADE_HOOK_STATUS.CURVING) {

@@ -8,6 +8,8 @@ import { ARCADE_HOOK_STATUS } from "@/lib/abis/arcadeHook";
 import { useLaunchpadTokens, LaunchpadTokenInfo } from "@/lib/hooks/useLaunchpadTokens";
 import { useV4LaunchpadTokens } from "@/lib/hooks/useV4LaunchpadTokens";
 import { useArcadeHookTokens, type ArcadeHookTokenInfo } from "@/lib/hooks/useArcadeHookTokens";
+import { useTokenImage } from "@/lib/hooks/useTokenImage";
+import { TokenIcon } from "@/components/ui/TokenIcon";
 import { parseInlineMetadata } from "@/lib/metadata";
 import { TokenCard } from "@/components/launchpad/TokenCard";
 import { V4LaunchCard } from "@/components/launchpad/V4LaunchCard";
@@ -264,6 +266,8 @@ const ARC_HOOK_MODE_LABEL: Record<number, string> = {
 };
 
 function ArcadeHookPreviewCard({ token }: { token: ArcadeHookTokenInfo }) {
+  const { image } = useTokenImage(token.address);
+
   const raisedPct = useMemo(() => {
     if (ARC_HOOK_GRAD_USDC === 0n) return 0;
     const bps = (token.realUsdcReserve * 10_000n) / ARC_HOOK_GRAD_USDC;
@@ -282,7 +286,8 @@ function ArcadeHookPreviewCard({ token }: { token: ArcadeHookTokenInfo }) {
       href={`/launchpad/v4hook/${token.address}`}
       className="arc-card group flex flex-col gap-3 p-4 transition-colors hover:border-arc-cta-hover/40"
     >
-      <div className="flex items-start justify-between gap-2">
+      <div className="flex items-start gap-3">
+        <TokenIcon symbol={token.symbol ?? "?"} image={image} size={40} />
         <div className="min-w-0 flex-1">
           <div className="truncate text-base font-semibold">
             {token.name ?? "Unnamed"}{" "}

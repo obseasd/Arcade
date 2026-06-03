@@ -1,6 +1,7 @@
 "use client";
 
-import { ArrowLeft, Lock } from "lucide-react";
+import { ArrowLeft, Lock, Image as ImageIcon, Upload } from "lucide-react";
+import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
@@ -14,14 +15,46 @@ import {
 } from "@/lib/abis/arcadeHook";
 import { ADDRESSES, CREATION_FEE_USDC, V4_HOOK_ENABLED } from "@/lib/constants";
 import { useApproveIfNeeded } from "@/lib/hooks/useApproveIfNeeded";
+import { encodeMetadataDataUri, resolveIpfs } from "@/lib/metadata";
 import { pushToast } from "@/lib/toast";
 import { TxStatus, type TxState } from "@/components/ui/TxStatus";
 import { cn, formatUSDC } from "@/lib/utils";
 
 const MAX_NAME = 32;
 const MAX_SYMBOL = 12;
+const MAX_DESCRIPTION = 280;
 const MAX_SNIPE_BPS = 5_000;
 const MAX_SNIPE_DECAY_MINUTES = 60;
+
+/** Fallback inline-encode the image as a downscaled JPEG data URL when Pinata
+ * is not reachable. Mirrors the V2 launchpad's encodeInlineDataUrl so the V4
+ * create flow stays usable on environments without PINATA_JWT. */
+async function encodeInlineImage(file: File): Promise<string> {
+    const blob = await new Promise<Blob | null>((resolve) => {
+        const img = new window.Image();
+        img.onload = () => {
+            const target = 192;
+            const ratio = Math.min(target / img.width, target / img.height, 1);
+            const w = Math.round(img.width * ratio);
+            const h = Math.round(img.height * ratio);
+            const canvas = document.createElement("canvas");
+            canvas.width = w;
+            canvas.height = h;
+            const ctx = canvas.getContext("2d");
+            if (!ctx) return resolve(null);
+            ctx.drawImage(img, 0, 0, w, h);
+            canvas.toBlob((b) => resolve(b), "image/jpeg", 0.72);
+        };
+        img.onerror = () => resolve(null);
+        img.src = URL.createObjectURL(file);
+    });
+    if (!blob) return "";
+    const buf = await blob.arrayBuffer();
+    const b64 = typeof window !== "undefined"
+        ? window.btoa(String.fromCharCode(...new Uint8Array(buf)))
+        : "";
+    return `data:image/jpeg;base64,${b64}`;
+}
 
 export default function ArcadeHookCreatePage() {
     if (!V4_HOOK_ENABLED) {
@@ -55,7 +88,10 @@ function Inner() {
     // --- Form state ---------------------------------------------------------
     const [name, setName] = useState("");
     const [symbol, setSymbol] = useState("");
-    const [metadataURI, setMetadataURI] = useState("");
+    const [description, setDescription] = useState("");
+    const [image, setImage] = useState("");
+    const [imagePreview, setImagePreview] = useState("");
+    const [imageUploading, setImageUploading] = useState(false);
     const [mode, setMode] = useState<ArcadeHookMode>(ARCADE_HOOK_MODE.PUMP);
 
     // CLANKER-only fields (only relevant when mode == CLANKER).
@@ -86,7 +122,37 @@ function Inner() {
         (mode === ARCADE_HOOK_MODE.PUMP || mode === ARCADE_HOOK_MODE.CLANKER) &&
         (!isClanker || creator2.trim().length === 0 || isAddress(creator2.trim())) &&
         creator2Pct >= 0 &&
-        creator2Pct <= 100;
+        creator2Pct <= 100 &&
+        !imageUploading;
+
+    /**
+     * Pin an image to IPFS via the project's existing /api/pin/file endpoint
+     * (PINATA_JWT lives server-side only). Falls back to a 192px-downscaled
+     * data:image/jpeg URL when Pinata is not reachable so the form stays
+     * usable on environments without Pinata configured. Mirrors the V2
+     * launchpad's onImageFile handler.
+     */
+    const onImageFile = async (file: File | undefined) => {
+        if (!file) return;
+        setImagePreview(URL.createObjectURL(file));
+        setImageUploading(true);
+        try {
+            const form = new FormData();
+            form.append("file", file);
+            const res = await fetch("/api/pin/file", { method: "POST", body: form });
+            if (!res.ok) throw new Error(`pin/file ${res.status}`);
+            const { uri } = (await res.json()) as { uri: string };
+            setImage(uri);
+        } catch {
+            // Pinata unavailable - fallback to inline data URL.
+            const inline = await encodeInlineImage(file);
+            setImage(inline);
+        } finally {
+            setImageUploading(false);
+        }
+    };
+
+    const previewSrc = imagePreview || resolveIpfs(image) || image;
 
     const onCreate = async () => {
         if (!isConnected || !account) {
@@ -104,6 +170,19 @@ function Inner() {
 
             setTxState({ status: "pending", message: "Submitting createLaunch..." });
             const snipeDecaySeconds = snipeStartBps > 0 ? snipeDecayMinutes * 60 : 0;
+            // Build the on-chain metadataURI. encodeMetadataDataUri yields a
+            // data:application/json;base64 URI that bundles name/symbol/image/
+            // description in a single calldata blob, mirroring the V2 launch
+            // pattern so frontends + indexers can render token info without
+            // a network fetch.
+            // name + symbol live on the ERC20 itself; metadataURI carries the
+            // off-chain extras only (image, description, social links).
+            const metadataURI = description.trim() || image
+                ? encodeMetadataDataUri({
+                    description: description.trim() || undefined,
+                    image: image || undefined,
+                })
+                : "";
             const hash = await writeContractAsync({
                 address: ADDRESSES.arcadeHook,
                 abi: ARCADE_HOOK_ABI,
@@ -111,7 +190,7 @@ function Inner() {
                 args: [
                     name.trim(),
                     symbol.trim(),
-                    metadataURI.trim(),
+                    metadataURI,
                     mode,
                     creator2Addr,
                     creator2Bps,
@@ -177,46 +256,79 @@ function Inner() {
             </div>
 
             <div className="space-y-5 rounded-2xl border border-arc-border bg-arc-surface p-6">
-                {/* Identity ----------------------------------------------- */}
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                    <label className="block text-sm">
-                        <span className="text-arc-text-muted">Name</span>
+                {/* Identity row: image left, name+symbol right ---------- */}
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-stretch">
+                    <label className="flex h-32 w-32 shrink-0 cursor-pointer flex-col items-center justify-center gap-1.5 self-center overflow-hidden rounded-xl border border-dashed border-arc-border bg-arc-bg-elevated transition-colors hover:border-arc-cta-hover sm:self-stretch">
+                        {previewSrc ? (
+                            <Image
+                                src={previewSrc}
+                                alt="Token icon"
+                                width={128}
+                                height={128}
+                                unoptimized
+                                className="h-full w-full object-cover"
+                            />
+                        ) : (
+                            <>
+                                <ImageIcon className="h-6 w-6 text-arc-text-muted" />
+                                <span className="text-[10px] text-arc-text-muted">Token icon</span>
+                                <span className="text-[10px] text-arc-text-faint">PNG / JPG</span>
+                            </>
+                        )}
                         <input
-                            value={name}
-                            onChange={(e) => setName(e.target.value.slice(0, MAX_NAME))}
-                            placeholder="Arcade Demo Token"
-                            className="mt-1 w-full rounded-lg border border-arc-border bg-arc-bg-elevated px-3 py-2 text-sm focus:border-arc-cta-hover focus:outline-none"
+                            type="file"
+                            accept="image/png,image/jpeg,image/webp"
+                            className="sr-only"
+                            onChange={(e) => onImageFile(e.target.files?.[0])}
                         />
+                        {imageUploading && (
+                            <span className="absolute inset-0 flex items-center justify-center bg-black/40 text-[10px] uppercase tracking-wider text-white">
+                                <Upload className="mr-1 h-3 w-3 animate-pulse" />
+                                Uploading
+                            </span>
+                        )}
                     </label>
-                    <label className="block text-sm">
-                        <span className="text-arc-text-muted">Symbol</span>
-                        <input
-                            value={symbol}
-                            onChange={(e) =>
-                                setSymbol(
-                                    e.target.value
-                                        .toUpperCase()
-                                        .replace(/[^A-Z0-9]/g, "")
-                                        .slice(0, MAX_SYMBOL),
-                                )
-                            }
-                            placeholder="ARC"
-                            className="mt-1 w-full rounded-lg border border-arc-border bg-arc-bg-elevated px-3 py-2 text-sm uppercase focus:border-arc-cta-hover focus:outline-none"
-                        />
-                    </label>
+                    <div className="flex flex-1 flex-col gap-2">
+                        <label className="block text-sm">
+                            <span className="text-arc-text-muted">Name</span>
+                            <input
+                                value={name}
+                                onChange={(e) => setName(e.target.value.slice(0, MAX_NAME))}
+                                placeholder="Arcade Demo Token"
+                                className="mt-1 w-full rounded-lg border border-arc-border bg-arc-bg-elevated px-3 py-2 text-sm focus:border-arc-cta-hover focus:outline-none"
+                            />
+                        </label>
+                        <label className="block text-sm">
+                            <span className="text-arc-text-muted">Symbol</span>
+                            <input
+                                value={symbol}
+                                onChange={(e) =>
+                                    setSymbol(
+                                        e.target.value
+                                            .toUpperCase()
+                                            .replace(/[^A-Z0-9]/g, "")
+                                            .slice(0, MAX_SYMBOL),
+                                    )
+                                }
+                                placeholder="ARC"
+                                className="mt-1 w-full rounded-lg border border-arc-border bg-arc-bg-elevated px-3 py-2 text-sm uppercase focus:border-arc-cta-hover focus:outline-none"
+                            />
+                        </label>
+                    </div>
                 </div>
                 <label className="block text-sm">
                     <span className="text-arc-text-muted">
-                        Metadata URI{" "}
+                        Description{" "}
                         <span className="text-xs text-arc-text-faint">
-                            (ipfs:// or data:application/json)
+                            ({description.length} / {MAX_DESCRIPTION})
                         </span>
                     </span>
-                    <input
-                        value={metadataURI}
-                        onChange={(e) => setMetadataURI(e.target.value)}
-                        placeholder="ipfs://bafybei..."
-                        className="mt-1 w-full rounded-lg border border-arc-border bg-arc-bg-elevated px-3 py-2 text-sm focus:border-arc-cta-hover focus:outline-none"
+                    <textarea
+                        value={description}
+                        onChange={(e) => setDescription(e.target.value.slice(0, MAX_DESCRIPTION))}
+                        placeholder="A short pitch your token deserves..."
+                        rows={3}
+                        className="mt-1 w-full resize-none rounded-lg border border-arc-border bg-arc-bg-elevated px-3 py-2 text-sm focus:border-arc-cta-hover focus:outline-none"
                     />
                 </label>
 
