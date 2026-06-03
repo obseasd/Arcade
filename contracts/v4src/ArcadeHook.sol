@@ -11,6 +11,14 @@ import {ArcadeLaunchToken} from "../src/launchpad/ArcadeLaunchToken.sol";
 import {ArcadeV4Curve} from "./libraries/ArcadeV4Curve.sol";
 import {ILaunchpadSnipe} from "./interfaces/IArcadeV4Launchpad.sol";
 
+/// @notice Minimal subset of the production ArcadeTwitterEscrowV3 surface the
+///         hook calls from afterSwap to credit a Twitter-handle slot with
+///         creator fees. Kept in this file so the V4 stack does not import the
+///         full V3 escrow source.
+interface IArcadeTwitterEscrowV3Min {
+    function creditSlot(uint256 positionId, uint8 slot, address token, uint256 amount) external;
+}
+
 // v4-core upstream.
 import {IHooks} from "v4-core/interfaces/IHooks.sol";
 import {IPoolManager} from "v4-core/interfaces/IPoolManager.sol";
@@ -488,48 +496,69 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
 
     /// @inheritdoc IHooks
     function beforeAddLiquidity(
-        address, /*sender*/
-        PoolKey calldata, /*key*/
+        address sender,
+        PoolKey calldata key,
         ModifyLiquidityParams calldata, /*params*/
         bytes calldata /*hookData*/
     ) external view override onlyPoolManager returns (bytes4) {
-        // Round 5 fills in:
-        //   - if status == Curving: revert LiquidityNotPermitted
-        //   - if status == Graduated && CLANKER_V3: revert (single-sided lock)
-        //   - if status == Graduated && PUMP/CLANK && sender != self: revert
-        //   - sender == address(this): allow (graduation-seed only)
+        PoolId poolId = key.toId();
+        CurveState storage state = curveStates[poolId];
+
+        // No LP during the bonding curve phase: LPs would extract value from
+        // curve buyers. The post-grad pool is also locked after the
+        // graduation seed.
+        if (state.status == uint8(Status.GraduationStarted)) revert GraduationInProgress();
+        if (state.status == uint8(Status.Curving)) revert LiquidityNotPermitted();
+        // status == Graduated: only the hook itself can add LP (graduation
+        // seed or fee harvest with delta=0). Any external add is rejected so
+        // post-graduation LP stays as the locked seed forever.
+        if (sender != address(this)) revert LiquidityNotPermitted();
         return IHooks.beforeAddLiquidity.selector;
     }
 
     /// @inheritdoc IHooks
     function afterAddLiquidity(
-        address, /*sender*/
-        PoolKey calldata, /*key*/
-        ModifyLiquidityParams calldata, /*params*/
+        address sender,
+        PoolKey calldata key,
+        ModifyLiquidityParams calldata params,
         BalanceDelta, /*delta*/
         BalanceDelta, /*feesAccrued*/
         bytes calldata /*hookData*/
     ) external override onlyPoolManager returns (bytes4, BalanceDelta) {
-        // Round 5 fills in:
-        //   - compute positionKey
-        //   - positions[positionKey] = {owner: creator, liquidity, locked: true}
-        //   - mint ERC-6909 receipt to LOCKED_VAULT
-        //   - emit PositionLocked
+        // Mark the graduation-seed position as locked. Subsequent
+        // beforeRemoveLiquidity calls revert unless liquidityDelta == 0
+        // (fee harvest path).
+        if (sender == address(this) && params.liquidityDelta > 0) {
+            bytes32 positionKey = keccak256(
+                abi.encodePacked(sender, params.tickLower, params.tickUpper, params.salt)
+            );
+            address positionOwner = feeOwners[key.toId()].creator;
+            uint128 liquidity = uint128(uint256(params.liquidityDelta));
+            positions[positionKey] =
+                PositionInfo({owner: positionOwner, liquidity: liquidity, locked: true});
+            emit PositionLocked(positionKey, positionOwner, liquidity);
+        }
         return (IHooks.afterAddLiquidity.selector, BalanceDeltaLibrary.ZERO_DELTA);
     }
 
     /// @inheritdoc IHooks
     function beforeRemoveLiquidity(
-        address, /*sender*/
+        address sender,
         PoolKey calldata, /*key*/
-        ModifyLiquidityParams calldata, /*params*/
+        ModifyLiquidityParams calldata params,
         bytes calldata /*hookData*/
     ) external view override onlyPoolManager returns (bytes4) {
-        // Round 5 fills in (ORDER MATTERS):
-        //   1. if params.liquidityDelta == 0 && sender == address(this): allow
-        //      (fee-harvest path)
-        //   2. compute positionKey; if positions[positionKey].locked: revert
-        //   3. otherwise allow
+        // ORDER MATTERS: the harvest exception MUST be checked before the
+        // locked check, or a fee harvest of a locked position would revert.
+        // Inverting these creates a fee-harvest DOS on the hook's own LP.
+        if (params.liquidityDelta == 0 && sender == address(this)) {
+            return IHooks.beforeRemoveLiquidity.selector;
+        }
+
+        bytes32 positionKey = keccak256(
+            abi.encodePacked(sender, params.tickLower, params.tickUpper, params.salt)
+        );
+        if (positions[positionKey].locked) revert LockedPosition();
         return IHooks.beforeRemoveLiquidity.selector;
     }
 
@@ -687,16 +716,139 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
     /// @inheritdoc IHooks
     function afterSwap(
         address, /*sender*/
-        PoolKey calldata, /*key*/
-        SwapParams calldata, /*params*/
-        BalanceDelta, /*delta*/
+        PoolKey calldata key,
+        SwapParams calldata params,
+        BalanceDelta delta,
         bytes calldata /*hookData*/
-    ) external view override onlyPoolManager returns (bytes4, int128) {
-        // Curving: curve fee was already taken inline in beforeSwap, so
-        // afterSwap has nothing to do.
-        // Graduated: Round 5 fills in the post-grad royalty + anti-sniper
-        // skim path here.
-        return (IHooks.afterSwap.selector, int128(0));
+    ) external override onlyPoolManager returns (bytes4, int128) {
+        PoolId poolId = key.toId();
+        CurveState memory state = curveStates[poolId];
+
+        // Curving / GraduationStarted: nothing to do. Curving fees are taken
+        // in hook.buy / hook.sell; GraduationStarted swaps revert in
+        // beforeSwap before reaching here.
+        if (state.status != uint8(Status.Graduated)) {
+            return (IHooks.afterSwap.selector, int128(0));
+        }
+
+        // Identify the unspecified currency and the magnitude swapped through
+        // it. Matches the V4 FeeTakingHook pattern: fee taken on the side
+        // V4 hook deltas can affect cleanly. For Arcade this means royalty
+        // is in token for USDC -> token buys and in USDC for token -> USDC
+        // sells. Creators / treasury auto-convert on the token side via the
+        // MultiSwap aggregator when needed.
+        bool specifiedTokenIs0 = (params.amountSpecified < 0 == params.zeroForOne);
+        (Currency feeCurrency, int128 swapAmount) =
+            specifiedTokenIs0 ? (key.currency1, delta.amount1()) : (key.currency0, delta.amount0());
+        if (swapAmount < 0) swapAmount = -swapAmount;
+        if (swapAmount == 0) return (IHooks.afterSwap.selector, int128(0));
+
+        uint256 amount = uint256(uint128(swapAmount));
+        uint256 totalRoyalty = (amount * POST_GRAD_ROYALTY_BPS) / 10_000;
+
+        // Anti-sniper top-up: during the decay window post-grad, BUYS pay an
+        // additional skim straight to TREASURY. Only USDC -> token swaps
+        // count as buys for this purpose. The skim sits ALONGSIDE the
+        // royalty: both are taken from the unspecified side.
+        Currency usdcCurrency = USDC;
+        bool isBuy = _isUsdcToTokenSwap(key, params, usdcCurrency);
+        uint256 snipeSkim = 0;
+        if (isBuy) {
+            address launchToken =
+                Currency.unwrap(key.currency0) == Currency.unwrap(usdcCurrency)
+                    ? Currency.unwrap(key.currency1)
+                    : Currency.unwrap(key.currency0);
+            uint256 bps = _currentSnipeBps(launchToken);
+            if (bps > 0) {
+                snipeSkim = (amount * bps) / 10_000;
+                if (snipeSkim > 0) {
+                    POOL_MANAGER.take(feeCurrency, TREASURY, snipeSkim);
+                    emit AntiSnipeApplied(poolId, msg.sender, snipeSkim, uint16(bps));
+                }
+            }
+        }
+
+        // Split the royalty per mode (PUMP 50/50, CLANKER 70/30 creator/treasury,
+        // CLANKER_V3 80/20). MODE_CREATOR_BPS pinned at construction.
+        FeeOwner memory fo = feeOwners[poolId];
+        uint256 creatorCut = 0;
+        uint256 treasuryCut = 0;
+        if (totalRoyalty > 0) {
+            uint16 creatorBps = MODE_CREATOR_BPS[state.mode];
+            creatorCut = (totalRoyalty * creatorBps) / 10_000;
+            treasuryCut = totalRoyalty - creatorCut;
+
+            // Optional creator2 split. Only active when the launch was opened
+            // in CLANKER mode WITH a creator2 + bps configured.
+            if (
+                fo.creator2 != address(0) && fo.creator2Bps > 0
+                    && state.mode == uint8(LaunchMode.CLANKER)
+            ) {
+                uint256 creator2Cut = (creatorCut * fo.creator2Bps) / 10_000;
+                if (creator2Cut > 0) {
+                    POOL_MANAGER.take(feeCurrency, fo.creator2, creator2Cut);
+                    creatorCut -= creator2Cut;
+                }
+            }
+
+            // Route the creator cut. When the launch wired a Twitter escrow
+            // slot, try to credit the slot. If the escrow is paused, missing,
+            // or reverts for any reason, fall back to a direct take to the
+            // creator and emit EscrowCreditFailed so an indexer can surface
+            // it. Escrow downtime MUST NOT block swaps.
+            if (creatorCut > 0) {
+                if (fo.twitterEscrow != address(0)) {
+                    address feeTokenAddr = Currency.unwrap(feeCurrency);
+                    uint256 positionId = _positionIdForEscrow(poolId);
+                    try IArcadeTwitterEscrowV3Min(fo.twitterEscrow).creditSlot(
+                        positionId, fo.slotIndex, feeTokenAddr, creatorCut
+                    ) {
+                        POOL_MANAGER.take(feeCurrency, fo.twitterEscrow, creatorCut);
+                    } catch {
+                        POOL_MANAGER.take(feeCurrency, fo.creator, creatorCut);
+                        emit EscrowCreditFailed(positionId, fo.slotIndex, creatorCut);
+                    }
+                } else {
+                    POOL_MANAGER.take(feeCurrency, fo.creator, creatorCut);
+                }
+            }
+            if (treasuryCut > 0) POOL_MANAGER.take(feeCurrency, TREASURY, treasuryCut);
+
+            emit RoyaltyPaid(poolId, fo.creator, creatorCut, treasuryCut);
+        }
+
+        // Return the total taken on the unspecified side so the user pays
+        // for everything we took above.
+        uint256 totalTaken = totalRoyalty + snipeSkim;
+        return (IHooks.afterSwap.selector, int128(int256(totalTaken)));
+    }
+
+    /// @dev True iff the swap routes USDC -> launch token (a buy).
+    function _isUsdcToTokenSwap(PoolKey calldata key, SwapParams calldata params, Currency usdcCurrency)
+        internal
+        pure
+        returns (bool)
+    {
+        address usdcAddr = Currency.unwrap(usdcCurrency);
+        bool usdcIsCurrency0 = Currency.unwrap(key.currency0) == usdcAddr;
+        // zeroForOne == true means swap currency0 for currency1.
+        return (usdcIsCurrency0 && params.zeroForOne) || (!usdcIsCurrency0 && !params.zeroForOne);
+    }
+
+    /// @dev positionId passed to the Twitter escrow's creditSlot. The escrow
+    ///      treats this as opaque so we just use the PoolId as the identifier
+    ///      (unique per launch, stable for the life of the pool).
+    function _positionIdForEscrow(PoolId poolId) internal pure returns (uint256) {
+        return uint256(PoolId.unwrap(poolId));
+    }
+
+    /// @dev Internal copy of currentSnipeBps that avoids an external self-call.
+    function _currentSnipeBps(address token) internal view returns (uint256) {
+        SnipeConfig memory cfg = snipeConfigs[token];
+        if (cfg.startBps == 0 || cfg.decaySeconds == 0 || cfg.launchedAt == 0) return 0;
+        uint256 elapsed = block.timestamp - cfg.launchedAt;
+        if (elapsed >= cfg.decaySeconds) return 0;
+        return (uint256(cfg.startBps) * (cfg.decaySeconds - elapsed)) / cfg.decaySeconds;
     }
 
     // -------------------------------------------------------------------
