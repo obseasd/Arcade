@@ -123,10 +123,12 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
   // V3<->V2 (non-USDC) can't route in one router call - flag as unsupported.
   const v3Unsupported = isV3Swap && !v3DoubleHop && !v3SingleHop;
 
-  // V3 router is exact-in only - force exact-in when this is a V3 swap.
-  useEffect(() => {
-    if ((route.useLaunchpadRouter || isV3Swap) && lastEdited === "out") setLastEdited("in");
-  }, [route.useLaunchpadRouter, isV3Swap, lastEdited]);
+  // Forward-quote ratio cache: captured every time an in->out quote returns
+  // a non-zero result so we can back-derive amountIn when the user types
+  // into the For field on a path that has no exact-output quote (V3 single
+  // direction quoter, launchpad-routed multi-hops). Keeps the For field
+  // editable instead of snapping back to the computed quote.
+  const lastForwardRatioRef = useRef<{ amountIn: bigint; amountOut: bigint } | null>(null);
 
   // Fee tier of the V3 leg (the non-USDC side's pool). Both-V3 uses tokenIn's.
   const v3Fee = inIsV3 ? feeOf(tokenIn.address) : feeOf(tokenOut?.address);
@@ -208,7 +210,29 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
     : route.useLaunchpadRouter
       ? migratedQuote?.[0]
       : amountsOut?.[amountsOut.length - 1];
-  const computedAmountIn = amountsIn?.[0];
+
+  // Capture the latest forward (in->out) ratio whenever it lands. Stays in
+  // a ref so future renders that toggle lastEdited still see the last known
+  // price and can derive amountIn from a user-typed amountOut without
+  // having to fire a new quote.
+  useEffect(() => {
+    if (lastEdited === "in" && amountInRaw > 0n && computedAmountOut && computedAmountOut > 0n) {
+      lastForwardRatioRef.current = { amountIn: amountInRaw, amountOut: computedAmountOut };
+    }
+  }, [computedAmountOut, amountInRaw, lastEdited]);
+
+  // Derived amountIn for paths where V2 getAmountsIn does not run (V3 quoter
+  // is in-only, launchpad-routed multi-hops). Uses the cached forward ratio
+  // so the user's For input drives From in real time, matching V2 behavior.
+  const derivedAmountIn = useMemo<bigint | undefined>(() => {
+    if (lastEdited !== "out") return undefined;
+    if (amountOutRawTyped === 0n) return undefined;
+    const r = lastForwardRatioRef.current;
+    if (!r || r.amountOut === 0n) return undefined;
+    return (amountOutRawTyped * r.amountIn) / r.amountOut;
+  }, [lastEdited, amountOutRawTyped]);
+
+  const computedAmountIn = amountsIn?.[0] ?? derivedAmountIn;
   /** USDC amount taken as royalty across both legs (0 when not via launchpad). */
   const totalRoyaltyUsdc: bigint = migratedQuote?.[1] ?? 0n;
 
