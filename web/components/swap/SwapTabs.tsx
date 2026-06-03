@@ -14,7 +14,7 @@ interface Props {
  * inside each card's own header so the tab visually belongs to the card. */
 export function SwapTabs({ tab, onTabChange, className }: Props) {
   return (
-    <div className={cn("flex items-center gap-4", className)}>
+    <div className={cn("flex items-center gap-2 sm:gap-4", className)}>
       <TabButton active={tab === "swap"} onClick={() => onTabChange("swap")}>
         Swap
       </TabButton>

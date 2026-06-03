@@ -639,7 +639,7 @@ function CreateTokenInner() {
         {isV3 && (
           <div className="space-y-3 rounded-xl border border-arc-border bg-arc-bg-elevated p-4">
             <span className="text-sm font-medium text-arc-text">Pool type</span>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
               {POOL_TYPES.map((pt) => (
                 <button
                   key={pt.id}

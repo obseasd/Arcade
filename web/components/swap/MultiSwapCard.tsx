@@ -783,7 +783,7 @@ function SlippagePopover({
         <Image src="/slider.png" alt="Slippage" width={18} height={18} className="h-4 w-4 opacity-80" />
       </button>
       {open && (
-        <div className="absolute right-0 top-full z-20 mt-2 w-72 rounded-2xl border border-arc-border bg-black/45 p-4 shadow-arc-card backdrop-blur-2xl">
+        <div className="absolute right-0 top-full z-20 mt-2 w-72 max-w-[calc(100vw-1rem)] rounded-2xl border border-arc-border bg-black/45 p-4 shadow-arc-card backdrop-blur-2xl">
           <div className="mb-3 text-sm font-semibold text-arc-text">Transaction settings</div>
           <div className="mb-2 flex items-center gap-1.5 text-xs text-arc-text-muted">
             Slippage tolerance
