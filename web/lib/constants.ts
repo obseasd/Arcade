@@ -20,13 +20,23 @@ export const ADDRESSES = {
   weth: safeAddress(process.env.NEXT_PUBLIC_WETH_ADDRESS),
   /** ArcadeTwitterEscrow: holds Clanker LP fees attributed to a Twitter @handle. */
   twitterEscrow: safeAddress(process.env.NEXT_PUBLIC_TWITTER_ESCROW_ADDRESS),
-  // --- Uniswap V4 stack (Arc testnet, behind NEXT_PUBLIC_V4_ENABLED) ---
+  // --- Uniswap V4 prototype (ArcadeV4Launchpad + ArcadeAntiSniperHook) ---
+  // Original 2-step (createLaunch then initializePool) flow, behind
+  // NEXT_PUBLIC_V4_ENABLED. Superseded by the ArcadeHook production stack
+  // below but kept for the existing /launchpad/v4 prototype pages.
   v4PoolManager: safeAddress(process.env.NEXT_PUBLIC_V4_POOL_MANAGER_ADDRESS),
   v4Launchpad: safeAddress(process.env.NEXT_PUBLIC_V4_LAUNCHPAD_ADDRESS),
   v4Hook: safeAddress(process.env.NEXT_PUBLIC_V4_HOOK_ADDRESS),
   v4StateView: safeAddress(process.env.NEXT_PUBLIC_V4_STATE_VIEW_ADDRESS),
   v4Quoter: safeAddress(process.env.NEXT_PUBLIC_V4_QUOTER_ADDRESS),
   v4Router: safeAddress(process.env.NEXT_PUBLIC_V4_ROUTER_ADDRESS),
+  // --- ArcadeHook production stack (V4 Phase 2, behind NEXT_PUBLIC_V4_HOOK_ENABLED) ---
+  // Unified hook subsuming launchpad + V2 stack + V3 locker. Uses atomic
+  // createLaunch + direct hook.buy/hook.sell during Curving phase.
+  /** ArcadeHook: production V4 hook for the bonding-curve launchpad. */
+  arcadeHook: safeAddress(process.env.NEXT_PUBLIC_ARCADE_HOOK_ADDRESS),
+  /** LockedVault: immutable holder of ERC-6909 graduation-seed LP receipts. */
+  lockedVault: safeAddress(process.env.NEXT_PUBLIC_LOCKED_VAULT_ADDRESS),
   // --- Orbs TWAP / dLIMIT stack (limit orders, Arc testnet) ---
   /** TWAP main contract. Receives ask() calls, holds the order book. */
   orbsTwap: safeAddress(process.env.NEXT_PUBLIC_ORBS_TWAP_ADDRESS),
@@ -41,10 +51,19 @@ export const LIMIT_ORDERS_ENABLED: boolean =
   !!process.env.NEXT_PUBLIC_ORBS_TWAP_ADDRESS &&
   !!process.env.NEXT_PUBLIC_ORBS_EXCHANGE_V2_ADDRESS;
 
-/** True iff the V4 stack is enabled in this env. Gates every V4 UI
- *  surface; renders nothing instead of throwing when addresses are unset. */
+/** True iff the V4 prototype stack is enabled in this env. Gates the
+ *  /launchpad/v4 wizard pages. Independent of the ArcadeHook production
+ *  flag below so the two surfaces can coexist during the migration window. */
 export const V4_ENABLED: boolean =
   process.env.NEXT_PUBLIC_V4_ENABLED === "1" || process.env.NEXT_PUBLIC_V4_ENABLED === "true";
+
+/** True iff the ArcadeHook production stack is wired. Gates the new V4
+ *  surfaces that target the unified ArcadeHook contract (atomic createLaunch
+ *  + hook.buy / hook.sell). Requires both the hook address AND the locked
+ *  vault to be set, since the deploy script always provisions them as a pair. */
+export const V4_HOOK_ENABLED: boolean =
+  !!process.env.NEXT_PUBLIC_ARCADE_HOOK_ADDRESS &&
+  !!process.env.NEXT_PUBLIC_LOCKED_VAULT_ADDRESS;
 
 /** V4 pool params used for every Arcade launch (1% fee tier). */
 export const V4_POOL_FEE = 10_000;

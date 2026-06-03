@@ -2,66 +2,72 @@
 pragma solidity ^0.8.26;
 
 import {Script, console2} from "forge-std/Script.sol";
-import {ArcadeAntiSniperHook} from "../v4src/ArcadeAntiSniperHook.sol";
-import {ILaunchpadSnipe} from "../v4src/interfaces/IArcadeV4Launchpad.sol";
+import {ArcadeHook} from "../v4src/ArcadeHook.sol";
+
 import {IPoolManager} from "v4-core/interfaces/IPoolManager.sol";
 import {Currency} from "v4-core/types/Currency.sol";
 import {Hooks} from "v4-core/libraries/Hooks.sol";
 
 /**
  * @title MineHookSalt
- * @notice Brute-forces a CREATE2 salt so that the deployed hook's address
- *         encodes exactly the permission flags it declares.
+ * @notice Brute-force a CREATE2 salt so the deployed ArcadeHook's address
+ *         encodes the permission flags it declares via getHookPermissions().
  *
- *         V4's PoolManager checks the hook ADDRESS' low 14 bits against the
- *         permissions a hook claims. For our hook we want exactly four bits
- *         set: BEFORE_SWAP_FLAG (7), AFTER_SWAP_FLAG (6),
- *         BEFORE_SWAP_RETURNS_DELTA_FLAG (3), AFTER_SWAP_RETURNS_DELTA_FLAG
- *         (2). The deployer mines a salt off-chain until the resulting
- *         CREATE2 address has those four bits set (and only those four).
+ *         V4's PoolManager checks the hook ADDRESS's low 14 bits against the
+ *         permissions the hook claims. ArcadeHook claims 10 bits = 0x3ECE
+ *         (see V4_HOOK_SPEC.md Section 3 + ArcadeHook.getHookPermissions).
  *
- *         At the search space size for exact-match across all 14 low bits
- *         (1/2^14 = 1 in 16384), this typically finds a match in well under
- *         a second; MAX_ATTEMPTS = 200_000 leaves a 12x safety margin.
+ *         At 10 bits the expected hit rate is 1 in 2^10 = 1024 salts. We cap
+ *         at 500_000 attempts which leaves a ~488x safety margin (Geometric
+ *         distribution: 500k attempts at p=1/1024 misses with probability
+ *         < 10^-200).
  *
  *         Usage:
  *           FOUNDRY_PROFILE=v4 \
  *           DEPLOYER=0x... \
  *           POOL_MANAGER=0x... \
- *           LAUNCHPAD=0x... \
  *           USDC=0x... \
+ *           LOCKED_VAULT=0x... \
+ *           TREASURY=0x... \
+ *           TWITTER_ESCROW=0x... \
+ *           OWNER=0x... \
  *           forge script v4script/MineHookSalt.s.sol
  *
- *         The script prints the salt + predicted address. Pass that salt to
- *         the actual deploy script via CREATE2 (vm.deployCode or a custom
- *         deployer contract that does `new X{salt: s}(...)`).
+ *         Prints the salt, predicted address, and attempt count. Pass the salt
+ *         to the deploy script via env or CREATE2 directly. The actual deploy
+ *         loop in DeployV4.s.sol re-runs the same algorithm so this script is
+ *         optional — useful for previewing the hook address before committing
+ *         to a deploy ceremony.
  */
 contract MineHookSalt is Script {
     /// @notice Mask covering all 14 permission bits in V4 hook addresses.
     uint160 internal constant PERM_MASK = (1 << 14) - 1;
-    /// @notice Bits we want set on the deployed hook's address - mirrors
-    ///         getHookPermissions(): BEFORE_SWAP + AFTER_SWAP +
-    ///         BEFORE_SWAP_RETURNS_DELTA + AFTER_SWAP_RETURNS_DELTA. The
-    ///         RETURNS_DELTA bits are required so the manager keeps the
-    ///         non-zero delta we return (otherwise pm.take leaves an
-    ///         unresolved hook delta and the swap reverts).
-    uint160 internal constant TARGET_FLAGS = Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG
-        | Hooks.BEFORE_SWAP_RETURNS_DELTA_FLAG | Hooks.AFTER_SWAP_RETURNS_DELTA_FLAG;
 
-    /// @notice Max salts to try before giving up. ~1 in 16k chance per attempt
-    ///         for four permission flags; we cap at 200k for paranoia.
-    uint256 internal constant MAX_ATTEMPTS = 200_000;
+    /// @notice Bits the deployed hook address MUST have set. Mirrors
+    ///         ArcadeHook.getHookPermissions() exactly. Drift here vs the hook
+    ///         is caught at deploy time by DeployV4's runtime assertion, but
+    ///         the cheaper guard is keeping this constant in sync.
+    uint160 internal constant TARGET_FLAGS = Hooks.BEFORE_INITIALIZE_FLAG | Hooks.AFTER_INITIALIZE_FLAG
+        | Hooks.BEFORE_ADD_LIQUIDITY_FLAG | Hooks.AFTER_ADD_LIQUIDITY_FLAG | Hooks.BEFORE_REMOVE_LIQUIDITY_FLAG
+        | Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG | Hooks.BEFORE_SWAP_RETURNS_DELTA_FLAG
+        | Hooks.AFTER_SWAP_RETURNS_DELTA_FLAG | Hooks.AFTER_ADD_LIQUIDITY_RETURNS_DELTA_FLAG;
+
+    uint256 internal constant MAX_ATTEMPTS = 500_000;
 
     function run() external view {
         address deployer = vm.envAddress("DEPLOYER");
         IPoolManager poolManager = IPoolManager(vm.envAddress("POOL_MANAGER"));
-        ILaunchpadSnipe launchpad = ILaunchpadSnipe(vm.envAddress("LAUNCHPAD"));
         Currency usdc = Currency.wrap(vm.envAddress("USDC"));
+        address lockedVault = vm.envAddress("LOCKED_VAULT");
         address treasury = vm.envAddress("TREASURY");
+        address twitterEscrow = vm.envOr("TWITTER_ESCROW", address(0));
+        address owner = vm.envOr("OWNER", deployer);
+
+        require(TARGET_FLAGS == 0x3ECE, "TARGET_FLAGS drift from 0x3ECE");
 
         bytes memory creationCode = abi.encodePacked(
-            type(ArcadeAntiSniperHook).creationCode,
-            abi.encode(poolManager, launchpad, usdc, treasury)
+            type(ArcadeHook).creationCode,
+            abi.encode(poolManager, usdc, lockedVault, treasury, twitterEscrow, owner)
         );
         bytes32 codeHash = keccak256(creationCode);
 
@@ -69,19 +75,21 @@ contract MineHookSalt is Script {
             bytes32 salt = bytes32(i);
             address predicted = vm.computeCreate2Address(salt, codeHash, deployer);
             if (_matchesPermissions(predicted)) {
-                console2.log("Found salt after", i, "attempts");
-                console2.log("Salt (uint):", i);
+                console2.log("Found salt after attempts:", i);
+                console2.log("Salt (uint):              ", i);
                 console2.logBytes32(salt);
-                console2.log("Hook address:", predicted);
-                console2.log("Address low 14 bits (hex):");
+                console2.log("Predicted hook addr:      ", predicted);
+                console2.log("Addr low 14 bits (hex):");
                 console2.logBytes32(bytes32(uint256(uint160(predicted) & PERM_MASK)));
+                console2.log("Expected (0x3ECE):");
+                console2.logBytes32(bytes32(uint256(TARGET_FLAGS)));
                 return;
             }
         }
         revert("No salt found within MAX_ATTEMPTS");
     }
 
-    /// @dev Address is acceptable iff its low 14 bits equal exactly TARGET_FLAGS.
+    /// @dev Address acceptable iff its low 14 bits equal exactly TARGET_FLAGS.
     function _matchesPermissions(address a) internal pure returns (bool) {
         return uint160(a) & PERM_MASK == TARGET_FLAGS;
     }
