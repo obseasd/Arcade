@@ -14,6 +14,8 @@ import {ILaunchpadSnipe} from "./interfaces/IArcadeV4Launchpad.sol";
 // v4-core upstream.
 import {IHooks} from "v4-core/interfaces/IHooks.sol";
 import {IPoolManager} from "v4-core/interfaces/IPoolManager.sol";
+import {IUnlockCallback} from "v4-core/interfaces/callback/IUnlockCallback.sol";
+import {FullMath} from "v4-core/libraries/FullMath.sol";
 import {Hooks} from "v4-core/libraries/Hooks.sol";
 import {LPFeeLibrary} from "v4-core/libraries/LPFeeLibrary.sol";
 import {TickMath} from "v4-core/libraries/TickMath.sol";
@@ -23,6 +25,8 @@ import {PoolKey} from "v4-core/types/PoolKey.sol";
 import {BalanceDelta, BalanceDeltaLibrary} from "v4-core/types/BalanceDelta.sol";
 import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "v4-core/types/BeforeSwapDelta.sol";
 import {SwapParams, ModifyLiquidityParams} from "v4-core/types/PoolOperation.sol";
+
+import {LiquidityAmounts} from "v4-periphery/libraries/LiquidityAmounts.sol";
 
 /**
  * @title ArcadeHook
@@ -68,7 +72,7 @@ import {SwapParams, ModifyLiquidityParams} from "v4-core/types/PoolOperation.sol
  *         (no validateHookAddress call), letting tests use deployCodeTo to
  *         place the hook at a chosen address with the right bits.
  */
-contract ArcadeHook is IHooks, Ownable2Step, Pausable, ReentrancyGuard, ILaunchpadSnipe {
+contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, ReentrancyGuard, ILaunchpadSnipe {
     using SafeERC20 for IERC20;
     using PoolIdLibrary for PoolKey;
 
@@ -381,15 +385,15 @@ contract ArcadeHook is IHooks, Ownable2Step, Pausable, ReentrancyGuard, ILaunchp
         }
 
         emit TokenLaunched(tokenAddr, msg.sender, mode, name, symbol, metadataURI);
-
-        // Initialise the V4 pool. msg.sender on the PoolManager call site is
-        // this hook, which beforeInitialize relies on to gate creation to the
-        // canonical createLaunch path. We pick tick 0 as the start sqrtPrice;
-        // the curve hook overrides every swap so the AMM's starting price is
-        // irrelevant during the Curving phase.
-        POOL_MANAGER.initialize(key, TickMath.getSqrtPriceAtTick(0));
-
         emit LaunchCreated(poolId, tokenAddr, msg.sender, mode);
+
+        // NOTE: the V4 pool itself is NOT initialised here. During the Curving
+        // phase the curve runs through hook.buy / hook.sell with no V4 swap
+        // involvement, so the pool need not exist. The pool is initialised
+        // atomically inside _graduate at the migration price computed from
+        // the final reserve ratio, which gives the post-grad AMM a clean
+        // starting price instead of an arbitrary "tick 0" the curve never
+        // touched.
     }
 
     // -------------------------------------------------------------------
@@ -603,13 +607,12 @@ contract ArcadeHook is IHooks, Ownable2Step, Pausable, ReentrancyGuard, ILaunchp
         ArcadeV4Curve.BuyResult memory r =
             ArcadeV4Curve.simulateBuy(state.tokensSold, state.realUsdcReserve, amountIn);
 
-        // Round 4: cap-path buys trigger graduation. For the Round 3 cut we
-        // revert so the UI can prompt a graduation flow once Round 4 ships.
-        if (r.refund > 0) revert GraduationInProgress();
         if (r.tokensOut == 0) revert ZeroAmount();
-        if (r.tokensOut < minTokensOut) revert ZeroAmount(); // slippage guard, reuses ZeroAmount
+        if (r.tokensOut < minTokensOut) revert ZeroAmount(); // slippage guard
 
-        // Pull the gross USDC from the buyer into the hook.
+        // Pull only what the curve actually accepts. In the cap (graduation)
+        // path actualGross < amountIn and the residual stays with the buyer
+        // automatically since we never transferFrom'd it.
         IERC20(Currency.unwrap(USDC)).safeTransferFrom(msg.sender, address(this), r.actualGross);
 
         // Distribute the curve fee out of the hook's accumulating balance.
@@ -623,6 +626,12 @@ contract ArcadeHook is IHooks, Ownable2Step, Pausable, ReentrancyGuard, ILaunchp
         state.realUsdcReserve += uint128(r.actualGross - r.fee);
 
         emit CurveBuy(poolId, msg.sender, r.actualGross, r.tokensOut);
+
+        // Cap path: the curve is now exhausted. Trigger graduation atomically
+        // so the next caller observes status = Graduated and the V4 swap path
+        // is unlocked. The pool gets initialised + seeded inside _graduate.
+        if (r.refund > 0) _graduate(token, state);
+
         return (r.tokensOut, r.actualGross);
     }
 
@@ -746,6 +755,135 @@ contract ArcadeHook is IHooks, Ownable2Step, Pausable, ReentrancyGuard, ILaunchp
     // -------------------------------------------------------------------
     // Internal helpers
     // -------------------------------------------------------------------
+
+    // -------------------------------------------------------------------
+    // Graduation
+    // -------------------------------------------------------------------
+
+    /// @dev Atomic curve -> AMM migration. Triggered from `buy` when the
+    ///      simulateBuy result reports a refund > 0 (cap path).
+    ///
+    ///      Sequence (frozen per V4_HOOK_SPEC.md Section 5):
+    ///        1. Status flip to GraduationStarted so any other in-flight call
+    ///           sees the transient state and reverts cleanly.
+    ///        2. Take MIGRATION_FEE (2_500 USDC) off the top to TREASURY.
+    ///        3. Compute the V4 init price from the seed reserves.
+    ///        4. Initialise the V4 pool at that price.
+    ///        5. Unlock the manager and add full-range LP via `unlockCallback`.
+    ///        6. Status flip to Graduated. The buy that triggered graduation
+    ///           returns normally to the caller after this completes.
+    function _graduate(address token, CurveState storage state) internal {
+        state.status = uint8(Status.GraduationStarted);
+
+        uint256 totalUsdc = state.realUsdcReserve;
+        uint256 lpUsdc = ArcadeV4Curve.graduationLiquidityUsdc(totalUsdc);
+        if (lpUsdc == 0) revert ZeroAmount();
+        uint256 lpTokens = ArcadeV4Curve.MIGRATION_LP_TOKENS;
+
+        // Migration fee off the top -> treasury.
+        IERC20(Currency.unwrap(USDC)).safeTransfer(TREASURY, ArcadeV4Curve.MIGRATION_FEE);
+
+        PoolKey memory key = _buildPoolKey(token);
+        bool usdcIsCurrency0 = Currency.unwrap(key.currency0) == Currency.unwrap(USDC);
+        (uint256 amount0, uint256 amount1) =
+            usdcIsCurrency0 ? (lpUsdc, lpTokens) : (lpTokens, lpUsdc);
+
+        // The V4 init price MUST match the reserve ratio or the AMM will
+        // start in an arb-able state and our LP gets one-sided.
+        uint160 sqrtPriceX96 = _sqrtPriceX96FromAmounts(amount0, amount1);
+        POOL_MANAGER.initialize(key, sqrtPriceX96);
+
+        // Hand off to the unlock callback which adds the LP + settles both
+        // sides. The hook owns the LP position; beforeRemoveLiquidity guards
+        // it from withdrawal in Round 5. For Round 4 the LP is effectively
+        // locked because no external surface can call modifyLiquidity with
+        // negative delta on a hook-owned position (yet).
+        POOL_MANAGER.unlock(abi.encode(token, amount0, amount1));
+
+        state.status = uint8(Status.Graduated);
+        emit Graduated(key.toId(), totalUsdc, lpTokens);
+    }
+
+    /// @inheritdoc IUnlockCallback
+    function unlockCallback(bytes calldata data) external override returns (bytes memory) {
+        if (msg.sender != address(POOL_MANAGER)) revert NotPoolManager();
+        (address token, uint256 amount0, uint256 amount1) = abi.decode(data, (address, uint256, uint256));
+
+        PoolKey memory key = _buildPoolKey(token);
+
+        // Full-range single position. Tick spacing is constant 200 so the
+        // usable bounds align cleanly.
+        int24 tickLower = TickMath.minUsableTick(key.tickSpacing);
+        int24 tickUpper = TickMath.maxUsableTick(key.tickSpacing);
+        uint160 sqrtPriceAX96 = TickMath.getSqrtPriceAtTick(tickLower);
+        uint160 sqrtPriceBX96 = TickMath.getSqrtPriceAtTick(tickUpper);
+
+        // Re-derive the init sqrtPrice from amounts so we don't rely on the
+        // caller to plumb it through. Mirrors what _graduate did.
+        uint160 sqrtPriceX96 = _sqrtPriceX96FromAmounts(amount0, amount1);
+
+        uint128 liquidity = LiquidityAmounts.getLiquidityForAmounts(
+            sqrtPriceX96, sqrtPriceAX96, sqrtPriceBX96, amount0, amount1
+        );
+
+        (BalanceDelta callerDelta,) = POOL_MANAGER.modifyLiquidity(
+            key,
+            ModifyLiquidityParams({
+                tickLower: tickLower,
+                tickUpper: tickUpper,
+                liquidityDelta: int256(uint256(liquidity)),
+                salt: bytes32(0)
+            }),
+            ""
+        );
+
+        // callerDelta carries the EXACT amounts the position cost the hook
+        // (negative on each side the hook owes). Settling against this rather
+        // than against the off-chain estimates lets us absorb the V4 amount
+        // rounding that happens inside getLiquidityForAmounts.
+        int128 d0 = callerDelta.amount0();
+        int128 d1 = callerDelta.amount1();
+        if (d0 < 0) _settleSide(key.currency0, uint256(uint128(-d0)));
+        if (d1 < 0) _settleSide(key.currency1, uint256(uint128(-d1)));
+
+        // amount0/amount1 args are documented inputs; if liquidity rounding
+        // left a residual on either side we keep it in the hook (it's at most
+        // a few wei and gets folded into the next graduation's reserve).
+        (amount0, amount1);
+
+        return "";
+    }
+
+    /// @dev Pay `amount` of `currency` to the PoolManager, balancing the
+    ///      modifyLiquidity delta.
+    function _settleSide(Currency currency, uint256 amount) internal {
+        if (amount == 0) return;
+        POOL_MANAGER.sync(currency);
+        IERC20(Currency.unwrap(currency)).safeTransfer(address(POOL_MANAGER), amount);
+        POOL_MANAGER.settle();
+    }
+
+    /// @dev sqrtPriceX96 from raw token amounts. price = amount1 / amount0.
+    ///      Uses FullMath for the 512-bit multiply, then Babylonian sqrt.
+    function _sqrtPriceX96FromAmounts(uint256 amount0, uint256 amount1) internal pure returns (uint160) {
+        if (amount0 == 0) revert ZeroAmount();
+        uint256 ratioX192 = FullMath.mulDiv(amount1, 1 << 192, amount0);
+        uint256 root = _sqrt(ratioX192);
+        if (root > type(uint160).max) revert InvariantBroken();
+        return uint160(root);
+    }
+
+    /// @dev Integer square root via Babylonian iteration. Suitable for the
+    ///      one-shot graduation call (gas not measured, ran at testnet cost).
+    function _sqrt(uint256 x) internal pure returns (uint256 y) {
+        if (x == 0) return 0;
+        uint256 z = (x + 1) >> 1;
+        y = x;
+        while (z < y) {
+            y = z;
+            z = (x / z + z) >> 1;
+        }
+    }
 
     /// @dev Canonical PoolKey for a launch. Sorts the currencies by address
     ///      so currency0 < currency1 (v4 invariant), then sets the hook to

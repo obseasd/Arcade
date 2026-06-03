@@ -202,15 +202,90 @@ contract ArcadeHookSwapTest is Test {
     }
 
     // -------------------------------------------------------------------
-    // Cap-path buys revert (graduation deferred to Round 4)
+    // Graduation (Round 4)
     // -------------------------------------------------------------------
 
-    function test_buy_capPath_revertsAsGraduationDeferred() public {
+    function test_buy_capPath_graduatesPoolAndTakesMigrationFee() public {
+        (address tokenAddr, PoolKey memory key) = _launchPump();
+
+        uint256 treasuryBefore = usdc.balanceOf(TREASURY);
+        uint256 aliceUsdcBefore = usdc.balanceOf(ALICE);
+
+        vm.prank(ALICE);
+        (uint256 tokensOut, uint256 actualGross) = hook.buy(tokenAddr, 30_000e6, 0);
+
+        // Alice received the full CURVE_SUPPLY (cap path delivers maxOut).
+        assertEq(tokensOut, ArcadeV4Curve.CURVE_SUPPLY, "alice gets full curve supply");
+        // Per Round 1 fixture: cap-path buy from empty curve consumes
+        // actualGross = 20_202_020_203 USDC.
+        assertEq(actualGross, 20_202_020_203, "matches fixture actualGross");
+        // Refund stays with alice automatically (we only transferFrom actualGross).
+        assertEq(aliceUsdcBefore - usdc.balanceOf(ALICE), actualGross, "alice only paid actualGross");
+
+        // Status is now Graduated. Curve state is at the cap.
+        ArcadeHook.CurveState memory s = hook.getCurveState(key.toId());
+        assertEq(uint256(s.status), 2, "status = Graduated");
+        assertEq(s.tokensSold, ArcadeV4Curve.CURVE_SUPPLY, "tokensSold at cap");
+
+        // Treasury received MIGRATION_FEE (plus its share of the curve trade
+        // fee on the cap-filling buy). At MINIMUM treasuryBefore + 2_500e6.
+        assertGe(
+            usdc.balanceOf(TREASURY) - treasuryBefore, 2_500e6, "treasury at least migration fee"
+        );
+    }
+
+    function test_buy_afterGraduation_revertsLiquidityNotPermitted() public {
+        (address tokenAddr,) = _launchPump();
+
+        // Graduate the pool first.
+        vm.prank(ALICE);
+        hook.buy(tokenAddr, 30_000e6, 0);
+
+        // Further hook.buy calls should revert because the curve is closed.
+        vm.prank(ALICE);
+        vm.expectRevert(ArcadeHook.LiquidityNotPermitted.selector);
+        hook.buy(tokenAddr, 100e6, 0);
+    }
+
+    function test_sell_afterGraduation_revertsLiquidityNotPermitted() public {
         (address tokenAddr,) = _launchPump();
 
         vm.prank(ALICE);
-        vm.expectRevert(ArcadeHook.GraduationInProgress.selector);
         hook.buy(tokenAddr, 30_000e6, 0);
+
+        vm.startPrank(ALICE);
+        IERC20(tokenAddr).approve(address(hook), type(uint256).max);
+        vm.expectRevert(ArcadeHook.LiquidityNotPermitted.selector);
+        hook.sell(tokenAddr, 1e18, 0);
+        vm.stopPrank();
+    }
+
+    function test_v4Swap_afterGraduation_succeeds() public {
+        (address tokenAddr, PoolKey memory key) = _launchPump();
+
+        // Graduate.
+        vm.prank(ALICE);
+        hook.buy(tokenAddr, 30_000e6, 0);
+
+        // Now a V4 swap through the canonical router should land at the
+        // graduation-seeded pool. Alice already holds the launch tokens
+        // from the cap-path buy; she sells some via the AMM.
+        uint256 sellAmount = 1_000e18;
+        vm.startPrank(ALICE);
+        IERC20(tokenAddr).approve(address(swapRouter), type(uint256).max);
+        bool zeroForOne = Currency.unwrap(key.currency0) != address(usdc);
+        uint160 priceLimit = zeroForOne ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1;
+        BalanceDelta delta = swapRouter.swap(
+            key,
+            SwapParams({zeroForOne: zeroForOne, amountSpecified: -int256(sellAmount), sqrtPriceLimitX96: priceLimit}),
+            PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}),
+            ""
+        );
+        vm.stopPrank();
+
+        // The AMM produced a non-zero output on the USDC side.
+        int128 usdcDelta = Currency.unwrap(key.currency0) == address(usdc) ? delta.amount0() : delta.amount1();
+        assertGt(int256(usdcDelta), 0, "alice receives USDC from V4 AMM");
     }
 
     // -------------------------------------------------------------------
