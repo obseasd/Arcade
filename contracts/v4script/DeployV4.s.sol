@@ -84,6 +84,14 @@ contract DeployV4 is Script {
         | Hooks.AFTER_SWAP_RETURNS_DELTA_FLAG | Hooks.AFTER_ADD_LIQUIDITY_RETURNS_DELTA_FLAG;
     uint256 internal constant MAX_ATTEMPTS = 500_000;
 
+    /// @notice Foundry routes `new Contract{salt: s}(...)` through this
+    ///         canonical deterministic deployer rather than msg.sender. We
+    ///         must use this address (not vm.addr(pk)) when predicting the
+    ///         CREATE2 result or salt-mining produces a salt whose actual
+    ///         deploy address does not match the prediction (Phase 2 Round 5+
+    ///         field-bug discovered on Arc testnet, Jun 2026).
+    address internal constant CREATE2_DEPLOYER = 0x4e59b44847b379578588920cA78FbF26c0B4956C;
+
     function run() external {
         // 1. Resolve env.
         uint256 pk = vm.envUint("PRIVATE_KEY");
@@ -146,7 +154,10 @@ contract DeployV4 is Script {
         uint256 attempts;
         for (uint256 i = 0; i < MAX_ATTEMPTS; ++i) {
             bytes32 s = bytes32(i);
-            address a = vm.computeCreate2Address(s, codeHash, deployer);
+            // CREATE2_DEPLOYER not deployer: foundry routes the
+            // `new ArcadeHook{salt: s}(...)` through the canonical
+            // deterministic deployer.
+            address a = vm.computeCreate2Address(s, codeHash, CREATE2_DEPLOYER);
             if (uint160(a) & PERM_MASK == TARGET_FLAGS) {
                 salt = s;
                 predicted = a;

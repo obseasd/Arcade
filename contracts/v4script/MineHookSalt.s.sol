@@ -54,6 +54,10 @@ contract MineHookSalt is Script {
 
     uint256 internal constant MAX_ATTEMPTS = 500_000;
 
+    /// @notice See DeployV4.s.sol: foundry's `new Contract{salt: s}` routes
+    ///         through this canonical CREATE2 factory, not msg.sender.
+    address internal constant CREATE2_DEPLOYER = 0x4e59b44847b379578588920cA78FbF26c0B4956C;
+
     function run() external view {
         address deployer = vm.envAddress("DEPLOYER");
         IPoolManager poolManager = IPoolManager(vm.envAddress("POOL_MANAGER"));
@@ -71,9 +75,12 @@ contract MineHookSalt is Script {
         );
         bytes32 codeHash = keccak256(creationCode);
 
+        // `deployer` (the EOA) is kept for log readability but the actual
+        // CREATE2 source is the deterministic deployer below.
+        deployer;
         for (uint256 i = 0; i < MAX_ATTEMPTS; ++i) {
             bytes32 salt = bytes32(i);
-            address predicted = vm.computeCreate2Address(salt, codeHash, deployer);
+            address predicted = vm.computeCreate2Address(salt, codeHash, CREATE2_DEPLOYER);
             if (_matchesPermissions(predicted)) {
                 console2.log("Found salt after attempts:", i);
                 console2.log("Salt (uint):              ", i);
