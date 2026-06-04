@@ -27,6 +27,13 @@ skip = ["lib/v3-core/**", "lib/v3-periphery/**", "orbs/**"]
 # the Uniswap V3 fork they depend on. Native V3 settings (0.7.6, legacy
 # codegen, no IR). `test`/`script` point at non-existent dirs so this profile
 # never drags in our 0.8 contracts (which require via_ir). Artifacts in out-v3.
+#
+# Prerequisite for ArcadeV3PositionManager (NPM fork):
+#   forge install OpenZeppelin/openzeppelin-contracts@v3.4.1-solc-0.7-2 \
+#     --no-git --rename oz-v3
+# That pulls the 0.7-compatible OZ branch (which v3-periphery imports as
+# @openzeppelin/contracts/...) into lib/oz-v3/, used only by this profile via
+# the remapping override below.
 [profile.v3]
 src = "v3src"
 test = "v3src/_none"
@@ -38,6 +45,12 @@ optimizer = true
 optimizer_runs = 200
 via_ir = false
 auto_detect_solc = true
+remappings = [
+    "@openzeppelin/contracts/=lib/oz-v3/contracts/",
+    "@uniswap/v3-core/=lib/v3-core/",
+    "@uniswap/v3-periphery/=lib/v3-periphery/",
+    "forge-std/=lib/forge-std/src/",
+]
 
 # V4 prototype profile (anti-sniper hook). Strictly isolated to `v4src/`
 # and `v4test/` so the default and v3 builds never touch it - lets us

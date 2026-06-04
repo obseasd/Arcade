@@ -18,6 +18,9 @@ export const ADDRESSES = {
   v3Router: safeAddress(process.env.NEXT_PUBLIC_V3_ROUTER_ADDRESS),
   v3Quoter: safeAddress(process.env.NEXT_PUBLIC_V3_QUOTER_ADDRESS),
   v3Locker: safeAddress(process.env.NEXT_PUBLIC_V3_LOCKER_ADDRESS),
+  /** ArcadeV3PositionManager (Uniswap V3 NPM rebrand). Optional - the V3
+   *  branch of /positions/add is gated when zeroAddress. */
+  v3PositionManager: safeAddress(process.env.NEXT_PUBLIC_V3_NPM_ADDRESS),
   tokenVault: safeAddress(process.env.NEXT_PUBLIC_TOKEN_VAULT_ADDRESS),
   /** WETH on Arc, used as the paired token for POOL_WETH Clanker launches. */
   weth: safeAddress(process.env.NEXT_PUBLIC_WETH_ADDRESS),

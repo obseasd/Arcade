@@ -34,6 +34,7 @@ import { useApproveIfNeeded } from "@/lib/hooks/useApproveIfNeeded";
 import { pushToast } from "@/lib/toast";
 import { Modal } from "@/components/ui/Modal";
 import { TokenIcon } from "@/components/ui/TokenIcon";
+import { V3AddLiquidity } from "@/components/pool/V3AddLiquidity";
 import { cn } from "@/lib/utils";
 
 type Mode = "dual" | "single";
@@ -372,6 +373,27 @@ function AddLiquidityInner() {
 
             {/* Main add-liquidity card */}
             <div className="arc-card p-4 sm:p-5">
+                {/* For V3 the whole form is concentrated-liquidity (range + dual
+                    legs) and rendered by the dedicated component. The V2 dual/
+                    single zap surface only applies to type=amm. */}
+                {poolType === "v3" && tokenB ? (
+                    <V3AddLiquidity
+                        tokenA={{
+                            address: tokenA.address,
+                            symbol: tokenA.symbol,
+                            decimals: tokenA.decimals,
+                        }}
+                        tokenB={{
+                            address: tokenB.address,
+                            symbol: tokenB.symbol,
+                            decimals: tokenB.decimals,
+                        }}
+                        feeBps={feeBps}
+                        slippageBps={slippageBps}
+                        deadlineMin={deadlineMin}
+                    />
+                ) : (
+                <>
                 {/* Dual / Single tabs */}
                 <div className="mb-3 flex items-center gap-4 text-sm">
                     <ModeTab active={mode === "dual"} onClick={() => setMode("dual")}>
@@ -515,6 +537,8 @@ function AddLiquidityInner() {
                                     ? "Zap into pool"
                                     : "Add liquidity"}
                 </button>
+                </>
+                )}
             </div>
 
             {/* Settings modal */}
