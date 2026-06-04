@@ -5,12 +5,14 @@ import { Address, erc20Abi, formatUnits, parseUnits } from "viem";
 import { useAccount, usePublicClient, useReadContract, useWriteContract } from "wagmi";
 import { FACTORY_ABI, PAIR_ABI, ROUTER_ABI } from "@/lib/abis/dex";
 import { ADDRESSES, USDC_DECIMALS } from "@/lib/constants";
+import { arcTestnet } from "@/lib/chains";
 import { useApproveIfNeeded } from "@/lib/hooks/useApproveIfNeeded";
 import { useV2Tokens } from "@/lib/hooks/useV2Tokens";
+import { pushToast } from "@/lib/toast";
 import { AmountInput } from "@/components/ui/AmountInput";
 import { TokenIcon } from "@/components/ui/TokenIcon";
 import { TokenSelectModal, TokenOption } from "@/components/ui/TokenSelectModal";
-import { TxStatus, type TxState } from "@/components/ui/TxStatus";
+import { type TxState } from "@/components/ui/TxStatus";
 import { formatToken, formatUSDC } from "@/lib/utils";
 
 const USDC_TOKEN: TokenOption = {
@@ -127,14 +129,66 @@ export function AddLiquidityCard() {
           BigInt(Math.floor(Date.now() / 1000) + 600),
         ],
       });
-      if (publicClient) await publicClient.waitForTransactionReceipt({ hash });
-      setTx({ status: "success", message: "Liquidity added" });
+
+      // Read the new LP balance off the pair so the toast shows the actual
+      // receipt rather than a placeholder. Pair address might be 0x0 on the
+      // first-LP path, so we resolve it from getPair after the receipt.
+      let lpFormatted = "—";
+      let resolvedPair = pair;
+      if (publicClient) {
+        await publicClient.waitForTransactionReceipt({ hash });
+        if (!resolvedPair || resolvedPair === "0x0000000000000000000000000000000000000000") {
+          try {
+            resolvedPair = (await publicClient.readContract({
+              address: ADDRESSES.factory,
+              abi: FACTORY_ABI,
+              functionName: "getPair",
+              args: [tokenA.address, tokenB.address],
+            })) as Address;
+          } catch {
+            /* ignore */
+          }
+        }
+        if (resolvedPair && resolvedPair !== "0x0000000000000000000000000000000000000000") {
+          try {
+            const lp = (await publicClient.readContract({
+              address: resolvedPair,
+              abi: PAIR_ABI,
+              functionName: "balanceOf",
+              args: [account],
+            })) as bigint;
+            lpFormatted = Number(formatUnits(lp, 18)).toLocaleString(undefined, {
+              maximumFractionDigits: 4,
+            });
+          } catch {
+            /* ignore */
+          }
+        }
+      }
+      pushToast({
+        kind: "liquidity",
+        token0: { address: tokenA.address, symbol: tokenA.symbol },
+        token1: { address: tokenB.address, symbol: tokenB.symbol },
+        lpFormatted,
+        poolHref:
+          resolvedPair && resolvedPair !== "0x0000000000000000000000000000000000000000"
+            ? `/pool/${resolvedPair}`
+            : "/positions",
+        explorerUrl: `${arcTestnet.blockExplorers?.default.url}/tx/${hash}`,
+      });
+
+      setTx({ status: "idle" });
       setAmountA("");
       setAmountB("");
       balanceA.refetch();
       balanceB.refetch();
     } catch (e: any) {
-      setTx({ status: "error", message: e?.shortMessage || e?.message || "Failed" });
+      setTx({ status: "idle" });
+      pushToast({
+        kind: "error",
+        title: "Add liquidity failed",
+        message: e?.shortMessage || e?.message || "Failed",
+      });
     }
   };
 
@@ -220,11 +274,9 @@ export function AddLiquidityCard() {
             : !amountA || !amountB
               ? "Enter amounts"
               : tx.status === "pending"
-                ? "Adding…"
+                ? tx.message || "Adding…"
                 : "Add liquidity"}
       </button>
-
-      <TxStatus state={tx} className="mt-3" />
 
       <TokenSelectModal
         open={picker !== null}

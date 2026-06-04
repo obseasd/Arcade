@@ -68,12 +68,22 @@ export function useV2Tokens() {
     query: { enabled: tokenList.length > 0 },
   });
 
-  const tokens = tokenList.map((address, i) => ({
-    address,
-    symbol: metaCalls.data?.[3 * i]?.result as string | undefined,
-    name: metaCalls.data?.[3 * i + 1]?.result as string | undefined,
-    decimals: metaCalls.data?.[3 * i + 2]?.result as number | undefined,
-  }));
+  // Fall back to a short address tag + 18 decimals when the multicall
+  // returns a partial payload. arcTestnet has no Multicall3, so the V3
+  // periphery `useReadContracts` path occasionally drops one of the three
+  // reads (symbol/name/decimals). Sane defaults keep the swap/select UIs
+  // from rendering `?` icons for pairs that DO exist on-chain.
+  const tokens = tokenList.map((address, i) => {
+    const sym = metaCalls.data?.[3 * i]?.result as string | undefined;
+    const nm = metaCalls.data?.[3 * i + 1]?.result as string | undefined;
+    const dec = metaCalls.data?.[3 * i + 2]?.result as number | undefined;
+    return {
+      address,
+      symbol: sym && sym.length > 0 ? sym : `${address.slice(0, 6)}…${address.slice(-4)}`,
+      name: nm,
+      decimals: dec ?? 18,
+    };
+  });
 
   return {
     isLoading: pairsLengthQ.isLoading || pairAddrCalls.isLoading || tokenCalls.isLoading || metaCalls.isLoading,
