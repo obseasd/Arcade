@@ -77,7 +77,10 @@ interface PoolPairRow {
     token1: { address: Address; symbol: string };
     subRows: PoolSubRow[];
     tvlUsdc: bigint;
-    isHyped: boolean;
+    /** Pool-level APR percentage (eg. 120.5 means 120.5%). Undefined until
+     *  ArcLens lands; "Hyped" derives from this >100% rule, so until then
+     *  the Hyped filter returns no pools (rather than guessing).  */
+    aprPct?: number;
     isIncentivized: boolean;
 }
 
@@ -130,15 +133,11 @@ export default function ExplorePage() {
         return m;
     }, [v2Tokens, v3Tokens]);
 
-    const hypedAddresses = useMemo(() => {
-        const out = new Set<string>();
-        for (const t of launchpadTokens) {
-            const curveSupply = 800_000_000n * 10n ** 18n;
-            const ratio = (t.tokensSold * 100n) / curveSupply;
-            if (ratio > 50n || t.migrated) out.add(t.address.toLowerCase());
-        }
-        return out;
-    }, [launchpadTokens]);
+    // Hyped: pools whose APR exceeds 100%. APR is indexer-sourced and
+    // currently undefined for every row, so the filter intentionally returns
+    // nothing until that data lands. Keeping launchpad tokens here as a
+    // suppressed reference until the real APR map is wired.
+    void launchpadTokens;
 
     const allRows: PoolPairRow[] = useMemo(() => {
         const grouped = new Map<string, PoolPairRow>();
@@ -175,7 +174,7 @@ export default function ExplorePage() {
                         token1: { address: kb as Address, symbol: bMeta?.symbol ?? "?" },
                         subRows: [],
                         tvlUsdc: 0n,
-                        isHyped: hypedAddresses.has(ka) || hypedAddresses.has(kb),
+                        aprPct: undefined,
                         isIncentivized: false,
                     });
                 }
@@ -204,7 +203,7 @@ export default function ExplorePage() {
                     token1: { address: kb as Address, symbol: bMeta?.symbol ?? "?" },
                     subRows: [],
                     tvlUsdc: 0n,
-                    isHyped: hypedAddresses.has(t.address.toLowerCase()),
+                    aprPct: undefined,
                     isIncentivized: false,
                 });
             }
@@ -218,11 +217,12 @@ export default function ExplorePage() {
         }
 
         return Array.from(grouped.values());
-    }, [v2Pairs, reservesQ.data, v3Tokens, v3FeeOf, hypedAddresses, tokenLookup]);
+    }, [v2Pairs, reservesQ.data, v3Tokens, v3FeeOf, tokenLookup]);
 
     const filteredRows = useMemo(() => {
         let rows = allRows;
-        if (filter === "hyped") rows = rows.filter((r) => r.isHyped);
+        if (filter === "hyped")
+            rows = rows.filter((r) => r.aprPct !== undefined && r.aprPct > 100);
         else if (filter === "incentivized") rows = rows.filter((r) => r.isIncentivized);
         else if (filter === "standard-amm")
             rows = rows.filter((r) => r.subRows.some((s) => s.version === "v2"));
@@ -751,7 +751,7 @@ function PoolPairRowCard({
                         <div className="truncate text-sm font-semibold">
                             {row.token0.symbol} / {row.token1.symbol}
                         </div>
-                        {row.isHyped && (
+                        {row.aprPct !== undefined && row.aprPct > 100 && (
                             <div className="mt-1 flex flex-wrap items-center gap-1.5">
                                 <span className="inline-flex items-center gap-1 rounded-md border border-arc-warn/40 bg-arc-warn/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-arc-warn">
                                     <Flame className="h-2.5 w-2.5" />
@@ -916,7 +916,7 @@ function PoolPairGridCard({ row }: { row: PoolPairRow }) {
                 </div>
             </div>
 
-            {row.isHyped && (
+            {row.aprPct !== undefined && row.aprPct > 100 && (
                 <div className="flex flex-wrap items-center gap-1.5">
                     <span className="inline-flex items-center gap-1 rounded-md border border-arc-warn/40 bg-arc-warn/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-arc-warn">
                         <Flame className="h-2.5 w-2.5" />

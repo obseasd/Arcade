@@ -105,7 +105,7 @@ export function CreatePoolModal({ open, onClose, defaultPair, tokens }: Props) {
             <Modal
                 open={open}
                 onClose={onClose}
-                widthClassName="max-w-md"
+                widthClassName="max-w-[25.2rem]"
                 backdropClassName="bg-black/40 backdrop-blur-md"
                 className="border-arc-border bg-black/40 backdrop-blur-2xl"
             >
