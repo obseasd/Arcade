@@ -96,7 +96,7 @@ export function CreatePoolModal({ open, onClose, defaultPair, tokens }: Props) {
             t1: token1.address,
         });
         if (poolType === "v3") params.set("fee", String(feeBps));
-        router.push(`/positions?${params.toString()}`);
+        router.push(`/positions/add?${params.toString()}`);
         onClose();
     }
 

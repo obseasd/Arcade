@@ -27,7 +27,23 @@ export interface InfoToastPayload {
   message?: string;
 }
 
-export type ToastPayload = SwapToastPayload | InfoToastPayload;
+export interface LiquidityToastPayload {
+  kind: "liquidity";
+  /** Tokens that were paired (used to render stacked icons + symbol pair). */
+  token0: { address: Address; symbol?: string };
+  token1: { address: Address; symbol?: string };
+  /** Pre-formatted LP balance the user received, eg "1.234". */
+  lpFormatted: string;
+  /** Optional "View pool" deep link that the toast routes to on click. */
+  poolHref?: string;
+  /** Optional block-explorer URL for the addLiquidity tx. */
+  explorerUrl?: string;
+}
+
+export type ToastPayload =
+    | SwapToastPayload
+    | InfoToastPayload
+    | LiquidityToastPayload;
 
 const EVENT_NAME = "arc-toast";
 

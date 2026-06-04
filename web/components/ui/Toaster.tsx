@@ -1,6 +1,7 @@
 "use client";
 
-import { CheckCircle2, ExternalLink, X, XCircle } from "lucide-react";
+import { ArrowRight, CheckCircle2, ExternalLink, X, XCircle } from "lucide-react";
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { subscribeToToasts, type ToastPayload } from "@/lib/toast";
@@ -45,6 +46,53 @@ export function Toaster() {
 }
 
 function ToastCard({ payload, onClose }: { payload: ToastPayload; onClose: () => void }) {
+  if (payload.kind === "liquidity") {
+    const symA = payload.token0.symbol ?? "?";
+    const symB = payload.token1.symbol ?? "?";
+    return (
+      <div className="pointer-events-auto flex w-80 items-center gap-3 rounded-2xl border border-arc-success/40 bg-black/65 p-3 shadow-arc-card backdrop-blur-xl animate-in slide-in-from-right">
+        {/* Stacked pair icons */}
+        <div className="flex -space-x-2">
+          <AutoTokenIcon address={payload.token0.address} symbol={symA} size={32} />
+          <AutoTokenIcon address={payload.token1.address} symbol={symB} size={32} />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1.5 text-xs text-arc-text-muted">
+            <CheckCircle2 className="h-3.5 w-3.5 text-arc-success" />
+            <span>Liquidity added</span>
+          </div>
+          <div className="mt-0.5 truncate text-sm font-semibold tabular-nums text-arc-text">
+            {payload.lpFormatted} LP {symA}/{symB}
+          </div>
+          <div className="mt-0.5 flex items-center gap-2 text-[11px]">
+            {payload.poolHref && (
+              <Link
+                href={payload.poolHref}
+                onClick={onClose}
+                className="inline-flex items-center gap-1 text-sky-400 hover:text-sky-300 hover:underline"
+              >
+                View pool <ArrowRight className="h-2.5 w-2.5" />
+              </Link>
+            )}
+            {payload.explorerUrl && (
+              <a
+                href={payload.explorerUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 text-arc-text-faint hover:text-arc-text"
+              >
+                Tx <ExternalLink className="h-2.5 w-2.5" />
+              </a>
+            )}
+          </div>
+        </div>
+        <button onClick={onClose} className="text-arc-text-faint hover:text-arc-text">
+          <X className="h-3.5 w-3.5" />
+        </button>
+      </div>
+    );
+  }
+
   if (payload.kind === "swap") {
     return (
       <div className="pointer-events-auto flex w-72 items-center gap-3 rounded-2xl border border-arc-gray/40 bg-black/60 p-3 shadow-arc-card backdrop-blur-xl animate-in slide-in-from-right">
