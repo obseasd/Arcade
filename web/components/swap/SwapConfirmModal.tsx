@@ -21,6 +21,10 @@ interface Props {
   guardLabel: string;
   guardKey: string;
   tx: TxState;
+  /** Estimated USD value of the input leg. */
+  inputUsd?: number;
+  /** Estimated USD value of the output leg. */
+  outputUsd?: number;
 }
 
 export function SwapConfirmModal({
@@ -35,8 +39,21 @@ export function SwapConfirmModal({
   guardLabel,
   guardKey,
   tx,
+  inputUsd,
+  outputUsd,
 }: Props) {
   const busy = tx.status === "pending";
+
+  // Loss percentage: how much of the input's USD value the user gives up.
+  // Used to escalate the modal to a red "dangerous trade" state when output
+  // value is at most 50% of input. Common cause: trading into a thin pool
+  // or a pool whose ratio is broken (eg first LP set the wrong price).
+  const lossPct = (() => {
+    if (!inputUsd || inputUsd <= 0 || outputUsd === undefined) return 0;
+    return Math.max(0, (1 - outputUsd / inputUsd) * 100);
+  })();
+  const dangerous = lossPct >= 50;
+
   return (
     <Modal
       open={open}
@@ -45,11 +62,20 @@ export function SwapConfirmModal({
       closeOnEscape={!busy}
       widthClassName="max-w-md"
       backdropClassName="bg-black/30 backdrop-blur-sm"
-      className="border-arc-border bg-black/45 backdrop-blur-2xl"
+      className={
+        dangerous
+          ? "border-arc-danger/60 bg-black/45 backdrop-blur-2xl shadow-[0_0_40px_-10px_rgba(239,68,68,0.4)]"
+          : "border-arc-border bg-black/45 backdrop-blur-2xl"
+      }
     >
       <div className="font-sans">
-      <div className="flex items-center justify-between border-b border-arc-border px-5 py-4">
-        <h3 className="text-base font-semibold">Confirm swap</h3>
+      <div className={
+        "flex items-center justify-between border-b px-5 py-4 " +
+        (dangerous ? "border-arc-danger/40" : "border-arc-border")
+      }>
+        <h3 className={"text-base font-semibold " + (dangerous ? "text-arc-danger" : "")}>
+          {dangerous ? "Confirm swap (high loss)" : "Confirm swap"}
+        </h3>
         <button
           onClick={onClose}
           disabled={busy}
@@ -80,17 +106,42 @@ export function SwapConfirmModal({
           amountFormatted={amountOutFormatted}
         />
 
+        {dangerous && (
+          <div className="rounded-xl border border-arc-danger/50 bg-arc-danger/10 p-3 text-xs">
+            <div className="font-semibold text-arc-danger">
+              You will lose ~{lossPct.toFixed(1)}% of value on this swap.
+            </div>
+            <div className="mt-1 text-arc-danger/80">
+              The output is worth at most {outputUsd ? `$${outputUsd.toFixed(4)}` : "$0"} vs
+              {" "}
+              {inputUsd ? `$${inputUsd.toFixed(2)}` : "—"} sent in. This usually
+              means the pool is too thin or its ratio is broken. Triple-check
+              before signing — this loss is permanent.
+            </div>
+          </div>
+        )}
+
         <div className="space-y-1 rounded-xl border border-arc-border bg-arc-bg p-4 text-sm">
           <Row label="Price" value={rateLabel} />
           <Row label={guardKey} value={guardLabel} />
           <Row label="Protocol" value="Arcade V2" />
         </div>
 
-        <button onClick={onConfirm} disabled={busy} className="arc-button-primary w-full py-3.5 text-base">
+        <button
+          onClick={onConfirm}
+          disabled={busy}
+          className={
+            dangerous
+              ? "inline-flex w-full items-center justify-center gap-2 rounded-xl bg-arc-danger py-3.5 text-base font-semibold text-white transition-colors hover:bg-arc-danger/80 disabled:opacity-50"
+              : "arc-button-primary w-full py-3.5 text-base"
+          }
+        >
           {busy ? (
             <>
               <Loader2 className="h-4 w-4 animate-spin" /> {tx.message ?? "Confirming…"}
             </>
+          ) : dangerous ? (
+            "Swap anyway"
           ) : (
             "Confirm swap"
           )}

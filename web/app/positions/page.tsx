@@ -14,6 +14,10 @@ type Tab = "amm" | "burned" | "concentrated";
 export default function PositionsPage() {
   const [newOpen, setNewOpen] = useState(false);
   const [tab, setTab] = useState<Tab>("amm");
+  // Remount-key nonce: bump after a successful add so MyPositions discards
+  // its query cache and re-fetches the pair list. Cheaper than threading a
+  // bespoke refetch handle through the tree.
+  const [refreshKey, setRefreshKey] = useState(0);
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-8 sm:px-6">
@@ -68,8 +72,12 @@ export default function PositionsPage() {
         </TabButton>
       </div>
 
-      {/* Tab content */}
-      {tab === "amm" && <MyPositions emptyState={<EmptyState />} />}
+      {/* Tab content. Keying MyPositions on refreshKey forces a remount +
+          full query re-run after the user adds liquidity via the modal so
+          the row appears without a hard reload. */}
+      {tab === "amm" && (
+        <MyPositions key={refreshKey} emptyState={<EmptyState />} />
+      )}
       {tab === "burned" && <BurnedPositions />}
 
       {/* New-position modal - panel matches the swap/bridge cards exactly
@@ -92,7 +100,12 @@ export default function PositionsPage() {
           </button>
         </div>
         <div className="p-5">
-          <AddLiquidityCard />
+          <AddLiquidityCard
+            onSuccess={() => {
+              setNewOpen(false);
+              setRefreshKey((k) => k + 1);
+            }}
+          />
         </div>
       </Modal>
     </div>

@@ -631,6 +631,8 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
           guardLabel={guardLabel}
           guardKey={guardKey}
           tx={tx}
+          inputUsd={inUsd.usd}
+          outputUsd={outUsd.usd}
         />
       )}
 

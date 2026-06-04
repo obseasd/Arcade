@@ -1,11 +1,11 @@
 "use client";
 
 import {
-    ArrowDown,
     ArrowLeft,
     ChevronDown,
     Info,
     Lock,
+    Plus,
     Settings,
     X,
 } from "lucide-react";
@@ -35,7 +35,7 @@ import { pushToast } from "@/lib/toast";
 import { Modal } from "@/components/ui/Modal";
 import { TokenIcon } from "@/components/ui/TokenIcon";
 import { V3AddLiquidity } from "@/components/pool/V3AddLiquidity";
-import { cn } from "@/lib/utils";
+import { cn, formatLpBalance } from "@/lib/utils";
 
 type Mode = "dual" | "single";
 type PoolType = "amm" | "v3";
@@ -282,9 +282,7 @@ function AddLiquidityInner() {
                             functionName: "balanceOf",
                             args: [account],
                         })) as bigint;
-                        lpFormatted = Number(formatUnits(lp, 18)).toLocaleString(undefined, {
-                            maximumFractionDigits: 4,
-                        });
+                        lpFormatted = formatLpBalance(lp);
                     } catch {
                         /* ignore - first-LP read can race the receipt */
                     }
@@ -419,10 +417,11 @@ function AddLiquidityInner() {
                     balance={balA.data as bigint | undefined}
                 />
 
-                {/* Swap-direction arrow centerpiece */}
+                {/* Add-liquidity centerpiece: a "+" cross because the two
+                    legs are SUMMED into the LP, not swapped. */}
                 <div className="relative flex justify-center">
                     <div className="-my-2 rounded-xl border border-arc-border bg-arc-bg-elevated p-2">
-                        <ArrowDown className="h-4 w-4 text-arc-text-muted" />
+                        <Plus className="h-4 w-4 text-arc-text-muted" />
                     </div>
                 </div>
 
@@ -479,17 +478,6 @@ function AddLiquidityInner() {
                         <span>
                             No pool exists yet. You&apos;ll be the first liquidity provider
                             and the ratio you set defines the initial price.
-                        </span>
-                    </div>
-                )}
-                {mode === "single" && zapEnabled && (
-                    <div className="mt-3 flex items-start gap-2 rounded-xl border border-arc-border bg-arc-bg-elevated p-3 text-xs text-arc-text-muted">
-                        <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                        <span>
-                            Single Asset Zap auto-swaps part of your deposit via the
-                            pool, paying the standard {(feeBps / 100).toFixed(2)}% swap
-                            fee (no extra protocol skim). LP tokens go straight to your
-                            wallet.
                         </span>
                     </div>
                 )}

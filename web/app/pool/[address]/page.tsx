@@ -278,10 +278,6 @@ export default function PoolDetailPage() {
                 </div>
             </div>
 
-            <p className="mt-8 text-center text-xs text-arc-text-faint">
-                Activity feed + price history ship with the ArcLens indexer (Circle Grant
-                Milestone 3).
-            </p>
         </div>
     );
 }

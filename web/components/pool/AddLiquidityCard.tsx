@@ -13,7 +13,7 @@ import { AmountInput } from "@/components/ui/AmountInput";
 import { TokenIcon } from "@/components/ui/TokenIcon";
 import { TokenSelectModal, TokenOption } from "@/components/ui/TokenSelectModal";
 import { type TxState } from "@/components/ui/TxStatus";
-import { formatToken, formatUSDC } from "@/lib/utils";
+import { formatLpBalance, formatToken, formatUSDC } from "@/lib/utils";
 
 const USDC_TOKEN: TokenOption = {
   address: ADDRESSES.usdc,
@@ -23,7 +23,14 @@ const USDC_TOKEN: TokenOption = {
   pinned: true,
 };
 
-export function AddLiquidityCard() {
+interface AddLiquidityCardProps {
+  /** Fires after the addLiquidity tx is confirmed. Used by the parent to
+   *  close the wrapping modal AND trigger a position-list refetch so the
+   *  new row shows up without a manual page reload. */
+  onSuccess?: () => void;
+}
+
+export function AddLiquidityCard({ onSuccess }: AddLiquidityCardProps = {}) {
   const { address: account } = useAccount();
   const publicClient = usePublicClient();
   const { tokens: v2Tokens } = useV2Tokens();
@@ -157,9 +164,7 @@ export function AddLiquidityCard() {
               functionName: "balanceOf",
               args: [account],
             })) as bigint;
-            lpFormatted = Number(formatUnits(lp, 18)).toLocaleString(undefined, {
-              maximumFractionDigits: 4,
-            });
+            lpFormatted = formatLpBalance(lp);
           } catch {
             /* ignore */
           }
@@ -182,6 +187,9 @@ export function AddLiquidityCard() {
       setAmountB("");
       balanceA.refetch();
       balanceB.refetch();
+      // Tell the parent: close the wrapping modal AND kick a position-list
+      // refetch so the new row appears without a hard reload.
+      onSuccess?.();
     } catch (e: any) {
       setTx({ status: "idle" });
       pushToast({

@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowDown, Info } from "lucide-react";
+import { Info, Plus } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { Address, erc20Abi, formatUnits, parseUnits, zeroAddress } from "viem";
@@ -372,7 +372,7 @@ export function V3AddLiquidity({
             />
             <div className="flex justify-center">
                 <div className="-my-2 rounded-xl border border-arc-border bg-arc-bg-elevated p-2">
-                    <ArrowDown className="h-4 w-4 text-arc-text-muted" />
+                    <Plus className="h-4 w-4 text-arc-text-muted" />
                 </div>
             </div>
             <V3TokenInput
