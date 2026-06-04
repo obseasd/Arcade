@@ -3,37 +3,30 @@ pragma solidity ^0.8.24;
 
 import {Script, console2} from "forge-std/Script.sol";
 
-/**
- * @title DeployArcadeV3PositionManager
- * @notice Deploys ArcadeV3PositionManager — the canonical Uniswap V3
- *         NonfungiblePositionManager rebranded for Arcade — by loading its
- *         pre-compiled 0.7.6 artifact and forwarding constructor args via
- *         create. Same pattern as DeployV3.s.sol for the core Factory.
- *
- *         Prerequisites (one-time setup):
- *           # 1. Vendor the OZ 0.7-compatible release that v3-periphery
- *           #    was authored against. v5 (in lib/openzeppelin-contracts)
- *           #    is the wrong API surface.
- *           forge install OpenZeppelin/openzeppelin-contracts@v3.4.1-solc-0.7-2 \
- *             --no-git --rename oz-v3
- *           # 2. Compile the 0.7.6 layer (writes the NPM artifact to out-v3/).
- *           FOUNDRY_PROFILE=v3 forge build
- *
- *         Required env:
- *           PRIVATE_KEY = deployer key, funded with Arc USDC for gas
- *
- *         Optional env (defaults pulled from web/public/deployments.json):
- *           V3_FACTORY = ArcadeV3 factory address
- *           WETH9      = WETH9 address. Default is address(0) — Arc has no
- *                        native ETH and the WETH-touching helpers in NPM
- *                        are inert when this is zero. Set if you ever need
- *                        the multicall + payable + unwrapWETH9 flow.
- *
- *         Usage:
- *           FOUNDRY_PROFILE=v3 forge build
- *           forge script script/DeployArcadeV3PositionManager.s.sol:DeployArcadeV3PositionManager \
- *             --rpc-url arc_testnet --broadcast
- */
+// Deploys ArcadeV3PositionManager - the canonical Uniswap V3
+// NonfungiblePositionManager rebranded for Arcade - by loading its
+// pre-compiled 0.7.6 artifact and forwarding constructor args via create.
+// Same pattern as DeployV3.s.sol for the core Factory.
+//
+// Prerequisites (one-time setup):
+//   1. Vendor the OZ 0.7-compatible release that v3-periphery was authored
+//      against. v5 (in lib/openzeppelin-contracts) is the wrong API surface.
+//        rm -rf lib/oz-v3
+//        forge install oz-v3=OpenZeppelin/openzeppelin-contracts@v3.4.1-solc-0.7-2 --no-git
+//   2. Compile the 0.7.6 layer (writes the NPM artifact to out-v3/):
+//        FOUNDRY_PROFILE=v3 forge build
+//
+// Required env:
+//   PRIVATE_KEY = deployer key, funded with Arc USDC for gas
+//
+// Optional env (defaults pulled from web/public/deployments.json):
+//   V3_FACTORY = ArcadeV3 factory address
+//   WETH9      = WETH9 address. Default address(0) - Arc has no native ETH
+//                and the WETH-touching helpers in NPM are inert when zero.
+//
+// Usage:
+//   forge script script/DeployArcadeV3PositionManager.s.sol:DeployArcadeV3PositionManager \
+//     --rpc-url arc_testnet --broadcast
 contract DeployArcadeV3PositionManager is Script {
     function run() external returns (address npm) {
         uint256 pk = vm.envUint("PRIVATE_KEY");

@@ -29,11 +29,12 @@ skip = ["lib/v3-core/**", "lib/v3-periphery/**", "orbs/**"]
 # never drags in our 0.8 contracts (which require via_ir). Artifacts in out-v3.
 #
 # Prerequisite for ArcadeV3PositionManager (NPM fork):
-#   forge install OpenZeppelin/openzeppelin-contracts@v3.4.1-solc-0.7-2 \
-#     --no-git --rename oz-v3
+#   rm -rf lib/oz-v3
+#   forge install oz-v3=OpenZeppelin/openzeppelin-contracts@v3.4.1-solc-0.7-2 --no-git
 # That pulls the 0.7-compatible OZ branch (which v3-periphery imports as
 # @openzeppelin/contracts/...) into lib/oz-v3/, used only by this profile via
-# the remapping override below.
+# the remapping override below. The "alias=" prefix is the foundry syntax
+# for a renamed install (older forge versions do not support --rename).
 [profile.v3]
 src = "v3src"
 test = "v3src/_none"
