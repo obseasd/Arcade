@@ -8,6 +8,9 @@ export const ADDRESSES = {
   usdc: safeAddress(process.env.NEXT_PUBLIC_USDC_ADDRESS),
   factory: safeAddress(process.env.NEXT_PUBLIC_V2_FACTORY_ADDRESS),
   router: safeAddress(process.env.NEXT_PUBLIC_V2_ROUTER_ADDRESS),
+  /** ArcadeV2Zap: single-asset add-liquidity helper. Optional - the Single
+   *  Asset tab in /positions/add is hidden when this is zeroAddress. */
+  v2Zap: safeAddress(process.env.NEXT_PUBLIC_V2_ZAP_ADDRESS),
   launchpad: safeAddress(process.env.NEXT_PUBLIC_LAUNCHPAD_ADDRESS),
   multiSwap: safeAddress(process.env.NEXT_PUBLIC_MULTISWAP_ADDRESS),
   // Uniswap V3 fork (CLANKER_V3 locked-LP tokens)

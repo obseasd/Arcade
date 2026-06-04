@@ -157,3 +157,40 @@ export const PAIR_ABI = [
     outputs: [{ type: "bool" }],
   },
 ] as const;
+
+/**
+ * ArcadeV2Zap helper. zapIn pulls a single side, optimally swaps half via the
+ * pair, then forwards both legs to the router's addLiquidity. quoteZapIn is
+ * pure read for UI preview.
+ */
+export const ZAP_ABI = [
+  {
+    type: "function",
+    name: "zapIn",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "tokenIn", type: "address" },
+      { name: "amountIn", type: "uint256" },
+      { name: "tokenOther", type: "address" },
+      { name: "amountLpMin", type: "uint256" },
+      { name: "to", type: "address" },
+      { name: "deadline", type: "uint256" },
+    ],
+    outputs: [{ name: "liquidity", type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "quoteZapIn",
+    stateMutability: "view",
+    inputs: [
+      { name: "tokenIn", type: "address" },
+      { name: "amountIn", type: "uint256" },
+      { name: "tokenOther", type: "address" },
+    ],
+    outputs: [
+      { name: "swapAmount", type: "uint256" },
+      { name: "otherOut", type: "uint256" },
+      { name: "lpEstimate", type: "uint256" },
+    ],
+  },
+] as const;

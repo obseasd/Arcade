@@ -32,7 +32,9 @@
     "twitterEscrowOwner": "0x3a0Dd90212838f32a953Acd4B32596b62859324A"
   },
   "notes": {
-    "seedETH": "Standalone testnet ERC20 ('Ether (Seed)', symbol 'ETH', 18 decimals, 1,000,000 supply) deployed 2026-06-04 at block 45,493,309, tx 0xa7f46c56de4c3b87663a61018891d55a8ec0e332801e2033b245b4dd69ed6ce5. No USDC/ETH pair exists yet; seed via the frontend (/positions -> + New position -> paste the address above) so the live factory creates the pair and the front-end picks it up automatically."
+    "seedETH": "Standalone testnet ERC20 ('Ether (Seed)', symbol 'ETH', 18 decimals, 1,000,000 supply) deployed 2026-06-04 at block 45,493,309, tx 0xa7f46c56de4c3b87663a61018891d55a8ec0e332801e2033b245b4dd69ed6ce5. No USDC/ETH pair exists yet; seed via the frontend (/positions -> + New position -> paste the address above) so the live factory creates the pair and the front-end picks it up automatically.",
+    "v2Zap": "ArcadeV2Zap contract ships with this commit but is NOT deployed yet. Run `forge script script/DeployArcadeV2Zap.s.sol:DeployArcadeV2Zap --rpc-url arc_testnet --broadcast`, then add the printed address to Vercel as NEXT_PUBLIC_V2_ZAP_ADDRESS. Until that env var is set, the Single Asset tab in /positions/add renders the 'Soon' badge and the warn bubble.",
+    "v3NPM": "User-permissioned V3 add-liquidity is deferred: the CLANKER_V3 stack only exposes the locker (used by the launchpad to seed migrated tokens) - there is no NonfungiblePositionManager. Shipping V3 mint requires either a) deploying Uniswap v3-periphery's NPM, b) writing a thin mint wrapper that handles the v3 mint callback. Track this with the explore Concentrated Liquidity filter; until the NPM lands the CreatePoolModal V3 branch hands off to /positions/add which currently renders the V2 form (the type=v3 query param is preserved so the page can flip once NPM is wired)."
   },
   "constants": {
     "tokenDecimals": 18,

@@ -27,7 +27,7 @@ import {
     useWriteContract,
 } from "wagmi";
 
-import { FACTORY_ABI, PAIR_ABI, ROUTER_ABI } from "@/lib/abis/dex";
+import { FACTORY_ABI, PAIR_ABI, ROUTER_ABI, ZAP_ABI } from "@/lib/abis/dex";
 import { ADDRESSES, USDC_DECIMALS } from "@/lib/constants";
 import { arcTestnet } from "@/lib/chains";
 import { useApproveIfNeeded } from "@/lib/hooks/useApproveIfNeeded";
@@ -169,6 +169,36 @@ function AddLiquidityInner() {
         tokenB?.address,
         ADDRESSES.router,
     );
+    // Zap path uses its own approval target.
+    const { ensureAllowance: approveAForZap } = useApproveIfNeeded(
+        tokenA.address,
+        ADDRESSES.v2Zap,
+    );
+    const zapEnabled = ADDRESSES.v2Zap !== zeroAddress;
+
+    // Live preview of the zap split + LP output. Only fires when the user has
+    // typed an amount, the pair exists, and zap is deployed.
+    const zapAmountIn = useMemo(() => {
+        if (!tokenB || !amountA || mode !== "single") return 0n;
+        try {
+            return parseUnits(amountA, tokenA.decimals);
+        } catch {
+            return 0n;
+        }
+    }, [amountA, tokenA.decimals, tokenB, mode]);
+
+    const zapQuoteQ = useReadContract({
+        address: ADDRESSES.v2Zap,
+        abi: ZAP_ABI,
+        functionName: "quoteZapIn",
+        args: tokenB && zapAmountIn > 0n
+            ? [tokenA.address, zapAmountIn, tokenB.address]
+            : undefined,
+        query: { enabled: zapEnabled && !!tokenB && zapAmountIn > 0n && hasPair },
+    });
+    const zapQuote = zapQuoteQ.data as
+        | readonly [bigint, bigint, bigint]
+        | undefined;
 
     const { pricePerA, pricePerB, sharePct } = usePoolEstimates({
         amountA,
@@ -180,32 +210,63 @@ function AddLiquidityInner() {
         totalSupply: totalSupplyQ.data as bigint | undefined,
     });
 
-    const canSubmit =
-        !!account && !!tokenB && !!amountA && !!amountB && !submitting && mode === "dual";
+    const canSubmit = useMemo(() => {
+        if (!account || !tokenB || !amountA || submitting) return false;
+        if (mode === "dual") return !!amountB;
+        // Single Asset: needs zap deployed AND an existing pair to swap through.
+        return zapEnabled && hasPair;
+    }, [account, tokenB, amountA, amountB, submitting, mode, zapEnabled, hasPair]);
 
     async function onSubmit() {
         if (!account || !tokenB) return;
         try {
             setSubmitting(true);
             const aRaw = parseUnits(amountA, tokenA.decimals);
-            const bRaw = parseUnits(amountB, tokenB.decimals);
-            await Promise.all([approveA(aRaw), approveB(bRaw)]);
             const slipDen = 10_000n - BigInt(slippageBps);
-            const hash = await writeContractAsync({
-                address: ADDRESSES.router,
-                abi: ROUTER_ABI,
-                functionName: "addLiquidity",
-                args: [
-                    tokenA.address,
-                    tokenB.address,
-                    aRaw,
-                    bRaw,
-                    (aRaw * slipDen) / 10_000n,
-                    (bRaw * slipDen) / 10_000n,
-                    account,
-                    BigInt(Math.floor(Date.now() / 1000) + deadlineMin * 60),
-                ],
-            });
+            const deadline = BigInt(Math.floor(Date.now() / 1000) + deadlineMin * 60);
+
+            let hash: `0x${string}`;
+            if (mode === "single") {
+                // Single-asset zap: approve the zap helper and submit zapIn.
+                // amountLpMin uses the quote with the user's slippage tolerance
+                // applied so a swap-side surprise reverts before LP mint.
+                await approveAForZap(aRaw);
+                const lpMin =
+                    zapQuote && zapQuote[2] > 0n
+                        ? (zapQuote[2] * slipDen) / 10_000n
+                        : 0n;
+                hash = await writeContractAsync({
+                    address: ADDRESSES.v2Zap,
+                    abi: ZAP_ABI,
+                    functionName: "zapIn",
+                    args: [
+                        tokenA.address,
+                        aRaw,
+                        tokenB.address,
+                        lpMin,
+                        account,
+                        deadline,
+                    ],
+                });
+            } else {
+                const bRaw = parseUnits(amountB, tokenB.decimals);
+                await Promise.all([approveA(aRaw), approveB(bRaw)]);
+                hash = await writeContractAsync({
+                    address: ADDRESSES.router,
+                    abi: ROUTER_ABI,
+                    functionName: "addLiquidity",
+                    args: [
+                        tokenA.address,
+                        tokenB.address,
+                        aRaw,
+                        bRaw,
+                        (aRaw * slipDen) / 10_000n,
+                        (bRaw * slipDen) / 10_000n,
+                        account,
+                        deadline,
+                    ],
+                });
+            }
 
             // Wait for the tx + read the LP balance afterwards so the toast can
             // surface the actual receipt amount.
@@ -238,11 +299,17 @@ function AddLiquidityInner() {
                 token0: { address: tokenA.address, symbol: tokenA.symbol },
                 token1: { address: tokenB.address, symbol: tokenB.symbol },
                 lpFormatted,
-                poolHref: "/positions",
+                // Route the toast's "View pool" link to the pool detail page if
+                // we know the pair address, else /positions as a graceful fallback.
+                poolHref:
+                    pair && pair !== zeroAddress ? `/pool/${pair}` : "/positions",
                 explorerUrl: `${arcTestnet.blockExplorers?.default.url}/tx/${hash}`,
             });
-            // Drop the user on /positions so the new row is visible right away.
-            router.push("/positions");
+            // Drop the user on the pool detail page (or /positions when we still
+            // need to refetch the pair address after a first-LP add).
+            router.push(
+                pair && pair !== zeroAddress ? `/pool/${pair}` : "/positions",
+            );
         } catch (e: unknown) {
             const msg =
                 typeof e === "object" && e !== null && "shortMessage" in e
@@ -313,7 +380,9 @@ function AddLiquidityInner() {
                     <ModeTab
                         active={mode === "single"}
                         onClick={() => setMode("single")}
-                        soon
+                        // Show the "Soon" pill only when the zap helper hasn't
+                        // been deployed in this env (frontend off-switch).
+                        soon={!zapEnabled}
                     >
                         Single Asset
                     </ModeTab>
@@ -345,7 +414,18 @@ function AddLiquidityInner() {
                         balance={balB.data as bigint | undefined}
                     />
                 ) : (
-                    <LockedField label="Token 2" token={tokenB} />
+                    <LockedField
+                        label="Token 2"
+                        token={tokenB}
+                        // Surface the zap quote (other-side amount) so the
+                        // locked field still shows what's actually heading
+                        // into the pair.
+                        previewAmount={
+                            tokenB && zapQuote && zapQuote[1] > 0n
+                                ? formatUnits(zapQuote[1], tokenB.decimals)
+                                : undefined
+                        }
+                    />
                 )}
 
                 {/* Prices + pool share */}
@@ -378,14 +458,33 @@ function AddLiquidityInner() {
                         </span>
                     </div>
                 )}
-                {mode === "single" && (
+                {mode === "single" && zapEnabled && (
                     <div className="mt-3 flex items-start gap-2 rounded-xl border border-arc-border bg-arc-bg-elevated p-3 text-xs text-arc-text-muted">
                         <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                         <span>
-                            Single Asset Zap auto-swaps half of your input via the pool,
-                            paying the standard {(feeBps / 100).toFixed(2)}% swap fee
-                            (no extra protocol fee on top). Shipping with the zap router
-                            in the next deploy.
+                            Single Asset Zap auto-swaps part of your deposit via the
+                            pool, paying the standard {(feeBps / 100).toFixed(2)}% swap
+                            fee (no extra protocol skim). LP tokens go straight to your
+                            wallet.
+                        </span>
+                    </div>
+                )}
+                {mode === "single" && !zapEnabled && (
+                    <div className="mt-3 flex items-start gap-2 rounded-xl border border-arc-warn/30 bg-arc-warn/10 p-3 text-xs text-arc-warn">
+                        <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                        <span>
+                            Single Asset Zap is queued to roll out as soon as
+                            ArcadeV2Zap is wired into NEXT_PUBLIC_V2_ZAP_ADDRESS.
+                            Use Dual Token in the meantime.
+                        </span>
+                    </div>
+                )}
+                {mode === "single" && zapEnabled && !hasPair && (
+                    <div className="mt-3 flex items-start gap-2 rounded-xl border border-arc-warn/30 bg-arc-warn/10 p-3 text-xs text-arc-warn">
+                        <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                        <span>
+                            Single Asset Zap needs an existing pair to swap through.
+                            Seed the pool with Dual Token first, then zap from there.
                         </span>
                     </div>
                 )}
@@ -404,13 +503,17 @@ function AddLiquidityInner() {
                         ? "Connect wallet"
                         : !tokenB
                           ? "Select a token"
-                          : mode === "single"
+                          : mode === "single" && !zapEnabled
                             ? "Single Asset Zap — coming soon"
-                            : !amountA || !amountB
-                              ? "Enter an amount"
-                              : submitting
-                                ? "Adding liquidity…"
-                                : "Add liquidity"}
+                            : mode === "single" && !hasPair
+                              ? "No pool to zap into yet"
+                              : !amountA || (mode === "dual" && !amountB)
+                                ? "Enter an amount"
+                                : submitting
+                                  ? "Adding liquidity…"
+                                  : mode === "single"
+                                    ? "Zap into pool"
+                                    : "Add liquidity"}
                 </button>
             </div>
 
@@ -577,23 +680,40 @@ function TokenInput({
     );
 }
 
-function LockedField({ label, token }: { label: string; token: ResolvedToken | undefined }) {
+function LockedField({
+    label,
+    token,
+    previewAmount,
+}: {
+    label: string;
+    token: ResolvedToken | undefined;
+    /** Optional zap quote so the locked field reads as "0 + arrow" until the
+     *  user types a Token 1 amount, then flips to the live preview. */
+    previewAmount?: string;
+}) {
+    const display = previewAmount
+        ? Number(previewAmount).toLocaleString(undefined, {
+              maximumFractionDigits: 6,
+          })
+        : "0";
     return (
-        <div className="relative rounded-2xl border border-arc-border bg-white/[0.015] p-4 opacity-70">
+        <div className="relative rounded-2xl border border-arc-border bg-white/[0.015] p-4">
             <div className="mb-2 flex items-center justify-between">
                 <span className="text-sm text-arc-text-muted">{label}</span>
-                <div className="flex items-center gap-2 rounded-xl bg-arc-surface-2 px-3 py-1.5 text-sm font-semibold">
+                <div className="flex items-center gap-2 rounded-xl bg-arc-surface-2 px-3 py-1.5 text-sm font-semibold opacity-70">
                     <TokenIcon symbol={token?.symbol} size={20} />
                     {token?.symbol ?? "?"}
                     <ChevronDown className="h-3.5 w-3.5 text-arc-text-muted" />
                 </div>
             </div>
             <div className="text-3xl font-semibold tabular-nums text-arc-text-faint">
-                0
+                {display}
             </div>
-            <div className="pointer-events-none absolute inset-x-0 top-1/2 flex -translate-y-1/2 flex-col items-center gap-1 text-arc-text-muted">
-                <Lock className="h-4 w-4" />
-                <span className="text-[11px]">This field is locked in Single Asset Zap</span>
+            <div className="mt-1 inline-flex items-center gap-1 text-[11px] text-arc-text-muted">
+                <Lock className="h-3 w-3" />
+                {previewAmount
+                    ? "auto-zapped via the pool"
+                    : "locked in Single Asset Zap"}
             </div>
         </div>
     );

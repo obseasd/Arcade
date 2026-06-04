@@ -867,10 +867,10 @@ function PoolSubRowCard({
             <span className="text-right text-xs tabular-nums sm:text-sm">{tvlLabel}</span>
             <span className="text-right text-xs tabular-nums text-arc-text-faint sm:text-sm">—</span>
             <Link
-                href="/swap"
+                href={`/pool/${sub.address}`}
                 className="inline-flex items-center justify-end gap-1 rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-1.5 text-[11px] font-medium text-arc-text transition-colors hover:bg-white/5"
             >
-                Add Liquidity
+                Open pool
                 <ChevronDown className="h-3 w-3 -rotate-90" />
             </Link>
         </div>
@@ -962,7 +962,7 @@ function PoolPairGridCard({ row }: { row: PoolPairRow }) {
 
             <div className="mt-2 grid grid-cols-2 gap-2">
                 <Link
-                    href="/swap"
+                    href={`/positions/add?type=amm&t0=${row.token0.address}&t1=${row.token1.address}`}
                     className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-[0.575rem] text-xs font-semibold text-arc-text transition-colors hover:bg-white/5"
                 >
                     <Plus className="h-3.5 w-3.5" />
