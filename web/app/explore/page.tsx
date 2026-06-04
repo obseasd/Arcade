@@ -844,12 +844,14 @@ function PoolSubRowCard({
                         {token0.symbol} / {token1.symbol}
                     </div>
                     <div className="mt-0.5 flex items-center gap-1">
+                        {/* V2 = cyan (light blue, mirrors stats V2 line).
+                            V3 = arc-cta-hover (dark blue, mirrors stats Total). */}
                         <span
                             className={cn(
                                 "rounded-md border px-1 py-0.5 text-[9px] uppercase tracking-wider",
                                 sub.version === "v2"
-                                    ? "border-arc-cta-hover/40 bg-arc-cta-hover/10 text-arc-cta-hover"
-                                    : "border-arc-success/40 bg-arc-success/10 text-arc-success",
+                                    ? "border-cyan-400/40 bg-cyan-400/10 text-cyan-400"
+                                    : "border-arc-cta-hover/40 bg-arc-cta-hover/10 text-arc-cta-hover",
                             )}
                         >
                             {sub.version}
@@ -898,18 +900,28 @@ function PoolPairGridCard({ row }: { row: PoolPairRow }) {
                     <div className="truncate text-sm font-semibold">
                         {row.token0.symbol} / {row.token1.symbol}
                     </div>
+                    {/* Each pool variant gets a version pill AND a separate
+                        fee-tier pill (e.g. v3 then 1%), matching the row view
+                        and HyperSwap. Cyan = V2, arc-cta-hover navy = V3. */}
                     <div className="mt-1 flex flex-wrap items-center gap-1">
                         {variantBadges.map((v) => (
                             <span
                                 key={`${v.address}-${v.version}`}
-                                className={cn(
-                                    "rounded-md border px-1.5 py-0.5 text-[9px] uppercase tracking-wider",
-                                    v.version === "v2"
-                                        ? "border-arc-cta-hover/40 bg-arc-cta-hover/10 text-arc-cta-hover"
-                                        : "border-arc-success/40 bg-arc-success/10 text-arc-success",
-                                )}
+                                className="flex items-center gap-1"
                             >
-                                {v.version} · {v.feeBps / 100}%
+                                <span
+                                    className={cn(
+                                        "rounded-md border px-1.5 py-0.5 text-[9px] uppercase tracking-wider",
+                                        v.version === "v2"
+                                            ? "border-cyan-400/40 bg-cyan-400/10 text-cyan-400"
+                                            : "border-arc-cta-hover/40 bg-arc-cta-hover/10 text-arc-cta-hover",
+                                    )}
+                                >
+                                    {v.version}
+                                </span>
+                                <span className="rounded-md border border-arc-border bg-arc-bg-elevated px-1.5 py-0.5 text-[9px] text-arc-text-muted">
+                                    {v.feeBps / 100}%
+                                </span>
                             </span>
                         ))}
                     </div>
