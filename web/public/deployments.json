@@ -32,7 +32,7 @@
     "twitterEscrowOwner": "0x3a0Dd90212838f32a953Acd4B32596b62859324A"
   },
   "notes": {
-    "seedETH": "Standalone testnet ERC20 ('Ether (Seed)', symbol 'ETH', 18 decimals) deployed 2026-06-04 to back the /explore USDC/ETH demo pool. Pair created on the OLD factory 0xd192...611e by the first script run before deployments.json was synced; re-seed via the frontend on the live factory above (Continue from /positions or /explore -> + New position)."
+    "seedETH": "Standalone testnet ERC20 ('Ether (Seed)', symbol 'ETH', 18 decimals, 1,000,000 supply) deployed 2026-06-04 at block 45,493,309, tx 0xa7f46c56de4c3b87663a61018891d55a8ec0e332801e2033b245b4dd69ed6ce5. No USDC/ETH pair exists yet; seed via the frontend (/positions -> + New position -> paste the address above) so the live factory creates the pair and the front-end picks it up automatically."
   },
   "constants": {
     "tokenDecimals": 18,
