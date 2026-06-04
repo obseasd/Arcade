@@ -455,18 +455,20 @@ function AddLiquidityInner() {
                     <div className="mb-3 text-xs font-semibold uppercase tracking-wider text-arc-text-muted">
                         Prices and pool share
                     </div>
+                    {/* Share of pool sits between the two ratio stats so the
+                        eye lands on the user-relevant number first. */}
                     <div className="grid grid-cols-3 gap-2 text-center">
                         <Stat
                             value={pricePerA ?? "—"}
                             label={`${tokenB?.symbol ?? "?"} per ${tokenA.symbol}`}
                         />
                         <Stat
-                            value={pricePerB ?? "—"}
-                            label={`${tokenA.symbol} per ${tokenB?.symbol ?? "?"}`}
-                        />
-                        <Stat
                             value={sharePct ?? "0%"}
                             label="Share of Pool"
+                        />
+                        <Stat
+                            value={pricePerB ?? "—"}
+                            label={`${tokenA.symbol} per ${tokenB?.symbol ?? "?"}`}
                         />
                     </div>
                 </div>

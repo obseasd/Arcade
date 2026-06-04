@@ -40,10 +40,26 @@ export interface LiquidityToastPayload {
   explorerUrl?: string;
 }
 
+export interface LiquidityRemovedToastPayload {
+  kind: "liquidity-removed";
+  /** Tokens that were redeemed (used to render stacked icons). */
+  token0: { address: Address; symbol?: string };
+  token1: { address: Address; symbol?: string };
+  /** Pre-formatted amount of token0 that hit the user's wallet. */
+  amount0Formatted: string;
+  /** Pre-formatted amount of token1 that hit the user's wallet. */
+  amount1Formatted: string;
+  /** Optional pool detail link. */
+  poolHref?: string;
+  /** Optional block-explorer URL for the removeLiquidity tx. */
+  explorerUrl?: string;
+}
+
 export type ToastPayload =
     | SwapToastPayload
     | InfoToastPayload
-    | LiquidityToastPayload;
+    | LiquidityToastPayload
+    | LiquidityRemovedToastPayload;
 
 const EVENT_NAME = "arc-toast";
 

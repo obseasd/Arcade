@@ -5,10 +5,14 @@ import { Address, erc20Abi, formatUnits } from "viem";
 import { useAccount, usePublicClient, useReadContract, useReadContracts, useWriteContract } from "wagmi";
 import { FACTORY_ABI, PAIR_ABI, ROUTER_ABI } from "@/lib/abis/dex";
 import { ADDRESSES, USDC_DECIMALS } from "@/lib/constants";
+import { arcTestnet } from "@/lib/chains";
 import { useApproveIfNeeded } from "@/lib/hooks/useApproveIfNeeded";
-import { TxStatus, type TxState } from "@/components/ui/TxStatus";
+import { pushToast } from "@/lib/toast";
 import { TokenIcon } from "@/components/ui/TokenIcon";
 import { formatToken, formatUSDC } from "@/lib/utils";
+
+// TxStatus / TxState are no longer used here - feedback now lives in the
+// bottom-right toaster (matches the add-liquidity flow).
 
 interface PositionInfo {
   pair: Address;
@@ -180,24 +184,31 @@ function PositionRow({
   const { address: account } = useAccount();
   const { writeContractAsync } = useWriteContract();
   const [pct, setPct] = useState(50);
-  const [tx, setTx] = useState<TxState>({ status: "idle" });
+  // Slippage tolerance in bps: 50 = 0.5%, 100 = 1%, 300 = 3%. Default is
+  // 0.5% which is more forgiving than the previous hard-coded 1% and rare
+  // to trip on a pair-burn (no swap path => the only race is another LP
+  // op touching the same pair in the same block).
+  const [slippageBps, setSlippageBps] = useState(50);
+  const [removing, setRemoving] = useState(false);
 
   const sharePct = (Number(p.lpBalance) / Number(p.lpTotal)) * 100;
   const amt0 = (p.reserve0 * p.lpBalance) / p.lpTotal;
   const amt1 = (p.reserve1 * p.lpBalance) / p.lpTotal;
 
   const lpToRemove = (p.lpBalance * BigInt(pct)) / 100n;
-  const min0 = ((amt0 * BigInt(pct)) / 100n * 99n) / 100n;
-  const min1 = ((amt1 * BigInt(pct)) / 100n * 99n) / 100n;
+  const slipDen = 10_000n - BigInt(slippageBps);
+  const expected0 = (amt0 * BigInt(pct)) / 100n;
+  const expected1 = (amt1 * BigInt(pct)) / 100n;
+  const min0 = (expected0 * slipDen) / 10_000n;
+  const min1 = (expected1 * slipDen) / 10_000n;
 
   const { ensureAllowance } = useApproveIfNeeded(p.pair, ADDRESSES.router);
 
   const onRemove = async () => {
     if (!account || pct === 0) return;
     try {
-      setTx({ status: "pending", message: "Approving LP tokens…" });
+      setRemoving(true);
       await ensureAllowance(lpToRemove);
-      setTx({ status: "pending", message: "Removing liquidity…" });
       const hash = await writeContractAsync({
         address: ADDRESSES.router,
         abi: ROUTER_ABI,
@@ -213,10 +224,33 @@ function PositionRow({
         ],
       });
       if (publicClient) await publicClient.waitForTransactionReceipt({ hash });
-      setTx({ status: "success", message: "Liquidity removed" });
+      pushToast({
+        kind: "liquidity-removed",
+        token0: { address: p.token0, symbol: p.symbol0 },
+        token1: { address: p.token1, symbol: p.symbol1 },
+        amount0Formatted: fmt(expected0, p.decimals0),
+        amount1Formatted: fmt(expected1, p.decimals1),
+        poolHref: `/pool/${p.pair}`,
+        explorerUrl: `${arcTestnet.blockExplorers?.default.url}/tx/${hash}`,
+      });
       onRefresh();
-    } catch (e: any) {
-      setTx({ status: "error", message: e?.shortMessage || e?.message || "Failed" });
+    } catch (e: unknown) {
+      // Surface the real revert reason so the user sees WHY remove failed.
+      // Most common cause on Arc is the slippage min being too tight after
+      // someone else moved the reserves between read and exec.
+      const msg =
+        typeof e === "object" && e !== null && "shortMessage" in e
+          ? String((e as { shortMessage?: string }).shortMessage)
+          : e instanceof Error
+            ? e.message
+            : "Failed";
+      pushToast({
+        kind: "error",
+        title: "Remove liquidity failed",
+        message: msg,
+      });
+    } finally {
+      setRemoving(false);
     }
   };
 
@@ -270,16 +304,48 @@ function PositionRow({
               </button>
             ))}
           </div>
-          <div className="mt-3 text-xs text-arc-text-muted">
-            You will receive (≥99%):
-            <div className="mt-1 tabular-nums text-arc-text">
-              {fmt(min0, p.decimals0)} {p.symbol0} + {fmt(min1, p.decimals1)} {p.symbol1}
+          {/* Slippage selector. The 1% default we had was tight enough to
+              fail when reserves moved a hair between read and exec; default
+              here is 0.5% but the user can bump to 1% / 3% for sketchy pools. */}
+          <div className="mt-3 flex items-center justify-between gap-2 text-xs">
+            <span className="text-arc-text-muted">Slippage tolerance</span>
+            <div className="flex items-center gap-1">
+              {[
+                { label: "0.5%", bps: 50 },
+                { label: "1%", bps: 100 },
+                { label: "3%", bps: 300 },
+              ].map((opt) => (
+                <button
+                  key={opt.bps}
+                  onClick={() => setSlippageBps(opt.bps)}
+                  className={
+                    "rounded-md px-2 py-0.5 text-[11px] font-semibold transition-colors " +
+                    (slippageBps === opt.bps
+                      ? "bg-arc-cta text-white"
+                      : "bg-arc-surface text-arc-text-muted hover:text-arc-text")
+                  }
+                >
+                  {opt.label}
+                </button>
+              ))}
             </div>
           </div>
-          <button onClick={onRemove} className="arc-button-secondary mt-3 w-full py-2 text-sm" disabled={tx.status === "pending"}>
-            {tx.status === "pending" ? "Removing…" : "Remove liquidity"}
+          <div className="mt-3 text-xs text-arc-text-muted">
+            You will receive at least <span className="font-semibold text-arc-text">{(100 - slippageBps / 100).toFixed(2)}%</span> of:
+            <div
+              className="mt-1 tabular-nums text-arc-text"
+              title="Minimum guaranteed by your slippage tolerance. Anything above this lands in your wallet; below it the tx reverts so you do not get rugged on the LP burn."
+            >
+              {fmt(expected0, p.decimals0)} {p.symbol0} + {fmt(expected1, p.decimals1)} {p.symbol1}
+            </div>
+          </div>
+          <button
+            onClick={onRemove}
+            className="arc-button-secondary mt-3 w-full py-2 text-sm"
+            disabled={removing}
+          >
+            {removing ? "Removing…" : "Remove liquidity"}
           </button>
-          <TxStatus state={tx} className="mt-2" />
         </div>
       )}
     </div>
