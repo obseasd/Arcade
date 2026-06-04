@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
+import { CreatePoolModal } from "@/components/pool/CreatePoolModal";
 import {
     Area,
     AreaChart,
@@ -100,6 +101,7 @@ export default function ExplorePage() {
     const [expanded, setExpanded] = useState<string | null>(null);
     const [viewMode, setViewMode] = useState<ViewMode>("list");
     const [page, setPage] = useState(1);
+    const [createOpen, setCreateOpen] = useState(false);
     const PAGE_SIZE = 10;
 
     const reservesQ = useReadContracts({
@@ -337,15 +339,15 @@ export default function ExplorePage() {
                 />
             </div>
 
-            {/* + New position */}
+            {/* + New position - opens the Create-a-new-pool modal */}
             <div className="mb-4 flex justify-end">
-                <Link
-                    href="/launchpad/create"
+                <button
+                    onClick={() => setCreateOpen(true)}
                     className="inline-flex items-center gap-2 rounded-xl bg-arc-cta px-[1.1rem] py-[0.55rem] text-[0.9625rem] font-semibold text-white transition-colors hover:bg-arc-cta-hover"
                 >
                     <Plus className="h-[1.1rem] w-[1.1rem]" />
                     New position
-                </Link>
+                </button>
             </div>
 
             {/* Filter chips */}
@@ -368,9 +370,11 @@ export default function ExplorePage() {
                     ))}
                 </div>
             </div>
-            {/* Search + sort + view-mode toggle */}
+            {/* Search + sort + view-mode toggle. Both icon buttons are perfect
+                squares (h-11 w-11), and the search bar matches that height so
+                the row reads as a uniform 44-px control strip. */}
             <div className="mb-4 flex items-center gap-2">
-                <div className="flex flex-1 items-center gap-2 rounded-xl border border-arc-border bg-black/15 px-3 py-[0.6875rem] backdrop-blur-xl">
+                <div className="flex h-11 flex-1 items-center gap-2 rounded-xl border border-arc-border bg-black/15 px-3 backdrop-blur-xl">
                     <Search className="h-4 w-4 text-arc-text-faint" />
                     <input
                         value={q}
@@ -381,7 +385,7 @@ export default function ExplorePage() {
                 </div>
                 <button
                     title="Sort"
-                    className="shrink-0 rounded-xl border border-arc-border bg-black/15 p-[0.6875rem] text-arc-text backdrop-blur-xl transition-colors hover:bg-white/5"
+                    className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-arc-border bg-black/15 text-arc-text backdrop-blur-xl transition-colors hover:bg-white/5"
                 >
                     <MaskIcon src="/filter.png" size={16} />
                 </button>
@@ -390,7 +394,7 @@ export default function ExplorePage() {
                     onClick={() =>
                         setViewMode((m) => (m === "list" ? "card" : "list"))
                     }
-                    className="shrink-0 rounded-xl border border-arc-border bg-black/15 p-[0.6875rem] text-arc-text backdrop-blur-xl transition-colors hover:bg-white/5"
+                    className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-arc-border bg-black/15 text-arc-text backdrop-blur-xl transition-colors hover:bg-white/5"
                 >
                     <MaskIcon
                         src={viewMode === "list" ? "/viewcard.png" : "/viewligne.png"}
@@ -442,6 +446,23 @@ export default function ExplorePage() {
                 (Circle Grant Milestone 3). For now the page surfaces a live TVL snapshot
                 across every Arcade pool plus the categorisation infrastructure.
             </p>
+
+            {/* Create-a-new-pool modal. Defaults to the highest-TVL pair so the
+                user lands on the existing flagship pool without having to pick. */}
+            <CreatePoolModal
+                open={createOpen}
+                onClose={() => setCreateOpen(false)}
+                defaultPair={
+                    allRows.length > 0
+                        ? { token0: allRows[0].token0, token1: allRows[0].token1 }
+                        : undefined
+                }
+                tokens={Array.from(tokenLookup.entries()).map(([addr, meta]) => ({
+                    address: addr as Address,
+                    symbol: meta.symbol,
+                    decimals: meta.decimals,
+                }))}
+            />
         </div>
     );
 }
@@ -516,10 +537,14 @@ function ChartCard({
     }, [window]);
 
     const valueLabel = useMemo(() => formatBig(totalUsd), [totalUsd]);
-    const fillId = `chart-fill-${label.replace(/\s+/g, "-")}`;
+    const slug = label.replace(/\s+/g, "-").toLowerCase();
+    const fillId = `chart-fill-${slug}`;
+    const shimmerTotalId = `shimmer-${slug}-total`;
+    const shimmerV3Id = `shimmer-${slug}-v3`;
+    const shimmerV2Id = `shimmer-${slug}-v2`;
 
     return (
-        <div className="relative h-44 overflow-hidden rounded-2xl border border-arc-border bg-black/15 p-4 backdrop-blur-xl">
+        <div className="relative h-[12.1rem] overflow-hidden rounded-2xl border border-arc-border bg-black/15 p-4 backdrop-blur-xl">
             <div className="mb-3 flex items-center justify-start gap-3">
                 <span className="text-xs uppercase tracking-wider text-arc-text-muted">
                     {label}
@@ -555,6 +580,13 @@ function ChartCard({
                                 <stop offset="0%" stopColor={TOTAL_COLOR} stopOpacity={0.45} />
                                 <stop offset="100%" stopColor={TOTAL_COLOR} stopOpacity={0} />
                             </linearGradient>
+                            {/* Animated shimmer gradients: a 50%-positioned bright
+                                stop slides across the bounding box via animateTransform,
+                                producing a moving glint along every line. Each line
+                                gets its own gradient so the colours stay distinct. */}
+                            <ShimmerGradient id={shimmerTotalId} color={TOTAL_COLOR} />
+                            <ShimmerGradient id={shimmerV3Id} color={V3_COLOR} />
+                            <ShimmerGradient id={shimmerV2Id} color={V2_COLOR} />
                         </defs>
                         <RechartsTooltip
                             cursor={{ stroke: TOTAL_COLOR, strokeOpacity: 0.4, strokeWidth: 1 }}
@@ -573,9 +605,9 @@ function ChartCard({
                             <Area
                                 type="monotone"
                                 dataKey="v2"
-                                stroke={V2_COLOR}
+                                stroke={`url(#${shimmerV2Id})`}
                                 fill="transparent"
-                                strokeWidth={1.2}
+                                strokeWidth={1.4}
                                 isAnimationActive={false}
                                 dot={false}
                             />
@@ -584,9 +616,9 @@ function ChartCard({
                             <Area
                                 type="monotone"
                                 dataKey="v3"
-                                stroke={V3_COLOR}
+                                stroke={`url(#${shimmerV3Id})`}
                                 fill="transparent"
-                                strokeWidth={1.2}
+                                strokeWidth={1.4}
                                 isAnimationActive={false}
                                 dot={false}
                             />
@@ -594,9 +626,9 @@ function ChartCard({
                         <Area
                             type="monotone"
                             dataKey="total"
-                            stroke={TOTAL_COLOR}
+                            stroke={`url(#${shimmerTotalId})`}
                             fill={`url(#${fillId})`}
-                            strokeWidth={2}
+                            strokeWidth={2.2}
                             isAnimationActive={false}
                             dot={false}
                         />
@@ -630,7 +662,7 @@ function ChartTooltip({
     const v3 = v3Usd > 0 ? point.v3 * (v3Usd / Math.max(point.v3, 0.01)) : 0;
     const v2 = v2Usd > 0 ? point.v2 * (v2Usd / Math.max(point.v2, 0.01)) : 0;
     return (
-        <div className="rounded-xl border border-arc-border bg-arc-bg-elevated/95 px-3 py-2 text-xs shadow-arc-card backdrop-blur-xl">
+        <div className="rounded-xl border border-arc-border bg-black/30 px-3 py-2 text-xs shadow-arc-card backdrop-blur-xl">
             <div className="mb-1 text-arc-text-muted">{point.label}</div>
             <div className="space-y-0.5">
                 {singleLine ? (
@@ -942,6 +974,32 @@ function PoolPairGridCard({ row }: { row: PoolPairRow }) {
 
 function SwapIcon() {
     return <MaskIcon src="/swap.png" size={14} className="bg-sky-400" />;
+}
+
+/**
+ * Animated SVG linearGradient: a bright stop in the centre slides across the
+ * path's bounding box via animateTransform, producing a glint that runs along
+ * the line. Each chart line passes a unique id and its base colour, so all
+ * three lines can shimmer in their own hue at the same time without colliding.
+ */
+function ShimmerGradient({ id, color }: { id: string; color: string }) {
+    return (
+        <linearGradient id={id} x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%" stopColor={color} stopOpacity={0.55} />
+            <stop offset="40%" stopColor={color} stopOpacity={1} />
+            <stop offset="50%" stopColor="#ffffff" stopOpacity={1} />
+            <stop offset="60%" stopColor={color} stopOpacity={1} />
+            <stop offset="100%" stopColor={color} stopOpacity={0.55} />
+            <animateTransform
+                attributeName="gradientTransform"
+                type="translate"
+                from="-1 0"
+                to="1 0"
+                dur="3.6s"
+                repeatCount="indefinite"
+            />
+        </linearGradient>
+    );
 }
 
 /**
