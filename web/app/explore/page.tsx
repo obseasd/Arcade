@@ -1,11 +1,12 @@
 "use client";
 
 import {
-    ArrowDownUp,
     ChevronDown,
+    ChevronLeft,
+    ChevronRight,
+    ChevronsLeft,
+    ChevronsRight,
     Flame,
-    LayoutGrid,
-    List,
     Plus,
     Search,
     Sparkles,
@@ -98,6 +99,8 @@ export default function ExplorePage() {
     const [feeWindow, setFeeWindow] = useState<Win>("30D");
     const [expanded, setExpanded] = useState<string | null>(null);
     const [viewMode, setViewMode] = useState<ViewMode>("list");
+    const [page, setPage] = useState(1);
+    const PAGE_SIZE = 10;
 
     const reservesQ = useReadContracts({
         contracts: v2Pairs.flatMap((p) => [
@@ -251,6 +254,18 @@ export default function ExplorePage() {
         }
     }, [filter, filteredRows.length]);
 
+    // Reset to page 1 whenever the filter, search, or view mode resets the
+    // visible set so the user never lands on an empty (past-the-end) page.
+    useEffect(() => {
+        setPage(1);
+    }, [filter, q, viewMode]);
+
+    const pageCount = Math.max(1, Math.ceil(filteredRows.length / PAGE_SIZE));
+    const pageRows = useMemo(
+        () => filteredRows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE),
+        [filteredRows, page],
+    );
+
     const totalTvlUsdc = useMemo(
         () => allRows.reduce((acc, r) => acc + r.tvlUsdc, 0n),
         [allRows],
@@ -368,7 +383,7 @@ export default function ExplorePage() {
                     title="Sort"
                     className="shrink-0 rounded-xl border border-arc-border bg-black/15 p-[0.6875rem] text-arc-text backdrop-blur-xl transition-colors hover:bg-white/5"
                 >
-                    <ArrowDownUp className="h-4 w-4" />
+                    <MaskIcon src="/filter.png" size={16} />
                 </button>
                 <button
                     title={viewMode === "list" ? "Switch to card view" : "Switch to list view"}
@@ -377,11 +392,10 @@ export default function ExplorePage() {
                     }
                     className="shrink-0 rounded-xl border border-arc-border bg-black/15 p-[0.6875rem] text-arc-text backdrop-blur-xl transition-colors hover:bg-white/5"
                 >
-                    {viewMode === "list" ? (
-                        <LayoutGrid className="h-4 w-4" />
-                    ) : (
-                        <List className="h-4 w-4" />
-                    )}
+                    <MaskIcon
+                        src={viewMode === "list" ? "/viewcard.png" : "/viewligne.png"}
+                        size={16}
+                    />
                 </button>
             </div>
 
@@ -399,8 +413,8 @@ export default function ExplorePage() {
                 </div>
             )}
             {!reservesQ.isLoading && filteredRows.length > 0 && viewMode === "list" && (
-                <div className="space-y-3">
-                    {filteredRows.map((row) => (
+                <div className="space-y-3 pt-2">
+                    {pageRows.map((row) => (
                         <PoolPairRowCard
                             key={row.key}
                             row={row}
@@ -414,10 +428,13 @@ export default function ExplorePage() {
             )}
             {!reservesQ.isLoading && filteredRows.length > 0 && viewMode === "card" && (
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-                    {filteredRows.map((row) => (
+                    {pageRows.map((row) => (
                         <PoolPairGridCard key={row.key} row={row} />
                     ))}
                 </div>
+            )}
+            {!reservesQ.isLoading && pageCount > 1 && (
+                <Pagination page={page} pageCount={pageCount} onPage={setPage} />
             )}
 
             <p className="mt-10 text-center text-xs text-arc-text-faint">
@@ -664,12 +681,25 @@ function PoolPairRowCard({
     const subCount = row.subRows.length;
 
     return (
-        <div
-            className={cn(
-                "arc-card overflow-hidden p-0 transition-colors",
-                expanded && "border-arc-cta-hover/30",
+        <div className="relative">
+            {/* "LP Boost" sticker - sits on top of the row border for any pool
+                tagged Incentivized & Liquidity Mining. Green outline + soft
+                glow mirrors HyperSwap's badge, adapted to Arcade's palette
+                via arc-success (emerald). */}
+            {row.isIncentivized && (
+                <div className="absolute -top-2.5 left-4 z-10 inline-flex items-center gap-1 rounded-md border border-arc-success bg-arc-bg-elevated px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-arc-success">
+                    <Sparkles className="h-2.5 w-2.5" />
+                    LP Boost
+                </div>
             )}
-        >
+            <div
+                className={cn(
+                    "arc-card overflow-hidden p-0 transition-colors",
+                    expanded && "border-arc-cta-hover/30",
+                    row.isIncentivized &&
+                        "border-arc-success/70 shadow-[0_0_20px_-4px_rgba(16,185,129,0.45)] ring-1 ring-arc-success/40",
+                )}
+            >
             {/* Row header. +10% taller than the previous spec (1.1rem -> 1.21rem). */}
             <div className="flex flex-col items-stretch gap-3 p-[1.21rem] sm:flex-row sm:items-center">
                 <div className="flex min-w-0 flex-1 items-center gap-3">
@@ -708,14 +738,14 @@ function PoolPairRowCard({
                 <div className="flex shrink-0 items-center gap-2">
                     <Link
                         href="/swap"
-                        className="inline-flex items-center gap-1.5 rounded-xl border border-arc-border bg-sky-400/10 px-3 py-2 text-xs font-semibold text-sky-400 transition-colors hover:bg-sky-400/20"
+                        className="inline-flex items-center gap-1.5 rounded-xl border border-arc-border bg-sky-400/10 px-3 py-[0.575rem] text-xs font-semibold text-sky-400 transition-colors hover:bg-sky-400/20"
                     >
                         <SwapIcon />
                         Swap
                     </Link>
                     <button
                         onClick={onToggle}
-                        className="inline-flex items-center gap-1 rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2 text-xs font-medium text-arc-text transition-colors hover:bg-white/5"
+                        className="inline-flex items-center gap-1 rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-[0.575rem] text-xs font-medium text-arc-text transition-colors hover:bg-white/5"
                     >
                         {expanded ? "Hide pools" : `Show all pools (${subCount})`}
                         <ChevronDown
@@ -750,6 +780,7 @@ function PoolPairRowCard({
                     ))}
                 </div>
             )}
+            </div>
         </div>
     );
 }
@@ -888,14 +919,14 @@ function PoolPairGridCard({ row }: { row: PoolPairRow }) {
             <div className="mt-2 grid grid-cols-2 gap-2">
                 <Link
                     href="/swap"
-                    className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2 text-xs font-semibold text-arc-text transition-colors hover:bg-white/5"
+                    className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-[0.575rem] text-xs font-semibold text-arc-text transition-colors hover:bg-white/5"
                 >
                     <Plus className="h-3.5 w-3.5" />
                     Add Liq.
                 </Link>
                 <Link
                     href="/swap"
-                    className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-arc-border bg-sky-400/10 px-3 py-2 text-xs font-semibold text-sky-400 transition-colors hover:bg-sky-400/20"
+                    className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-arc-border bg-sky-400/10 px-3 py-[0.575rem] text-xs font-semibold text-sky-400 transition-colors hover:bg-sky-400/20"
                 >
                     <SwapIcon />
                     Swap
@@ -910,12 +941,32 @@ function PoolPairGridCard({ row }: { row: PoolPairRow }) {
 // -------------------------------------------------------------------
 
 function SwapIcon() {
+    return <MaskIcon src="/swap.png" size={14} className="bg-sky-400" />;
+}
+
+/**
+ * Renders a PNG as a CSS mask so the icon picks up whatever background
+ * colour the caller sets. Lets us swap the lucide icons for /public PNGs
+ * (filter, viewligne, viewcard, swap) without losing the white/sky tint
+ * we use across the page.
+ */
+function MaskIcon({
+    src,
+    size = 16,
+    className,
+}: {
+    src: string;
+    size?: number;
+    className?: string;
+}) {
     return (
         <span
-            className="inline-block h-3.5 w-3.5 bg-sky-400"
+            className={cn("inline-block bg-arc-text", className)}
             style={{
-                WebkitMaskImage: "url(/swap.png)",
-                maskImage: "url(/swap.png)",
+                width: size,
+                height: size,
+                WebkitMaskImage: `url(${src})`,
+                maskImage: `url(${src})`,
                 WebkitMaskSize: "contain",
                 maskSize: "contain",
                 WebkitMaskRepeat: "no-repeat",
@@ -926,6 +977,112 @@ function SwapIcon() {
             aria-hidden
         />
     );
+}
+
+/**
+ * Compact « ‹ 1 2 3 ... 10 › » pagination strip. Built when the filtered
+ * pool list spills past PAGE_SIZE rows. Edge arrows jump to first/last;
+ * ellipses fold runs longer than the ±1-around-current window.
+ */
+function Pagination({
+    page,
+    pageCount,
+    onPage,
+}: {
+    page: number;
+    pageCount: number;
+    onPage: (p: number) => void;
+}) {
+    const pages = useMemo(() => compactPages(page, pageCount), [page, pageCount]);
+    const atStart = page === 1;
+    const atEnd = page === pageCount;
+    return (
+        <div className="mt-6 flex items-center justify-center gap-1.5">
+            <PageBtn onClick={() => onPage(1)} disabled={atStart} aria-label="First page">
+                <ChevronsLeft className="h-3.5 w-3.5" />
+            </PageBtn>
+            <PageBtn
+                onClick={() => onPage(Math.max(1, page - 1))}
+                disabled={atStart}
+                aria-label="Previous page"
+            >
+                <ChevronLeft className="h-3.5 w-3.5" />
+            </PageBtn>
+            {pages.map((p, i) =>
+                p === "..." ? (
+                    <span
+                        key={`gap-${i}`}
+                        className="px-1 text-arc-text-muted"
+                        aria-hidden
+                    >
+                        ···
+                    </span>
+                ) : (
+                    <PageBtn
+                        key={p}
+                        onClick={() => onPage(p)}
+                        active={p === page}
+                        aria-label={`Page ${p}`}
+                        aria-current={p === page ? "page" : undefined}
+                    >
+                        {p}
+                    </PageBtn>
+                ),
+            )}
+            <PageBtn
+                onClick={() => onPage(Math.min(pageCount, page + 1))}
+                disabled={atEnd}
+                aria-label="Next page"
+            >
+                <ChevronRight className="h-3.5 w-3.5" />
+            </PageBtn>
+            <PageBtn onClick={() => onPage(pageCount)} disabled={atEnd} aria-label="Last page">
+                <ChevronsRight className="h-3.5 w-3.5" />
+            </PageBtn>
+        </div>
+    );
+}
+
+function PageBtn({
+    onClick,
+    disabled,
+    active,
+    children,
+    ...rest
+}: {
+    onClick: () => void;
+    disabled?: boolean;
+    active?: boolean;
+    children: React.ReactNode;
+} & React.AriaAttributes) {
+    return (
+        <button
+            onClick={onClick}
+            disabled={disabled}
+            className={cn(
+                "flex h-9 min-w-[2.25rem] items-center justify-center rounded-lg border px-2 text-xs font-medium backdrop-blur-xl transition-colors",
+                active
+                    ? "border-arc-cta-hover bg-arc-cta-hover/15 text-arc-text"
+                    : "border-arc-border bg-black/15 text-arc-text hover:bg-white/5",
+                disabled && "cursor-not-allowed opacity-40 hover:bg-black/15",
+            )}
+            {...rest}
+        >
+            {children}
+        </button>
+    );
+}
+
+function compactPages(page: number, total: number): (number | "...")[] {
+    if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
+    const out: (number | "...")[] = [1];
+    const start = Math.max(2, page - 1);
+    const end = Math.min(total - 1, page + 1);
+    if (start > 2) out.push("...");
+    for (let i = start; i <= end; i++) out.push(i);
+    if (end < total - 1) out.push("...");
+    out.push(total);
+    return out;
 }
 
 function Metric({
