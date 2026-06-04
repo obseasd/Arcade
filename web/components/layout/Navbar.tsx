@@ -11,6 +11,7 @@ import { HeaderWalletWidget } from "./HeaderWalletWidget";
 const NAV_ITEMS = [
   { href: "/swap", label: "Swap" },
   { href: "/launchpad", label: "Launchpad" },
+  { href: "/explore", label: "Explore" },
   { href: "/positions", label: "Positions" },
   { href: "/bridge", label: "Bridge" },
 ];
