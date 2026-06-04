@@ -27,13 +27,14 @@
     "v4Quoter": "0x51Da2cA6a663dFE704A11Bdbb107df0E4365c5F8",
     "v4Router": "0x1Ac821216edcbA5da28DA6e2096ce490a962fc41",
     "seedETH": "0xcA34959A856c82214Bb3b2b7777342dE30459F83",
+    "v2Zap": "0x50D8f7311F052022b59792527e5599026D1b1Fc6",
     "twitterEscrow": "0x8f60C7B119F551E5055E7B3E94a11C4DFdFA34C7",
     "twitterEscrowSigner": "0xa31437fC1C8E2723C5EB0D50A26A0bD0C8382Eda",
     "twitterEscrowOwner": "0x3a0Dd90212838f32a953Acd4B32596b62859324A"
   },
   "notes": {
     "seedETH": "Standalone testnet ERC20 ('Ether (Seed)', symbol 'ETH', 18 decimals, 1,000,000 supply) deployed 2026-06-04 at block 45,493,309, tx 0xa7f46c56de4c3b87663a61018891d55a8ec0e332801e2033b245b4dd69ed6ce5. No USDC/ETH pair exists yet; seed via the frontend (/positions -> + New position -> paste the address above) so the live factory creates the pair and the front-end picks it up automatically.",
-    "v2Zap": "ArcadeV2Zap contract ships with this commit but is NOT deployed yet. Run `forge script script/DeployArcadeV2Zap.s.sol:DeployArcadeV2Zap --rpc-url arc_testnet --broadcast`, then add the printed address to Vercel as NEXT_PUBLIC_V2_ZAP_ADDRESS. Until that env var is set, the Single Asset tab in /positions/add renders the 'Soon' badge and the warn bubble.",
+    "v2Zap": "ArcadeV2Zap deployed 2026-06-04 at block 45,506,023 (tx 0x2dbd119f0a2fb883107296414bf4dd906edb31addf29cfcd77070a0afc7945e9). Wired to live V2 factory + router. To enable the Single Asset Zap tab in /positions/add, set NEXT_PUBLIC_V2_ZAP_ADDRESS=0x50D8f7311F052022b59792527e5599026D1b1Fc6 in Vercel (Production + Preview).",
     "v3NPM": "User-permissioned V3 add-liquidity is deferred: the CLANKER_V3 stack only exposes the locker (used by the launchpad to seed migrated tokens) - there is no NonfungiblePositionManager. Shipping V3 mint requires either a) deploying Uniswap v3-periphery's NPM, b) writing a thin mint wrapper that handles the v3 mint callback. Track this with the explore Concentrated Liquidity filter; until the NPM lands the CreatePoolModal V3 branch hands off to /positions/add which currently renders the V2 form (the type=v3 query param is preserved so the page can flip once NPM is wired)."
   },
   "constants": {
