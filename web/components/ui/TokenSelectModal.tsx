@@ -81,8 +81,19 @@ export function TokenSelectModal({ open, onClose, tokens, onSelect, selectedAddr
     const name = importedMetaQ.data[0]?.result as string | undefined;
     const symbol = importedMetaQ.data[1]?.result as string | undefined;
     const decimals = importedMetaQ.data[2]?.result as number | undefined;
-    if (!symbol || decimals === undefined) return undefined;
-    return { address: pastedAddress, name, symbol, decimals };
+    // Surface the import row as long as at least one ERC20 call succeeded.
+    // The Arc public RPC sometimes returns partial multicall payloads for
+    // freshly-deployed contracts; rather than block the user we accept the
+    // hit with sane defaults so the pair-creation flow can proceed.
+    const allFailed =
+        symbol === undefined && name === undefined && decimals === undefined;
+    if (allFailed) return undefined;
+    return {
+        address: pastedAddress,
+        name: name ?? "Imported token",
+        symbol: symbol || "TOKEN",
+        decimals: decimals ?? 18,
+    };
   }, [pastedAddress, importedMetaQ.data]);
 
   const filtered = useMemo(() => {

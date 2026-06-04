@@ -55,13 +55,16 @@ contract DeploySeedETH is Script {
             "USDC",
             address(0x3600000000000000000000000000000000000000)
         );
+        // Defaults match web/public/deployments.json + web/.env.local (the live
+        // Vercel front-end). If you deploy against different addresses, override
+        // via the V2_FACTORY / V2_ROUTER env vars at runtime.
         address v2Factory = vm.envOr(
             "V2_FACTORY",
-            address(0xd1923bA075ccA6438DcBf4676090CDFC8C48611e)
+            address(0x289b18cBFD9f2a2657c021F80423137Af6233332)
         );
         address v2Router = vm.envOr(
             "V2_ROUTER",
-            address(0x0D1cf8b659100186De8E836D6De0C5A1A999EAa1)
+            address(0x529d7250652aAaA11b4E2407e8b49fa9ae0E5041)
         );
 
         uint256 seedUsdc = vm.envOr("SEED_USDC_AMOUNT", uint256(1_000_000_000));
