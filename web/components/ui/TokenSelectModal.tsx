@@ -3,7 +3,7 @@
 import { Search, X, Check, Plus, ExternalLink } from "lucide-react";
 import { useState, useMemo, useEffect, useCallback } from "react";
 import { Address, erc20Abi, isAddress, zeroAddress } from "viem";
-import { useReadContracts } from "wagmi";
+import { useReadContract } from "wagmi";
 import { Modal } from "./Modal";
 import { TokenIcon } from "./TokenIcon";
 import { AutoTokenIcon } from "./AutoTokenIcon";
@@ -65,26 +65,43 @@ export function TokenSelectModal({ open, onClose, tokens, onSelect, selectedAddr
     return trimmedQ as Address;
   }, [trimmedQ, tokens]);
 
-  const importedMetaQ = useReadContracts({
-    contracts: pastedAddress
-      ? [
-          { address: pastedAddress, abi: erc20Abi, functionName: "name" },
-          { address: pastedAddress, abi: erc20Abi, functionName: "symbol" },
-          { address: pastedAddress, abi: erc20Abi, functionName: "decimals" },
-        ]
-      : [],
+  // arcTestnet chain definition declares no Multicall3 address, so wagmi's
+  // batched `useReadContracts` falls through to viem's
+  // ChainDoesNotSupportContract path and resolves the whole call to undefined.
+  // Switch to 3 independent `useReadContract` calls so each ERC20 read uses a
+  // plain eth_call (which Arc supports) and partial responses are still
+  // captured.
+  const nameQ = useReadContract({
+    address: pastedAddress,
+    abi: erc20Abi,
+    functionName: "name",
     query: { enabled: !!pastedAddress },
   });
+  const symbolQ = useReadContract({
+    address: pastedAddress,
+    abi: erc20Abi,
+    functionName: "symbol",
+    query: { enabled: !!pastedAddress },
+  });
+  const decimalsQ = useReadContract({
+    address: pastedAddress,
+    abi: erc20Abi,
+    functionName: "decimals",
+    query: { enabled: !!pastedAddress },
+  });
+  const importedMetaQ = {
+    isLoading: nameQ.isLoading || symbolQ.isLoading || decimalsQ.isLoading,
+  };
 
   const importedToken: TokenOption | undefined = useMemo(() => {
-    if (!pastedAddress || !importedMetaQ.data) return undefined;
-    const name = importedMetaQ.data[0]?.result as string | undefined;
-    const symbol = importedMetaQ.data[1]?.result as string | undefined;
-    const decimals = importedMetaQ.data[2]?.result as number | undefined;
+    if (!pastedAddress) return undefined;
+    const name = nameQ.data as string | undefined;
+    const symbol = symbolQ.data as string | undefined;
+    const decimals = decimalsQ.data as number | undefined;
     // Surface the import row as long as at least one ERC20 call succeeded.
-    // The Arc public RPC sometimes returns partial multicall payloads for
-    // freshly-deployed contracts; rather than block the user we accept the
-    // hit with sane defaults so the pair-creation flow can proceed.
+    // Some Arc RPC nodes intermittently miss freshly-deployed contracts on
+    // one of the three calls; rather than block the user we accept the hit
+    // with sane defaults so the pair-creation flow can proceed.
     const allFailed =
         symbol === undefined && name === undefined && decimals === undefined;
     if (allFailed) return undefined;
@@ -94,7 +111,7 @@ export function TokenSelectModal({ open, onClose, tokens, onSelect, selectedAddr
         symbol: symbol || "TOKEN",
         decimals: decimals ?? 18,
     };
-  }, [pastedAddress, importedMetaQ.data]);
+  }, [pastedAddress, nameQ.data, symbolQ.data, decimalsQ.data]);
 
   const filtered = useMemo(() => {
     const norm = trimmedQ.toLowerCase();
