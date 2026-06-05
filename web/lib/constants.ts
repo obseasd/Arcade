@@ -24,6 +24,11 @@ export const ADDRESSES = {
   tokenVault: safeAddress(process.env.NEXT_PUBLIC_TOKEN_VAULT_ADDRESS),
   /** WETH on Arc, used as the paired token for POOL_WETH Clanker launches. */
   weth: safeAddress(process.env.NEXT_PUBLIC_WETH_ADDRESS),
+  /** SeedETH (testnet ERC20 symbol "ETH"). Lives across V2 factory
+   *  generations as a plain ERC20; pin it in token pickers so the user can
+   *  pair it without pasting the address. Optional — keep zeroAddress on
+   *  mainnet so the picker doesn't show a phantom ETH chip. */
+  seedEth: safeAddress(process.env.NEXT_PUBLIC_SEED_ETH_ADDRESS),
   /** ArcadeTwitterEscrow: holds Clanker LP fees attributed to a Twitter @handle. */
   twitterEscrow: safeAddress(process.env.NEXT_PUBLIC_TWITTER_ESCROW_ADDRESS),
   // --- Uniswap V4 prototype (ArcadeV4Launchpad + ArcadeAntiSniperHook) ---

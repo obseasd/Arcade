@@ -50,10 +50,19 @@ export function TokenSelectModal({ open, onClose, tokens, onSelect, selectedAddr
     if (open) setQ("");
   }, [open]);
 
-  const pinnedTemplates: PinnedTemplate[] = useMemo(
-    () => PINNED.map((p, i) => (i === 0 ? { ...p, address: ADDRESSES.usdc } : p)),
-    [],
-  );
+  // Wire the canonical ETH pin to the testnet SeedETH address when present,
+  // so users can pair USDC/ETH from the chip grid without having to paste
+  // 0xcA34… every time. On mainnet (where NEXT_PUBLIC_SEED_ETH_ADDRESS is
+  // unset) the pin falls back to its "Soon" placeholder.
+  const pinnedTemplates: PinnedTemplate[] = useMemo(() => {
+    return PINNED.map((p) => {
+      if (p.symbol === "USDC") return { ...p, address: ADDRESSES.usdc };
+      if (p.symbol === "ETH" && ADDRESSES.seedEth !== zeroAddress) {
+        return { ...p, address: ADDRESSES.seedEth };
+      }
+      return p;
+    });
+  }, []);
 
   // Detect a pasted address that isn't already in the list - fetch metadata
   // and surface it as an importable token.
