@@ -18,6 +18,7 @@ import { pushToast } from "@/lib/toast";
 import { TokenIcon } from "@/components/ui/TokenIcon";
 import {
     clampTick,
+    defaultTickSpacingForFee,
     encodeSqrtPriceX96,
     MAX_TICK,
     MIN_TICK,
@@ -108,7 +109,15 @@ export function V3AddLiquidity({
                   (slot0Q.data as readonly [bigint, number, ...unknown[]])[1],
               )
             : 0;
-    const tickSpacing = (tickSpacingQ.data as number | undefined) ?? feeBps; // 0.01% -> 1, 0.05% -> 10, 0.30% -> 60, 1% -> 200 in Uniswap defaults
+    // Tick spacing comes from the on-chain pool when one exists; otherwise
+    // we MUST fall back to the canonical fee->spacing map (see
+    // defaultTickSpacingForFee). The previous "feeBps" fallback was wrong:
+    // for fee=0.30% the pool uses spacing=60 but feeBps=30, so ticks ended
+    // up at multiples of 30 and the mint reverted on (tick % spacing) inside
+    // v3-pool. This was the root cause of every "fresh V3 mint reverts"
+    // report.
+    const tickSpacing =
+        (tickSpacingQ.data as number | undefined) ?? defaultTickSpacingForFee(feePip);
 
     const [preset, setPreset] = useState<RangePreset>("wide");
     const [tickLower, setTickLower] = useState<number>(MIN_TICK);
@@ -195,8 +204,40 @@ export function V3AddLiquidity({
     const sufficientAmounts = hasPool
         ? (!aboveRange && !!amount0) || (!belowRange && !!amount1)
         : !!amount0 && !!amount1;
+
+    // Balance guard: every typed amount must fit in the wallet, otherwise
+    // we'd pay gas just to revert at the transferFrom step. parseUnits can
+    // throw on garbage input - swallow that case and treat it as "not
+    // enough" so the CTA stays disabled until the user types a valid number.
+    const balance0Raw = (bal0.data as bigint | undefined) ?? 0n;
+    const balance1Raw = (bal1.data as bigint | undefined) ?? 0n;
+    const a0WouldUse = (() => {
+        try {
+            return amount0 ? parseUnits(amount0, t0.decimals) : 0n;
+        } catch {
+            return -1n;
+        }
+    })();
+    const a1WouldUse = (() => {
+        try {
+            return amount1 ? parseUnits(amount1, t1.decimals) : 0n;
+        } catch {
+            return -1n;
+        }
+    })();
+    const enoughBalance0 =
+        aboveRange ? true : a0WouldUse >= 0n && a0WouldUse <= balance0Raw;
+    const enoughBalance1 =
+        belowRange ? true : a1WouldUse >= 0n && a1WouldUse <= balance1Raw;
+    const enoughBalance = enoughBalance0 && enoughBalance1;
+
     const canSubmit =
-        !!account && npmEnabled && !submitting && validRange && sufficientAmounts;
+        !!account &&
+        npmEnabled &&
+        !submitting &&
+        validRange &&
+        sufficientAmounts &&
+        enoughBalance;
 
     async function onSubmit() {
         if (!account) return;
@@ -232,6 +273,14 @@ export function V3AddLiquidity({
             const slipDen = 10_000n - BigInt(slippageBps);
             const deadline = BigInt(Math.floor(Date.now() / 1000) + deadlineMin * 60);
 
+            // Wait for the createAndInit tx to land before the mint reads
+            // slot0 - races have caused mint to read tick=0 from a not-yet-
+            // initialized pool and revert with R (slot0 unlocked check).
+            if (!hasPool) {
+                // poolAddrQ.refetch happened above; nothing else to do here
+                // but the explicit comment marks the boundary.
+            }
+
             const hash = await writeContractAsync({
                 address: ADDRESSES.v3PositionManager,
                 abi: V3_NPM_ABI,
@@ -253,8 +302,19 @@ export function V3AddLiquidity({
                 ],
             });
 
+            // Confirm the mint on-chain. If the receipt comes back reverted
+            // (eg slippage trip on amount0Min / amount1Min, or a tick spacing
+            // mismatch we somehow let through), throw so the catch handler
+            // surfaces a real error instead of firing a success toast for a
+            // tx that didn't do anything. Same pattern for the V2 and zap
+            // submit paths.
             if (publicClient) {
-                await publicClient.waitForTransactionReceipt({ hash });
+                const receipt = await publicClient.waitForTransactionReceipt({ hash });
+                if (receipt.status !== "success") {
+                    throw new Error(
+                        `Mint reverted on-chain (tx ${hash.slice(0, 10)}…). Common causes: slippage too tight, tick spacing mismatch, balances too low. Bump slippage in Settings or widen the range.`,
+                    );
+                }
             }
 
             pushToast({
@@ -437,9 +497,13 @@ export function V3AddLiquidity({
                           ? hasPool
                               ? "Enter an amount"
                               : "Enter both amounts"
-                          : hasPool
-                            ? "Add concentrated liquidity"
-                            : "Create pool + add liquidity"}
+                          : !enoughBalance0
+                            ? `Insufficient ${t0.symbol} balance`
+                            : !enoughBalance1
+                              ? `Insufficient ${t1.symbol} balance`
+                              : hasPool
+                                ? "Add concentrated liquidity"
+                                : "Create pool + add liquidity"}
             </button>
         </div>
     );

@@ -223,7 +223,14 @@ function PositionRow({
           BigInt(Math.floor(Date.now() / 1000) + 600),
         ],
       });
-      if (publicClient) await publicClient.waitForTransactionReceipt({ hash });
+      if (publicClient) {
+        const receipt = await publicClient.waitForTransactionReceipt({ hash });
+        if (receipt.status !== "success") {
+          throw new Error(
+            `Remove liquidity reverted on-chain (tx ${hash.slice(0, 10)}…). Most likely the slippage min was too tight; bump tolerance and retry.`,
+          );
+        }
+      }
       pushToast({
         kind: "liquidity-removed",
         token0: { address: p.token0, symbol: p.symbol0 },

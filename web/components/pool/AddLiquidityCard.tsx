@@ -140,10 +140,18 @@ export function AddLiquidityCard({ onSuccess }: AddLiquidityCardProps = {}) {
       // Read the new LP balance off the pair so the toast shows the actual
       // receipt rather than a placeholder. Pair address might be 0x0 on the
       // first-LP path, so we resolve it from getPair after the receipt.
+      // Throw on a reverted receipt so the success toast never fires for a
+      // no-op tx (waitForTransactionReceipt returns receipts for both
+      // success and revert; status is the only safe signal).
       let lpFormatted = "—";
       let resolvedPair = pair;
       if (publicClient) {
-        await publicClient.waitForTransactionReceipt({ hash });
+        const receipt = await publicClient.waitForTransactionReceipt({ hash });
+        if (receipt.status !== "success") {
+          throw new Error(
+            `Add liquidity reverted on-chain (tx ${hash.slice(0, 10)}…). Common causes: slippage too tight (try bumping in Settings) or the pool ratio moved between read and execution.`,
+          );
+        }
         if (!resolvedPair || resolvedPair === "0x0000000000000000000000000000000000000000") {
           try {
             resolvedPair = (await publicClient.readContract({

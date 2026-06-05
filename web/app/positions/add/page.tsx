@@ -296,10 +296,18 @@ function AddLiquidityInner() {
             }
 
             // Wait for the tx + read the LP balance afterwards so the toast can
-            // surface the actual receipt amount.
+            // surface the actual receipt amount. Check receipt.status BEFORE
+            // touching post-success state — waitForTransactionReceipt returns
+            // the receipt for both successful and reverted txs, so we have to
+            // gate explicitly or the success toast fires on a no-op revert.
             let lpFormatted = "—";
             if (publicClient) {
-                await publicClient.waitForTransactionReceipt({ hash });
+                const receipt = await publicClient.waitForTransactionReceipt({ hash });
+                if (receipt.status !== "success") {
+                    throw new Error(
+                        `${mode === "single" ? "Zap" : "Add liquidity"} reverted on-chain (tx ${hash.slice(0, 10)}…). Likely causes: pool balance moved between read and exec, slippage too tight, or the USDC blocklist precompile fired on Arc — try bumping slippage in Settings.`,
+                    );
+                }
                 if (pair && pair !== zeroAddress) {
                     try {
                         const lp = (await publicClient.readContract({

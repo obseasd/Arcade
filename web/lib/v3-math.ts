@@ -13,6 +13,28 @@ export const MIN_TICK = -887272;
 export const MAX_TICK = 887272;
 
 /**
+ * Canonical fee -> tickSpacing map. Pulled from Uniswap V3's factory
+ * constructor (0.05/0.30/1%) plus Arc's two extra tiers (2%, 3%) which the
+ * ArcadeV3 deploy script enabled at spacing 200. Use this as a fallback
+ * when reading slot0.tickSpacing for a pool that hasn't been deployed yet,
+ * so the UI rounds ticks to the value the pool will actually require on
+ * mint. Mismatched spacing is the silent-revert classic for fresh-pool
+ * mints because the v3-pool's mint() asserts (tick % tickSpacing == 0).
+ */
+export const FEE_TICK_SPACING: Record<number, number> = {
+    100: 1, // 0.01%
+    500: 10, // 0.05%
+    3000: 60, // 0.30%
+    10000: 200, // 1%
+    20000: 200, // 2% (Arc extension)
+    30000: 200, // 3% (Arc extension)
+};
+
+export function defaultTickSpacingForFee(feePip: number): number {
+    return FEE_TICK_SPACING[feePip] ?? 60;
+}
+
+/**
  * Price-to-tick: tick = log(price) / log(1.0001).
  * `price` is token1-per-token0 in raw on-chain ratio (no decimals scaling
  * yet — the caller is responsible for converting decimal-aware to raw).
