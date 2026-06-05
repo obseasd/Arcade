@@ -201,9 +201,26 @@ export function V3AddLiquidity({
     //     is derived from the midpoint of the user's range.
     //   - Existing pool: at least the non-disabled side is filled.
     const validRange = tickLower < tickUpper && minPrice > 0 && maxPrice > 0;
+    // String inputs like "0", "0.00" are truthy but parse to 0n on-chain.
+    // Use the raw parse to gate validation so the user can't sneak past with
+    // a placeholder zero.
+    const a0Positive = (() => {
+        try {
+            return amount0 ? parseUnits(amount0, t0.decimals) > 0n : false;
+        } catch {
+            return false;
+        }
+    })();
+    const a1Positive = (() => {
+        try {
+            return amount1 ? parseUnits(amount1, t1.decimals) > 0n : false;
+        } catch {
+            return false;
+        }
+    })();
     const sufficientAmounts = hasPool
-        ? (!aboveRange && !!amount0) || (!belowRange && !!amount1)
-        : !!amount0 && !!amount1;
+        ? (!aboveRange && a0Positive) || (!belowRange && a1Positive)
+        : a0Positive && a1Positive;
 
     // Balance guard: every typed amount must fit in the wallet, otherwise
     // we'd pay gas just to revert at the transferFrom step. parseUnits can
@@ -247,21 +264,55 @@ export function V3AddLiquidity({
             const a0Raw = amount0 ? parseUnits(amount0, t0.decimals) : 0n;
             const a1Raw = amount1 ? parseUnits(amount1, t1.decimals) : 0n;
 
-            // For fresh pools, seed sqrtPriceX96 at the user's midpoint price
-            // so the first mint defines a sane reference. Skipped when a pool
-            // already exists - the NPM ignores the seed in that case.
+            // We may need to re-anchor tickLower/tickUpper around the seed
+            // tick on a fresh pool (see below). Default to the UI-computed
+            // ticks; the fresh-pool branch may overwrite them.
+            let actualTickLower = tickLower;
+            let actualTickUpper = tickUpper;
+
+            // For fresh pools the seed sqrtPriceX96 has to come from the
+            // user's deposit ratio, not the midpoint of their preset range.
+            // Otherwise the initial pool price (and therefore the implicit
+            // current tick) lands somewhere unrelated to the amounts being
+            // deposited, the position ends up out-of-range, and the
+            // amount{0,1}Min slippage check on mint reverts because the V3
+            // core only consumed one leg.
             if (!hasPool) {
-                const seedPrice = Math.sqrt(minPrice * maxPrice);
-                const sqrtX96 = encodeSqrtPriceX96(
-                    seedPrice * Math.pow(10, t1.decimals - t0.decimals),
+                if (a0Raw === 0n || a1Raw === 0n) {
+                    throw new Error(
+                        "Fresh V3 pools need both Token 1 and Token 2 amounts. Single-sided seeding is only safe once the pool exists.",
+                    );
+                }
+                // sqrtPriceX96 = sqrt(token1Raw / token0Raw) * 2^96. Use the
+                // raw ratio directly so encoding doesn't need a decimals
+                // adjustment pass.
+                const rawPrice = Number(a1Raw) / Number(a0Raw);
+                const sqrtX96 = encodeSqrtPriceX96(rawPrice);
+
+                // The implicit current tick after init - derived from the
+                // raw price. Re-snap the user's chosen range around this
+                // tick so the position straddles the seeded price and BOTH
+                // legs deposit fully.
+                const implicitTick = Math.floor(Math.log(rawPrice) / Math.log(1.0001));
+                const halfWidth = Math.max(
+                    tickSpacing,
+                    Math.floor((tickUpper - tickLower) / 2),
                 );
+                actualTickLower = roundTickDown(
+                    clampTick(implicitTick - halfWidth),
+                    tickSpacing,
+                );
+                actualTickUpper = roundTickUp(
+                    clampTick(implicitTick + halfWidth),
+                    tickSpacing,
+                );
+
                 await writeContractAsync({
                     address: ADDRESSES.v3PositionManager,
                     abi: V3_NPM_ABI,
                     functionName: "createAndInitializePoolIfNecessary",
                     args: [t0.address, t1.address, feePip, sqrtX96],
                 });
-                // Slot0 will update on next refetch.
                 await poolAddrQ.refetch();
             }
 
@@ -273,13 +324,14 @@ export function V3AddLiquidity({
             const slipDen = 10_000n - BigInt(slippageBps);
             const deadline = BigInt(Math.floor(Date.now() / 1000) + deadlineMin * 60);
 
-            // Wait for the createAndInit tx to land before the mint reads
-            // slot0 - races have caused mint to read tick=0 from a not-yet-
-            // initialized pool and revert with R (slot0 unlocked check).
-            if (!hasPool) {
-                // poolAddrQ.refetch happened above; nothing else to do here
-                // but the explicit comment marks the boundary.
-            }
+            // On fresh pools the user IS the seeder - they cannot get
+            // sandwiched, so zero out the slippage minimums. This stops the
+            // edge case where rounding inside the V3 core produces a
+            // slightly-different amount than the user typed and trips
+            // amount{0,1}Min. On existing pools we keep the standard
+            // slipDen-derived guard.
+            const amount0Min = hasPool ? (a0Raw * slipDen) / 10_000n : 0n;
+            const amount1Min = hasPool ? (a1Raw * slipDen) / 10_000n : 0n;
 
             const hash = await writeContractAsync({
                 address: ADDRESSES.v3PositionManager,
@@ -290,12 +342,12 @@ export function V3AddLiquidity({
                         token0: t0.address,
                         token1: t1.address,
                         fee: feePip,
-                        tickLower: tickLower,
-                        tickUpper: tickUpper,
+                        tickLower: actualTickLower,
+                        tickUpper: actualTickUpper,
                         amount0Desired: a0Raw,
                         amount1Desired: a1Raw,
-                        amount0Min: (a0Raw * slipDen) / 10_000n,
-                        amount1Min: (a1Raw * slipDen) / 10_000n,
+                        amount0Min,
+                        amount1Min,
                         recipient: account,
                         deadline,
                     },
