@@ -33,9 +33,10 @@ import {Script, console2} from "forge-std/Script.sol";
 contract DeployArcadeV3PositionManager is Script {
     function run() external returns (address descriptor, address npm) {
         uint256 pk = vm.envUint("PRIVATE_KEY");
+        // Generation 5 (2026-06-05) addresses.
         address factory = vm.envOr(
             "V3_FACTORY",
-            address(0xB9339dE1eeC40d4f513aBD567DAb6837fc7D63D6)
+            address(0x7Eb534f517Cfe55324B772005Af6DAc8457b7Ac2)
         );
         address weth = vm.envOr("WETH9", address(0));
 

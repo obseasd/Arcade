@@ -25,13 +25,15 @@ import {ArcadeV2Zap} from "../src/dex/ArcadeV2Zap.sol";
 contract DeployArcadeV2Zap is Script {
     function run() external {
         uint256 pk = vm.envUint("PRIVATE_KEY");
+        // Generation 5 (2026-06-05) addresses. Override via env to deploy
+        // against a different stack.
         address factory = vm.envOr(
             "V2_FACTORY",
-            address(0x289b18cBFD9f2a2657c021F80423137Af6233332)
+            address(0x980e766d13FF786023ebaC9c19c9C963a2287f4e)
         );
         address router = vm.envOr(
             "V2_ROUTER",
-            address(0x529d7250652aAaA11b4E2407e8b49fa9ae0E5041)
+            address(0xb209df41F8362c2027A919FE9eC2ae8848E2CCb5)
         );
 
         vm.startBroadcast(pk);
