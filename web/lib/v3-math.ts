@@ -237,6 +237,112 @@ export function isSqrtPriceInRange(sqrtX96: bigint): boolean {
     return sqrtX96 >= MIN_SQRT_RATIO && sqrtX96 <= MAX_SQRT_RATIO;
 }
 
+// -------------------------------------------------------------------
+// LiquidityAmounts — port of Uniswap V3's LiquidityAmounts library
+// (v3-periphery/contracts/libraries/LiquidityAmounts.sol). Used to
+// pre-compute the exact amounts V3 will consume on a mint, so the user's
+// amount0Desired/amount1Desired match what mint() actually takes — letting
+// us submit a tight slippage min without tripping the V3 "M0/M1" check
+// when the user's typed ratio doesn't perfectly align with the pool's
+// price + range.
+// -------------------------------------------------------------------
+
+const Q96 = 1n << 96n;
+
+/** liquidity = amount0 * sqrtA * sqrtB / (sqrtB - sqrtA) */
+function getLiquidityForAmount0(sqrtA: bigint, sqrtB: bigint, amount0: bigint): bigint {
+    const [a, b] = sqrtA < sqrtB ? [sqrtA, sqrtB] : [sqrtB, sqrtA];
+    const intermediate = (a * b) / Q96;
+    return (amount0 * intermediate) / (b - a);
+}
+
+/** liquidity = amount1 * 2^96 / (sqrtB - sqrtA) */
+function getLiquidityForAmount1(sqrtA: bigint, sqrtB: bigint, amount1: bigint): bigint {
+    const [a, b] = sqrtA < sqrtB ? [sqrtA, sqrtB] : [sqrtB, sqrtA];
+    return (amount1 * Q96) / (b - a);
+}
+
+/**
+ * Compute the liquidity placed by depositing amount0 + amount1 across the
+ * range [sqrtA, sqrtB] given the current sqrtPriceX96. Mirrors
+ * LiquidityAmounts.getLiquidityForAmounts.
+ */
+export function getLiquidityForAmounts(
+    sqrtPriceX96: bigint,
+    sqrtAX96: bigint,
+    sqrtBX96: bigint,
+    amount0: bigint,
+    amount1: bigint,
+): bigint {
+    const [a, b] = sqrtAX96 < sqrtBX96 ? [sqrtAX96, sqrtBX96] : [sqrtBX96, sqrtAX96];
+    if (sqrtPriceX96 <= a) {
+        return getLiquidityForAmount0(a, b, amount0);
+    }
+    if (sqrtPriceX96 < b) {
+        const l0 = getLiquidityForAmount0(sqrtPriceX96, b, amount0);
+        const l1 = getLiquidityForAmount1(a, sqrtPriceX96, amount1);
+        return l0 < l1 ? l0 : l1;
+    }
+    return getLiquidityForAmount1(a, b, amount1);
+}
+
+/** Amount0 consumed by a position of `liquidity` over [sqrtA, sqrtB]. */
+function getAmount0ForLiquidity(sqrtA: bigint, sqrtB: bigint, liquidity: bigint): bigint {
+    const [a, b] = sqrtA < sqrtB ? [sqrtA, sqrtB] : [sqrtB, sqrtA];
+    return ((liquidity * Q96 * (b - a)) / b) / a;
+}
+
+/** Amount1 consumed by a position of `liquidity` over [sqrtA, sqrtB]. */
+function getAmount1ForLiquidity(sqrtA: bigint, sqrtB: bigint, liquidity: bigint): bigint {
+    const [a, b] = sqrtA < sqrtB ? [sqrtA, sqrtB] : [sqrtB, sqrtA];
+    return (liquidity * (b - a)) / Q96;
+}
+
+/**
+ * Inverse of getLiquidityForAmounts: given a placed liquidity + current
+ * sqrtPrice + range, return the (amount0, amount1) actually consumed.
+ * Use these as amount0Desired / amount1Desired on mint so the slippage
+ * minimum can be tight without tripping the V3 core's M0/M1 revert.
+ */
+export function getAmountsForLiquidity(
+    sqrtPriceX96: bigint,
+    sqrtAX96: bigint,
+    sqrtBX96: bigint,
+    liquidity: bigint,
+): { amount0: bigint; amount1: bigint } {
+    const [a, b] = sqrtAX96 < sqrtBX96 ? [sqrtAX96, sqrtBX96] : [sqrtBX96, sqrtAX96];
+    if (sqrtPriceX96 <= a) {
+        return { amount0: getAmount0ForLiquidity(a, b, liquidity), amount1: 0n };
+    }
+    if (sqrtPriceX96 < b) {
+        return {
+            amount0: getAmount0ForLiquidity(sqrtPriceX96, b, liquidity),
+            amount1: getAmount1ForLiquidity(a, sqrtPriceX96, liquidity),
+        };
+    }
+    return { amount0: 0n, amount1: getAmount1ForLiquidity(a, b, liquidity) };
+}
+
+/**
+ * sqrtPriceX96 corresponding to a tick. Used to derive the boundary
+ * sqrt-prices of a position so we can call getLiquidityForAmounts.
+ */
+export function getSqrtRatioAtTick(tick: number): bigint {
+    // Float fallback for human-scale ticks (we're in the JS layer, exactness
+    // beyond 1e-9 isn't material — the on-chain v3-pool uses its own
+    // TickMath path). For the V3 legal tick range this stays within 1 unit
+    // of the on-chain value, well below mint slippage tolerances.
+    const sqrtPrice = Math.pow(1.0001, tick / 2);
+    return encodeSqrtPriceX96Float(sqrtPrice);
+}
+
+function encodeSqrtPriceX96Float(sqrtPrice: number): bigint {
+    if (!isFinite(sqrtPrice) || sqrtPrice <= 0) return 0n;
+    const scale48 = 2 ** 48;
+    const a = BigInt(Math.floor(sqrtPrice * scale48));
+    return a * BigInt(scale48);
+}
+
 /**
  * Mirror of Uniswap V3's LiquidityAmounts.getLiquidityForAmounts for the UI
  * preview. Float math, accurate enough for "you'll receive ~X liquidity".

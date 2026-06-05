@@ -536,7 +536,13 @@ function ChartCard({
         return out;
     }, [window]);
 
-    const valueLabel = useMemo(() => formatBig(totalUsd), [totalUsd]);
+    // Prepend "$" so the hero TVL/Volume/Fees numbers read as money. The
+    // formatBig helper handles K/M suffixes; we add the dollar sign once at
+    // the call site so the empty-state "—" stays untouched.
+    const valueLabel = useMemo(() => {
+        const inner = formatBig(totalUsd);
+        return inner === "—" ? "—" : `$${inner}`;
+    }, [totalUsd]);
     const slug = label.replace(/\s+/g, "-").toLowerCase();
     const fillId = `chart-fill-${slug}`;
     const shimmerTotalId = `shimmer-${slug}-total`;
@@ -569,7 +575,7 @@ function ChartCard({
                     ))}
                 </div>
             </div>
-            <div className="absolute right-4 top-3 text-2xl font-semibold tabular-nums sm:text-3xl">
+            <div className="absolute right-4 top-3 text-[1.35rem] font-semibold tabular-nums sm:text-[1.7rem]">
                 {valueLabel}
             </div>
             <div className="absolute inset-x-0 bottom-0 h-24">

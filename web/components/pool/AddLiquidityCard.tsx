@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { Address, erc20Abi, formatUnits, parseUnits } from "viem";
 import { useAccount, usePublicClient, useReadContract, useWriteContract } from "wagmi";
@@ -31,6 +32,7 @@ interface AddLiquidityCardProps {
 }
 
 export function AddLiquidityCard({ onSuccess }: AddLiquidityCardProps = {}) {
+  const router = useRouter();
   const { address: account } = useAccount();
   const publicClient = usePublicClient();
   const { tokens: v2Tokens } = useV2Tokens();
@@ -214,6 +216,12 @@ export function AddLiquidityCard({ onSuccess }: AddLiquidityCardProps = {}) {
       // Tell the parent: close the wrapping modal AND kick a position-list
       // refetch so the new row appears without a hard reload.
       onSuccess?.();
+      // Match the /positions/add page: drop the user on the new pool's
+      // detail page so they can immediately see reserves + their LP balance
+      // instead of landing back on the empty positions list.
+      if (resolvedPair && resolvedPair !== "0x0000000000000000000000000000000000000000") {
+        router.push(`/pool/${resolvedPair}`);
+      }
     } catch (e: any) {
       setTx({ status: "idle" });
       pushToast({

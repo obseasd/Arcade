@@ -19,6 +19,9 @@ import { TokenIcon } from "@/components/ui/TokenIcon";
 import {
     defaultTickSpacingForFee,
     encodeSqrtPriceX96,
+    getAmountsForLiquidity,
+    getLiquidityForAmounts,
+    getSqrtRatioAtTick,
     isSqrtPriceInRange,
     MAX_TICK,
     MIN_TICK,
@@ -370,16 +373,60 @@ export function V3AddLiquidity({
 
             const deadline = BigInt(Math.floor(Date.now() / 1000) + deadlineMin * 60);
 
-            // AUDIT CRITICAL [2]/[22]: slippage applies on EVERY path. The
-            // previous "fresh pool means user is the seeder, no slippage"
-            // assumption was wrong (PoolInitializer silently no-ops on a
-            // pre-existing pool), and the zero-min trick let an attacker
-            // steal one entire leg of the user's deposit. The slot0 check
-            // above + a real amount{0,1}Min here is the belt-and-suspenders
-            // defence.
-            const amount0Min = (a0Raw * slipDen) / 10_000n;
-            const amount1Min = (a1Raw * slipDen) / 10_000n;
+            // Pre-compute the EXACT amounts the v3-pool will consume so
+            // the slippage minimum can be tight without tripping M0/M1.
+            // V3 binds on the smaller leg, so the user's other leg is
+            // typically partially used; without this step amount{0,1}Min
+            // derived from amount{0,1}Desired routinely reverted.
+            //
+            // Read the live sqrtPriceX96 + tickSpacing-rounded boundary
+            // sqrts. Then call LiquidityAmounts to derive the placed
+            // liquidity from the user's typed (desired) amounts and the
+            // CONSUMED amounts that liquidity will actually withdraw.
+            // Submit those consumed amounts as Desired so V3's internal
+            // math matches what we asked for.
+            let exactA0 = a0Raw;
+            let exactA1 = a1Raw;
+            try {
+                const liveSqrt = hasPool
+                    ? (((await publicClient.readContract({
+                          address: pool ?? ADDRESSES.v3Factory, // pool resolved above when hasPool
+                          abi: V3_POOL_ABI,
+                          functionName: "slot0",
+                      })) as readonly [bigint, number, ...unknown[]])[0] as bigint)
+                    : encodeSqrtPriceX96(Number(a1Raw) / Number(a0Raw));
+                const sqrtA = getSqrtRatioAtTick(actualTickLower);
+                const sqrtB = getSqrtRatioAtTick(actualTickUpper);
+                const liquidity = getLiquidityForAmounts(
+                    liveSqrt,
+                    sqrtA,
+                    sqrtB,
+                    a0Raw,
+                    a1Raw,
+                );
+                if (liquidity > 0n) {
+                    const consumed = getAmountsForLiquidity(
+                        liveSqrt,
+                        sqrtA,
+                        sqrtB,
+                        liquidity,
+                    );
+                    exactA0 = consumed.amount0;
+                    exactA1 = consumed.amount1;
+                }
+            } catch {
+                /* fall back to user's raw amounts */
+            }
 
+            // AUDIT CRITICAL [2]/[22]: slippage still applies — but now on
+            // the EXACT consumed amounts so a tight slip can't false-revert.
+            const amount0Min = (exactA0 * slipDen) / 10_000n;
+            const amount1Min = (exactA1 * slipDen) / 10_000n;
+
+            // Use the EXACT consumed amounts as Desired so V3's mint binds
+            // both legs exactly. If we passed the raw user amounts, V3
+            // would consume less than amount{0,1}Min on the non-binding
+            // leg and revert.
             const hash = await writeContractAsync({
                 address: ADDRESSES.v3PositionManager,
                 abi: V3_NPM_ABI,
@@ -391,8 +438,8 @@ export function V3AddLiquidity({
                         fee: feePip,
                         tickLower: actualTickLower,
                         tickUpper: actualTickUpper,
-                        amount0Desired: a0Raw,
-                        amount1Desired: a1Raw,
+                        amount0Desired: exactA0,
+                        amount1Desired: exactA1,
                         amount0Min,
                         amount1Min,
                         recipient: account,
@@ -622,8 +669,17 @@ function PriceInput({
     onChange: (v: number) => void;
     pricePerPair: string;
 }) {
-    const [text, setText] = useState(value.toFixed(6));
-    useEffect(() => setText(value === 0 || !isFinite(value) ? "0" : value.toFixed(6)), [value]);
+    // Precision ladder: keep 6 decimals for human-scale prices and step up
+    // to scientific for sub-1e-4 values so a USDC/ETH range never displays
+    // as "0.000000" (which makes the user think the preset failed).
+    const fmt = (v: number) => {
+        if (v === 0 || !isFinite(v)) return "0";
+        if (v >= 0.0001) return v.toFixed(6);
+        if (v >= 0.000_000_1) return v.toFixed(10);
+        return v.toExponential(2);
+    };
+    const [text, setText] = useState(fmt(value));
+    useEffect(() => setText(fmt(value)), [value]);
     return (
         <div className="rounded-2xl border border-arc-border bg-white/[0.015] p-3">
             <div className="text-[10px] uppercase tracking-wider text-arc-text-muted">{label}</div>

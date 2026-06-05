@@ -99,7 +99,9 @@ function AddLiquidityInner() {
     // Without this both effects would race and clobber each other's value.
     const [lastEdited, setLastEdited] = useState<"A" | "B">("A");
     const [settingsOpen, setSettingsOpen] = useState(false);
-    const [slippageBps, setSlippageBps] = useState(10); // 0.1% default
+    // Default 0.5% (50 bps). The previous 0.1% was tight enough to trip
+    // V3 mint slippage on normal rounding within the v3-pool.
+    const [slippageBps, setSlippageBps] = useState(50);
     const [deadlineMin, setDeadlineMin] = useState(20);
     const [submitting, setSubmitting] = useState(false);
 
