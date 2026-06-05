@@ -1,6 +1,7 @@
 "use client";
 
 import {
+    ArrowDownUp,
     ArrowLeft,
     ChevronDown,
     Info,
@@ -297,6 +298,8 @@ function AddLiquidityInner() {
                 kind: "liquidity",
                 token0: { address: tokenA.address, symbol: tokenA.symbol },
                 token1: { address: tokenB.address, symbol: tokenB.symbol },
+                amount0Formatted: amountA,
+                amount1Formatted: amountB,
                 lpFormatted,
                 // Route the toast's "View pool" link to the pool detail page if
                 // we know the pair address, else /positions as a graceful fallback.
@@ -417,12 +420,31 @@ function AddLiquidityInner() {
                     balance={balA.data as bigint | undefined}
                 />
 
-                {/* Add-liquidity centerpiece: a "+" cross because the two
-                    legs are SUMMED into the LP, not swapped. */}
+                {/* Centerpiece: a "+" cross on Dual Token (legs are SUMMED
+                    into the LP), swap arrows on Single Asset (flip lets the
+                    user pick which side they're zapping IN from). */}
                 <div className="relative flex justify-center">
-                    <div className="-my-2 rounded-xl border border-arc-border bg-arc-bg-elevated p-2">
-                        <Plus className="h-4 w-4 text-arc-text-muted" />
-                    </div>
+                    {mode === "single" ? (
+                        <button
+                            onClick={() => {
+                                if (!tokenB) return;
+                                const params = new URLSearchParams(sp.toString());
+                                params.set("t0", tokenB.address);
+                                params.set("t1", tokenA.address);
+                                router.replace(`/positions/add?${params.toString()}`);
+                                setAmountA("");
+                                setAmountB("");
+                            }}
+                            title="Flip zap direction"
+                            className="-my-2 rounded-xl border border-arc-border bg-arc-bg-elevated p-2 transition-colors hover:bg-white/5"
+                        >
+                            <ArrowDownUp className="h-4 w-4 text-arc-text" />
+                        </button>
+                    ) : (
+                        <div className="-my-2 rounded-xl border border-arc-border bg-arc-bg-elevated p-2">
+                            <Plus className="h-4 w-4 text-arc-text-muted" />
+                        </div>
+                    )}
                 </div>
 
                 {/* Token 2 input or locked field */}

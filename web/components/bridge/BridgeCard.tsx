@@ -316,6 +316,12 @@ export function BridgeCard() {
       // eslint-disable-next-line no-console
       console.log(`[CCTP] poll #${attempts}`, { status: att?.status, hasAtt: !!att });
       if (att && att.status === "complete" && !cancelled) {
+        // Flip the matching history entry's badge from "Pending" -> "To claim"
+        // so the user sees there's an action waiting on them. The mint
+        // handler later flips status -> "minted" which supersedes this.
+        const patch = { attestationReady: true } as const;
+        if (historyId) updateBridge(historyId, patch);
+        else updateBridgeByBurnTx(step.burnTxHash, patch);
         setStep({
           kind: "minting",
           burnTxHash: step.burnTxHash,

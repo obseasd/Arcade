@@ -1,0 +1,315 @@
+"use client";
+
+import { ExternalLink, Plus } from "lucide-react";
+import Link from "next/link";
+import { useMemo } from "react";
+import { Address, erc20Abi, formatUnits } from "viem";
+import { useAccount, useReadContract, useReadContracts } from "wagmi";
+
+import { V3_NPM_ABI } from "@/lib/abis/v3-npm";
+import { ADDRESSES, USDC_DECIMALS } from "@/lib/constants";
+import { arcTestnet } from "@/lib/chains";
+import { TokenIcon } from "@/components/ui/TokenIcon";
+import { tickToPriceWithDecimals } from "@/lib/v3-math";
+import { cn, formatAddress } from "@/lib/utils";
+
+const USDC_LOWER = ADDRESSES.usdc.toLowerCase();
+
+/**
+ * Concentrated-liquidity positions owned by the connected wallet. Reads NPM
+ * balanceOf -> tokenOfOwnerByIndex(i) -> positions(tokenId) for each NFT,
+ * then surfaces a compact row with the pair, fee tier, tick range, and the
+ * tokens owed (uncollected fees). Add Liquidity / Collect / Remove flows
+ * link to /positions/add and the explorer for now; full manage UI lands
+ * with the next iteration.
+ */
+export function V3Positions({ emptyState }: { emptyState?: React.ReactNode }) {
+    const { address: account } = useAccount();
+    const npmEnabled = ADDRESSES.v3PositionManager !== "0x0000000000000000000000000000000000000000";
+
+    const balanceQ = useReadContract({
+        address: ADDRESSES.v3PositionManager,
+        abi: V3_NPM_ABI,
+        functionName: "balanceOf",
+        args: account ? [account] : undefined,
+        query: { enabled: !!account && npmEnabled },
+    });
+    const count = Number((balanceQ.data as bigint | undefined) ?? 0n);
+
+    // Walk tokenOfOwnerByIndex from 0..count-1 to get every token id owned.
+    const tokenIdsQ = useReadContracts({
+        contracts: account && npmEnabled
+            ? Array.from({ length: count }, (_, i) => ({
+                  address: ADDRESSES.v3PositionManager,
+                  abi: V3_NPM_ABI,
+                  functionName: "tokenOfOwnerByIndex" as const,
+                  args: [account, BigInt(i)] as const,
+              }))
+            : [],
+        query: { enabled: !!account && npmEnabled && count > 0 },
+    });
+    const tokenIds = useMemo(
+        () =>
+            (tokenIdsQ.data ?? [])
+                .map((c) => (c.status === "success" ? (c.result as bigint) : undefined))
+                .filter((x): x is bigint => x !== undefined),
+        [tokenIdsQ.data],
+    );
+
+    // For each tokenId, read positions(tokenId) to get the full state.
+    const positionsQ = useReadContracts({
+        contracts: tokenIds.map((id) => ({
+            address: ADDRESSES.v3PositionManager,
+            abi: V3_NPM_ABI,
+            functionName: "positions" as const,
+            args: [id] as const,
+        })),
+        query: { enabled: tokenIds.length > 0 },
+    });
+
+    type RawPosition = readonly [
+        bigint,
+        Address,
+        Address,
+        Address,
+        number,
+        number,
+        number,
+        bigint,
+        bigint,
+        bigint,
+        bigint,
+        bigint,
+    ];
+    const positions = useMemo(() => {
+        return (positionsQ.data ?? [])
+            .map((c, i) => {
+                if (c.status !== "success") return undefined;
+                const r = c.result as RawPosition;
+                return {
+                    tokenId: tokenIds[i],
+                    token0: r[2],
+                    token1: r[3],
+                    fee: Number(r[4]),
+                    tickLower: Number(r[5]),
+                    tickUpper: Number(r[6]),
+                    liquidity: r[7],
+                    tokensOwed0: r[10],
+                    tokensOwed1: r[11],
+                };
+            })
+            .filter((x): x is NonNullable<typeof x> => x !== undefined);
+    }, [positionsQ.data, tokenIds]);
+
+    // Gather all unique token addresses for metadata.
+    const tokenAddrs = useMemo(() => {
+        const s = new Set<string>();
+        positions.forEach((p) => {
+            s.add(p.token0.toLowerCase());
+            s.add(p.token1.toLowerCase());
+        });
+        return Array.from(s) as Address[];
+    }, [positions]);
+
+    const metaQ = useReadContracts({
+        contracts: tokenAddrs.flatMap((t) => [
+            { address: t, abi: erc20Abi, functionName: "symbol" as const },
+            { address: t, abi: erc20Abi, functionName: "decimals" as const },
+        ]),
+        query: { enabled: tokenAddrs.length > 0 },
+    });
+
+    const tokenInfo = useMemo(() => {
+        const m: Record<string, { symbol: string; decimals: number }> = {};
+        if (metaQ.data) {
+            tokenAddrs.forEach((addr, i) => {
+                m[addr.toLowerCase()] = {
+                    symbol:
+                        (metaQ.data?.[2 * i]?.result as string | undefined) ??
+                        (addr.toLowerCase() === USDC_LOWER ? "USDC" : "TOKEN"),
+                    decimals:
+                        (metaQ.data?.[2 * i + 1]?.result as number | undefined) ??
+                        (addr.toLowerCase() === USDC_LOWER ? USDC_DECIMALS : 18),
+                };
+            });
+        }
+        // Always know USDC.
+        m[USDC_LOWER] = m[USDC_LOWER] ?? { symbol: "USDC", decimals: USDC_DECIMALS };
+        return m;
+    }, [metaQ.data, tokenAddrs]);
+
+    if (!npmEnabled) {
+        return (
+            <div className="arc-card p-8 text-center text-sm text-arc-text-muted">
+                The V3 NonfungiblePositionManager has not been wired into this build
+                yet. Set NEXT_PUBLIC_V3_NPM_ADDRESS in Vercel to enable Concentrated
+                Liquidity here.
+            </div>
+        );
+    }
+    if (!account) {
+        return (
+            emptyState ?? (
+                <div className="arc-card p-8 text-center text-sm text-arc-text-muted">
+                    Connect a wallet to see your concentrated-liquidity positions.
+                </div>
+            )
+        );
+    }
+    if (count === 0) {
+        return (
+            emptyState ?? (
+                <div className="arc-card p-8 text-center text-sm text-arc-text-muted">
+                    You don&apos;t have any V3 positions yet. Open a new one from
+                    {" "}
+                    <Link href="/explore" className="text-arc-cta-hover hover:underline">
+                        Explore
+                    </Link>{" "}
+                    or +&nbsp;New&nbsp;position above.
+                </div>
+            )
+        );
+    }
+    if (positions.length === 0) {
+        return (
+            <div className="arc-card p-8 text-center text-sm text-arc-text-muted">
+                Loading your concentrated positions…
+            </div>
+        );
+    }
+
+    return (
+        <div className="space-y-3">
+            {positions.map((p) => {
+                const t0Info = tokenInfo[p.token0.toLowerCase()] ?? {
+                    symbol: "?",
+                    decimals: 18,
+                };
+                const t1Info = tokenInfo[p.token1.toLowerCase()] ?? {
+                    symbol: "?",
+                    decimals: 18,
+                };
+                const minPrice = tickToPriceWithDecimals(
+                    p.tickLower,
+                    t0Info.decimals,
+                    t1Info.decimals,
+                );
+                const maxPrice = tickToPriceWithDecimals(
+                    p.tickUpper,
+                    t0Info.decimals,
+                    t1Info.decimals,
+                );
+                const explorerUrl =
+                    arcTestnet.blockExplorers?.default.url ??
+                    "https://testnet.arcscan.app";
+
+                return (
+                    <div key={p.tokenId.toString()} className="arc-card p-4">
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                            <div className="flex items-center gap-3">
+                                <div className="flex -space-x-2">
+                                    <TokenIcon symbol={t0Info.symbol} size={36} />
+                                    <TokenIcon symbol={t1Info.symbol} size={36} />
+                                </div>
+                                <div>
+                                    <div className="flex items-center gap-2">
+                                        <span className="text-sm font-semibold">
+                                            {t0Info.symbol} / {t1Info.symbol}
+                                        </span>
+                                        <span className="rounded-md border border-arc-cta-hover/40 bg-arc-cta-hover/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-arc-cta-hover">
+                                            v3
+                                        </span>
+                                        <span className="rounded-md border border-arc-success/40 bg-arc-success/10 px-1.5 py-0.5 text-[10px] font-semibold text-arc-success">
+                                            {(p.fee / 10000).toFixed(2)}%
+                                        </span>
+                                    </div>
+                                    <div className="mt-1 text-xs text-arc-text-muted">
+                                        Token ID #{p.tokenId.toString()} •
+                                        Range {fmtPrice(minPrice)} - {fmtPrice(maxPrice)}{" "}
+                                        {t1Info.symbol}/{t0Info.symbol}
+                                    </div>
+                                </div>
+                            </div>
+                            <div className="flex flex-wrap items-center gap-2">
+                                <a
+                                    href={`${explorerUrl}/token/${ADDRESSES.v3PositionManager}?a=${p.tokenId}`}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="inline-flex items-center gap-1 rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-1.5 text-xs font-medium text-arc-text transition-colors hover:bg-white/5"
+                                >
+                                    NFT <ExternalLink className="h-3 w-3" />
+                                </a>
+                                <Link
+                                    href={`/positions/add?type=v3&t0=${p.token0}&t1=${p.token1}&fee=${p.fee / 100}`}
+                                    className="inline-flex items-center gap-1 rounded-xl border border-arc-cta-hover/40 bg-arc-cta-hover/10 px-3 py-1.5 text-xs font-semibold text-arc-cta-hover transition-colors hover:bg-arc-cta-hover/20"
+                                >
+                                    <Plus className="h-3 w-3" />
+                                    Add liquidity
+                                </Link>
+                            </div>
+                        </div>
+                        <div className="mt-3 grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
+                            <Stat
+                                label="Liquidity"
+                                value={p.liquidity === 0n ? "0" : abbreviate(p.liquidity)}
+                            />
+                            <Stat
+                                label={`Owed ${t0Info.symbol}`}
+                                value={formatTok(p.tokensOwed0, t0Info.decimals)}
+                            />
+                            <Stat
+                                label={`Owed ${t1Info.symbol}`}
+                                value={formatTok(p.tokensOwed1, t1Info.decimals)}
+                            />
+                            <Stat
+                                label="NPM"
+                                value={formatAddress(ADDRESSES.v3PositionManager)}
+                            />
+                        </div>
+                    </div>
+                );
+            })}
+        </div>
+    );
+}
+
+function Stat({ label, value }: { label: string; value: string }) {
+    return (
+        <div className="rounded-xl border border-arc-border bg-white/[0.015] px-3 py-2">
+            <div className="text-[9px] uppercase tracking-wider text-arc-text-faint">
+                {label}
+            </div>
+            <div
+                className={cn(
+                    "mt-0.5 text-sm font-semibold tabular-nums",
+                    value === "0" ? "text-arc-text-faint" : "text-arc-text",
+                )}
+            >
+                {value}
+            </div>
+        </div>
+    );
+}
+
+function abbreviate(n: bigint): string {
+    const v = Number(n);
+    if (v < 1e3) return v.toString();
+    if (v < 1e6) return (v / 1e3).toFixed(2) + "k";
+    if (v < 1e9) return (v / 1e6).toFixed(2) + "M";
+    if (v < 1e12) return (v / 1e9).toFixed(2) + "B";
+    return v.toExponential(2);
+}
+
+function formatTok(raw: bigint, decimals: number): string {
+    if (raw === 0n) return "0";
+    const n = Number(formatUnits(raw, decimals));
+    if (n < 0.0001) return "<0.0001";
+    return n.toLocaleString(undefined, { maximumFractionDigits: 4 });
+}
+
+function fmtPrice(p: number): string {
+    if (!isFinite(p) || p === 0) return "0";
+    if (p < 0.0001) return p.toExponential(2);
+    if (p < 1) return p.toFixed(6);
+    return p.toLocaleString(undefined, { maximumFractionDigits: 4 });
+}

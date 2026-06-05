@@ -110,9 +110,23 @@ function ToastCard({ payload, onClose }: { payload: ToastPayload; onClose: () =>
             <CheckCircle2 className="h-3.5 w-3.5 text-arc-success" />
             <span>Liquidity added</span>
           </div>
-          <div className="mt-0.5 truncate text-sm font-semibold tabular-nums text-arc-text">
-            {payload.lpFormatted} LP {symA}/{symB}
-          </div>
+          {/* Prefer the deposited-token line over the abstract LP count.
+              On a V2 first-LP add the LP figure is ~sqrt(amount0*amount1) so
+              "5.6e-6 LP" is hard to read; the per-token amounts speak. */}
+          {payload.amount0Formatted && payload.amount1Formatted ? (
+            <>
+              <div className="mt-0.5 truncate text-sm font-semibold tabular-nums text-arc-text">
+                +{payload.amount0Formatted} {symA}
+              </div>
+              <div className="truncate text-sm font-semibold tabular-nums text-arc-text">
+                +{payload.amount1Formatted} {symB}
+              </div>
+            </>
+          ) : (
+            <div className="mt-0.5 truncate text-sm font-semibold tabular-nums text-arc-text">
+              {payload.lpFormatted ?? "—"} LP {symA}/{symB}
+            </div>
+          )}
           <div className="mt-0.5 flex items-center gap-2 text-[11px]">
             {payload.poolHref && (
               <Link

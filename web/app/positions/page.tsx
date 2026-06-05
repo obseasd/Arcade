@@ -2,22 +2,40 @@
 
 import { Plus, X } from "lucide-react";
 import Image from "next/image";
-import { useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { Suspense, useEffect, useState } from "react";
 import { AddLiquidityCard } from "@/components/pool/AddLiquidityCard";
 import { MyPositions } from "@/components/pool/MyPositions";
 import { BurnedPositions } from "@/components/pool/BurnedPositions";
+import { V3Positions } from "@/components/pool/V3Positions";
 import { Modal } from "@/components/ui/Modal";
 import { cn } from "@/lib/utils";
 
 type Tab = "amm" | "burned" | "concentrated";
 
 export default function PositionsPage() {
+  return (
+    <Suspense fallback={null}>
+      <PositionsInner />
+    </Suspense>
+  );
+}
+
+function PositionsInner() {
+  const sp = useSearchParams();
   const [newOpen, setNewOpen] = useState(false);
   const [tab, setTab] = useState<Tab>("amm");
   // Remount-key nonce: bump after a successful add so MyPositions discards
   // its query cache and re-fetches the pair list. Cheaper than threading a
   // bespoke refetch handle through the tree.
   const [refreshKey, setRefreshKey] = useState(0);
+
+  // Allow deep links like /positions?tab=concentrated so the V3 mint flow
+  // can drop the user directly on their freshly minted NFT row.
+  useEffect(() => {
+    const t = sp.get("tab");
+    if (t === "amm" || t === "burned" || t === "concentrated") setTab(t);
+  }, [sp]);
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-8 sm:px-6">
@@ -64,20 +82,24 @@ export default function PositionsPage() {
         <TabButton active={tab === "amm"} onClick={() => setTab("amm")}>
           Standard AMM
         </TabButton>
+        <TabButton
+          active={tab === "concentrated"}
+          onClick={() => setTab("concentrated")}
+        >
+          Concentrated Liquidity
+        </TabButton>
         <TabButton active={tab === "burned"} onClick={() => setTab("burned")}>
           Burned
         </TabButton>
-        <TabButton active={false} disabled label="Soon">
-          Concentrated Liquidity
-        </TabButton>
       </div>
 
-      {/* Tab content. Keying MyPositions on refreshKey forces a remount +
+      {/* Tab content. Keying the lists on refreshKey forces a remount +
           full query re-run after the user adds liquidity via the modal so
           the row appears without a hard reload. */}
       {tab === "amm" && (
         <MyPositions key={refreshKey} emptyState={<EmptyState />} />
       )}
+      {tab === "concentrated" && <V3Positions key={refreshKey} />}
       {tab === "burned" && <BurnedPositions />}
 
       {/* New-position modal - panel matches the swap/bridge cards exactly

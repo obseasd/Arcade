@@ -21,6 +21,14 @@ export interface HistoryEntry {
   burnedAt: number;
   /** Epoch ms at mint time (if minted). */
   mintedAt?: number;
+  /**
+   * Set to true once Circle's Iris attestation comes back complete - the
+   * row is now mintable. UI flips the badge from "Pending" (still waiting
+   * on attestation) to "To claim" so the user knows they have an action
+   * to take. Stays true through `mintTxHash` confirmation, at which point
+   * status flips to "minted" and supersedes the badge anyway.
+   */
+  attestationReady?: boolean;
 }
 
 function isBrowser(): boolean {

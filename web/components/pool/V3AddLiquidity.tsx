@@ -168,10 +168,15 @@ export function V3AddLiquidity({
 
     const [submitting, setSubmitting] = useState(false);
 
+    // Out-of-range single-sided logic only makes sense when a pool already
+    // exists (we know the current tick). On a fresh pool the user is
+    // SETTING the initial price via the midpoint of their range, so both
+    // legs are always needed regardless of where the ticks sit relative to
+    // the default tick=0.
     const inRange =
-        currentTick >= tickLower && currentTick < tickUpper;
-    const belowRange = currentTick < tickLower;
-    const aboveRange = currentTick >= tickUpper;
+        hasPool && currentTick >= tickLower && currentTick < tickUpper;
+    const belowRange = hasPool && currentTick < tickLower;
+    const aboveRange = hasPool && currentTick >= tickUpper;
 
     const canSubmit =
         !!account &&
@@ -242,11 +247,15 @@ export function V3AddLiquidity({
                 kind: "liquidity",
                 token0: { address: t0.address, symbol: t0.symbol },
                 token1: { address: t1.address, symbol: t1.symbol },
+                amount0Formatted: amount0 || "0",
+                amount1Formatted: amount1 || "0",
                 lpFormatted: "1 NFT",
                 poolHref: hasPool && pool ? `/pool/${pool}` : "/positions",
                 explorerUrl: `${arcTestnet.blockExplorers?.default.url}/tx/${hash}`,
             });
-            router.push("/positions");
+            // Route to /positions?tab=concentrated so the new NFT is in view
+            // without the user having to click the V3 tab themselves.
+            router.push("/positions?tab=concentrated");
         } catch (e: unknown) {
             const msg =
                 typeof e === "object" && e !== null && "shortMessage" in e

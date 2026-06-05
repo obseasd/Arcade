@@ -174,6 +174,8 @@ export function AddLiquidityCard({ onSuccess }: AddLiquidityCardProps = {}) {
         kind: "liquidity",
         token0: { address: tokenA.address, symbol: tokenA.symbol },
         token1: { address: tokenB.address, symbol: tokenB.symbol },
+        amount0Formatted: amountA,
+        amount1Formatted: amountB,
         lpFormatted,
         poolHref:
           resolvedPair && resolvedPair !== "0x0000000000000000000000000000000000000000"

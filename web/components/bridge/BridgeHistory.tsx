@@ -111,7 +111,7 @@ function Row({ entry, onDismiss }: { entry: HistoryEntry; onDismiss: () => void 
           {src?.name ?? "?"} → {dst?.name ?? "?"} · {ago}
         </div>
       </div>
-      <StatusBadge status={entry.status} />
+      <StatusBadge status={entry.status} attestationReady={entry.attestationReady} />
       {explorerTx && (
         <a
           href={explorerTx}
@@ -137,7 +137,13 @@ function Row({ entry, onDismiss }: { entry: HistoryEntry; onDismiss: () => void 
   );
 }
 
-function StatusBadge({ status }: { status: HistoryEntry["status"] }) {
+function StatusBadge({
+  status,
+  attestationReady,
+}: {
+  status: HistoryEntry["status"];
+  attestationReady?: boolean;
+}) {
   if (status === "minted") {
     return (
       <span className="rounded-full bg-arc-success/15 px-2 py-0.5 text-[10px] font-medium text-arc-success">
@@ -149,6 +155,16 @@ function StatusBadge({ status }: { status: HistoryEntry["status"] }) {
     return (
       <span className="rounded-full bg-arc-danger/15 px-2 py-0.5 text-[10px] font-medium text-arc-danger">
         Failed
+      </span>
+    );
+  }
+  // Attestation in - mint not done yet. Flip the badge so the user knows
+  // they have an action available rather than thinking it's still waiting
+  // on Circle.
+  if (attestationReady) {
+    return (
+      <span className="rounded-full bg-sky-400/15 px-2 py-0.5 text-[10px] font-medium text-sky-300">
+        To claim
       </span>
     );
   }

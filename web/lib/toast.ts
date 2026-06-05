@@ -32,8 +32,15 @@ export interface LiquidityToastPayload {
   /** Tokens that were paired (used to render stacked icons + symbol pair). */
   token0: { address: Address; symbol?: string };
   token1: { address: Address; symbol?: string };
-  /** Pre-formatted LP balance the user received, eg "1.234". */
-  lpFormatted: string;
+  /**
+   * Pre-formatted token amounts the user deposited. When provided, the
+   * toast renders these instead of (or alongside) the LP balance because
+   * "10 USDC + 3.16 ETH" reads way clearer than "5.6e-6 LP USDC/ETH".
+   */
+  amount0Formatted?: string;
+  amount1Formatted?: string;
+  /** Pre-formatted LP balance the user received, eg "1.234". Optional. */
+  lpFormatted?: string;
   /** Optional "View pool" deep link that the toast routes to on click. */
   poolHref?: string;
   /** Optional block-explorer URL for the addLiquidity tx. */
