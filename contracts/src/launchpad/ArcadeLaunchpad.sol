@@ -881,28 +881,26 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         if (pair == address(0)) {
             pair = v2Factory.createPair(address(USDC), tokenAddr);
         }
-        // M-09: neutralise any pre-donation an attacker may have made to the
-        // pair's deterministic address before migration. We pay only the
-        // difference between intended LP seed and the existing balance, so
-        // the pair always ends up with exactly `usdcForLP` (or `preBalance`,
-        // whichever is larger) post-mint. Any saved USDC goes to the
-        // treasury, neutralising the price-shift grief vector. Skim AFTER
-        // mint cleans up any donation that arrives between getPair and mint.
-        uint256 preBalance = USDC.balanceOf(pair);
-        uint256 toTransfer = usdcForLP > preBalance ? usdcForLP - preBalance : 0;
-        if (toTransfer > 0) {
-            USDC.safeTransfer(pair, toTransfer);
-        }
+        // M-09 + audit medium [24]: defend against TWO grief vectors:
+        //   (a) raw donation - attacker transfers USDC directly to the pair
+        //   (b) pre-mint - attacker calls createPair + mint themselves at
+        //       a ratio-matching deposit, claiming the LP. M-09's old
+        //       "short-pay" path treats this as a giant donation, transfers
+        //       0 USDC, mints 0 LP for the launchpad, then reverts inside
+        //       pair.mint(DEAD) - bricking the token at the migration
+        //       boundary.
+        //
+        // New strategy: always transfer the full `usdcForLP` (so the mint
+        // produces non-zero liquidity regardless of pre-existing reserves)
+        // and skim afterwards to recover any value the attacker tried to
+        // donate. The attacker's pre-mint LP (if any) is unaffected but the
+        // launchpad's mint always succeeds — the launch can never be DoS'd
+        // at this step. The skim grabs the donation portion only; the
+        // attacker's own pre-mint balance stays in the pair as their LP.
+        USDC.safeTransfer(pair, usdcForLP);
         IERC20(tokenAddr).safeTransfer(pair, tokensForLP);
         IArcadeV2Pair(pair).mint(DEAD);
         IArcadeV2Pair(pair).skim(treasury);
-        // The portion of our intended seed that the attacker's donation
-        // already covered is now ours to redirect. Pay it to the treasury
-        // alongside the migration fee.
-        uint256 saved = usdcForLP - toTransfer;
-        if (saved > 0) {
-            _safePayUsdc(treasury, saved);
-        }
         s.v2Pair = pair;
         emit Migrated(tokenAddr, pair, usdcForLP, tokensForLP);
     }
@@ -968,7 +966,18 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
             pool = v3Factory.createPool(token0, token1, fee);
         }
         uint160 sqrtPriceX96 = ArcadeV3PriceMath.encodeSqrtPriceX96(amount1, amount0);
-        IArcadeV3Pool(pool).initialize(sqrtPriceX96);
+        // Audit medium [23]: only initialise() when the pool is virgin.
+        // The token address is derived from this launchpad's CREATE nonce
+        // and is therefore predictable in the mempool; without this guard
+        // an attacker can pre-initialise the predicted pool at any price
+        // (gas-only cost) so that initialize() reverts with 'AI' and the
+        // creator's CLANKER_V3 launch is permanently bricked. Mirrors the
+        // canonical Uniswap PoolInitializer.createAndInitializePoolIfNecessary
+        // guard.
+        (uint160 currentSqrt,,,,,,) = IArcadeV3Pool(pool).slot0();
+        if (currentSqrt == 0) {
+            IArcadeV3Pool(pool).initialize(sqrtPriceX96);
+        }
 
         // L-02: flip migrated state BEFORE the external locker call so that
         // any view of `isMigrated(token)` invoked during the locker's
