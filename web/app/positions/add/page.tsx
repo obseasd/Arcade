@@ -7,8 +7,6 @@ import {
     Info,
     Lock,
     Plus,
-    Settings,
-    X,
 } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -33,8 +31,8 @@ import { ADDRESSES, USDC_DECIMALS } from "@/lib/constants";
 import { arcTestnet } from "@/lib/chains";
 import { useApproveIfNeeded } from "@/lib/hooks/useApproveIfNeeded";
 import { pushToast } from "@/lib/toast";
-import { Modal } from "@/components/ui/Modal";
 import { TokenIcon } from "@/components/ui/TokenIcon";
+import { TransactionSettings } from "@/components/ui/TransactionSettings";
 import { V3AddLiquidity } from "@/components/pool/V3AddLiquidity";
 import { cn, formatLpBalance } from "@/lib/utils";
 
@@ -102,6 +100,8 @@ function AddLiquidityInner() {
     // Default 0.5% (50 bps). The previous 0.1% was tight enough to trip
     // V3 mint slippage on normal rounding within the v3-pool.
     const [slippageBps, setSlippageBps] = useState(50);
+    // Mirror of the popover's custom-input field. "" means a preset is active.
+    const [slippageCustom, setSlippageCustom] = useState("");
     const [deadlineMin, setDeadlineMin] = useState(20);
     const [submitting, setSubmitting] = useState(false);
 
@@ -413,13 +413,31 @@ function AddLiquidityInner() {
                         </div>
                     </div>
                 </div>
-                <button
-                    onClick={() => setSettingsOpen(true)}
-                    aria-label="Transaction settings"
-                    className="rounded-xl border border-arc-border bg-black/30 p-2 text-arc-text-muted transition-colors hover:bg-white/5 hover:text-arc-text"
-                >
-                    <Settings className="h-4 w-4" />
-                </button>
+                <TransactionSettings
+                    open={settingsOpen}
+                    onToggle={() => setSettingsOpen((v) => !v)}
+                    onClose={() => setSettingsOpen(false)}
+                    slippageBps={slippageBps}
+                    slippageCustom={slippageCustom}
+                    onPreset={(bps) => {
+                        setSlippageBps(bps);
+                        setSlippageCustom("");
+                    }}
+                    onCustom={(raw) => {
+                        // Clamp the custom field to [1 bp, 5000 bps]
+                        // (audit low [7]) so a typo can't sign a 100% min.
+                        // Keep the raw string in state so the input doesn't
+                        // re-render the typed value out from under the user.
+                        const clean = raw.replace(/[^0-9.]/g, "");
+                        setSlippageCustom(clean);
+                        const n = Number(clean);
+                        if (!Number.isFinite(n) || n <= 0) return;
+                        const bps = Math.min(5000, Math.max(1, Math.round(n * 100)));
+                        setSlippageBps(bps);
+                    }}
+                    deadlineMin={deadlineMin}
+                    onDeadlineChange={setDeadlineMin}
+                />
             </div>
 
             {/* Main add-liquidity card */}
@@ -609,85 +627,6 @@ function AddLiquidityInner() {
                 )}
             </div>
 
-            {/* Settings modal */}
-            <Modal
-                open={settingsOpen}
-                onClose={() => setSettingsOpen(false)}
-                widthClassName="max-w-md"
-                backdropClassName="bg-black/40 backdrop-blur-md"
-                className="border-arc-border bg-black/45 backdrop-blur-2xl"
-            >
-                <div className="flex items-center justify-between border-b border-arc-border px-5 py-4">
-                    <h3 className="text-base font-semibold">Transaction Settings</h3>
-                    <button
-                        onClick={() => setSettingsOpen(false)}
-                        className="rounded-full border border-arc-border bg-black/30 p-1.5 text-arc-text-muted hover:text-arc-text"
-                    >
-                        <X className="h-4 w-4" />
-                    </button>
-                </div>
-                <div className="space-y-5 p-5">
-                    <div>
-                        <div className="mb-2 flex items-center gap-1 text-sm text-arc-text-muted">
-                            Slippage tolerance
-                            <Info className="h-3.5 w-3.5" />
-                        </div>
-                        <div className="flex flex-wrap items-center gap-2">
-                            {[10, 50, 100].map((bps) => (
-                                <button
-                                    key={bps}
-                                    onClick={() => setSlippageBps(bps)}
-                                    className={cn(
-                                        "rounded-xl px-3 py-1.5 text-sm font-semibold transition-colors",
-                                        slippageBps === bps
-                                            ? "bg-arc-success text-black"
-                                            : "bg-arc-bg-elevated text-arc-text-muted hover:text-arc-text",
-                                    )}
-                                >
-                                    {bps / 100}%
-                                </button>
-                            ))}
-                            <input
-                                type="number"
-                                step="0.01"
-                                min={0.01}
-                                max={50}
-                                value={slippageBps / 100}
-                                onChange={(e) => {
-                                    // Audit low [7]: clamp the custom field to
-                                    // [1 bp, 5000 bps] so a typo can't sign a
-                                    // 100% min. The submit path also clamps
-                                    // (belt-and-suspenders) but the UI never
-                                    // surfaces an absurd value either.
-                                    const raw = Math.round(Number(e.target.value) * 100);
-                                    if (!Number.isFinite(raw)) return;
-                                    setSlippageBps(Math.min(5000, Math.max(1, raw)));
-                                }}
-                                className="w-24 rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-1.5 text-right text-sm text-arc-text"
-                            />
-                            <span className="text-sm text-arc-text-muted">%</span>
-                        </div>
-                    </div>
-                    <div>
-                        <div className="mb-2 flex items-center gap-1 text-sm text-arc-text-muted">
-                            Transaction deadline
-                            <Info className="h-3.5 w-3.5" />
-                        </div>
-                        <div className="flex items-center gap-2">
-                            <input
-                                type="number"
-                                min={1}
-                                value={deadlineMin}
-                                onChange={(e) =>
-                                    setDeadlineMin(Math.max(1, Number(e.target.value) || 20))
-                                }
-                                className="w-20 rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-1.5 text-right text-sm text-arc-text"
-                            />
-                            <span className="text-sm text-arc-text-muted">minutes</span>
-                        </div>
-                    </div>
-                </div>
-            </Modal>
         </div>
     );
 }

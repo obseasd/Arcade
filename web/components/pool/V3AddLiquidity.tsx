@@ -373,28 +373,42 @@ export function V3AddLiquidity({
 
             const deadline = BigInt(Math.floor(Date.now() / 1000) + deadlineMin * 60);
 
-            // Pre-compute the EXACT amounts the v3-pool will consume so
-            // the slippage minimum can be tight without tripping M0/M1.
-            // V3 binds on the smaller leg, so the user's other leg is
-            // typically partially used; without this step amount{0,1}Min
-            // derived from amount{0,1}Desired routinely reverted.
+            // Resolve the pool address - either the React-state `pool` (set
+            // when poolAddrQ hydrated) or the fresh-pool branch's livePool
+            // (read directly above after the init tx confirmed). The previous
+            // `pool ?? ADDRESSES.v3Factory` fallback silently routed slot0()
+            // to the factory (no slot0) which threw and dropped the
+            // LiquidityAmounts pre-compute entirely.
+            const resolvedPool = (pool && pool !== zeroAddress
+                ? pool
+                : (await publicClient.readContract({
+                      address: ADDRESSES.v3Factory,
+                      abi: V3_FACTORY_ABI,
+                      functionName: "getPool",
+                      args: [t0.address, t1.address, feePip],
+                  })) as Address);
+            if (!resolvedPool || resolvedPool === zeroAddress) {
+                throw new Error("V3 pool address unresolved — refresh and retry.");
+            }
+
+            // Pre-compute the EXACT amounts the v3-pool will consume so the
+            // slippage minimum can be tight without tripping M0/M1. V3 binds
+            // on the smaller-liquidity leg, so the user's other leg is
+            // typically partially consumed; without this step amount{0,1}Min
+            // derived from the user's typed amount{0,1}Desired routinely
+            // reverted because the binding logic skewed actual deposits.
             //
-            // Read the live sqrtPriceX96 + tickSpacing-rounded boundary
-            // sqrts. Then call LiquidityAmounts to derive the placed
-            // liquidity from the user's typed (desired) amounts and the
-            // CONSUMED amounts that liquidity will actually withdraw.
-            // Submit those consumed amounts as Desired so V3's internal
-            // math matches what we asked for.
+            // Uses the TickMath-exact getSqrtRatioAtTick (bit-for-bit port
+            // of v3-core/TickMath) so our liquidity math matches the
+            // on-chain mint flow to the last bit.
             let exactA0 = a0Raw;
             let exactA1 = a1Raw;
             try {
-                const liveSqrt = hasPool
-                    ? (((await publicClient.readContract({
-                          address: pool ?? ADDRESSES.v3Factory, // pool resolved above when hasPool
-                          abi: V3_POOL_ABI,
-                          functionName: "slot0",
-                      })) as readonly [bigint, number, ...unknown[]])[0] as bigint)
-                    : encodeSqrtPriceX96(Number(a1Raw) / Number(a0Raw));
+                const liveSqrt = ((await publicClient.readContract({
+                    address: resolvedPool,
+                    abi: V3_POOL_ABI,
+                    functionName: "slot0",
+                })) as readonly [bigint, number, ...unknown[]])[0] as bigint;
                 const sqrtA = getSqrtRatioAtTick(actualTickLower);
                 const sqrtB = getSqrtRatioAtTick(actualTickUpper);
                 const liquidity = getLiquidityForAmounts(
@@ -411,8 +425,14 @@ export function V3AddLiquidity({
                         sqrtB,
                         liquidity,
                     );
-                    exactA0 = consumed.amount0;
-                    exactA1 = consumed.amount1;
+                    // Pad the desired amounts by 1 unit so the on-chain
+                    // round-to-nearest-pool-tick precision can't make
+                    // amount0Desired < what V3 actually wants for this
+                    // liquidity (V3 caps at desired, so under-prediction
+                    // is harmless; over-prediction by 1 unit costs the
+                    // user 1e-18 of either token — negligible).
+                    exactA0 = consumed.amount0 > 0n ? consumed.amount0 + 1n : 0n;
+                    exactA1 = consumed.amount1 > 0n ? consumed.amount1 + 1n : 0n;
                 }
             } catch {
                 /* fall back to user's raw amounts */
@@ -423,6 +443,48 @@ export function V3AddLiquidity({
             const amount0Min = (exactA0 * slipDen) / 10_000n;
             const amount1Min = (exactA1 * slipDen) / 10_000n;
 
+            const mintArgs = [
+                {
+                    token0: t0.address,
+                    token1: t1.address,
+                    fee: feePip,
+                    tickLower: actualTickLower,
+                    tickUpper: actualTickUpper,
+                    amount0Desired: exactA0,
+                    amount1Desired: exactA1,
+                    amount0Min,
+                    amount1Min,
+                    recipient: account,
+                    deadline,
+                },
+            ] as const;
+
+            // Simulate the mint before broadcasting so a revert (M0/M1/
+            // TLU/etc) surfaces with the actual on-chain reason instead of
+            // burning gas to discover it. simulateContract uses the same
+            // RPC eth_call path the pool uses for its require checks.
+            try {
+                await publicClient.simulateContract({
+                    address: ADDRESSES.v3PositionManager,
+                    abi: V3_NPM_ABI,
+                    functionName: "mint",
+                    args: mintArgs,
+                    account,
+                });
+            } catch (simErr: unknown) {
+                const o = simErr as Record<string, unknown> | null;
+                const reason =
+                    o && typeof o === "object"
+                        ? ((o.cause as Record<string, unknown> | undefined)?.reason as string | undefined) ??
+                          (o.shortMessage as string | undefined) ??
+                          (o.details as string | undefined) ??
+                          (o.message as string | undefined)
+                        : undefined;
+                throw new Error(
+                    `V3 simulate-mint reverted: ${reason || "unknown"}. Pool ${resolvedPool.slice(0, 10)}…, range [${actualTickLower}, ${actualTickUpper}], exactA0=${exactA0}, exactA1=${exactA1}, min0=${amount0Min}, min1=${amount1Min}.`,
+                );
+            }
+
             // Use the EXACT consumed amounts as Desired so V3's mint binds
             // both legs exactly. If we passed the raw user amounts, V3
             // would consume less than amount{0,1}Min on the non-binding
@@ -431,21 +493,7 @@ export function V3AddLiquidity({
                 address: ADDRESSES.v3PositionManager,
                 abi: V3_NPM_ABI,
                 functionName: "mint",
-                args: [
-                    {
-                        token0: t0.address,
-                        token1: t1.address,
-                        fee: feePip,
-                        tickLower: actualTickLower,
-                        tickUpper: actualTickUpper,
-                        amount0Desired: exactA0,
-                        amount1Desired: exactA1,
-                        amount0Min,
-                        amount1Min,
-                        recipient: account,
-                        deadline,
-                    },
-                ],
+                args: mintArgs,
             });
 
             // Confirm the mint on-chain. If the receipt comes back reverted
