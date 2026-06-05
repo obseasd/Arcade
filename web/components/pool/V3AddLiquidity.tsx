@@ -17,16 +17,15 @@ import { useApproveIfNeeded } from "@/lib/hooks/useApproveIfNeeded";
 import { pushToast } from "@/lib/toast";
 import { TokenIcon } from "@/components/ui/TokenIcon";
 import {
-    clampTick,
     defaultTickSpacingForFee,
     encodeSqrtPriceX96,
+    isSqrtPriceInRange,
     MAX_TICK,
     MIN_TICK,
+    nearestUsableTick,
     presetTickRange,
     priceToTickWithDecimals,
     type RangePreset,
-    roundTickDown,
-    roundTickUp,
     tickToPriceWithDecimals,
 } from "@/lib/v3-math";
 import { cn } from "@/lib/utils";
@@ -248,72 +247,120 @@ export function V3AddLiquidity({
         belowRange ? true : a1WouldUse >= 0n && a1WouldUse <= balance1Raw;
     const enoughBalance = enoughBalance0 && enoughBalance1;
 
+    // Audit low [28]: gate submit on poolAddrQ loading. The page used to
+    // submit with a stale hasPool=false closure if the user hit Submit
+    // before the factory.getPool query resolved, taking the fresh-pool
+    // branch on a pool that already existed.
     const canSubmit =
         !!account &&
         npmEnabled &&
         !submitting &&
+        !poolAddrQ.isLoading &&
         validRange &&
         sufficientAmounts &&
         enoughBalance;
 
     async function onSubmit() {
-        if (!account) return;
+        if (!account || !publicClient) return;
         try {
             setSubmitting(true);
 
             const a0Raw = amount0 ? parseUnits(amount0, t0.decimals) : 0n;
             const a1Raw = amount1 ? parseUnits(amount1, t1.decimals) : 0n;
+            const slipDen = 10_000n - BigInt(slippageBps);
 
-            // We may need to re-anchor tickLower/tickUpper around the seed
-            // tick on a fresh pool (see below). Default to the UI-computed
-            // ticks; the fresh-pool branch may overwrite them.
             let actualTickLower = tickLower;
             let actualTickUpper = tickUpper;
 
-            // For fresh pools the seed sqrtPriceX96 has to come from the
-            // user's deposit ratio, not the midpoint of their preset range.
-            // Otherwise the initial pool price (and therefore the implicit
-            // current tick) lands somewhere unrelated to the amounts being
-            // deposited, the position ends up out-of-range, and the
-            // amount{0,1}Min slippage check on mint reverts because the V3
-            // core only consumed one leg.
+            // Fresh-pool branch. Two on-chain calls (init + mint) bracketed
+            // by a slot0 verification — see the security commentary below.
             if (!hasPool) {
                 if (a0Raw === 0n || a1Raw === 0n) {
                     throw new Error(
-                        "Fresh V3 pools need both Token 1 and Token 2 amounts. Single-sided seeding is only safe once the pool exists.",
+                        "Fresh V3 pools need both Token 1 and Token 2 amounts.",
                     );
                 }
-                // sqrtPriceX96 = sqrt(token1Raw / token0Raw) * 2^96. Use the
-                // raw ratio directly so encoding doesn't need a decimals
-                // adjustment pass.
                 const rawPrice = Number(a1Raw) / Number(a0Raw);
                 const sqrtX96 = encodeSqrtPriceX96(rawPrice);
-
-                // The implicit current tick after init - derived from the
-                // raw price. Re-snap the user's chosen range around this
-                // tick so the position straddles the seeded price and BOTH
-                // legs deposit fully.
+                // Audit medium [9]: refuse to broadcast if the encoded seed
+                // sits outside the V3 legal range — initialise() would
+                // revert with R but we'd already have paid the gas.
+                if (!isSqrtPriceInRange(sqrtX96)) {
+                    throw new Error(
+                        "Seed price falls outside the V3 legal range. Pick deposit amounts whose ratio is closer to 1.",
+                    );
+                }
                 const implicitTick = Math.floor(Math.log(rawPrice) / Math.log(1.0001));
+                if (!isFinite(implicitTick)) {
+                    throw new Error("Could not derive a seed tick from the amounts.");
+                }
                 const halfWidth = Math.max(
                     tickSpacing,
                     Math.floor((tickUpper - tickLower) / 2),
                 );
-                actualTickLower = roundTickDown(
-                    clampTick(implicitTick - halfWidth),
+                actualTickLower = nearestUsableTick(
+                    implicitTick - halfWidth,
                     tickSpacing,
                 );
-                actualTickUpper = roundTickUp(
-                    clampTick(implicitTick + halfWidth),
+                actualTickUpper = nearestUsableTick(
+                    implicitTick + halfWidth,
                     tickSpacing,
                 );
 
-                await writeContractAsync({
+                // Init the pool and wait for the receipt before approving
+                // / minting. If init reverted we must abort or the next
+                // tx would mint against an uninitialised pool.
+                const initHash = await writeContractAsync({
                     address: ADDRESSES.v3PositionManager,
                     abi: V3_NPM_ABI,
                     functionName: "createAndInitializePoolIfNecessary",
                     args: [t0.address, t1.address, feePip, sqrtX96],
                 });
+                const initReceipt = await publicClient.waitForTransactionReceipt({ hash: initHash });
+                if (initReceipt.status !== "success") {
+                    throw new Error(
+                        `Pool init reverted (tx ${initHash.slice(0, 10)}…). Retry with a different ratio or fee tier.`,
+                    );
+                }
+
+                // AUDIT CRITICAL [2]/[22]: PoolInitializer's createAndInit-
+                // ializePoolIfNecessary is a SILENT no-op when the pool was
+                // already initialised by someone else. A front-runner could
+                // have pre-initialised at a malicious price between our
+                // submit and our receipt landing; without this check we'd
+                // mint into the attacker's price. Verify the live slot0
+                // matches what we asked for (1% tolerance for rounding).
                 await poolAddrQ.refetch();
+                const livePool = (await publicClient.readContract({
+                    address: ADDRESSES.v3Factory,
+                    abi: V3_FACTORY_ABI,
+                    functionName: "getPool",
+                    args: [t0.address, t1.address, feePip],
+                })) as Address;
+                if (!livePool || livePool === zeroAddress) {
+                    throw new Error("V3 factory did not return a pool address after init.");
+                }
+                const liveSlot0 = (await publicClient.readContract({
+                    address: livePool,
+                    abi: V3_POOL_ABI,
+                    functionName: "slot0",
+                })) as readonly [bigint, number, ...unknown[]];
+                const liveSqrtX96 = liveSlot0[0] as bigint;
+                const dev =
+                    liveSqrtX96 > sqrtX96
+                        ? ((liveSqrtX96 - sqrtX96) * 10_000n) / sqrtX96
+                        : ((sqrtX96 - liveSqrtX96) * 10_000n) / sqrtX96;
+                if (dev > 100n) {
+                    throw new Error(
+                        "Pool init landed at a price ~1%+ off the seed (likely a front-run). Refresh and retry — UI will re-read the live tick.",
+                    );
+                }
+
+                // Re-anchor the range around the live tick so the slip-min
+                // computation below targets the correct deposit ratios.
+                const liveTick = Number(liveSlot0[1]);
+                actualTickLower = nearestUsableTick(liveTick - halfWidth, tickSpacing);
+                actualTickUpper = nearestUsableTick(liveTick + halfWidth, tickSpacing);
             }
 
             await Promise.all([
@@ -321,17 +368,17 @@ export function V3AddLiquidity({
                 a1Raw > 0n ? approve1(a1Raw) : Promise.resolve(),
             ]);
 
-            const slipDen = 10_000n - BigInt(slippageBps);
             const deadline = BigInt(Math.floor(Date.now() / 1000) + deadlineMin * 60);
 
-            // On fresh pools the user IS the seeder - they cannot get
-            // sandwiched, so zero out the slippage minimums. This stops the
-            // edge case where rounding inside the V3 core produces a
-            // slightly-different amount than the user typed and trips
-            // amount{0,1}Min. On existing pools we keep the standard
-            // slipDen-derived guard.
-            const amount0Min = hasPool ? (a0Raw * slipDen) / 10_000n : 0n;
-            const amount1Min = hasPool ? (a1Raw * slipDen) / 10_000n : 0n;
+            // AUDIT CRITICAL [2]/[22]: slippage applies on EVERY path. The
+            // previous "fresh pool means user is the seeder, no slippage"
+            // assumption was wrong (PoolInitializer silently no-ops on a
+            // pre-existing pool), and the zero-min trick let an attacker
+            // steal one entire leg of the user's deposit. The slot0 check
+            // above + a real amount{0,1}Min here is the belt-and-suspenders
+            // defence.
+            const amount0Min = (a0Raw * slipDen) / 10_000n;
+            const amount1Min = (a1Raw * slipDen) / 10_000n;
 
             const hash = await writeContractAsync({
                 address: ADDRESSES.v3PositionManager,
@@ -465,7 +512,10 @@ export function V3AddLiquidity({
                             t0.decimals,
                             t1.decimals,
                         );
-                        setTickLower(roundTickDown(clampTick(t), tickSpacing || 60));
+                        // nearestUsableTick rounds AND clamps back inside
+                        // the aligned [MIN, MAX] domain so the on-chain
+                        // checkTicks require never trips.
+                        setTickLower(nearestUsableTick(t, tickSpacing || 60));
                     }}
                 />
                 <PriceInput
@@ -479,7 +529,7 @@ export function V3AddLiquidity({
                             t0.decimals,
                             t1.decimals,
                         );
-                        setTickUpper(roundTickUp(clampTick(t), tickSpacing || 60));
+                        setTickUpper(nearestUsableTick(t, tickSpacing || 60));
                     }}
                 />
             </div>

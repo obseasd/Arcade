@@ -68,22 +68,31 @@ export function useV2Tokens() {
     query: { enabled: tokenList.length > 0 },
   });
 
-  // Fall back to a short address tag + 18 decimals when the multicall
-  // returns a partial payload. arcTestnet has no Multicall3, so the V3
-  // periphery `useReadContracts` path occasionally drops one of the three
-  // reads (symbol/name/decimals). Sane defaults keep the swap/select UIs
-  // from rendering `?` icons for pairs that DO exist on-chain.
-  const tokens = tokenList.map((address, i) => {
-    const sym = metaCalls.data?.[3 * i]?.result as string | undefined;
-    const nm = metaCalls.data?.[3 * i + 1]?.result as string | undefined;
-    const dec = metaCalls.data?.[3 * i + 2]?.result as number | undefined;
-    return {
-      address,
-      symbol: sym && sym.length > 0 ? sym : `${address.slice(0, 6)}…${address.slice(-4)}`,
-      name: nm,
-      decimals: dec ?? 18,
-    };
-  });
+  // Audit high [4]/[8]: decimals are SAFETY-CRITICAL — they scale every
+  // amount we sign on-chain. The earlier `dec ?? 18` fallback would mis-
+  // scale every quote and slippage min by up to 10^12 if the multicall
+  // dropped just the decimals read (Arc has no Multicall3 so this
+  // happens). The right answer is to omit the token from the swap /
+  // select UI until decimals come back from a successful read; the
+  // symbol fallback is still acceptable because it's display-only.
+  const tokens = tokenList
+    .map((address, i) => {
+      const sym = metaCalls.data?.[3 * i]?.result as string | undefined;
+      const nm = metaCalls.data?.[3 * i + 1]?.result as string | undefined;
+      const dec = metaCalls.data?.[3 * i + 2]?.result as number | undefined;
+      if (dec === undefined) {
+        // Skip until decimals are confirmed; the next refetch tick will
+        // surface the token once the read lands.
+        return undefined;
+      }
+      return {
+        address,
+        symbol: sym && sym.length > 0 ? sym : `${address.slice(0, 6)}…${address.slice(-4)}`,
+        name: nm,
+        decimals: dec,
+      };
+    })
+    .filter(<T,>(v: T | undefined): v is T => v !== undefined);
 
   return {
     isLoading: pairsLengthQ.isLoading || pairAddrCalls.isLoading || tokenCalls.isLoading || metaCalls.isLoading,

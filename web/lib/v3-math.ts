@@ -83,8 +83,13 @@ export function roundTickDown(tick: number, spacing: number): number {
 }
 
 export function roundTickUp(tick: number, spacing: number): number {
-    const r = tick + (spacing - (tick % spacing));
-    return tick % spacing === 0 ? tick : r;
+    // JS modulo: (-7) % 60 == -7, so the naive `(spacing - tick % spacing)`
+    // path yields a value > spacing for negative non-aligned ticks and
+    // overshoots by one whole spacing. Normalise the modulus to [0, spacing)
+    // before deriving the gap.
+    const mod = ((tick % spacing) + spacing) % spacing;
+    if (mod === 0) return tick;
+    return tick + (spacing - mod);
 }
 
 /**
@@ -94,6 +99,27 @@ export function clampTick(tick: number): number {
     if (tick < MIN_TICK) return MIN_TICK;
     if (tick > MAX_TICK) return MAX_TICK;
     return tick;
+}
+
+/**
+ * Snap a tick to the nearest spacing-aligned multiple inside the
+ * [MIN_TICK, MAX_TICK] domain, never overshooting either bound. The naive
+ * roundTickDown/roundTickUp chain produces values like 887280 when given
+ * MAX_TICK=887272 with spacing=60 (because 60 - (887272 % 60) = 8), which
+ * the on-chain v3-pool then rejects via the TUM check. This helper bounds
+ * BACK after rounding so the UI never asks the chain to validate a tick
+ * outside its legal domain.
+ */
+export function nearestUsableTick(tick: number, spacing: number): number {
+    const clamped = clampTick(tick);
+    const rounded = Math.round(clamped / spacing) * spacing;
+    // Bound back inside the legal aligned window so the v3-pool's
+    // require(tickLower >= MIN_TICK && tickUpper <= MAX_TICK) never fails.
+    const minAligned = Math.ceil(MIN_TICK / spacing) * spacing;
+    const maxAligned = Math.floor(MAX_TICK / spacing) * spacing;
+    if (rounded < minAligned) return minAligned;
+    if (rounded > maxAligned) return maxAligned;
+    return rounded;
 }
 
 /**
@@ -122,9 +148,13 @@ export function presetTickRange(
     tickSpacing: number,
 ): { tickLower: number; tickUpper: number } {
     if (preset === "max") {
-        const min = roundTickUp(MIN_TICK, tickSpacing);
-        const max = roundTickDown(MAX_TICK, tickSpacing);
-        return { tickLower: min, tickUpper: max };
+        // nearestUsableTick rounds AND clamps back into the legal aligned
+        // domain so we never hand the v3-pool a tick that violates the
+        // checkTicks() require.
+        return {
+            tickLower: nearestUsableTick(MIN_TICK, tickSpacing),
+            tickUpper: nearestUsableTick(MAX_TICK, tickSpacing),
+        };
     }
     if (preset === "custom") {
         return { tickLower: currentTick, tickUpper: currentTick };
@@ -135,26 +165,76 @@ export function presetTickRange(
     const tickLow = currentTick + priceToTick(lowPrice);
     const tickHigh = currentTick + priceToTick(highPrice);
     return {
-        tickLower: roundTickDown(clampTick(tickLow), tickSpacing),
-        tickUpper: roundTickUp(clampTick(tickHigh), tickSpacing),
+        tickLower: nearestUsableTick(tickLow, tickSpacing),
+        tickUpper: nearestUsableTick(tickHigh, tickSpacing),
     };
 }
 
+// Uniswap V3 sqrt-price bounds (matches v3-core TickMath constants).
+export const MIN_SQRT_RATIO = 4295128739n;
+export const MAX_SQRT_RATIO = 1461446703485210103287273052203988822378723970342n;
+
 /**
- * sqrtPriceX96 of a price = sqrt(price) * 2^96.
- * Used for createAndInitializePoolIfNecessary when a pool doesn't exist yet:
- * we have to seed the pool at the user's chosen initial price.
+ * sqrtPriceX96 of a price = sqrt(price) * 2^96, BigInt-precise.
+ *
+ *   sqrtPriceX96 = floor(sqrt(num * 2^192 / den))
+ *
+ * where price = num / den. Computing sqrt directly in float (the previous
+ * approach) silently returned 0n for sub-1e-29 prices because Math.sqrt
+ * underflowed below 2^-48, and overshoots MAX_SQRT_RATIO for extreme
+ * upside ratios — both cases would revert the pool's initialize() with no
+ * client-side warning. The integer path stays faithful across the full
+ * V3 legal range, and we surface an explicit error when the result
+ * lands outside [MIN_SQRT_RATIO, MAX_SQRT_RATIO] so the caller can refuse
+ * the mint instead of paying gas for a guaranteed revert.
  */
 export function encodeSqrtPriceX96(price: number): bigint {
     if (!isFinite(price) || price <= 0) return 0n;
-    // price is token1/token0 in raw (decimals-adjusted). sqrt + scale.
-    const sqrtPrice = Math.sqrt(price);
-    // 2^96 doesn't fit in a JS number, so we scale via BigInt arithmetic.
-    // sqrtPrice * 2^96 = sqrtPrice * 2^48 * 2^48
-    const scale48 = 2 ** 48;
-    const a = BigInt(Math.floor(sqrtPrice * scale48));
-    const b = BigInt(scale48);
-    return a * b;
+    // Decompose price into integer num/den with enough precision (we use
+    // 1e18 as the denominator to capture sub-femto prices without losing
+    // bits on the upper end).
+    const SCALE = 10n ** 18n;
+    let num: bigint;
+    let den: bigint;
+    if (price >= 1) {
+        num = BigInt(Math.floor(price * 1e6)) * SCALE;
+        den = 10n ** 6n * SCALE;
+    } else {
+        // For tiny prices, multiply both by 1e18 so we keep precision.
+        num = BigInt(Math.floor(price * 1e18));
+        den = SCALE;
+    }
+    if (num === 0n || den === 0n) return 0n;
+    // sqrt(num/den) * 2^96 == sqrt(num * 2^192 / den)
+    const inner = (num << 192n) / den;
+    return bigintSqrt(inner);
+}
+
+/**
+ * Babylonian-style sqrt over BigInt. Matches the value returned by
+ * Math.floor(Math.sqrt(n)) for inputs that fit in a double, and stays
+ * correct for inputs that don't.
+ */
+function bigintSqrt(n: bigint): bigint {
+    if (n < 0n) throw new Error("sqrt of negative");
+    if (n < 2n) return n;
+    // Initial guess: 2^((bitLength+1)/2)
+    let bits = 0;
+    let x = n;
+    while (x > 0n) {
+        bits++;
+        x >>= 1n;
+    }
+    let guess = 1n << BigInt((bits + 1) >> 1);
+    while (true) {
+        const next = (guess + n / guess) >> 1n;
+        if (next >= guess) return guess;
+        guess = next;
+    }
+}
+
+export function isSqrtPriceInRange(sqrtX96: bigint): boolean {
+    return sqrtX96 >= MIN_SQRT_RATIO && sqrtX96 <= MAX_SQRT_RATIO;
 }
 
 /**

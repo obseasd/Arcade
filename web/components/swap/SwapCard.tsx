@@ -88,8 +88,15 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
     if (!tokenOut && v2Tokens.length > 0) setTokenOut(v2Tokens[0]);
   }, [v2Tokens, tokenOut]);
 
-  const decimalsIn = tokenIn.decimals ?? 18;
-  const decimalsOut = tokenOut?.decimals ?? 18;
+  // Audit high [4]/[8]: a fallback of 18 here would mis-scale parseUnits /
+  // formatUnits / minOut by up to 10^12 for any non-hardcoded 6-decimal
+  // token. We treat decimals as MANDATORY; if the producer (useV2Tokens,
+  // TokenSelectModal, etc.) handed us a TokenOption without decimals, we
+  // refuse to render a quote. The disabled CTA + cleared input downstream
+  // protect the user from signing a wrongly-scaled swap.
+  const decimalsKnown = tokenIn.decimals !== undefined && (!tokenOut || tokenOut.decimals !== undefined);
+  const decimalsIn = tokenIn.decimals ?? 0;
+  const decimalsOut = tokenOut?.decimals ?? 0;
 
   const amountInRaw = useMemo(() => {
     try {
@@ -347,6 +354,9 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
     !!account &&
     !!tokenOut &&
     !v3Unsupported &&
+    // Audit high [4]/[8]: never sign with unknown decimals — the entire
+    // amount/min math would be off by a factor of 10^(realDec - 18).
+    decimalsKnown &&
     finalAmountIn > 0n &&
     finalAmountOut > 0n &&
     !fetching &&
@@ -405,7 +415,18 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
           args: [finalAmountOut, maxIn, path, account, deadline],
         });
       }
-      if (publicClient) await publicClient.waitForTransactionReceipt({ hash });
+      // Audit high [26]: viem's waitForTransactionReceipt returns a
+      // receipt for BOTH success and revert. Without an explicit status
+      // check the swap path used to clear the form, push a green toast,
+      // and record an activity entry for a tx that did nothing on-chain.
+      if (publicClient) {
+        const receipt = await publicClient.waitForTransactionReceipt({ hash });
+        if (receipt.status !== "success") {
+          throw new Error(
+            `Swap reverted on-chain (tx ${hash.slice(0, 10)}…). Common causes: slippage too tight, deadline passed, pool ratio moved between read and exec.`,
+          );
+        }
+      }
 
       // Close the modal immediately and push a toast notification instead
       setConfirmOpen(false);
@@ -432,8 +453,20 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
         tokenSymbol: tokenOut.symbol,
         amountFormatted: outFormatted,
       });
-    } catch (e: any) {
-      setTx({ status: "error", message: e?.shortMessage || e?.message || "Swap failed" });
+    } catch (e: unknown) {
+      // Deep-dig the viem error chain so a real revert reason surfaces
+      // (cause.reason -> shortMessage -> details -> message).
+      const o = e as Record<string, unknown> | null;
+      const reason =
+        o && typeof o === "object"
+          ? ((o.cause as Record<string, unknown> | undefined)?.reason as string | undefined) ??
+            (o.shortMessage as string | undefined) ??
+            (o.details as string | undefined) ??
+            (o.message as string | undefined)
+          : undefined;
+      const msg = reason || (e instanceof Error ? e.message : "Swap failed");
+      setTx({ status: "error", message: msg.slice(0, 200) });
+      pushToast({ kind: "error", title: "Swap failed", message: msg.slice(0, 200) });
     }
   };
 
