@@ -966,17 +966,19 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
             pool = v3Factory.createPool(token0, token1, fee);
         }
         uint160 sqrtPriceX96 = ArcadeV3PriceMath.encodeSqrtPriceX96(amount1, amount0);
-        // Audit medium [23]: only initialise() when the pool is virgin.
-        // The token address is derived from this launchpad's CREATE nonce
-        // and is therefore predictable in the mempool; without this guard
-        // an attacker can pre-initialise the predicted pool at any price
-        // (gas-only cost) so that initialize() reverts with 'AI' and the
-        // creator's CLANKER_V3 launch is permanently bricked. Mirrors the
-        // canonical Uniswap PoolInitializer.createAndInitializePoolIfNecessary
-        // guard.
-        (uint160 currentSqrt,,,,,,) = IArcadeV3Pool(pool).slot0();
-        if (currentSqrt == 0) {
-            IArcadeV3Pool(pool).initialize(sqrtPriceX96);
+        // Audit medium [23]: try/catch guard against pre-init grief. The
+        // token address is derived from this launchpad's CREATE nonce and
+        // therefore predictable in the mempool; without this guard an
+        // attacker could pre-init the predicted pool at any price (gas-
+        // only cost) so that initialize() reverts with 'AI' and the
+        // creator's CLANKER_V3 launch was permanently bricked. try/catch
+        // accepts whatever sqrtPriceX96 is already on the pool and lets
+        // the launch proceed; reverts elsewhere in the path (eg sane-
+        // tick locker mint) still surface. Equivalent in safety to the
+        // canonical PoolInitializer slot0==0 check but ~250 bytes lighter
+        // so the launchpad stays under EIP-170's 24 KB limit.
+        try IArcadeV3Pool(pool).initialize(sqrtPriceX96) {} catch {
+            /* pool already initialised */
         }
 
         // L-02: flip migrated state BEFORE the external locker call so that
