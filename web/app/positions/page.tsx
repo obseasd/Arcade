@@ -1,14 +1,18 @@
 "use client";
 
-import { Plus, X } from "lucide-react";
+import { Plus } from "lucide-react";
 import Image from "next/image";
 import { useSearchParams } from "next/navigation";
-import { Suspense, useEffect, useState } from "react";
-import { AddLiquidityCard } from "@/components/pool/AddLiquidityCard";
+import { Suspense, useEffect, useMemo, useState } from "react";
+import { Address } from "viem";
+import { CreatePoolModal } from "@/components/pool/CreatePoolModal";
 import { MyPositions } from "@/components/pool/MyPositions";
 import { BurnedPositions } from "@/components/pool/BurnedPositions";
 import { V3Positions } from "@/components/pool/V3Positions";
-import { Modal } from "@/components/ui/Modal";
+import { ADDRESSES, USDC_DECIMALS } from "@/lib/constants";
+import { useV2Tokens } from "@/lib/hooks/useV2Tokens";
+import { useV3Tokens } from "@/lib/hooks/useV3Tokens";
+import type { TokenOption } from "@/components/ui/TokenSelectModal";
 import { cn } from "@/lib/utils";
 
 type Tab = "amm" | "burned" | "concentrated";
@@ -36,6 +40,40 @@ function PositionsInner() {
     const t = sp.get("tab");
     if (t === "amm" || t === "burned" || t === "concentrated") setTab(t);
   }, [sp]);
+
+  // Token list passed to CreatePoolModal. Dedupes V2 + V3 catalogs and
+  // always surfaces USDC so the modal's pickers have a sane starting set.
+  const { tokens: v2Tokens } = useV2Tokens();
+  const { tokens: v3Tokens } = useV3Tokens();
+  const createPoolTokens: TokenOption[] = useMemo(() => {
+    const seen = new Set<string>();
+    const out: TokenOption[] = [
+      {
+        address: ADDRESSES.usdc as Address,
+        symbol: "USDC",
+        name: "USD Coin",
+        decimals: USDC_DECIMALS,
+        pinned: true,
+      },
+    ];
+    seen.add(ADDRESSES.usdc.toLowerCase());
+    for (const t of [...v2Tokens, ...v3Tokens]) {
+      const k = t.address.toLowerCase();
+      if (seen.has(k)) continue;
+      seen.add(k);
+      out.push({
+        address: t.address,
+        symbol: t.symbol,
+        name: t.name,
+        decimals: t.decimals,
+      });
+    }
+    return out;
+  }, [v2Tokens, v3Tokens]);
+  // refreshKey is still used to remount the position lists when the user
+  // closes the modal (the redirect happens client-side via router.push on
+  // /positions/add after a successful add).
+  void refreshKey;
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-8 sm:px-6">
@@ -102,34 +140,17 @@ function PositionsInner() {
       {tab === "concentrated" && <V3Positions key={refreshKey} />}
       {tab === "burned" && <BurnedPositions />}
 
-      {/* New-position modal - panel matches the swap/bridge cards exactly
-          (.arc-card = bg-black/15 backdrop-blur-xl) so the token rectangles
-          read identically. */}
-      <Modal
+      {/* "+ New position" opens the same CreatePoolModal as /explore. Pre-
+          fill the pool-type toggle with the tab the user is on so the AMM /
+          Concentrated split is honoured without an extra click. Continue
+          routes to /positions/add which mounts the full editor (V2 form or
+          V3AddLiquidity depending on type). */}
+      <CreatePoolModal
         open={newOpen}
         onClose={() => setNewOpen(false)}
-        widthClassName="max-w-md"
-        backdropClassName="bg-black/30"
-        className="border-arc-border bg-black/15 backdrop-blur-xl shadow-arc-card"
-      >
-        <div className="flex items-center justify-between border-b border-arc-border px-5 py-4">
-          <h3 className="text-base font-semibold">New position</h3>
-          <button
-            onClick={() => setNewOpen(false)}
-            className="rounded-lg p-1 text-arc-text-muted hover:bg-arc-surface hover:text-arc-text"
-          >
-            <X className="h-5 w-5" />
-          </button>
-        </div>
-        <div className="p-5">
-          <AddLiquidityCard
-            onSuccess={() => {
-              setNewOpen(false);
-              setRefreshKey((k) => k + 1);
-            }}
-          />
-        </div>
-      </Modal>
+        defaultPoolType={tab === "concentrated" ? "v3" : "amm"}
+        tokens={createPoolTokens}
+      />
     </div>
   );
 }

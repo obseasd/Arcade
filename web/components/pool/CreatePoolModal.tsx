@@ -40,6 +40,10 @@ interface Props {
      *  user lands on the flagship. Falls back to {USDC, USDC} if missing. */
     defaultPair?: Pair;
     tokens: TokenOption[];
+    /** Optional initial pool type. When the user triggers the modal from a
+     *  context that already implies one (eg the Concentrated Liquidity tab on
+     *  /positions), prefilling it skips an unnecessary click. */
+    defaultPoolType?: PoolType;
 }
 
 /**
@@ -49,9 +53,23 @@ interface Props {
  * add-liquidity surface at /positions; the modal itself just collects the
  * selection so the user doesn't have to scroll through a long form.
  */
-export function CreatePoolModal({ open, onClose, defaultPair, tokens }: Props) {
+export function CreatePoolModal({
+    open,
+    onClose,
+    defaultPair,
+    tokens,
+    defaultPoolType = "amm",
+}: Props) {
     const router = useRouter();
-    const [poolType, setPoolType] = useState<PoolType>("amm");
+    const [poolType, setPoolType] = useState<PoolType>(defaultPoolType);
+
+    // Sync the displayed pool type with the caller's prefill whenever the
+    // modal re-opens. Without this the user clicks Concentrated tab on
+    // /positions, opens "+ New position", and still lands on the AMM toggle
+    // because the local state was sticky from a previous open.
+    useEffect(() => {
+        if (open) setPoolType(defaultPoolType);
+    }, [open, defaultPoolType]);
     const [token0, setToken0] = useState<TokenOption | undefined>(undefined);
     const [token1, setToken1] = useState<TokenOption | undefined>(undefined);
     const [feeBps, setFeeBps] = useState<number>(30);

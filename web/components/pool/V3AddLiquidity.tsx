@@ -178,11 +178,25 @@ export function V3AddLiquidity({
     const belowRange = hasPool && currentTick < tickLower;
     const aboveRange = hasPool && currentTick >= tickUpper;
 
+    // Validation guard. Multiple layers:
+    //   - Wallet + NPM are wired.
+    //   - Range is a non-degenerate window (tickLower < tickUpper). Catches
+    //     the case where both Min and Max prices default to 0 and the tick
+    //     math collapses them onto the same tick - the mint would revert
+    //     with `TLU` ("ticks lower / upper") from v3-core.
+    //   - Min and Max prices are strictly positive (a 0 price means the
+    //     user hasn't typed anything; submitting that creates a malformed
+    //     sqrtPriceX96 seed).
+    //   - Fresh pool: BOTH legs are required because there is no current
+    //     price to anchor a single-sided position; the initial sqrtPriceX96
+    //     is derived from the midpoint of the user's range.
+    //   - Existing pool: at least the non-disabled side is filled.
+    const validRange = tickLower < tickUpper && minPrice > 0 && maxPrice > 0;
+    const sufficientAmounts = hasPool
+        ? (!aboveRange && !!amount0) || (!belowRange && !!amount1)
+        : !!amount0 && !!amount1;
     const canSubmit =
-        !!account &&
-        npmEnabled &&
-        !submitting &&
-        ((!aboveRange && !!amount0) || (!belowRange && !!amount1));
+        !!account && npmEnabled && !submitting && validRange && sufficientAmounts;
 
     async function onSubmit() {
         if (!account) return;
@@ -257,13 +271,20 @@ export function V3AddLiquidity({
             // without the user having to click the V3 tab themselves.
             router.push("/positions?tab=concentrated");
         } catch (e: unknown) {
-            const msg =
-                typeof e === "object" && e !== null && "shortMessage" in e
-                    ? String((e as { shortMessage?: string }).shortMessage)
-                    : e instanceof Error
-                      ? e.message
-                      : "Failed";
-            pushToast({ kind: "error", title: "V3 mint failed", message: msg });
+            // Same multi-layer dig as the V2 path: reason -> shortMessage ->
+            // details -> message. V3 mint reverts often surface as "TLU"
+            // (tick lower / upper degenerate) or "AS" (pool not initialised)
+            // which are useless without the full reason chain.
+            const o = e as Record<string, unknown> | null;
+            const reason =
+                o && typeof o === "object"
+                    ? ((o.cause as Record<string, unknown> | undefined)?.reason as string | undefined) ??
+                      (o.shortMessage as string | undefined) ??
+                      (o.details as string | undefined) ??
+                      (o.message as string | undefined)
+                    : undefined;
+            const msg = reason || (e instanceof Error ? e.message : "Failed");
+            pushToast({ kind: "error", title: "V3 mint failed", message: msg.slice(0, 200) });
         } finally {
             setSubmitting(false);
         }
@@ -407,10 +428,18 @@ export function V3AddLiquidity({
                 {!account
                     ? "Connect wallet"
                     : submitting
-                      ? hasPool ? "Minting position…" : "Initialising pool + minting…"
-                      : hasPool
-                        ? "Add concentrated liquidity"
-                        : "Create pool + add liquidity"}
+                      ? hasPool
+                          ? "Minting position…"
+                          : "Initialising pool + minting…"
+                      : !validRange
+                        ? "Set a valid price range"
+                        : !sufficientAmounts
+                          ? hasPool
+                              ? "Enter an amount"
+                              : "Enter both amounts"
+                          : hasPool
+                            ? "Add concentrated liquidity"
+                            : "Create pool + add liquidity"}
             </button>
         </div>
     );

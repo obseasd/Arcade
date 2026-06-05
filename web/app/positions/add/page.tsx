@@ -94,6 +94,10 @@ function AddLiquidityInner() {
     const [mode, setMode] = useState<Mode>("dual");
     const [amountA, setAmountA] = useState("");
     const [amountB, setAmountB] = useState("");
+    // Which side did the user last type into. Drives which auto-quote effect
+    // wins: editing A computes B from the V2 ratio, editing B computes A.
+    // Without this both effects would race and clobber each other's value.
+    const [lastEdited, setLastEdited] = useState<"A" | "B">("A");
     const [settingsOpen, setSettingsOpen] = useState(false);
     const [slippageBps, setSlippageBps] = useState(10); // 0.1% default
     const [deadlineMin, setDeadlineMin] = useState(20);
@@ -143,9 +147,11 @@ function AddLiquidityInner() {
         query: { enabled: !!account && !!tokenB },
     });
 
-    // Quote B from A whenever an existing pair has reserves. We follow the
-    // V2 invariant: amountB = amountA * reserveB / reserveA.
+    // V2 ratio auto-quote. The pair's reserves fix the deposit ratio, so the
+    // side the user didn't touch is computed from the side they did. Two
+    // effects, one per direction, gated on lastEdited so they don't race.
     useEffect(() => {
+        if (lastEdited !== "A") return;
         if (!tokenB || !reservesQ.data || !token0Q.data || !amountA) return;
         const [r0, r1] = reservesQ.data as [bigint, bigint, number];
         if (r0 === 0n || r1 === 0n) return;
@@ -161,7 +167,26 @@ function AddLiquidityInner() {
             /* ignore parse errors while typing */
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [amountA, reservesQ.data, token0Q.data, tokenA.decimals, tokenB?.decimals]);
+    }, [amountA, reservesQ.data, token0Q.data, tokenA.decimals, tokenB?.decimals, lastEdited]);
+
+    useEffect(() => {
+        if (lastEdited !== "B") return;
+        if (!tokenB || !reservesQ.data || !token0Q.data || !amountB) return;
+        const [r0, r1] = reservesQ.data as [bigint, bigint, number];
+        if (r0 === 0n || r1 === 0n) return;
+        try {
+            const bRaw = parseUnits(amountB, tokenB.decimals);
+            const isAFirst =
+                (token0Q.data as Address).toLowerCase() === tokenA.address.toLowerCase();
+            const [reserveA, reserveB] = isAFirst ? [r0, r1] : [r1, r0];
+            if (reserveB === 0n) return;
+            const aRaw = (bRaw * reserveA) / reserveB;
+            setAmountA(formatUnits(aRaw, tokenA.decimals));
+        } catch {
+            /* ignore parse errors while typing */
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [amountB, reservesQ.data, token0Q.data, tokenA.decimals, tokenB?.decimals, lastEdited]);
 
     const { ensureAllowance: approveA } = useApproveIfNeeded(
         tokenA.address,
@@ -313,13 +338,24 @@ function AddLiquidityInner() {
                 pair && pair !== zeroAddress ? `/pool/${pair}` : "/positions",
             );
         } catch (e: unknown) {
-            const msg =
-                typeof e === "object" && e !== null && "shortMessage" in e
-                    ? String((e as { shortMessage?: string }).shortMessage)
-                    : e instanceof Error
-                      ? e.message
-                      : "Failed";
-            pushToast({ kind: "error", title: "Liquidity add failed", message: msg });
+            // Build the most informative error message we can: prefer viem's
+            // ContractFunctionRevertedError reason, fall back to shortMessage,
+            // then any details/data field, then Error.message. Without this
+            // chain the toast tends to read "Failed" for chain-side reverts
+            // (zap path on Arc loves to revert with a precompile message
+            // buried two levels deep).
+            const o = e as Record<string, unknown> | null;
+            const reason =
+                o && typeof o === "object"
+                    ? ((o.cause as Record<string, unknown> | undefined)?.reason as string | undefined) ??
+                      (o.shortMessage as string | undefined) ??
+                      (o.details as string | undefined) ??
+                      (o.message as string | undefined)
+                    : undefined;
+            const msg = reason || (e instanceof Error ? e.message : "Failed");
+            const title =
+                mode === "single" ? "Zap failed" : "Liquidity add failed";
+            pushToast({ kind: "error", title, message: msg.slice(0, 200) });
         } finally {
             setSubmitting(false);
         }
@@ -416,7 +452,10 @@ function AddLiquidityInner() {
                     label="Token 1"
                     token={tokenA}
                     value={amountA}
-                    onChange={setAmountA}
+                    onChange={(v) => {
+                        setLastEdited("A");
+                        setAmountA(v);
+                    }}
                     balance={balA.data as bigint | undefined}
                 />
 
@@ -453,7 +492,10 @@ function AddLiquidityInner() {
                         label="Token 2"
                         token={tokenB}
                         value={amountB}
-                        onChange={setAmountB}
+                        onChange={(v) => {
+                            setLastEdited("B");
+                            setAmountB(v);
+                        }}
                         balance={balB.data as bigint | undefined}
                     />
                 ) : (
