@@ -27,7 +27,7 @@
     "v4Quoter": "0x51Da2cA6a663dFE704A11Bdbb107df0E4365c5F8",
     "v4Router": "0x1Ac821216edcbA5da28DA6e2096ce490a962fc41",
     "seedETH": "0xcA34959A856c82214Bb3b2b7777342dE30459F83",
-    "v2Zap": "TBD-REDEPLOY",
+    "v2Zap": "0x37c64Bde72e1fFB753669f83E39aEace6944fBF3",
     "v3PositionDescriptor": "TBD-REDEPLOY",
     "v3PositionManager": "TBD-REDEPLOY",
     "twitterEscrow": "0x8f60C7B119F551E5055E7B3E94a11C4DFdFA34C7",
@@ -37,7 +37,7 @@
   "notes": {
     "generation": "Generation 5 (2026-06-05) — DeployTestnet broadcast at block 45,667,221. All audit-fix contracts: V3 router with usdcMidMin slippage param, launchpad with try/catch initialize() guard + always-full-transfer _migrate.",
     "seedETH": "Standalone testnet ERC20 ('Ether (Seed)', symbol 'ETH', 18 decimals, 1,000,000 supply) deployed 2026-06-04 at block 45,493,309. Lives on the OLD V2 factory's pair scope; if you want it visible on the new factory, run the seed-eth flow via /positions to recreate the pair.",
-    "v2Zap": "Previous deploy at 0x838a92190D38481Faf05484Be2Ccd8934CeF64E2 was wired to the OLD V2 factory/router. Needs redeploy now that DeployTestnet produced new V2 addresses.",
+    "v2Zap": "Gen 5 V2 Zap deployed 2026-06-05, block 45,667,713, tx 0x93eb9c9fe703e1b67ebeb384ec82759f4041cfbafa70a87a7b79ca0609182684. Wired to gen 5 V2 factory + router. Includes audit fix [3] (internal swapMinOut at 50 bps) + [12] (dust sweep try/catch). NEXT_PUBLIC_V2_ZAP_ADDRESS=0x37c64Bde72e1fFB753669f83E39aEace6944fBF3. Previous deploys at 0x50D8...1Fc6 (gen 4) and 0x838a...64E2 (gen 5 first attempt, wired to old V2) are now abandoned.",
     "v3Npm": "Previous descriptor 0xD4e6...4933 + NPM 0xE3dD...1cE1 were wired to the OLD V3 factory 0xB9339d... Needs redeploy against the new V3 factory 0x7Eb534..."
   },
   "constants": {
