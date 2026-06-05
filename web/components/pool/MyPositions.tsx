@@ -242,19 +242,24 @@ function PositionRow({
       });
       onRefresh();
     } catch (e: unknown) {
-      // Surface the real revert reason so the user sees WHY remove failed.
-      // Most common cause on Arc is the slippage min being too tight after
+      // Audit low [31]: deep-walk the viem error chain (cause.reason ->
+      // shortMessage -> details -> message) so the surfaced toast carries
+      // the same fidelity as the V2 add / zap / V3 mint catch paths. Most
+      // common cause on Arc is the slippage min being too tight after
       // someone else moved the reserves between read and exec.
-      const msg =
-        typeof e === "object" && e !== null && "shortMessage" in e
-          ? String((e as { shortMessage?: string }).shortMessage)
-          : e instanceof Error
-            ? e.message
-            : "Failed";
+      const o = e as Record<string, unknown> | null;
+      const reason =
+        o && typeof o === "object"
+          ? ((o.cause as Record<string, unknown> | undefined)?.reason as string | undefined) ??
+            (o.shortMessage as string | undefined) ??
+            (o.details as string | undefined) ??
+            (o.message as string | undefined)
+          : undefined;
+      const msg = reason || (e instanceof Error ? e.message : "Failed");
       pushToast({
         kind: "error",
         title: "Remove liquidity failed",
-        message: msg,
+        message: msg.slice(0, 200),
       });
     } finally {
       setRemoving(false);

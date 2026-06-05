@@ -100,6 +100,7 @@ contract ArcadeV3SwapRouter is IUniswapV3SwapCallback {
         address recipient,
         uint256 amountIn,
         uint256 amountOutMinimum,
+        uint256 usdcMidMin,
         uint256 deadline
     ) external returns (uint256 amountOut) {
         require(block.timestamp <= deadline, "EXPIRED");
@@ -109,6 +110,14 @@ contract ArcadeV3SwapRouter is IUniswapV3SwapCallback {
             amountIn,
             address(this)
         );
+        // Audit low [5]: cap the mid-leg slippage independently of the
+        // final amountOutMinimum. A sandwicher who can move only the
+        // tokenIn/USDC pool (eg by sweeping a related thin pair on the
+        // same block) can drive usdcMid arbitrarily low, then the
+        // smoothing of leg 2's lower input against an unchanged
+        // USDC/tokenOut pool can still produce an amountOut that scrapes
+        // past amountOutMinimum. usdcMidMin closes that loophole.
+        require(usdcMid >= usdcMidMin, "MID_SLIPPAGE");
         // Anti-sniper skim: paid by the router from its own mid-balance.
         uint256 skim = _snipeSkim(USDC, tokenOut, usdcMid, address(this));
         // Leg 2: USDC -> tokenOut, paid by this router, delivered to recipient.
@@ -154,6 +163,15 @@ contract ArcadeV3SwapRouter is IUniswapV3SwapCallback {
             ? abi.encodeWithSelector(IERC20Min.transfer.selector, to, amount)
             : abi.encodeWithSelector(IERC20Min.transferFrom.selector, payer, to, amount);
         (bool ok, bytes memory ret) = token.call(payload);
-        require(ok && (ret.length == 0 || abi.decode(ret, (bool))), "PAY_FAIL");
+        // Audit low [0]: mirror the M-14 fix already applied in the Locker
+        // (ArcadeV3Locker._pay). A token that returns 1-31 bytes (legal but
+        // non-canonical) would otherwise trigger Panic 0x32 from abi.decode
+        // instead of the intended PAY_FAIL revert. The explicit
+        // `ret.length >= 32` gate keeps the require's reason string
+        // reachable.
+        require(
+            ok && (ret.length == 0 || (ret.length >= 32 && abi.decode(ret, (bool)))),
+            "PAY_FAIL"
+        );
     }
 }

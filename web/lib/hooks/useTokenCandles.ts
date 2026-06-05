@@ -163,6 +163,32 @@ export function useTokenCandles(args: {
       .then((b: any) => setTsAnchor({ ts: Number(b.timestamp), n: b.number as bigint }))
       .catch(() => {});
   }, [publicClient]);
+
+  // Audit medium [15]: cache the V3 pool's actual token0 once instead of
+  // re-deriving it from `USDC_ADDRESS < POOL_ADDRESS` on every swap event.
+  // Pools are CREATE2 deployments whose address has no meaningful sort
+  // relationship with the underlying token0 — the previous lexical compare
+  // returned the right answer ~half the time, inverting price and volume
+  // for the other half until the next backup fetch reconciled.
+  const [usdcIsToken0, setUsdcIsToken0] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (!publicClient || mode !== 2 || !pool || pool === "0x0000000000000000000000000000000000000000") {
+      setUsdcIsToken0(null);
+      return;
+    }
+    publicClient
+      .readContract({
+        address: pool as Address,
+        abi: [
+          { type: "function", name: "token0", stateMutability: "view", inputs: [], outputs: [{ type: "address" }] },
+        ],
+        functionName: "token0",
+      })
+      .then((t0: any) => {
+        setUsdcIsToken0((t0 as string).toLowerCase() === ADDRESSES.usdc.toLowerCase());
+      })
+      .catch(() => setUsdcIsToken0(null));
+  }, [publicClient, mode, pool]);
   const tsForBlock = useCallback(
     (bn: bigint) => (tsAnchor ? tsAnchor.ts - Number(tsAnchor.n - bn) : Math.floor(Date.now() / 1000)),
     [tsAnchor],
@@ -170,16 +196,14 @@ export function useTokenCandles(args: {
 
   const onSwapLog = useCallback(
     (logs: any[]) => {
-      if (mode !== 2 || !pool) return;
+      // Wait for the cached token0 lookup to land before we trust ANY
+      // direction-derived value. Skipping a few logs at startup is way
+      // better than pushing inverted prices that whiplash the chart.
+      if (mode !== 2 || !pool || usdcIsToken0 === null) return;
       const parsed: Trade[] = [];
       for (const log of logs) {
         const sqrtPriceX96 = log.args?.sqrtPriceX96 as bigint | undefined;
         if (!sqrtPriceX96) continue;
-        // We don't know `usdcIsToken0` here — defer to the more accurate fetch
-        // by also bumping liveTick. But for the immediate UI update we make
-        // a best-effort assumption: USDC is conventionally token0 when its
-        // address sorts lower. The full fetch reconciles within ~1s.
-        const usdcIsToken0 = ADDRESSES.usdc.toLowerCase() < (pool ?? "").toLowerCase();
         const price = priceFromSqrtX96(sqrtPriceX96, usdcIsToken0);
         const a0 = log.args.amount0 as bigint;
         const a1 = log.args.amount1 as bigint;
@@ -193,7 +217,7 @@ export function useTokenCandles(args: {
       }
       appendTrades(parsed);
     },
-    [mode, pool, tsForBlock, appendTrades],
+    [mode, pool, tsForBlock, appendTrades, usdcIsToken0],
   );
 
   const onCurveLog = useCallback(

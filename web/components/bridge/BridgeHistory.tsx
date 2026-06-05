@@ -6,9 +6,10 @@ import {
   BRIDGE_HISTORY_CHANGE_EVENT,
   loadBridgeHistory,
   removeBridge,
+  updateBridge,
   type HistoryEntry,
 } from "@/lib/bridgeHistory";
-import { getCctpChain } from "@/lib/cctp";
+import { fetchAttestation, getCctpChain } from "@/lib/cctp";
 import { ChainIcon } from "@/components/ui/ChainIcon";
 import { formatUSDC, cn } from "@/lib/utils";
 
@@ -26,13 +27,9 @@ export function BridgeHistory() {
 
   useEffect(() => {
     setEntries(loadBridgeHistory());
-    // Subscribe to storage events from OTHER tabs.
     const onStorage = (e: StorageEvent) => {
       if (e.key === "arcade_bridge_history_v1") setEntries(loadBridgeHistory());
     };
-    // Subscribe to our custom event for SAME-tab updates. The native
-    // "storage" event never fires on the tab that wrote, so the user's
-    // own bridge would stay invisible until refresh without this.
     const onChange = () => setEntries(loadBridgeHistory());
     window.addEventListener("storage", onStorage);
     window.addEventListener(BRIDGE_HISTORY_CHANGE_EVENT, onChange);
@@ -41,6 +38,47 @@ export function BridgeHistory() {
       window.removeEventListener(BRIDGE_HISTORY_CHANGE_EVENT, onChange);
     };
   }, []);
+
+  // Audit low [29]: rehydrate the "To claim" badge for orphaned pending
+  // entries. The BridgeCard only flips attestationReady while the user
+  // is actively on the burn flow; entries that became attestable in
+  // another tab (or in a previous session) stay stuck on "Pending"
+  // until the user opens the bridge card and we hit the active poll.
+  // Re-poll once per 60s for any non-attestation-ready, non-minted
+  // pending entry so the badge updates without the user doing anything.
+  useEffect(() => {
+    if (entries.length === 0) return;
+    let cancelled = false;
+    const poll = async () => {
+      const candidates = entries.filter(
+        (e) =>
+          e.status === "pending" &&
+          !e.attestationReady &&
+          !!e.burnTxHash &&
+          getCctpChain(e.srcChainId)?.cctpDomain !== undefined,
+      );
+      for (const entry of candidates) {
+        if (cancelled) return;
+        const cfg = getCctpChain(entry.srcChainId);
+        if (!cfg) continue;
+        try {
+          const att = await fetchAttestation(cfg.cctpDomain, entry.burnTxHash);
+          if (att && att.status === "complete" && !cancelled) {
+            updateBridge(entry.id, { attestationReady: true });
+            setEntries(loadBridgeHistory());
+          }
+        } catch {
+          /* network blip — try again next interval */
+        }
+      }
+    };
+    poll();
+    const id = setInterval(poll, 60_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [entries]);
 
   const dismiss = (id: string) => {
     removeBridge(id);

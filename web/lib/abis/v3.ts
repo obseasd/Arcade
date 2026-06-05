@@ -30,6 +30,7 @@ export const V3_ROUTER_ABI = [
       { name: "recipient", type: "address" },
       { name: "amountIn", type: "uint256" },
       { name: "amountOutMinimum", type: "uint256" },
+      { name: "usdcMidMin", type: "uint256" },
       { name: "deadline", type: "uint256" },
     ],
     outputs: [{ type: "uint256" }],

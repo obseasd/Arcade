@@ -86,9 +86,14 @@ export function AddLiquidityCard({ onSuccess }: AddLiquidityCardProps = {}) {
     query: { enabled: !!account && !!tokenB },
   });
 
-  // If pool exists, recompute B from A
+  // If pool exists, recompute B from A. Audit low [16]: gate on token0
+  // BEING RESOLVED before doing the orientation flip — otherwise the first
+  // pass races the token0 read, defaults isAFirst to false, and shows an
+  // INVERTED counter-amount until the second pass lands. Users routinely
+  // hit "Add" during that window and over- or under-deposit one side.
   useEffect(() => {
     if (!reserves.data || !tokenB) return;
+    if (!token0.data) return; // wait for the orientation read.
     const [r0, r1] = reserves.data as [bigint, bigint, number];
     if (r0 === 0n || r1 === 0n) return;
     if (!amountA) return;
@@ -96,8 +101,8 @@ export function AddLiquidityCard({ onSuccess }: AddLiquidityCardProps = {}) {
       const decA = tokenA.decimals ?? 18;
       const decB = tokenB.decimals ?? 18;
       const aRaw = parseUnits(amountA, decA);
-      const t0 = token0.data as Address | undefined;
-      const isAFirst = t0 && t0.toLowerCase() === tokenA.address.toLowerCase();
+      const t0 = token0.data as Address;
+      const isAFirst = t0.toLowerCase() === tokenA.address.toLowerCase();
       const [reserveA, reserveB] = isAFirst ? [r0, r1] : [r1, r0];
       if (reserveA === 0n) return;
       const bRaw = (aRaw * reserveB) / reserveA;
@@ -111,6 +116,11 @@ export function AddLiquidityCard({ onSuccess }: AddLiquidityCardProps = {}) {
   const { ensureAllowance: approveA } = useApproveIfNeeded(tokenA.address, ADDRESSES.router);
   const { ensureAllowance: approveB } = useApproveIfNeeded(tokenB?.address, ADDRESSES.router);
 
+  // Audit low [7]/[25]: slippage is now per-add and clamped to a sane
+  // [0.05%, 5%] range so a fat-finger "50" can't sign a 50% min. 0.5%
+  // (50 bps) matches the standalone /positions/add default.
+  const [slippageBps, setSlippageBps] = useState<number>(50);
+
   const onAdd = async () => {
     if (!account || !tokenB || !amountA || !amountB) return;
     try {
@@ -118,6 +128,10 @@ export function AddLiquidityCard({ onSuccess }: AddLiquidityCardProps = {}) {
       const decB = tokenB.decimals ?? 18;
       const aRaw = parseUnits(amountA, decA);
       const bRaw = parseUnits(amountB, decB);
+      // Clamp the slip bps tighter than the input does (defence in depth):
+      // refuse > 5% so a stale state with a bad value can't slip through.
+      const safeSlipBps = Math.min(500, Math.max(5, slippageBps));
+      const slipDen = 10_000n - BigInt(safeSlipBps);
       setTx({ status: "pending", message: "Approving tokens…" });
       await Promise.all([approveA(aRaw), approveB(bRaw)]);
       setTx({ status: "pending", message: "Adding liquidity…" });
@@ -130,8 +144,8 @@ export function AddLiquidityCard({ onSuccess }: AddLiquidityCardProps = {}) {
           tokenB.address,
           aRaw,
           bRaw,
-          (aRaw * 99n) / 100n,
-          (bRaw * 99n) / 100n,
+          (aRaw * slipDen) / 10_000n,
+          (bRaw * slipDen) / 10_000n,
           account,
           BigInt(Math.floor(Date.now() / 1000) + 600),
         ],
@@ -279,6 +293,34 @@ export function AddLiquidityCard({ onSuccess }: AddLiquidityCardProps = {}) {
           Existing pool - amount B is computed from current reserves to avoid swap-on-add.
         </div>
       )}
+
+      {/* Audit low [25]: per-add slippage selector. Default 0.5% mirrors
+          the standalone /positions/add page; 3% bucket is for sketchy
+          fresh pairs where the seed ratio can shift between read and exec. */}
+      <div className="mt-3 flex items-center justify-between gap-2 text-xs">
+        <span className="text-arc-text-muted">Slippage tolerance</span>
+        <div className="flex items-center gap-1">
+          {[
+            { label: "0.1%", bps: 10 },
+            { label: "0.5%", bps: 50 },
+            { label: "1%", bps: 100 },
+            { label: "3%", bps: 300 },
+          ].map((opt) => (
+            <button
+              key={opt.bps}
+              onClick={() => setSlippageBps(opt.bps)}
+              className={
+                "rounded-md px-2 py-0.5 text-[11px] font-semibold transition-colors " +
+                (slippageBps === opt.bps
+                  ? "bg-arc-cta text-white"
+                  : "bg-arc-surface text-arc-text-muted hover:text-arc-text")
+              }
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+      </div>
 
       <button
         onClick={onAdd}

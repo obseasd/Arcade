@@ -249,7 +249,11 @@ function AddLiquidityInner() {
         try {
             setSubmitting(true);
             const aRaw = parseUnits(amountA, tokenA.decimals);
-            const slipDen = 10_000n - BigInt(slippageBps);
+            // Audit low [7]: hard clamp slip bps at submit time too in case
+            // a fat-finger somehow lands a value the UI didn't catch. We refuse
+            // anything outside [1, 5000] (= [0.01%, 50%]).
+            const safeSlipBps = Math.min(5000, Math.max(1, slippageBps));
+            const slipDen = 10_000n - BigInt(safeSlipBps);
             const deadline = BigInt(Math.floor(Date.now() / 1000) + deadlineMin * 60);
 
             let hash: `0x${string}`;
@@ -644,12 +648,19 @@ function AddLiquidityInner() {
                             <input
                                 type="number"
                                 step="0.01"
+                                min={0.01}
+                                max={50}
                                 value={slippageBps / 100}
-                                onChange={(e) =>
-                                    setSlippageBps(
-                                        Math.max(1, Math.round(Number(e.target.value) * 100)),
-                                    )
-                                }
+                                onChange={(e) => {
+                                    // Audit low [7]: clamp the custom field to
+                                    // [1 bp, 5000 bps] so a typo can't sign a
+                                    // 100% min. The submit path also clamps
+                                    // (belt-and-suspenders) but the UI never
+                                    // surfaces an absurd value either.
+                                    const raw = Math.round(Number(e.target.value) * 100);
+                                    if (!Number.isFinite(raw)) return;
+                                    setSlippageBps(Math.min(5000, Math.max(1, raw)));
+                                }}
                                 className="w-24 rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-1.5 text-right text-sm text-arc-text"
                             />
                             <span className="text-sm text-arc-text-muted">%</span>

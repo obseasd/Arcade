@@ -27,11 +27,20 @@ contract ArcadeV2Zap {
     address public immutable factory;
     address public immutable router;
 
+    /// @notice Internal swap leg slippage budget, in basis points.
+    /// Mid-flight `swapExactTokensForTokens(_, 0, ...)` was sandwich-able
+    /// because amountLpMin alone could not catch in-pool ratio drift
+    /// (audit high finding [3]). 50 bps gives the user typed input ~0.5%
+    /// of room before the zap aborts, mirroring the standard add-liquidity
+    /// slippage default in the UI.
+    uint256 internal constant INTERNAL_SWAP_SLIP_BPS = 50;
+
     error Expired();
     error PairNotFound();
     error EmptyReserves();
     error InvalidInput();
     error InsufficientLiquidityMinted();
+    error InternalSwapSlippage();
 
     constructor(address _factory, address _router) {
         if (_factory == address(0) || _router == address(0)) revert InvalidInput();
@@ -76,18 +85,28 @@ contract ArcadeV2Zap {
         // the standard 0.30% fee (997/1000 of input becomes effective).
         uint256 swapAmount = _calcSwapAmount(reserveIn, amountIn);
 
-        // Swap the calculated chunk through the router.
+        // Precompute the expected swap output WITHOUT slippage so we can
+        // pass a real `amountOutMin` to the internal swap. AmountLpMin alone
+        // does NOT catch sandwich attacks on the internal swap leg because
+        // the LP minted from skewed reserves can still exceed amountLpMin
+        // while the attacker walks away with the spread.
+        (, uint256 reserveOther) = _orientedReserves(pair, tokenIn, tokenOther);
+        uint256 expectedOut = _getAmountOut(swapAmount, reserveIn, reserveOther);
+        uint256 swapMinOut = (expectedOut * (10_000 - INTERNAL_SWAP_SLIP_BPS)) / 10_000;
+
+        // Swap the calculated chunk through the router with the bounded min.
         IERC20(tokenIn).forceApprove(router, swapAmount);
         address[] memory path = new address[](2);
         path[0] = tokenIn;
         path[1] = tokenOther;
         uint256[] memory amounts = IArcadeV2Router(router).swapExactTokensForTokens(
             swapAmount,
-            0,
+            swapMinOut,
             path,
             address(this),
             deadline
         );
+        if (amounts[1] < swapMinOut) revert InternalSwapSlippage();
         uint256 otherReceived = amounts[1];
 
         // Deposit the remainder of tokenIn + the swap output as liquidity.
@@ -109,10 +128,33 @@ contract ArcadeV2Zap {
         if (liquidity < amountLpMin) revert InsufficientLiquidityMinted();
 
         // Sweep any dust caused by rounding so nothing stays parked here.
+        // Audit low [12]: wrap each leg in try/catch — if `to` is blocklisted
+        // by Arc's USDC precompile (or any token's transferRestriction
+        // hook), an inability to sweep that side must NOT roll back the
+        // entire zap. The dust is small (one-tick rounding); leaving it on
+        // the zap contract is better than reverting the whole flow.
         uint256 dustIn = IERC20(tokenIn).balanceOf(address(this));
-        if (dustIn > 0) IERC20(tokenIn).safeTransfer(to, dustIn);
+        if (dustIn > 0) {
+            try this.sweep(tokenIn, to, dustIn) {} catch {
+                /* skip - sweep blocked, dust remains on the zap */
+            }
+        }
         uint256 dustOther = IERC20(tokenOther).balanceOf(address(this));
-        if (dustOther > 0) IERC20(tokenOther).safeTransfer(to, dustOther);
+        if (dustOther > 0) {
+            try this.sweep(tokenOther, to, dustOther) {} catch {
+                /* skip - sweep blocked, dust remains on the zap */
+            }
+        }
+    }
+
+    /**
+     * @notice External self-call wrapper so the dust sweep can be guarded by
+     *         try/catch. Solidity does not allow try/catch on internal
+     *         function calls.
+     */
+    function sweep(address token, address to, uint256 amount) external {
+        require(msg.sender == address(this), "self-only");
+        IERC20(token).safeTransfer(to, amount);
     }
 
     /**
@@ -178,6 +220,22 @@ contract ArcadeV2Zap {
         uint256 inner = reserveIn * (reserveIn * 3988009 + amountIn * 3988000);
         uint256 root = _sqrt(inner);
         return (root - reserveIn * 1997) / 1994;
+    }
+
+    /**
+     * @dev Canonical V2 getAmountOut. Mirrors `ArcadeV2Library.getAmountOut`
+     *      bit-for-bit so the swapMinOut we compute matches what the router
+     *      will produce.
+     */
+    function _getAmountOut(uint256 amountIn, uint256 reserveIn, uint256 reserveOut)
+        internal
+        pure
+        returns (uint256)
+    {
+        uint256 amountInWithFee = amountIn * 997;
+        uint256 numerator = amountInWithFee * reserveOut;
+        uint256 denominator = (reserveIn * 1000) + amountInWithFee;
+        return numerator / denominator;
     }
 
     function _sqrt(uint256 y) internal pure returns (uint256 z) {

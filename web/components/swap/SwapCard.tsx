@@ -387,7 +387,15 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
           address: ADDRESSES.v3Router,
           abi: V3_ROUTER_ABI,
           functionName: v3DoubleHop ? "exactInputThroughUsdc" : "exactInputSingle",
-          args: [tokenIn.address, tokenOut.address, v3Fee, account, finalAmountIn, minOut, deadline],
+          // Audit low [5]: the V3 router's exactInputThroughUsdc now takes
+          // a usdcMidMin so the mid-leg slippage is bounded independently
+          // of the final amountOutMinimum. We pass 0 for now (no extra
+          // bound) on the front-end; backend sandwich defence sits in the
+          // amountOutMinimum + USDC blocklist. Tightening this to a real
+          // mid-quote derived from the V3 quoter is the next iteration.
+          args: v3DoubleHop
+            ? [tokenIn.address, tokenOut.address, v3Fee, account, finalAmountIn, minOut, 0n, deadline]
+            : [tokenIn.address, tokenOut.address, v3Fee, account, finalAmountIn, minOut, deadline],
         });
       } else if (route.useLaunchpadRouter) {
         // Multi-hop through the launchpad's router so post-migration royalties
