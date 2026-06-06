@@ -1,6 +1,6 @@
 "use client";
 
-import { Minus, Plus } from "lucide-react";
+import { MinusIcon, PlusIcon } from "@/components/ui/MaskIcon";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { Address, erc20Abi, formatUnits } from "viem";
@@ -415,14 +415,14 @@ function PositionRow({
           onClick={onToggle}
           className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-arc-border bg-white/[0.04] px-3 py-2.5 text-sm font-semibold text-arc-text transition-colors hover:bg-white/[0.08]"
         >
-          <Minus className="h-3.5 w-3.5" />
+          <MinusIcon size={14} />
           {expanded ? "Hide" : "Remove"}
         </button>
         <Link
           href={`/positions/add?type=amm&t0=${p.token0}&t1=${p.token1}`}
           className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-arc-border bg-white/[0.04] px-3 py-2.5 text-sm font-semibold text-arc-text transition-colors hover:bg-white/[0.08]"
         >
-          <Plus className="h-3.5 w-3.5" />
+          <PlusIcon size={14} />
           Add
         </Link>
       </div>

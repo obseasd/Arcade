@@ -1,6 +1,13 @@
 "use client";
 
-import { ArrowDown, ArrowUp, ChevronDown, Plus, RefreshCw, Search, Sparkles } from "lucide-react";
+import { Search, Sparkles } from "lucide-react";
+import {
+    DownArrowIcon,
+    MaskIcon,
+    PlusIcon,
+    RefreshIcon,
+    UpArrowIcon,
+} from "@/components/ui/MaskIcon";
 import Image from "next/image";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
@@ -10,7 +17,6 @@ import { MyPositions } from "@/components/pool/MyPositions";
 import { BurnedPositions } from "@/components/pool/BurnedPositions";
 import { V3Positions } from "@/components/pool/V3Positions";
 import { ClaimAllFeesModal } from "@/components/pool/ClaimAllFeesModal";
-import { MaskIcon } from "@/components/ui/MaskIcon";
 import { ADDRESSES, USDC_DECIMALS } from "@/lib/constants";
 import { useV2Tokens } from "@/lib/hooks/useV2Tokens";
 import { useV3Tokens } from "@/lib/hooks/useV3Tokens";
@@ -165,7 +171,7 @@ function PositionsInner() {
         >
           <span className="pointer-events-none absolute inset-0 bg-gradient-to-r from-black/55 via-black/30 to-black/55" aria-hidden />
           <span className="relative flex items-center gap-2 font-semibold drop-shadow-[0_1px_2px_rgba(0,0,0,0.85)]">
-            <Plus className="h-4 w-4" /> New position
+            <PlusIcon size={16} className="bg-white" /> New position
           </span>
         </button>
       </div>
@@ -235,9 +241,7 @@ function PositionsInner() {
             title="Refresh positions"
             className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-arc-border bg-black/15 text-arc-text backdrop-blur-xl transition-colors hover:bg-white/5"
           >
-            <RefreshCw
-              className={cn("h-4 w-4", refreshing && "animate-spin")}
-            />
+            <RefreshIcon size={16} spinning={refreshing} />
           </button>
         </div>
       )}
@@ -324,12 +328,7 @@ function RangeFilterDropdown({
         )}
       >
         {label}
-        <ChevronDown
-          className={cn(
-            "h-3.5 w-3.5 transition-transform",
-            open && "rotate-180",
-          )}
-        />
+        {open ? <UpArrowIcon size={14} /> : <DownArrowIcon size={14} />}
       </button>
       {open && (
         <div className="absolute right-0 top-full z-50 mt-2 w-52 rounded-xl border border-arc-border bg-black/85 p-1 shadow-arc-card backdrop-blur-2xl">
@@ -530,9 +529,9 @@ function PositionsSortDropdown({
                 <span>{POSITIONS_SORT_LABEL[k]}</span>
                 {isActive &&
                   (sortDir === "desc" ? (
-                    <ArrowDown className="h-3.5 w-3.5" />
+                    <DownArrowIcon size={14} />
                   ) : (
-                    <ArrowUp className="h-3.5 w-3.5" />
+                    <UpArrowIcon size={14} />
                   ))}
               </button>
             );

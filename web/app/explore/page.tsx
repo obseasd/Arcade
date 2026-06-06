@@ -1,18 +1,19 @@
 "use client";
 
 import {
-    ArrowDown,
-    ArrowUp,
-    ChevronDown,
     ChevronLeft,
     ChevronRight,
     ChevronsLeft,
     ChevronsRight,
     Flame,
-    Plus,
     Search,
     Sparkles,
 } from "lucide-react";
+import {
+    DownArrowIcon,
+    PlusIcon,
+    UpArrowIcon,
+} from "@/components/ui/MaskIcon";
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CreatePoolModal } from "@/components/pool/CreatePoolModal";
@@ -459,7 +460,7 @@ export default function ExplorePage() {
                     onClick={() => setCreateOpen(true)}
                     className="inline-flex items-center gap-2 rounded-xl bg-arc-cta px-[1.1rem] py-[0.55rem] text-[0.9625rem] font-semibold text-white transition-colors hover:bg-arc-cta-hover"
                 >
-                    <Plus className="h-[1.1rem] w-[1.1rem]" />
+                    <PlusIcon size={18} className="bg-white" />
                     New position
                 </button>
             </div>
@@ -934,12 +935,7 @@ function PoolPairRowCard({
                         className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-[0.575rem] text-xs font-medium text-arc-text transition-colors hover:bg-white/5"
                     >
                         {expanded ? "Hide pools" : `Show all pools (${subCount})`}
-                        <ChevronDown
-                            className={cn(
-                                "h-3.5 w-3.5 transition-transform",
-                                expanded && "rotate-180",
-                            )}
-                        />
+                        {expanded ? <UpArrowIcon size={14} /> : <DownArrowIcon size={14} />}
                     </button>
                 </div>
             </div>
@@ -1064,7 +1060,7 @@ function PoolSubRowCard({
                     href={addLiqHref}
                     className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-1.5 text-[11px] font-medium text-arc-text transition-colors hover:bg-white/5"
                 >
-                    <Plus className="h-3 w-3" />
+                    <PlusIcon size={12} />
                     Add Liquidity
                 </Link>
             </div>
@@ -1181,7 +1177,7 @@ function PoolPairGridCard({
                             : "border-arc-border bg-arc-bg-elevated text-arc-text hover:bg-white/5",
                     )}
                 >
-                    <Plus className="h-3.5 w-3.5" />
+                    <PlusIcon size={14} className={whiteCta ? "bg-white" : undefined} />
                     Add Liquidity
                 </Link>
                 <Link
@@ -1533,9 +1529,9 @@ function SortDropdown({
                                 <span>{SORT_LABEL[k]}</span>
                                 {isActive &&
                                     (sortDir === "desc" ? (
-                                        <ArrowDown className="h-3.5 w-3.5" />
+                                        <DownArrowIcon size={14} />
                                     ) : (
-                                        <ArrowUp className="h-3.5 w-3.5" />
+                                        <UpArrowIcon size={14} />
                                     ))}
                             </button>
                         );

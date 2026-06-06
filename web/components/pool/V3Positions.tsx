@@ -1,6 +1,7 @@
 "use client";
 
-import { ArrowLeftRight, ExternalLink, Pencil, Plus, Settings2 } from "lucide-react";
+import { ArrowLeftRight, ExternalLink, Pencil } from "lucide-react";
+import { PlusIcon, SliderIcon } from "@/components/ui/MaskIcon";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { Address, erc20Abi, formatUnits } from "viem";
@@ -597,7 +598,7 @@ function V3PositionRow({
                         href={`/pool/${poolAddress}`}
                         className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-arc-border bg-white/[0.04] px-3 py-2.5 text-sm font-semibold text-arc-text transition-colors hover:bg-white/[0.08]"
                     >
-                        <Settings2 className="h-3.5 w-3.5" />
+                        <SliderIcon size={14} />
                         Manage
                     </Link>
                 ) : (
@@ -605,7 +606,7 @@ function V3PositionRow({
                         disabled
                         className="inline-flex cursor-not-allowed items-center justify-center gap-1.5 rounded-xl border border-arc-border bg-white/[0.04] px-3 py-2.5 text-sm font-semibold text-arc-text-faint"
                     >
-                        <Settings2 className="h-3.5 w-3.5" />
+                        <SliderIcon size={14} />
                         Manage
                     </button>
                 )}
@@ -613,7 +614,7 @@ function V3PositionRow({
                     href={`/positions/add?type=v3&t0=${p.token0}&t1=${p.token1}&fee=${p.fee / 100}`}
                     className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-arc-border bg-white/[0.04] px-3 py-2.5 text-sm font-semibold text-arc-text transition-colors hover:bg-white/[0.08]"
                 >
-                    <Plus className="h-3.5 w-3.5" />
+                    <PlusIcon size={14} />
                     Add Liq.
                 </Link>
             </div>
