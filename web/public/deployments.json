@@ -28,8 +28,8 @@
     "v4Router": "0x1Ac821216edcbA5da28DA6e2096ce490a962fc41",
     "seedETH": "0xcA34959A856c82214Bb3b2b7777342dE30459F83",
     "v2Zap": "0x37c64Bde72e1fFB753669f83E39aEace6944fBF3",
-    "v3PositionDescriptor": "0x09Bf8D77ccfC61E1B36bc0204793F096d9563eb7",
-    "v3PositionManager": "0xabEb1Dc749e5E4fEC1A88d7B7AAc1122a2eAA49b",
+    "v3PositionDescriptor": "0xD2ba26cdee71f4a154479BdB74e3022a421C45F8",
+    "v3PositionManager": "0x07D3fE5e44b454CE59861fB3F0326702618dFB92",
     "twitterEscrow": "0x8f60C7B119F551E5055E7B3E94a11C4DFdFA34C7",
     "twitterEscrowSigner": "0xa31437fC1C8E2723C5EB0D50A26A0bD0C8382Eda",
     "twitterEscrowOwner": "0x3a0Dd90212838f32a953Acd4B32596b62859324A"
@@ -38,7 +38,7 @@
     "generation": "Generation 5 (2026-06-05) — DeployTestnet broadcast at block 45,667,221. All audit-fix contracts: V3 router with usdcMidMin slippage param, launchpad with try/catch initialize() guard + always-full-transfer _migrate.",
     "seedETH": "Standalone testnet ERC20 ('Ether (Seed)', symbol 'ETH', 18 decimals, 1,000,000 supply) deployed 2026-06-04 at block 45,493,309. Lives on the OLD V2 factory's pair scope; if you want it visible on the new factory, run the seed-eth flow via /positions to recreate the pair.",
     "v2Zap": "Gen 5 V2 Zap deployed 2026-06-05, block 45,667,713, tx 0x93eb9c9fe703e1b67ebeb384ec82759f4041cfbafa70a87a7b79ca0609182684. Wired to gen 5 V2 factory + router. Includes audit fix [3] (internal swapMinOut at 50 bps) + [12] (dust sweep try/catch). NEXT_PUBLIC_V2_ZAP_ADDRESS=0x37c64Bde72e1fFB753669f83E39aEace6944fBF3. Previous deploys at 0x50D8...1Fc6 (gen 4) and 0x838a...64E2 (gen 5 first attempt, wired to old V2) are now abandoned.",
-    "v3Npm": "Gen 5 ArcadeV3PositionManager + ArcadeV3PositionDescriptor deployed 2026-06-05, block 45,667,788. NPM tx 0xbc99d2620482001e960b17c9b1965b421bfef3ffd9fb378004089b93f2ecfb90, descriptor tx 0x960ad0a886002897436a2d201482da93df0bdedfa18a38f9c88b67d788cd05ef. Wired to the new V3 factory 0x7Eb534...7Ac2. NEXT_PUBLIC_V3_NPM_ADDRESS=0xabEb1Dc749e5E4fEC1A88d7B7AAc1122a2eAA49b. Gen 4 NPM 0xE3dD...1cE1 + descriptor 0xD4e6...4933 are abandoned."
+    "v3Npm": "Gen 5b ArcadeV3PositionManager + ArcadeV3PositionDescriptor redeployed 2026-06-06, block 45,771,126. NPM tx 0xf1cee2a353152cfe8b9d4d91af53287fa85360fe39b56404f7496eb33c068ba1, descriptor tx 0xcca0d7e203dcbe44f4f8d00c9c7e75ca54799567f2c6850b910baa21f5b64d03. Wired to the V3 factory 0x7Eb534...7Ac2. NEXT_PUBLIC_V3_NPM_ADDRESS=0x07D3fE5e44b454CE59861fB3F0326702618dFB92. Redeploy was needed because the upstream v3-periphery PoolAddress.POOL_INIT_CODE_HASH (0xe34f199b...) does NOT match the bytecode hash our Forge profile produces for UniswapV3Pool (0xca68598c...). Without the patch the NPM computed a ghost CREATE2 address (0xEd24...63F3) for every pool and every mint reverted with 'call to non-contract address'. Gen 5a NPM 0xabEb...A49b + descriptor 0x09Bf...3eb7 are abandoned. Patch lives in contracts/scripts/patch-v3-periphery.sh and must be re-applied after any forge install."
   },
   "constants": {
     "tokenDecimals": 18,
