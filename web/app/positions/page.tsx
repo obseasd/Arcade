@@ -41,6 +41,10 @@ function PositionsInner() {
   // its query cache and re-fetches the pair list. Cheaper than threading a
   // bespoke refetch handle through the tree.
   const [refreshKey, setRefreshKey] = useState(0);
+  // Refresh spinner. Flips true on click, auto-clears after a beat so the
+  // user gets visual feedback even when the underlying queries already
+  // resolve from cache (in which case there's nothing to "wait" for).
+  const [refreshing, setRefreshing] = useState(false);
   // Tools row state: search + V3 range filter + claim modal.
   const [search, setSearch] = useState("");
   const [rangeFilter, setRangeFilter] = useState<V3RangeFilter>({
@@ -223,11 +227,17 @@ function PositionsInner() {
             }}
           />
           <button
-            onClick={() => setRefreshKey((k) => k + 1)}
+            onClick={() => {
+              setRefreshKey((k) => k + 1);
+              setRefreshing(true);
+              window.setTimeout(() => setRefreshing(false), 700);
+            }}
             title="Refresh positions"
             className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-arc-border bg-black/15 text-arc-text backdrop-blur-xl transition-colors hover:bg-white/5"
           >
-            <RefreshCw className="h-4 w-4" />
+            <RefreshCw
+              className={cn("h-4 w-4", refreshing && "animate-spin")}
+            />
           </button>
         </div>
       )}

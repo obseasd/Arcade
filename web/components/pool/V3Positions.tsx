@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeftRight, ExternalLink, Plus } from "lucide-react";
+import { ArrowLeftRight, ExternalLink, Pencil, Plus, Settings2 } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { Address, erc20Abi, formatUnits } from "viem";
@@ -385,6 +385,31 @@ function V3PositionRow({
     const inRange =
         !!slot0 && slot0.tick >= p.tickLower && slot0.tick < p.tickUpper;
 
+    // USD valuation of the position (so Your Reserve can show $X.XX and
+    // per-leg % chips). Works whenever one side of the pool is USDC; for
+    // exotic non-USDC pairs (eg LAUNCHTOKEN / OTHER) we fall back to "—".
+    // currentPriceRaw is t1 per t0 from tickToPriceWithDecimals.
+    const usd0 = (() => {
+        const human = Number(formatUnits(underlying.amount0, t0Info.decimals));
+        if (p.token0.toLowerCase() === USDC_LOWER) return human;
+        // t0 priced in t1 = 1 / currentPriceRaw. If t1 is USDC, multiply.
+        if (p.token1.toLowerCase() === USDC_LOWER && currentPriceRaw > 0)
+            return human * currentPriceRaw;
+        return undefined;
+    })();
+    const usd1 = (() => {
+        const human = Number(formatUnits(underlying.amount1, t1Info.decimals));
+        if (p.token1.toLowerCase() === USDC_LOWER) return human;
+        // t1 priced in t0 = currentPriceRaw. If t0 is USDC, divide by price.
+        if (p.token0.toLowerCase() === USDC_LOWER && currentPriceRaw > 0)
+            return human / currentPriceRaw;
+        return undefined;
+    })();
+    const usdTotal =
+        usd0 !== undefined && usd1 !== undefined ? usd0 + usd1 : undefined;
+    const pct0 = usdTotal && usdTotal > 0 && usd0 !== undefined ? (usd0 / usdTotal) * 100 : undefined;
+    const pct1 = usdTotal && usdTotal > 0 && usd1 !== undefined ? (usd1 / usdTotal) * 100 : undefined;
+
     return (
         <div className="arc-card p-4">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -403,8 +428,8 @@ function V3PositionRow({
                                 {t0Info.symbol} / {t1Info.symbol}
                                 <ArrowLeftRight className="h-3 w-3 opacity-0 transition-opacity group-hover:opacity-70" />
                             </button>
-                            <span className="rounded-md border border-arc-cta-hover/40 bg-arc-cta-hover/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-arc-cta-hover">
-                                v3
+                            <span className="rounded-md border border-arc-cta-hover/40 bg-arc-cta-hover/10 px-1.5 py-0.5 text-[10px] font-semibold text-arc-cta-hover">
+                                ID:{p.tokenId.toString()}
                             </span>
                             <span className="rounded-md border border-arc-success/40 bg-arc-success/10 px-1.5 py-0.5 text-[10px] font-semibold text-arc-success">
                                 {(p.fee / 10000).toFixed(2)}%
@@ -434,47 +459,67 @@ function V3PositionRow({
                         </div>
                     </div>
                 </div>
-                <div className="flex flex-wrap items-center gap-2">
-                    <a
-                        href={`${explorerUrl}/token/${ADDRESSES.v3PositionManager}?a=${p.tokenId}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1 rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-1.5 text-xs font-medium text-arc-text transition-colors hover:bg-white/5"
-                    >
-                        NFT #{p.tokenId.toString()} <ExternalLink className="h-3 w-3" />
-                    </a>
-                    {poolAddress && (
-                        <Link
-                            href={`/pool/${poolAddress}`}
-                            className="inline-flex items-center gap-1 rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-1.5 text-xs font-medium text-arc-text transition-colors hover:bg-white/5"
-                        >
-                            Open pool
-                        </Link>
-                    )}
-                    <Link
-                        href={`/positions/add?type=v3&t0=${p.token0}&t1=${p.token1}&fee=${p.fee / 100}`}
-                        className="inline-flex items-center gap-1 rounded-xl border border-arc-cta-hover/40 bg-arc-cta-hover/10 px-3 py-1.5 text-xs font-semibold text-arc-cta-hover transition-colors hover:bg-arc-cta-hover/20"
-                    >
-                        <Plus className="h-3 w-3" />
-                        Add liquidity
-                    </Link>
+                {/* Top-right action: Edit button (mirrors Hyperswap). Routes
+                    to the NFT on the explorer for now since the full manage
+                    UI ships in a follow-up commit. */}
+                <a
+                    href={`${explorerUrl}/token/${ADDRESSES.v3PositionManager}?a=${p.tokenId}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    title={`NFT #${p.tokenId.toString()} on the explorer`}
+                    className="inline-flex items-center gap-1 self-start rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-1.5 text-xs font-medium text-arc-text transition-colors hover:bg-white/5"
+                >
+                    <Pencil className="h-3 w-3" />
+                    Edit
+                    <ExternalLink className="h-2.5 w-2.5 opacity-60" />
+                </a>
+            </div>
+
+            {/* Pool-level metrics row. APR / 1D Volume / Total TVL all read
+                from the indexer; for now they render as "—" so the layout
+                exists when ArcLens lands. */}
+            <div className="mt-3 grid grid-cols-3 gap-3 text-xs">
+                <div>
+                    <div className="text-[10px] uppercase tracking-wider text-arc-text-faint">APR</div>
+                    <div className="mt-0.5 text-sm font-semibold tabular-nums text-arc-text-faint">—</div>
+                </div>
+                <div>
+                    <div className="text-[10px] uppercase tracking-wider text-arc-text-faint">1D Volume</div>
+                    <div className="mt-0.5 text-sm font-semibold tabular-nums text-arc-text-faint">—</div>
+                </div>
+                <div>
+                    <div className="text-[10px] uppercase tracking-wider text-arc-text-faint">Total TVL</div>
+                    <div className="mt-0.5 text-sm font-semibold tabular-nums text-arc-text-faint">—</div>
                 </div>
             </div>
 
-            {/* Underlying balances - the actual token amounts the user gets if
-                they close the position now. Replaces the raw uint128 L scalar
-                which carried no human meaning. */}
+            {/* Underlying balances + per-leg % share. Each amount carries
+                a green pill with its USD-weighted share of the position
+                (Hyperswap pattern). Falls back to bare amounts for non-
+                USDC pairs where we can't price either side. */}
             <div className="mt-3 rounded-xl border border-arc-border bg-white/[0.015] p-3">
-                <div className="mb-1 text-[10px] uppercase tracking-wider text-arc-text-faint">
-                    Your reserve
+                <div className="mb-1 flex items-center justify-between">
+                    <div className="text-[10px] uppercase tracking-wider text-arc-text-faint">
+                        Your reserve
+                    </div>
+                    {usdTotal !== undefined && (
+                        <div className="text-[11px] font-semibold text-arc-text">
+                            {fmtUsd(usdTotal)}
+                        </div>
+                    )}
                 </div>
-                <div className="grid grid-cols-2 gap-2 text-sm">
+                <div className="grid grid-cols-1 gap-1.5 text-sm sm:grid-cols-2">
                     <div className="inline-flex items-center gap-2">
                         <TokenIcon symbol={t0Info.symbol} size={20} />
                         <span className="tabular-nums text-arc-text">
                             {formatTok(underlying.amount0, t0Info.decimals)}
                         </span>
                         <span className="text-arc-text-muted">{t0Info.symbol}</span>
+                        {pct0 !== undefined && (
+                            <span className="rounded-md border border-arc-success/40 bg-arc-success/10 px-1.5 py-0.5 text-[10px] font-semibold text-arc-success">
+                                {pct0.toFixed(2)}%
+                            </span>
+                        )}
                     </div>
                     <div className="inline-flex items-center gap-2">
                         <TokenIcon symbol={t1Info.symbol} size={20} />
@@ -482,6 +527,11 @@ function V3PositionRow({
                             {formatTok(underlying.amount1, t1Info.decimals)}
                         </span>
                         <span className="text-arc-text-muted">{t1Info.symbol}</span>
+                        {pct1 !== undefined && (
+                            <span className="rounded-md border border-arc-success/40 bg-arc-success/10 px-1.5 py-0.5 text-[10px] font-semibold text-arc-success">
+                                {pct1.toFixed(2)}%
+                            </span>
+                        )}
                     </div>
                 </div>
             </div>
@@ -509,27 +559,62 @@ function V3PositionRow({
                 />
             </div>
 
-            {/* Unclaimed fees row. Starts at 0 and ticks up when swaps cross
-                the range. Hidden when both legs are zero to keep the card
-                quiet on a fresh position. */}
-            {(p.tokensOwed0 > 0n || p.tokensOwed1 > 0n) && (
-                <div className="mt-3 flex items-center justify-between gap-2 rounded-xl border border-arc-border bg-white/[0.015] p-3 text-xs">
-                    <span className="text-arc-text-muted">Unclaimed fees</span>
-                    <span className="inline-flex items-center gap-3 tabular-nums">
-                        <span>
-                            {formatTok(p.tokensOwed0, t0Info.decimals)}{" "}
-                            <span className="text-arc-text-muted">{t0Info.symbol}</span>
-                        </span>
-                        <span className="text-arc-text-faint">/</span>
-                        <span>
-                            {formatTok(p.tokensOwed1, t1Info.decimals)}{" "}
-                            <span className="text-arc-text-muted">{t1Info.symbol}</span>
-                        </span>
+            {/* Unclaimed fees row. Always renders (Hyperswap pattern), 0
+                values just show as muted "0 SYM / 0 SYM" so the user can
+                see fees are accumulating regardless of state. */}
+            <div className="mt-3 flex items-center justify-between gap-2 rounded-xl border border-arc-border bg-white/[0.015] p-3 text-xs">
+                <span className="text-arc-text-muted">Unclaimed fees</span>
+                <span className="inline-flex items-center gap-3 tabular-nums">
+                    <span>
+                        {formatTok(p.tokensOwed0, t0Info.decimals)}{" "}
+                        <span className="text-arc-text-muted">{t0Info.symbol}</span>
                     </span>
-                </div>
-            )}
+                    <span className="text-arc-text-faint">/</span>
+                    <span>
+                        {formatTok(p.tokensOwed1, t1Info.decimals)}{" "}
+                        <span className="text-arc-text-muted">{t1Info.symbol}</span>
+                    </span>
+                </span>
+            </div>
+
+            {/* Bottom action bar: Manage + Add Liq. Manage routes to the
+                pool detail page for now since the in-app decrease/collect/
+                burn UI lands in a follow-up commit; the Open pool link is
+                the closest existing target. */}
+            <div className="mt-3 grid grid-cols-2 gap-2">
+                {poolAddress ? (
+                    <Link
+                        href={`/pool/${poolAddress}`}
+                        className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2 text-xs font-semibold text-arc-text transition-colors hover:bg-white/5"
+                    >
+                        <Settings2 className="h-3.5 w-3.5" />
+                        Manage
+                    </Link>
+                ) : (
+                    <button
+                        disabled
+                        className="inline-flex cursor-not-allowed items-center justify-center gap-1.5 rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2 text-xs font-semibold text-arc-text-faint"
+                    >
+                        <Settings2 className="h-3.5 w-3.5" />
+                        Manage
+                    </button>
+                )}
+                <Link
+                    href={`/positions/add?type=v3&t0=${p.token0}&t1=${p.token1}&fee=${p.fee / 100}`}
+                    className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-arc-cta-hover/40 bg-arc-cta-hover/10 px-3 py-2 text-xs font-semibold text-arc-cta-hover transition-colors hover:bg-arc-cta-hover/20"
+                >
+                    <Plus className="h-3.5 w-3.5" />
+                    Add Liq.
+                </Link>
+            </div>
         </div>
     );
+}
+
+function fmtUsd(n: number): string {
+    if (n === 0) return "$0";
+    if (n < 0.01) return "<$0.01";
+    return `$${n.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
 }
 
 function PriceTile({

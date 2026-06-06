@@ -458,7 +458,7 @@ export function ClaimAllFeesModal({ open, onClose, onSuccess }: Props) {
                             Estimated gas:{" "}
                             <span className="font-semibold tabular-nums text-arc-text">
                                 {gasEstimateUsdc !== undefined
-                                    ? fmtUsdc(gasEstimateUsdc)
+                                    ? fmtGasUsdc(gasEstimateUsdc)
                                     : "—"}
                             </span>
                         </span>
@@ -503,10 +503,16 @@ function fmtTok(raw: bigint, decimals: number): string {
     return n.toLocaleString(undefined, { maximumFractionDigits: 4 });
 }
 
-function fmtUsdc(raw: bigint): string {
-    const n = Number(formatUnits(raw, USDC_DECIMALS));
-    if (n < 0.0001) return "<$0.0001";
-    if (n < 1) return `$${n.toFixed(4)}`;
-    return `$${n.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+// Format an Arc gas total (wei) as a $-prefixed USDC value. Arc accounts
+// gas in wei (18 decimals, standard EVM) but pays it out of the user's
+// USDC balance via an implicit 1:1 wei -> USDC-smallest-unit mapping at
+// debit time. So we format the raw wei with 18 decimals - using USDC's
+// 6 decimals would over-count by 1e12.
+function fmtGasUsdc(weiTotal: bigint): string {
+    const usd = Number(formatUnits(weiTotal, 18));
+    if (usd < 0.0001) return "<$0.0001";
+    if (usd < 1) return `$${usd.toFixed(4)}`;
+    return `$${usd.toLocaleString(undefined, { maximumFractionDigits: 4 })}`;
 }
+void USDC_DECIMALS;
 

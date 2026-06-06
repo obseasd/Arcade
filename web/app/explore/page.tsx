@@ -513,9 +513,18 @@ export default function ExplorePage() {
             )}
             {!reservesQ.isLoading && filteredRows.length > 0 && viewMode === "card" && (
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-                    {pageRows.map((row) => (
-                        <PoolPairGridCard key={row.key} row={row} />
-                    ))}
+                    {/* One card per (pair, version+fee) combo - V2 and V3
+                        variants stand apart. flatMap preserves the pair's
+                        row order before splitting on sub-rows. */}
+                    {pageRows.flatMap((row) =>
+                        row.subRows.map((sub) => (
+                            <PoolPairGridCard
+                                key={`${row.key}-${sub.poolAddress}`}
+                                row={row}
+                                sub={sub}
+                            />
+                        )),
+                    )}
                 </div>
             )}
             {!reservesQ.isLoading && pageCount > 1 && (
@@ -819,8 +828,11 @@ function PoolPairRowCard({
                         "border-arc-success/70 shadow-[0_0_20px_-4px_rgba(16,185,129,0.45)] ring-1 ring-arc-success/40",
                 )}
             >
-            {/* Row header. +10% taller than the previous spec (1.1rem -> 1.21rem). */}
-            <div className="flex flex-col items-stretch gap-3 p-[1.21rem] sm:flex-row sm:items-center">
+            {/* Row header. p-[1.331rem] is 1.21rem * 1.1 = +10% height vs the
+                prior spec (already +10% over the original 1.1rem). Metrics
+                column gets text-center so the values line up under their
+                column headers regardless of pair-name length. */}
+            <div className="flex flex-col items-stretch gap-3 p-[1.331rem] sm:flex-row sm:items-center">
                 <div className="flex min-w-0 flex-1 items-center gap-3">
                     <div className="flex -space-x-4">
                         <TokenIcon
@@ -835,8 +847,11 @@ function PoolPairRowCard({
                         />
                     </div>
                     <div className="min-w-0 flex-1">
-                        <div className="truncate text-sm font-semibold">
-                            {row.token0.symbol} / {row.token1.symbol}
+                        <div className="flex items-center gap-1.5">
+                            <span className="truncate text-sm font-semibold">
+                                {row.token0.symbol} / {row.token1.symbol}
+                            </span>
+                            <CopyAddressButton address={row.token1.address} />
                         </div>
                         {row.aprPct !== undefined && row.aprPct > 100 && (
                             <div className="mt-1 flex flex-wrap items-center gap-1.5">
@@ -849,12 +864,17 @@ function PoolPairRowCard({
                     </div>
                 </div>
                 <div className="grid flex-1 grid-cols-2 gap-2 sm:grid-cols-4">
-                    <Metric label="Best APR" value="—" pendingIndexer />
-                    <Metric label="Daily Fees" value="—" pendingIndexer />
-                    <Metric label="TVL" value={tvlLabel} />
-                    <Metric label="1D Volume" value="—" pendingIndexer />
+                    <Metric label="Best APR" value="—" pendingIndexer center />
+                    <Metric label="Daily Fees" value="—" pendingIndexer center />
+                    <Metric label="TVL" value={tvlLabel} center />
+                    <Metric label="1D Volume" value="—" pendingIndexer center />
                 </div>
-                <div className="flex shrink-0 items-center gap-2">
+                {/* Pinned-width action column so the Show/Hide pools toggle
+                    flipping between "Show all pools (N)" and "Hide pools"
+                    doesn't push the Swap button around. min-w-[14.5rem]
+                    fits the longest possible "Show all pools (NN)" label;
+                    the inner row stays right-aligned. */}
+                <div className="flex shrink-0 items-center justify-end gap-2 sm:min-w-[14.5rem]">
                     <Link
                         href="/swap"
                         className="inline-flex items-center gap-1.5 rounded-xl border border-arc-border bg-sky-400/10 px-3 py-[0.575rem] text-xs font-semibold text-sky-400 transition-colors hover:bg-sky-400/20"
@@ -881,22 +901,33 @@ function PoolPairRowCard({
                 <div className="border-t border-arc-border bg-white/[0.015]">
                     <div className="hidden grid-cols-[1fr_repeat(4,_1fr)_auto] gap-3 px-4 py-2 text-[10px] uppercase tracking-wider text-arc-text-faint sm:grid">
                         <span>Pools ({subCount})</span>
-                        <span className="text-right">APR</span>
-                        <span className="text-right">Daily Fees</span>
-                        <span className="text-right">TVL</span>
-                        <span className="text-right">1D Volume</span>
+                        <span className="text-center">APR</span>
+                        <span className="text-center">Daily Fees</span>
+                        <span className="text-center">TVL</span>
+                        <span className="text-center">1D Volume</span>
                         <span />
                     </div>
-                    {row.subRows.map((sub) => (
-                        <PoolSubRowCard
-                            key={`${sub.address}-${sub.version}`}
-                            sub={sub}
-                            token0={row.token0}
-                            token1={row.token1}
-                            image0={image0}
-                            image1={image1}
-                        />
-                    ))}
+                    {row.subRows.map((sub) => {
+                        // "Best" chips per metric. APR / Volume fall back to
+                        // undefined (no indexer) so only TVL renders for now;
+                        // the labels match the Hyperswap pattern visually.
+                        const bestTvl = row.subRows.reduce(
+                            (max, s) => (s.tvlUsdc > max ? s.tvlUsdc : max),
+                            0n,
+                        );
+                        const isBestTvl = sub.tvlUsdc === bestTvl && bestTvl > 0n;
+                        return (
+                            <PoolSubRowCard
+                                key={`${sub.address}-${sub.version}`}
+                                sub={sub}
+                                token0={row.token0}
+                                token1={row.token1}
+                                image0={image0}
+                                image1={image1}
+                                isBestTvl={isBestTvl}
+                            />
+                        );
+                    })}
                 </div>
             )}
             </div>
@@ -910,12 +941,17 @@ function PoolSubRowCard({
     token1,
     image0,
     image1,
+    isBestTvl,
 }: {
     sub: PoolSubRow;
     token0: { address: Address; symbol: string };
     token1: { address: Address; symbol: string };
     image0?: string;
     image1?: string;
+    /** True when this sub-row holds the largest TVL across the pair's
+     *  other sub-rows. Surfaces a small "Best TVL" chip below the
+     *  version/fee row, mirroring Hyperswap's superlative labels. */
+    isBestTvl?: boolean;
 }) {
     const feeLabel = `${sub.feeBps / 100}%`;
     const tvlLabel = formatUsd(sub.tvlUsdc);
@@ -927,12 +963,13 @@ function PoolSubRowCard({
                     <TokenIcon symbol={token1.symbol} image={image1} size={26} />
                 </div>
                 <div className="min-w-0">
-                    <div className="truncate text-xs font-medium">
-                        {token0.symbol} / {token1.symbol}
+                    <div className="flex items-center gap-1.5">
+                        <span className="truncate text-xs font-medium">
+                            {token0.symbol} / {token1.symbol}
+                        </span>
+                        <CopyAddressButton address={token1.address} />
                     </div>
-                    <div className="mt-0.5 flex items-center gap-1">
-                        {/* V2 = cyan (light blue, mirrors stats V2 line).
-                            V3 = arc-cta-hover (dark blue, mirrors stats Total). */}
+                    <div className="mt-0.5 flex flex-wrap items-center gap-1">
                         <span
                             className={cn(
                                 "rounded-md border px-1 py-0.5 text-[9px] uppercase tracking-wider",
@@ -946,13 +983,22 @@ function PoolSubRowCard({
                         <span className="rounded-md border border-arc-border bg-arc-bg-elevated px-1 py-0.5 text-[9px] text-arc-text-muted">
                             {feeLabel}
                         </span>
+                        {/* Superlative chips. Only Best TVL is computable
+                            today (APR / Volume await the indexer). Each
+                            chip uses its own colour pulled from the design
+                            system. */}
+                        {isBestTvl && (
+                            <span className="rounded-md border border-purple-400/40 bg-purple-400/10 px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-purple-300">
+                                Best TVL
+                            </span>
+                        )}
                     </div>
                 </div>
             </div>
-            <span className="text-right text-xs tabular-nums text-arc-text-faint sm:text-sm">—</span>
-            <span className="text-right text-xs tabular-nums text-arc-text-faint sm:text-sm">—</span>
-            <span className="text-right text-xs tabular-nums sm:text-sm">{tvlLabel}</span>
-            <span className="text-right text-xs tabular-nums text-arc-text-faint sm:text-sm">—</span>
+            <span className="text-center text-xs tabular-nums text-arc-text-faint sm:text-sm">—</span>
+            <span className="text-center text-xs tabular-nums text-arc-text-faint sm:text-sm">—</span>
+            <span className="text-center text-xs tabular-nums sm:text-sm">{tvlLabel}</span>
+            <span className="text-center text-xs tabular-nums text-arc-text-faint sm:text-sm">—</span>
             <Link
                 href={`/pool/${sub.poolAddress}`}
                 className="inline-flex items-center justify-end gap-1 rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-1.5 text-[11px] font-medium text-arc-text transition-colors hover:bg-white/5"
@@ -968,49 +1014,59 @@ function PoolSubRowCard({
 // Pool pair card (grid / card view)
 // -------------------------------------------------------------------
 
-function PoolPairGridCard({ row }: { row: PoolPairRow }) {
+/**
+ * Single-version card for the grid view. The row-view (PoolPairRowCard)
+ * shows the pair once with sub-rows below it; here we flat-map into one
+ * card per (pair, version) so the V2 and V3 variants stand alone and
+ * size proportionally. Add Liq routes to the right type (amm vs v3).
+ * No "Best APR/Volume/TVL" chips - those only fit on the list view
+ * because each card is already isolated. */
+function PoolPairGridCard({
+    row,
+    sub,
+}: {
+    row: PoolPairRow;
+    sub: PoolSubRow;
+}) {
     const { image: image0 } = useTokenImage(row.token0.address);
     const { image: image1 } = useTokenImage(row.token1.address);
-    const tvlLabel = useMemo(() => formatUsd(row.tvlUsdc), [row.tvlUsdc]);
-
-    // Show up to two badges (one per version+fee variant) like HyperSwap.
-    const variantBadges = row.subRows.slice(0, 2);
+    const tvlLabel = useMemo(() => formatUsd(sub.tvlUsdc), [sub.tvlUsdc]);
+    const isV3 = sub.version === "v3";
+    const addLiqHref = isV3
+        ? `/positions/add?type=v3&t0=${row.token0.address}&t1=${row.token1.address}&fee=${sub.feeBps}`
+        : `/positions/add?type=amm&t0=${row.token0.address}&t1=${row.token1.address}`;
 
     return (
-        <div className="arc-card flex flex-col gap-3 p-4">
+        // +10% padding vs the old grid card (p-4 -> p-[1.1rem]) so the
+        // card has more breathing room and matches the list row's bumped
+        // height.
+        <div className="arc-card flex flex-col gap-3 p-[1.1rem]">
             <div className="flex items-start gap-3">
                 <div className="flex -space-x-3">
-                    <TokenIcon symbol={row.token0.symbol} image={image0} size={36} />
-                    <TokenIcon symbol={row.token1.symbol} image={image1} size={36} />
+                    <TokenIcon symbol={row.token0.symbol} image={image0} size={40} />
+                    <TokenIcon symbol={row.token1.symbol} image={image1} size={40} />
                 </div>
                 <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm font-semibold">
-                        {row.token0.symbol} / {row.token1.symbol}
+                    <div className="flex items-center gap-1.5">
+                        <span className="truncate text-sm font-semibold">
+                            {row.token0.symbol} / {row.token1.symbol}
+                        </span>
+                        <CopyAddressButton address={row.token1.address} />
                     </div>
-                    {/* Each pool variant gets a version pill AND a separate
-                        fee-tier pill (e.g. v3 then 1%), matching the row view
-                        and HyperSwap. Cyan = V2, arc-cta-hover navy = V3. */}
                     <div className="mt-1 flex flex-wrap items-center gap-1">
-                        {variantBadges.map((v) => (
-                            <span
-                                key={`${v.address}-${v.version}`}
-                                className="flex items-center gap-1"
-                            >
-                                <span
-                                    className={cn(
-                                        "rounded-md border px-1.5 py-0.5 text-[9px] uppercase tracking-wider",
-                                        v.version === "v2"
-                                            ? "border-cyan-400/40 bg-cyan-400/10 text-cyan-400"
-                                            : "border-arc-cta-hover/40 bg-arc-cta-hover/10 text-arc-cta-hover",
-                                    )}
-                                >
-                                    {v.version}
-                                </span>
-                                <span className="rounded-md border border-arc-border bg-arc-bg-elevated px-1.5 py-0.5 text-[9px] text-arc-text-muted">
-                                    {v.feeBps / 100}%
-                                </span>
-                            </span>
-                        ))}
+                        <span
+                            className={cn(
+                                "rounded-md border px-1.5 py-0.5 text-[9px] uppercase tracking-wider",
+                                isV3
+                                    ? "border-arc-cta-hover/40 bg-arc-cta-hover/10 text-arc-cta-hover"
+                                    : "border-cyan-400/40 bg-cyan-400/10 text-cyan-400",
+                            )}
+                        >
+                            {sub.version}
+                        </span>
+                        <span className="rounded-md border border-arc-border bg-arc-bg-elevated px-1.5 py-0.5 text-[9px] text-arc-text-muted">
+                            {sub.feeBps / 100}%
+                        </span>
                     </div>
                 </div>
             </div>
@@ -1049,7 +1105,7 @@ function PoolPairGridCard({ row }: { row: PoolPairRow }) {
 
             <div className="mt-2 grid grid-cols-2 gap-2">
                 <Link
-                    href={`/positions/add?type=amm&t0=${row.token0.address}&t1=${row.token1.address}`}
+                    href={addLiqHref}
                     className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-[0.575rem] text-xs font-semibold text-arc-text transition-colors hover:bg-white/5"
                 >
                     <Plus className="h-3.5 w-3.5" />
@@ -1213,13 +1269,18 @@ function Metric({
     label,
     value,
     pendingIndexer,
+    center,
 }: {
     label: string;
     value: string;
     pendingIndexer?: boolean;
+    /** Center the label + value horizontally instead of right-aligning. The
+     *  pair row header reads more naturally with centered columns when the
+     *  header label widths differ ("Best APR" vs "1D Volume"). */
+    center?: boolean;
 }) {
     return (
-        <div className="text-center sm:text-right">
+        <div className={cn("text-center", !center && "sm:text-right")}>
             <div className="text-[10px] uppercase tracking-wider text-arc-text-faint">{label}</div>
             <div
                 className={cn(
@@ -1230,6 +1291,61 @@ function Metric({
                 {value}
             </div>
         </div>
+    );
+}
+
+/**
+ * Compact copy-to-clipboard button. Used next to pair labels in /explore
+ * and /positions so the user can grab the token contract without hunting
+ * through the explorer. Flashes a check for 1s after a successful copy.
+ */
+function CopyAddressButton({ address }: { address: string }) {
+    const [copied, setCopied] = useState(false);
+    return (
+        <button
+            onClick={async (e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                try {
+                    await navigator.clipboard.writeText(address);
+                    setCopied(true);
+                    window.setTimeout(() => setCopied(false), 1000);
+                } catch {
+                    /* ignore - older browsers without clipboard API */
+                }
+            }}
+            title={copied ? "Copied!" : `Copy ${address.slice(0, 6)}…${address.slice(-4)}`}
+            className="inline-flex h-5 w-5 items-center justify-center rounded-md border border-arc-border bg-arc-bg-elevated text-arc-text-muted transition-colors hover:bg-white/5 hover:text-arc-text"
+        >
+            {copied ? (
+                <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="3"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    className="h-2.5 w-2.5"
+                >
+                    <polyline points="20 6 9 17 4 12" />
+                </svg>
+            ) : (
+                <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    className="h-2.5 w-2.5"
+                >
+                    <rect x="9" y="9" width="13" height="13" rx="2" />
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                </svg>
+            )}
+        </button>
     );
 }
 
