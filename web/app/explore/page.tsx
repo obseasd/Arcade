@@ -163,18 +163,33 @@ export default function ExplorePage() {
         // Curated "incentivized" set surfaces a pulsing LP Boost wrapper on
         // the pair row + sub-rows. Hyperswap-style hand-curated for now;
         // when the indexer ships rule-based incentives this collapses into
-        // a real incentivesOf(token0, token1) lookup. The check uses
-        // lowercased sorted (token0, token1) keys so direction-independent.
+        // a real incentivesOf(token0, token1) lookup.
+        //
+        // Match by EITHER curated address pair (USDC + SeedETH or USDC + WETH
+        // if envs are populated) OR by resolved symbol pair (USDC + ETH /
+        // USDC + WETH). The symbol fallback is what makes this survive when
+        // the env var isn't propagated to the build, when the on-chain "ETH"
+        // is actually WETH, or when the address comparison would otherwise
+        // come back empty. We apply it as a final post-pass over `grouped`
+        // so we only ever evaluate it against resolved row metadata, not
+        // mid-construction state. */
+        const zero = "0x0000000000000000000000000000000000000000";
         const seedEthLc = ADDRESSES.seedEth.toLowerCase();
-        const isIncentivisedKey = (ka: string, kb: string): boolean => {
-            // USDC <> SeedETH on Arc testnet.
-            if (seedEthLc === "0x0000000000000000000000000000000000000000") return false;
-            const sortedA = ka < kb ? ka : kb;
-            const sortedB = ka < kb ? kb : ka;
-            return (
-                (sortedA === USDC_LOWER && sortedB === seedEthLc) ||
-                (sortedA === seedEthLc && sortedB === USDC_LOWER)
-            );
+        const wethLc = ADDRESSES.weth.toLowerCase();
+        const isIncentivisedRow = (row: PoolPairRow): boolean => {
+            const a = row.token0.address.toLowerCase();
+            const b = row.token1.address.toLowerCase();
+            const [lo, hi] = a < b ? [a, b] : [b, a];
+            if (lo === USDC_LOWER) {
+                if (seedEthLc !== zero && hi === seedEthLc) return true;
+                if (wethLc !== zero && hi === wethLc) return true;
+            }
+            const sa = (row.token0.symbol ?? "").toUpperCase();
+            const sb = (row.token1.symbol ?? "").toUpperCase();
+            const symbols = sa < sb ? [sa, sb] : [sb, sa];
+            if (symbols[0] === "ETH" && symbols[1] === "USDC") return true;
+            if (symbols[0] === "USDC" && symbols[1] === "WETH") return true;
+            return false;
         };
 
         if (reservesQ.data) {
@@ -210,7 +225,7 @@ export default function ExplorePage() {
                         subRows: [],
                         tvlUsdc: 0n,
                         aprPct: undefined,
-                        isIncentivized: isIncentivisedKey(ka, kb),
+                        isIncentivized: false,
                     });
                 }
                 const row = grouped.get(key)!;
@@ -240,7 +255,7 @@ export default function ExplorePage() {
                     subRows: [],
                     tvlUsdc: 0n,
                     aprPct: undefined,
-                    isIncentivized: isIncentivisedKey(ka, kb),
+                    isIncentivized: false,
                 });
             }
             const row = grouped.get(key)!;
@@ -274,7 +289,7 @@ export default function ExplorePage() {
                     subRows: [],
                     tvlUsdc: 0n,
                     aprPct: undefined,
-                    isIncentivized: isIncentivisedKey(ka, kb),
+                    isIncentivized: false,
                 });
             }
             const row = grouped.get(key)!;
@@ -299,7 +314,15 @@ export default function ExplorePage() {
             row.tvlUsdc += fp.tvlUsdc;
         }
 
-        return Array.from(grouped.values());
+        // Final pass: resolve LP-Boost incentivisation now that every row
+        // has its resolved symbols + addresses. This is the single source
+        // of truth for `isIncentivized`, replacing the per-call-site
+        // address-only checks that didn't survive env / symbol drift.
+        const out = Array.from(grouped.values());
+        for (const row of out) {
+            row.isIncentivized = isIncentivisedRow(row);
+        }
+        return out;
     }, [v2Pairs, reservesQ.data, v3Tokens, v3FeeOf, v3PoolOf, v3FactoryPools, tokenLookup]);
 
     const filteredRows = useMemo(() => {
