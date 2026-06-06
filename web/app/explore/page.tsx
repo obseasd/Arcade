@@ -28,6 +28,7 @@ import { ADDRESSES, USDC_DECIMALS } from "@/lib/constants";
 import { useLaunchpadTokens } from "@/lib/hooks/useLaunchpadTokens";
 import { useV2Tokens } from "@/lib/hooks/useV2Tokens";
 import { useV3Tokens } from "@/lib/hooks/useV3Tokens";
+import { useV3FactoryPools } from "@/lib/hooks/useV3FactoryPools";
 import { useTokenImage } from "@/lib/hooks/useTokenImage";
 import { TokenIcon } from "@/components/ui/TokenIcon";
 import { SkeletonCard } from "@/components/ui/Skeleton";
@@ -94,6 +95,10 @@ interface PoolSubRow {
 export default function ExplorePage() {
     const { pairs: v2Pairs, tokens: v2Tokens } = useV2Tokens();
     const { tokens: v3Tokens, feeOf: v3FeeOf } = useV3Tokens();
+    // Manually-created V3 pools (not launchpad-driven). USDC/SeedETH style
+    // pools land here so they appear in the explore list alongside the
+    // launchpad's locked-LP CLANKER_V3 pools.
+    const { pools: v3FactoryPools } = useV3FactoryPools();
     const { tokens: launchpadTokens } = useLaunchpadTokens();
 
     const [filter, setFilter] = useState<Filter>("all");
@@ -216,8 +221,51 @@ export default function ExplorePage() {
             });
         }
 
+        // Manually-created V3 pools (factory.getPool enumeration). The same
+        // pair key joins them with their V2 sibling when one exists, so
+        // USDC/SeedETH lands on the same row regardless of which version
+        // the user opened first. Dedup against launchpad CLANKER_V3 pools
+        // by (token, feePip).
+        for (const fp of v3FactoryPools) {
+            const ka = USDC_LOWER < fp.token.toLowerCase() ? USDC_LOWER : fp.token.toLowerCase();
+            const kb = USDC_LOWER < fp.token.toLowerCase() ? fp.token.toLowerCase() : USDC_LOWER;
+            const key = `${ka}|${kb}`;
+            const aMeta = tokenLookup.get(ka);
+            const bMeta = tokenLookup.get(kb);
+
+            if (!grouped.has(key)) {
+                grouped.set(key, {
+                    key,
+                    token0: { address: ka as Address, symbol: aMeta?.symbol ?? "?" },
+                    token1: { address: kb as Address, symbol: bMeta?.symbol ?? "?" },
+                    subRows: [],
+                    tvlUsdc: 0n,
+                    aprPct: undefined,
+                    isIncentivized: false,
+                });
+            }
+            const row = grouped.get(key)!;
+            // Skip dup if the launchpad already surfaced this exact pool at
+            // the same fee tier (matches by sub-row address since the V3
+            // launchpad row's `address` is the underlying token, not the
+            // pool - so compare on token + fee instead).
+            const dup = row.subRows.some(
+                (s) =>
+                    s.version === "v3" &&
+                    s.address.toLowerCase() === fp.token.toLowerCase() &&
+                    s.feeBps === Math.round(fp.feePip / 100),
+            );
+            if (dup) continue;
+            row.subRows.push({
+                address: fp.token,
+                version: "v3",
+                feeBps: Math.round(fp.feePip / 100),
+                tvlUsdc: 0n,
+            });
+        }
+
         return Array.from(grouped.values());
-    }, [v2Pairs, reservesQ.data, v3Tokens, v3FeeOf, tokenLookup]);
+    }, [v2Pairs, reservesQ.data, v3Tokens, v3FeeOf, v3FactoryPools, tokenLookup]);
 
     const filteredRows = useMemo(() => {
         let rows = allRows;

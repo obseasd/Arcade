@@ -1,8 +1,8 @@
 "use client";
 
-import { ExternalLink, Plus } from "lucide-react";
+import { ArrowLeftRight, ExternalLink, Plus } from "lucide-react";
 import Link from "next/link";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { Address, erc20Abi, formatUnits } from "viem";
 import { useAccount, useReadContract, useReadContracts } from "wagmi";
 
@@ -11,7 +11,7 @@ import { ADDRESSES, USDC_DECIMALS } from "@/lib/constants";
 import { arcTestnet } from "@/lib/chains";
 import { TokenIcon } from "@/components/ui/TokenIcon";
 import { tickToPriceWithDecimals } from "@/lib/v3-math";
-import { cn, formatAddress } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 
 const USDC_LOWER = ADDRESSES.usdc.toLowerCase();
 
@@ -180,95 +180,118 @@ export function V3Positions({ emptyState }: { emptyState?: React.ReactNode }) {
 
     return (
         <div className="space-y-3">
-            {positions.map((p) => {
-                const t0Info = tokenInfo[p.token0.toLowerCase()] ?? {
-                    symbol: "?",
-                    decimals: 18,
-                };
-                const t1Info = tokenInfo[p.token1.toLowerCase()] ?? {
-                    symbol: "?",
-                    decimals: 18,
-                };
-                const minPrice = tickToPriceWithDecimals(
-                    p.tickLower,
-                    t0Info.decimals,
-                    t1Info.decimals,
-                );
-                const maxPrice = tickToPriceWithDecimals(
-                    p.tickUpper,
-                    t0Info.decimals,
-                    t1Info.decimals,
-                );
-                const explorerUrl =
-                    arcTestnet.blockExplorers?.default.url ??
-                    "https://testnet.arcscan.app";
+            {positions.map((p) => (
+                <V3PositionRow
+                    key={p.tokenId.toString()}
+                    position={p}
+                    tokenInfo={tokenInfo}
+                />
+            ))}
+        </div>
+    );
+}
 
-                return (
-                    <div key={p.tokenId.toString()} className="arc-card p-4">
-                        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                            <div className="flex items-center gap-3">
-                                <div className="flex -space-x-2">
-                                    <TokenIcon symbol={t0Info.symbol} size={36} />
-                                    <TokenIcon symbol={t1Info.symbol} size={36} />
-                                </div>
-                                <div>
-                                    <div className="flex items-center gap-2">
-                                        <span className="text-sm font-semibold">
-                                            {t0Info.symbol} / {t1Info.symbol}
-                                        </span>
-                                        <span className="rounded-md border border-arc-cta-hover/40 bg-arc-cta-hover/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-arc-cta-hover">
-                                            v3
-                                        </span>
-                                        <span className="rounded-md border border-arc-success/40 bg-arc-success/10 px-1.5 py-0.5 text-[10px] font-semibold text-arc-success">
-                                            {(p.fee / 10000).toFixed(2)}%
-                                        </span>
-                                    </div>
-                                    <div className="mt-1 text-xs text-arc-text-muted">
-                                        Token ID #{p.tokenId.toString()} •
-                                        Range {fmtPrice(minPrice)} - {fmtPrice(maxPrice)}{" "}
-                                        {t1Info.symbol}/{t0Info.symbol}
-                                    </div>
-                                </div>
-                            </div>
-                            <div className="flex flex-wrap items-center gap-2">
-                                <a
-                                    href={`${explorerUrl}/token/${ADDRESSES.v3PositionManager}?a=${p.tokenId}`}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="inline-flex items-center gap-1 rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-1.5 text-xs font-medium text-arc-text transition-colors hover:bg-white/5"
-                                >
-                                    NFT <ExternalLink className="h-3 w-3" />
-                                </a>
-                                <Link
-                                    href={`/positions/add?type=v3&t0=${p.token0}&t1=${p.token1}&fee=${p.fee / 100}`}
-                                    className="inline-flex items-center gap-1 rounded-xl border border-arc-cta-hover/40 bg-arc-cta-hover/10 px-3 py-1.5 text-xs font-semibold text-arc-cta-hover transition-colors hover:bg-arc-cta-hover/20"
-                                >
-                                    <Plus className="h-3 w-3" />
-                                    Add liquidity
-                                </Link>
-                            </div>
+interface V3PositionRowProps {
+    position: {
+        tokenId: bigint;
+        token0: Address;
+        token1: Address;
+        fee: number;
+        tickLower: number;
+        tickUpper: number;
+        liquidity: bigint;
+        tokensOwed0: bigint;
+        tokensOwed1: bigint;
+    };
+    tokenInfo: Record<string, { symbol: string; decimals: number }>;
+}
+
+function V3PositionRow({ position: p, tokenInfo }: V3PositionRowProps) {
+    const t0Info = tokenInfo[p.token0.toLowerCase()] ?? { symbol: "?", decimals: 18 };
+    const t1Info = tokenInfo[p.token1.toLowerCase()] ?? { symbol: "?", decimals: 18 };
+    const minPrice = tickToPriceWithDecimals(p.tickLower, t0Info.decimals, t1Info.decimals);
+    const maxPrice = tickToPriceWithDecimals(p.tickUpper, t0Info.decimals, t1Info.decimals);
+    const explorerUrl = arcTestnet.blockExplorers?.default.url ?? "https://testnet.arcscan.app";
+
+    // Range display is `t1/t0` by default (the canonical V3 tick math). The
+    // user can flip it by clicking the pair label so they read the range in
+    // whichever side feels native (eg "USDC per ETH" instead of "ETH per
+    // USDC"). Inverse swaps numerator/denominator AND symbols, and also
+    // flips min<->max because 1/min > 1/max.
+    const [inverted, setInverted] = useState(false);
+    const displayMin = inverted ? (maxPrice > 0 ? 1 / maxPrice : 0) : minPrice;
+    const displayMax = inverted ? (minPrice > 0 ? 1 / minPrice : 0) : maxPrice;
+    const numerator = inverted ? t0Info.symbol : t1Info.symbol;
+    const denominator = inverted ? t1Info.symbol : t0Info.symbol;
+
+    return (
+        <div className="arc-card p-4">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex items-center gap-3">
+                    <div className="flex -space-x-2">
+                        <TokenIcon symbol={t0Info.symbol} size={36} />
+                        <TokenIcon symbol={t1Info.symbol} size={36} />
+                    </div>
+                    <div>
+                        <div className="flex items-center gap-2">
+                            <button
+                                onClick={() => setInverted((v) => !v)}
+                                title="Invert price units"
+                                className="group inline-flex items-center gap-1 text-sm font-semibold text-arc-text transition-colors hover:text-arc-cta-hover"
+                            >
+                                {t0Info.symbol} / {t1Info.symbol}
+                                <ArrowLeftRight className="h-3 w-3 opacity-0 transition-opacity group-hover:opacity-70" />
+                            </button>
+                            <span className="rounded-md border border-arc-cta-hover/40 bg-arc-cta-hover/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-arc-cta-hover">
+                                v3
+                            </span>
+                            <span className="rounded-md border border-arc-success/40 bg-arc-success/10 px-1.5 py-0.5 text-[10px] font-semibold text-arc-success">
+                                {(p.fee / 10000).toFixed(2)}%
+                            </span>
                         </div>
-                        <div className="mt-3 grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
-                            <Stat
-                                label="Liquidity"
-                                value={p.liquidity === 0n ? "0" : abbreviate(p.liquidity)}
-                            />
-                            <Stat
-                                label={`Owed ${t0Info.symbol}`}
-                                value={formatTok(p.tokensOwed0, t0Info.decimals)}
-                            />
-                            <Stat
-                                label={`Owed ${t1Info.symbol}`}
-                                value={formatTok(p.tokensOwed1, t1Info.decimals)}
-                            />
-                            <Stat
-                                label="NPM"
-                                value={formatAddress(ADDRESSES.v3PositionManager)}
-                            />
+                        <div className="mt-1 text-xs text-arc-text-muted">
+                            Range {fmtPrice(displayMin)} - {fmtPrice(displayMax)}{" "}
+                            {numerator}/{denominator}
                         </div>
                     </div>
-                );
-            })}
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                    <a
+                        href={`${explorerUrl}/token/${ADDRESSES.v3PositionManager}?a=${p.tokenId}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-1.5 text-xs font-medium text-arc-text transition-colors hover:bg-white/5"
+                    >
+                        NFT #{p.tokenId.toString()} <ExternalLink className="h-3 w-3" />
+                    </a>
+                    <Link
+                        href={`/positions/add?type=v3&t0=${p.token0}&t1=${p.token1}&fee=${p.fee / 100}`}
+                        className="inline-flex items-center gap-1 rounded-xl border border-arc-cta-hover/40 bg-arc-cta-hover/10 px-3 py-1.5 text-xs font-semibold text-arc-cta-hover transition-colors hover:bg-arc-cta-hover/20"
+                    >
+                        <Plus className="h-3 w-3" />
+                        Add liquidity
+                    </Link>
+                </div>
+            </div>
+            {/* Three-stat strip mirrors the V2 row's underlying-amount footer.
+                Liquidity is raw V3 L units (uint128) -- it has no direct
+                token meaning, it scales the position's contribution to the
+                pool at every price inside the range. Uncollected fees ("Owed")
+                start at 0 and tick up as swaps hit the range. */}
+            <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
+                <Stat
+                    label="Liquidity (L)"
+                    value={p.liquidity === 0n ? "0" : abbreviate(p.liquidity)}
+                />
+                <Stat
+                    label={`Unclaimed ${t0Info.symbol}`}
+                    value={formatTok(p.tokensOwed0, t0Info.decimals)}
+                />
+                <Stat
+                    label={`Unclaimed ${t1Info.symbol}`}
+                    value={formatTok(p.tokensOwed1, t1Info.decimals)}
+                />
+            </div>
         </div>
     );
 }
