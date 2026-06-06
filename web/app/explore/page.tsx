@@ -832,8 +832,13 @@ function PoolPairRowCard({
                 prior spec (already +10% over the original 1.1rem). Metrics
                 column gets text-center so the values line up under their
                 column headers regardless of pair-name length. */}
-            <div className="flex flex-col items-stretch gap-3 p-[1.331rem] sm:flex-row sm:items-center">
-                <div className="flex min-w-0 flex-1 items-center gap-3">
+            {/* Row header. 3-column CSS grid: tokens block (pinned width on
+                sm+ so the metrics align consistently across rows), metrics
+                block (1fr, centered), actions block (auto, pinned so the
+                Show/Hide toggle width change doesn't shift Swap). Mirrors
+                Hyperswap's pair-row spec. */}
+            <div className="flex flex-col items-stretch gap-3 p-[1.331rem] sm:grid sm:grid-cols-[16rem_1fr_14.5rem] sm:items-center sm:gap-4">
+                <div className="flex min-w-0 items-center gap-3">
                     <div className="flex -space-x-4">
                         <TokenIcon
                             symbol={row.token0.symbol}
@@ -863,18 +868,13 @@ function PoolPairRowCard({
                         )}
                     </div>
                 </div>
-                <div className="grid flex-1 grid-cols-2 gap-2 sm:grid-cols-4">
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                     <Metric label="Best APR" value="—" pendingIndexer center />
                     <Metric label="Daily Fees" value="—" pendingIndexer center />
                     <Metric label="TVL" value={tvlLabel} center />
                     <Metric label="1D Volume" value="—" pendingIndexer center />
                 </div>
-                {/* Pinned-width action column so the Show/Hide pools toggle
-                    flipping between "Show all pools (N)" and "Hide pools"
-                    doesn't push the Swap button around. min-w-[14.5rem]
-                    fits the longest possible "Show all pools (NN)" label;
-                    the inner row stays right-aligned. */}
-                <div className="flex shrink-0 items-center justify-end gap-2 sm:min-w-[14.5rem]">
+                <div className="flex items-center justify-end gap-2">
                     <Link
                         href="/swap"
                         className="inline-flex items-center gap-1.5 rounded-xl border border-arc-border bg-sky-400/10 px-3 py-[0.575rem] text-xs font-semibold text-sky-400 transition-colors hover:bg-sky-400/20"
@@ -899,12 +899,20 @@ function PoolPairRowCard({
 
             {expanded && (
                 <div className="border-t border-arc-border bg-white/[0.015]">
-                    <div className="hidden grid-cols-[1fr_repeat(4,_1fr)_auto] gap-3 px-4 py-2 text-[10px] uppercase tracking-wider text-arc-text-faint sm:grid">
-                        <span>Pools ({subCount})</span>
-                        <span className="text-center">APR</span>
-                        <span className="text-center">Daily Fees</span>
-                        <span className="text-center">TVL</span>
-                        <span className="text-center">1D Volume</span>
+                    {/* Sub-row header pill - dark background lifts the column
+                        labels off the row background so they read as a header
+                        strip (Hyperswap pattern). 3-column grid matches the
+                        outer row spec so column centers line up exactly. */}
+                    <div className="hidden grid-cols-[16rem_1fr_14.5rem] gap-4 rounded-xl border border-arc-border bg-arc-bg-elevated/60 px-4 py-2.5 text-[10px] uppercase tracking-wider text-arc-text-muted sm:grid sm:mx-4 sm:mt-3">
+                        <span className="text-sm font-semibold text-arc-text">
+                            Pools ({subCount})
+                        </span>
+                        <div className="grid grid-cols-4 gap-2">
+                            <span className="text-center">APR</span>
+                            <span className="text-center">Daily Fees</span>
+                            <span className="text-center">TVL</span>
+                            <span className="text-center">1D Volume</span>
+                        </div>
                         <span />
                     </div>
                     {row.subRows.map((sub) => {
@@ -956,7 +964,7 @@ function PoolSubRowCard({
     const feeLabel = `${sub.feeBps / 100}%`;
     const tvlLabel = formatUsd(sub.tvlUsdc);
     return (
-        <div className="grid grid-cols-1 items-center gap-3 px-4 py-3 sm:grid-cols-[1fr_repeat(4,_1fr)_auto]">
+        <div className="grid grid-cols-1 items-center gap-3 px-4 py-3 sm:grid-cols-[16rem_1fr_14.5rem] sm:gap-4">
             <div className="flex items-center gap-3">
                 <div className="flex -space-x-3">
                     <TokenIcon symbol={token0.symbol} image={image0} size={26} />
@@ -983,10 +991,6 @@ function PoolSubRowCard({
                         <span className="rounded-md border border-arc-border bg-arc-bg-elevated px-1 py-0.5 text-[9px] text-arc-text-muted">
                             {feeLabel}
                         </span>
-                        {/* Superlative chips. Only Best TVL is computable
-                            today (APR / Volume await the indexer). Each
-                            chip uses its own colour pulled from the design
-                            system. */}
                         {isBestTvl && (
                             <span className="rounded-md border border-purple-400/40 bg-purple-400/10 px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-purple-300">
                                 Best TVL
@@ -995,10 +999,12 @@ function PoolSubRowCard({
                     </div>
                 </div>
             </div>
-            <span className="text-center text-xs tabular-nums text-arc-text-faint sm:text-sm">—</span>
-            <span className="text-center text-xs tabular-nums text-arc-text-faint sm:text-sm">—</span>
-            <span className="text-center text-xs tabular-nums sm:text-sm">{tvlLabel}</span>
-            <span className="text-center text-xs tabular-nums text-arc-text-faint sm:text-sm">—</span>
+            <div className="grid grid-cols-4 gap-2 text-xs sm:text-sm">
+                <span className="text-center tabular-nums text-arc-text-faint">—</span>
+                <span className="text-center tabular-nums text-arc-text-faint">—</span>
+                <span className="text-center tabular-nums">{tvlLabel}</span>
+                <span className="text-center tabular-nums text-arc-text-faint">—</span>
+            </div>
             <Link
                 href={`/pool/${sub.poolAddress}`}
                 className="inline-flex items-center justify-end gap-1 rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-1.5 text-[11px] font-medium text-arc-text transition-colors hover:bg-white/5"

@@ -1,5 +1,7 @@
 "use client";
 
+import { ChevronDown, ExternalLink, Pencil, Plus, Settings2 } from "lucide-react";
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { Address, erc20Abi, formatUnits } from "viem";
 import { useAccount, usePublicClient, useReadContract, useReadContracts, useWriteContract } from "wagmi";
@@ -9,7 +11,9 @@ import { arcTestnet } from "@/lib/chains";
 import { useApproveIfNeeded } from "@/lib/hooks/useApproveIfNeeded";
 import { pushToast } from "@/lib/toast";
 import { TokenIcon } from "@/components/ui/TokenIcon";
-import { formatToken, formatUSDC } from "@/lib/utils";
+import { cn, formatToken, formatUSDC } from "@/lib/utils";
+
+const USDC_LOWER = ADDRESSES.usdc.toLowerCase();
 
 // TxStatus / TxState are no longer used here - feedback now lives in the
 // bottom-right toaster (matches the add-liquidity flow).
@@ -304,33 +308,152 @@ function PositionRow({
   const fmt = (b: bigint, dec: number) =>
     dec === USDC_DECIMALS ? formatUSDC(b, dec, 2) : formatToken(b, dec, 4);
 
+  // USD valuation - works when one side is USDC (V2 reserves directly
+  // give us the price). Falls back to undefined for exotic non-USDC pairs.
+  const t0IsUsdc = p.token0.toLowerCase() === USDC_LOWER;
+  const t1IsUsdc = p.token1.toLowerCase() === USDC_LOWER;
+  const r0Human = Number(formatUnits(p.reserve0, p.decimals0));
+  const r1Human = Number(formatUnits(p.reserve1, p.decimals1));
+  const a0Human = Number(formatUnits(amt0, p.decimals0));
+  const a1Human = Number(formatUnits(amt1, p.decimals1));
+  const usdcPerT0 = t0IsUsdc ? 1 : t1IsUsdc && r0Human > 0 ? r1Human / r0Human : undefined;
+  const usdcPerT1 = t1IsUsdc ? 1 : t0IsUsdc && r1Human > 0 ? r0Human / r1Human : undefined;
+  const usd0 = usdcPerT0 !== undefined ? a0Human * usdcPerT0 : undefined;
+  const usd1 = usdcPerT1 !== undefined ? a1Human * usdcPerT1 : undefined;
+  const usdTotal = usd0 !== undefined && usd1 !== undefined ? usd0 + usd1 : undefined;
+  const pct0 = usdTotal && usdTotal > 0 && usd0 !== undefined ? (usd0 / usdTotal) * 100 : undefined;
+  const pct1 = usdTotal && usdTotal > 0 && usd1 !== undefined ? (usd1 / usdTotal) * 100 : undefined;
+
+  const explorerUrl = arcTestnet.blockExplorers?.default.url ?? "https://testnet.arcscan.app";
+
   return (
-    <div className="arc-card overflow-hidden">
-      <button onClick={onToggle} className="flex w-full items-center justify-between p-4 hover:bg-arc-surface">
+    <div className="arc-card p-4">
+      {/* Header row - matches V3 layout: pair label + version/fee badges
+          on the left, Edit button (explorer link) on the right. Drops the
+          'In range' badge (V2 has no concept of range) and the ID chip
+          (V2 LPs aren't NFTs). */}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="flex items-center gap-3">
           <div className="flex -space-x-2">
-            <TokenIcon symbol={p.symbol0} size={32} />
-            <TokenIcon symbol={p.symbol1} size={32} className="ring-2 ring-arc-surface" />
+            <TokenIcon symbol={p.symbol0} size={40} />
+            <TokenIcon symbol={p.symbol1} size={40} />
           </div>
-          <div className="text-left">
-            <div className="font-medium">
-              {p.symbol0} / {p.symbol1}
+          <div>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-base font-semibold text-arc-text">
+                {p.symbol0} / {p.symbol1}
+              </span>
+              <span className="rounded-md border border-cyan-400/40 bg-cyan-400/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-cyan-400">
+                v2
+              </span>
+              <span className="rounded-md border border-arc-success/40 bg-arc-success/10 px-1.5 py-0.5 text-[10px] font-semibold text-arc-success">
+                0.30%
+              </span>
             </div>
-            <div className="text-xs text-arc-text-muted">Share: {sharePct.toFixed(4)}%</div>
+            <div className="mt-1 text-[11px] text-arc-text-muted">
+              Share: <span className="tabular-nums text-arc-text">{sharePct.toFixed(4)}%</span>
+            </div>
           </div>
         </div>
-        <div className="text-right text-sm">
-          <div className="text-arc-text-muted">Underlying</div>
-          <div className="tabular-nums">
-            {fmt(amt0, p.decimals0)} {p.symbol0} · {fmt(amt1, p.decimals1)} {p.symbol1}
+        <a
+          href={`${explorerUrl}/address/${p.pair}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          title="View pair on the explorer"
+          className="inline-flex items-center gap-1 self-start rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-1.5 text-xs font-medium text-arc-text transition-colors hover:bg-white/5"
+        >
+          <Pencil className="h-3 w-3" />
+          Edit
+          <ExternalLink className="h-2.5 w-2.5 opacity-60" />
+        </a>
+      </div>
+
+      {/* Pool-level metrics row. APR / 1D Volume / Total TVL placeholders
+          until the indexer (ArcLens) ships - same layout as V3 cards. */}
+      <div className="mt-3 grid grid-cols-3 gap-3 text-xs">
+        <div>
+          <div className="text-[10px] uppercase tracking-wider text-arc-text-faint">APR</div>
+          <div className="mt-0.5 text-sm font-semibold tabular-nums text-arc-text-faint">—</div>
+        </div>
+        <div>
+          <div className="text-[10px] uppercase tracking-wider text-arc-text-faint">1D Volume</div>
+          <div className="mt-0.5 text-sm font-semibold tabular-nums text-arc-text-faint">—</div>
+        </div>
+        <div>
+          <div className="text-[10px] uppercase tracking-wider text-arc-text-faint">Total TVL</div>
+          <div className="mt-0.5 text-sm font-semibold tabular-nums text-arc-text-faint">—</div>
+        </div>
+      </div>
+
+      {/* Your reserve + per-leg % chips - same shell as the V3 card so
+          the two tabs visually match. */}
+      <div className="mt-3 rounded-xl border border-arc-border bg-white/[0.015] p-3">
+        <div className="mb-1 flex items-center justify-between">
+          <div className="text-[10px] uppercase tracking-wider text-arc-text-faint">
+            Your reserve
+          </div>
+          {usdTotal !== undefined && (
+            <div className="text-[11px] font-semibold text-arc-text">{fmtUsd(usdTotal)}</div>
+          )}
+        </div>
+        <div className="grid grid-cols-1 gap-1.5 text-sm sm:grid-cols-2">
+          <div className="inline-flex items-center gap-2">
+            <TokenIcon symbol={p.symbol0} size={20} />
+            <span className="tabular-nums text-arc-text">{fmt(amt0, p.decimals0)}</span>
+            <span className="text-arc-text-muted">{p.symbol0}</span>
+            {pct0 !== undefined && (
+              <span className="rounded-md border border-arc-success/40 bg-arc-success/10 px-1.5 py-0.5 text-[10px] font-semibold text-arc-success">
+                {pct0.toFixed(2)}%
+              </span>
+            )}
+          </div>
+          <div className="inline-flex items-center gap-2">
+            <TokenIcon symbol={p.symbol1} size={20} />
+            <span className="tabular-nums text-arc-text">{fmt(amt1, p.decimals1)}</span>
+            <span className="text-arc-text-muted">{p.symbol1}</span>
+            {pct1 !== undefined && (
+              <span className="rounded-md border border-arc-success/40 bg-arc-success/10 px-1.5 py-0.5 text-[10px] font-semibold text-arc-success">
+                {pct1.toFixed(2)}%
+              </span>
+            )}
           </div>
         </div>
-      </button>
+      </div>
+
+      {/* Bottom action bar: Manage (toggles inline remove panel) + Add
+          Liq (routes to /positions/add). Same shape + buttons as V3 so
+          the two cards feel like one component. */}
+      <div className="mt-3 grid grid-cols-2 gap-2">
+        <button
+          onClick={onToggle}
+          className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2 text-xs font-semibold text-arc-text transition-colors hover:bg-white/5"
+        >
+          <Settings2 className="h-3.5 w-3.5" />
+          {expanded ? "Hide" : "Manage"}
+          <ChevronDown
+            className={cn(
+              "h-3.5 w-3.5 transition-transform",
+              expanded && "rotate-180",
+            )}
+          />
+        </button>
+        <Link
+          href={`/positions/add?type=amm&t0=${p.token0}&t1=${p.token1}`}
+          className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-arc-cta-hover/40 bg-arc-cta-hover/10 px-3 py-2 text-xs font-semibold text-arc-cta-hover transition-colors hover:bg-arc-cta-hover/20"
+        >
+          <Plus className="h-3.5 w-3.5" />
+          Add Liq.
+        </Link>
+      </div>
+
+      {/* Remove panel - revealed by Manage. Uses the same slider + chip
+          presets + slippage selector as before; just now sits inside the
+          new card shell. */}
       {expanded && (
-        <div className="border-t border-arc-border bg-arc-bg-elevated p-4">
+        <div className="mt-3 rounded-xl border border-arc-border bg-arc-bg-elevated/60 p-3">
           <div className="mb-2 flex items-center justify-between text-sm">
-            <span>Remove</span>
-            <span className="tabular-nums">{pct}%</span>
+            <span className="font-semibold">Remove liquidity</span>
+            <span className="tabular-nums text-arc-text-muted">{pct}%</span>
           </div>
           <input
             type="range"
@@ -345,15 +468,17 @@ function PositionRow({
               <button
                 key={v}
                 onClick={() => setPct(v)}
-                className="flex-1 rounded-lg border border-arc-border bg-arc-surface py-1 text-xs hover:bg-arc-surface-2"
+                className={cn(
+                  "flex-1 rounded-lg border py-1 text-xs transition-colors",
+                  pct === v
+                    ? "border-arc-cta-hover bg-arc-cta-hover/15 text-arc-text"
+                    : "border-arc-border bg-arc-surface text-arc-text-muted hover:text-arc-text",
+                )}
               >
                 {v}%
               </button>
             ))}
           </div>
-          {/* Slippage selector. The 1% default we had was tight enough to
-              fail when reserves moved a hair between read and exec; default
-              here is 0.5% but the user can bump to 1% / 3% for sketchy pools. */}
           <div className="mt-3 flex items-center justify-between gap-2 text-xs">
             <span className="text-arc-text-muted">Slippage tolerance</span>
             <div className="flex items-center gap-1">
@@ -365,12 +490,12 @@ function PositionRow({
                 <button
                   key={opt.bps}
                   onClick={() => setSlippageBps(opt.bps)}
-                  className={
-                    "rounded-md px-2 py-0.5 text-[11px] font-semibold transition-colors " +
-                    (slippageBps === opt.bps
+                  className={cn(
+                    "rounded-md px-2 py-0.5 text-[11px] font-semibold transition-colors",
+                    slippageBps === opt.bps
                       ? "bg-arc-cta text-white"
-                      : "bg-arc-surface text-arc-text-muted hover:text-arc-text")
-                  }
+                      : "bg-arc-surface text-arc-text-muted hover:text-arc-text",
+                  )}
                 >
                   {opt.label}
                 </button>
@@ -378,18 +503,27 @@ function PositionRow({
             </div>
           </div>
           <div className="mt-3 text-xs text-arc-text-muted">
-            You will receive at least <span className="font-semibold text-arc-text">{(100 - slippageBps / 100).toFixed(2)}%</span> of:
+            You will receive at least{" "}
+            <span className="font-semibold text-arc-text">
+              {(100 - slippageBps / 100).toFixed(2)}%
+            </span>{" "}
+            of:
             <div
               className="mt-1 tabular-nums text-arc-text"
-              title="Minimum guaranteed by your slippage tolerance. Anything above this lands in your wallet; below it the tx reverts so you do not get rugged on the LP burn."
+              title="Minimum guaranteed by your slippage tolerance. Anything above this lands in your wallet; below it the tx reverts."
             >
               {fmt(expected0, p.decimals0)} {p.symbol0} + {fmt(expected1, p.decimals1)} {p.symbol1}
             </div>
           </div>
           <button
             onClick={onRemove}
-            className="arc-button-secondary mt-3 w-full py-2 text-sm"
             disabled={removing}
+            className={cn(
+              "mt-3 w-full rounded-xl py-2.5 text-sm font-semibold transition-colors",
+              removing
+                ? "cursor-not-allowed bg-arc-cta-disabled text-arc-text-muted"
+                : "bg-arc-cta text-white hover:bg-arc-cta-hover",
+            )}
           >
             {removing ? "Removing…" : "Remove liquidity"}
           </button>
@@ -397,4 +531,10 @@ function PositionRow({
       )}
     </div>
   );
+}
+
+function fmtUsd(n: number): string {
+  if (n === 0) return "$0";
+  if (n < 0.01) return "<$0.01";
+  return `$${n.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
 }
