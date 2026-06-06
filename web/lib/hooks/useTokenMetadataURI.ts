@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Address, parseAbiItem } from "viem";
 import { usePublicClient } from "wagmi";
 import { ADDRESSES } from "@/lib/constants";
@@ -18,74 +18,59 @@ const MAX_BACK = 500_000n;
  * no longer stores `metadataURI` in state (saves ~5M gas per launch), so this
  * is the canonical way to fetch it.
  *
- * Cached per token in a module-level Map: a token's metadataURI never changes
- * after launch, so we never re-fetch it.
+ * Backed by React Query, so multiple components asking for the same token's
+ * URI share one scan + one cache entry. URIs are immutable post-launch, so
+ * staleTime is Infinity - we never refetch.
  */
-const cache = new Map<string, string>();
-
 export function useTokenMetadataURI(token: Address | undefined): {
   metadataURI: string | undefined;
   isLoading: boolean;
 } {
   const publicClient = usePublicClient();
-  const [uri, setUri] = useState<string | undefined>(
-    token ? cache.get(token.toLowerCase()) : undefined,
-  );
-  const [isLoading, setIsLoading] = useState(false);
+  const tokenKey = token?.toLowerCase();
 
-  useEffect(() => {
-    if (!publicClient || !token) {
-      setUri(undefined);
-      setIsLoading(false);
-      return;
-    }
-    const cached = cache.get(token.toLowerCase());
-    if (cached !== undefined) {
-      setUri(cached);
-      setIsLoading(false);
-      return;
-    }
-    let cancelled = false;
-    setIsLoading(true);
-    (async () => {
-      try {
-        const latest = await publicClient.getBlockNumber();
-        let end = latest;
-        let walked = 0n;
-        while (walked < MAX_BACK) {
-          const start = end > CHUNK - 1n ? end - (CHUNK - 1n) : 0n;
-          try {
-            const logs = await publicClient.getLogs({
-              address: ADDRESSES.launchpad,
-              event: TOKEN_CREATED_EVT,
-              args: { token },
-              fromBlock: start,
-              toBlock: end,
-            });
-            if (logs.length > 0) {
-              const value = (logs[0].args.metadataURI as string) ?? "";
-              cache.set(token.toLowerCase(), value);
-              if (!cancelled) setUri(value);
-              return;
-            }
-          } catch {
-            break;
+  const { data, isLoading, isFetching } = useQuery<string | undefined>({
+    queryKey: ["arcade", "tokenMetadataURI", tokenKey],
+    enabled: !!publicClient && !!tokenKey,
+    // URIs never change after the token is launched, so we want this in
+    // cache forever. RQ defaults to a 5-minute stale window; Infinity
+    // turns that off so the query never re-runs for the same token.
+    staleTime: Infinity,
+    gcTime: Infinity,
+    // Chunked walk from head backwards. We early-exit the second a single
+    // TokenCreated for `token` is found - one per token by contract design.
+    queryFn: async ({ signal }) => {
+      if (!publicClient || !token) return undefined;
+      const latest = await publicClient.getBlockNumber();
+      let end = latest;
+      let walked = 0n;
+      while (walked < MAX_BACK) {
+        if (signal.aborted) return undefined;
+        const start = end > CHUNK - 1n ? end - (CHUNK - 1n) : 0n;
+        try {
+          const logs = await publicClient.getLogs({
+            address: ADDRESSES.launchpad,
+            event: TOKEN_CREATED_EVT,
+            args: { token },
+            fromBlock: start,
+            toBlock: end,
+          });
+          if (logs.length > 0) {
+            return (logs[0].args.metadataURI as string) ?? "";
           }
-          if (start === 0n) break;
-          walked += end - start + 1n;
-          end = start - 1n;
+        } catch {
+          // RPC range cap hit or transient failure; bail and return empty
+          // rather than spin forever - the cache TTL is Infinity so a
+          // future page navigation will retry from scratch.
+          break;
         }
-        if (!cancelled) setUri("");
-      } catch {
-        if (!cancelled) setUri(undefined);
-      } finally {
-        if (!cancelled) setIsLoading(false);
+        if (start === 0n) break;
+        walked += end - start + 1n;
+        end = start - 1n;
       }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [publicClient, token]);
+      return "";
+    },
+  });
 
-  return { metadataURI: uri, isLoading };
+  return { metadataURI: data, isLoading: isLoading || isFetching };
 }

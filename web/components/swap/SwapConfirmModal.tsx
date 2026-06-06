@@ -61,7 +61,7 @@ export function SwapConfirmModal({
       closeOnBackdrop={!busy}
       closeOnEscape={!busy}
       widthClassName="max-w-md"
-      backdropClassName="bg-black/30 backdrop-blur-sm"
+      backdropClassName="backdrop:bg-black/30 backdrop:backdrop-blur-sm"
       className={
         dangerous
           ? "border-arc-danger/60 bg-black/45 backdrop-blur-2xl shadow-[0_0_40px_-10px_rgba(239,68,68,0.4)]"

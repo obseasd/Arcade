@@ -76,7 +76,7 @@ export function RecipientEditModal({
       open={open}
       onClose={onClose}
       widthClassName="max-w-md"
-      backdropClassName="bg-black/30 backdrop-blur-sm"
+      backdropClassName="backdrop:bg-black/30 backdrop:backdrop-blur-sm"
       className="border-arc-border bg-black/45 backdrop-blur-2xl"
     >
       <div className="flex items-center justify-between border-b border-arc-border px-5 py-4">

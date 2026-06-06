@@ -124,7 +124,7 @@ export function CreatePoolModal({
                 open={open}
                 onClose={onClose}
                 widthClassName="max-w-[25.2rem]"
-                backdropClassName="bg-black/40 backdrop-blur-md"
+                backdropClassName="backdrop:bg-black/40 backdrop:backdrop-blur-md"
                 className="border-arc-border bg-black/40 backdrop-blur-2xl"
             >
                 <div className="flex items-center justify-between px-5 pb-3 pt-5">

@@ -327,7 +327,7 @@ export function ClaimAllFeesModal({ open, onClose, onSuccess }: Props) {
             open={open}
             onClose={onClose}
             widthClassName="max-w-lg"
-            backdropClassName="bg-black/40 backdrop-blur-md"
+            backdropClassName="backdrop:bg-black/40 backdrop:backdrop-blur-md"
             className="border-arc-border bg-black/55 backdrop-blur-2xl"
         >
             <div className="flex items-center justify-between border-b border-arc-border px-5 py-4">
