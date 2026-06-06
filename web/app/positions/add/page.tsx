@@ -261,9 +261,22 @@ function AddLiquidityInner() {
             let hash: `0x${string}`;
             if (mode === "single") {
                 // Single-asset zap: approve the zap helper and submit zapIn.
-                // amountLpMin uses the quote with the user's slippage tolerance
-                // applied so a swap-side surprise reverts before LP mint.
+                // amountOtherMin is the audit HIGH fix - the contract no
+                // longer attempts to derive a sandwich floor from in-tx
+                // reserves (that was structurally a no-op); we MUST compute
+                // it off-chain from the live quote and pass it as the
+                // router's amountOutMin. amountLpMin stays as the secondary
+                // guard on the mint step.
                 await approveAForZap(aRaw);
+                const otherMin =
+                    zapQuote && zapQuote[1] > 0n
+                        ? (zapQuote[1] * slipDen) / 10_000n
+                        : 0n;
+                if (otherMin === 0n) {
+                    throw new Error(
+                        "Live zap quote unavailable. Refresh and retry once the swap preview lands.",
+                    );
+                }
                 const lpMin =
                     zapQuote && zapQuote[2] > 0n
                         ? (zapQuote[2] * slipDen) / 10_000n
@@ -276,6 +289,7 @@ function AddLiquidityInner() {
                         tokenA.address,
                         aRaw,
                         tokenB.address,
+                        otherMin,
                         lpMin,
                         account,
                         deadline,

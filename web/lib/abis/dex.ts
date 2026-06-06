@@ -172,6 +172,10 @@ export const ZAP_ABI = [
       { name: "tokenIn", type: "address" },
       { name: "amountIn", type: "uint256" },
       { name: "tokenOther", type: "address" },
+      // Caller-signed sandwich defense. Must be derived off-chain from
+      // pre-tx reserves; the contract reverts if the swap leg produces
+      // less than this. Audit HIGH fix 2026-06-06.
+      { name: "amountOtherMin", type: "uint256" },
       { name: "amountLpMin", type: "uint256" },
       { name: "to", type: "address" },
       { name: "deadline", type: "uint256" },
