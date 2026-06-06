@@ -94,7 +94,7 @@ export function BridgeHistory() {
 
   return (
     <div className="mt-5 rounded-2xl border border-arc-border bg-black/15 backdrop-blur-xl">
-      <button
+      <button type="button"
         onClick={() => setExpanded((v) => !v)}
         className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left"
       >
@@ -164,7 +164,7 @@ function Row({ entry, onDismiss }: { entry: HistoryEntry; onDismiss: () => void 
       {/* Dismiss: hide a stuck entry locally. Useful when the burn was made
           before the burnTxHash auto-patch shipped and the entry is stranded
           as "pending" even though the user has already minted. */}
-      <button
+      <button type="button"
         onClick={onDismiss}
         aria-label="Dismiss"
         className="text-arc-text-faint hover:text-arc-danger"

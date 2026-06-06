@@ -137,7 +137,7 @@ export function HeaderWalletWidget() {
 
                 if (!connected) {
                     return (
-                        <button onClick={openConnectModal} className="arc-button-primary px-4 py-2 text-sm">
+                        <button type="button" onClick={openConnectModal} className="arc-button-primary px-4 py-2 text-sm">
                             Connect Wallet
                         </button>
                     );
@@ -145,7 +145,7 @@ export function HeaderWalletWidget() {
 
                 if (chain.unsupported) {
                     return (
-                        <button
+                        <button type="button"
                             onClick={openChainModal}
                             className="rounded-xl border border-arc-danger/40 bg-arc-danger/10 px-3 py-2 text-sm font-medium text-arc-danger"
                         >
@@ -175,7 +175,7 @@ export function HeaderWalletWidget() {
 
                             <div className="my-2 w-0.5 rounded-full bg-arc-gray/60" />
 
-                            <button
+                            <button type="button"
                                 onClick={() => setMenuOpen((v) => !v)}
                                 className="flex items-center gap-2 px-3 transition-colors hover:bg-white/5"
                             >
@@ -198,7 +198,7 @@ export function HeaderWalletWidget() {
                             <div className="absolute right-0 top-[58px] z-50 w-[360px] overflow-hidden rounded-2xl border border-arc-gray/20 bg-black/40 shadow-arc-card backdrop-blur-2xl">
                                 {/* Top row: avatar + address (left) | LP-sim + power (right) */}
                                 <div className="flex items-start justify-between gap-3 p-4">
-                                    <button
+                                    <button type="button"
                                         onClick={copyAddress}
                                         className="group flex min-w-0 items-center gap-2 rounded-lg p-1 -m-1 hover:bg-white/5"
                                         title="Copy full address"
@@ -235,7 +235,7 @@ export function HeaderWalletWidget() {
                                             <LineChart className="h-4 w-4" />
                                         </Link>
                                         <div className="relative">
-                                            <button
+                                            <button type="button"
                                                 onClick={() => setPowerOpen((v) => !v)}
                                                 className={cn(
                                                     "rounded-lg p-2 text-arc-text-muted transition-colors hover:bg-white/5 hover:text-arc-text",
@@ -292,7 +292,7 @@ export function HeaderWalletWidget() {
                                     Lighter blue (sky-400) per design ask - the deeper
                                     arc-cta-hover was too dark / close to the panel bg. */}
                                 <div className="grid grid-cols-2 gap-2 px-4 pb-3">
-                                    <button
+                                    <button type="button"
                                         onClick={() => {
                                             openAccountModal();
                                             setMenuOpen(false);
@@ -302,7 +302,7 @@ export function HeaderWalletWidget() {
                                         <Send className="h-5 w-5" />
                                         <span className="text-sm font-medium">Send</span>
                                     </button>
-                                    <button
+                                    <button type="button"
                                         onClick={() => setReceiveOpen(true)}
                                         className="flex flex-col items-center justify-center gap-1.5 rounded-xl bg-sky-400/10 px-3 py-4 text-sky-400 transition-colors hover:bg-sky-400/20"
                                     >
@@ -530,7 +530,7 @@ function PowerMenuItem({
     variant?: "default" | "danger";
 }) {
     return (
-        <button
+        <button type="button"
             onClick={onClick}
             className={cn(
                 "flex w-full items-center gap-2.5 px-3 py-2.5 text-left text-xs transition-colors",

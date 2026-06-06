@@ -93,7 +93,7 @@ function V4ListInner() {
             <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div className="flex flex-wrap items-center gap-1 rounded-xl border border-arc-border bg-arc-bg-elevated p-1">
                     {(["all", "live", "pending", "decayed"] as Filter[]).map((f) => (
-                        <button
+                        <button type="button"
                             key={f}
                             onClick={() => setFilter(f)}
                             className={cn(

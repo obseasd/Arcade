@@ -61,7 +61,7 @@ function TabButton({
   children: React.ReactNode;
 }) {
   return (
-    <button
+    <button type="button"
       onClick={onClick}
       className={cn(
         "flex flex-1 items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-xs font-medium transition-colors",

@@ -323,7 +323,7 @@ export default function IncentivizePage() {
                     <div className="mt-4 rounded-2xl border border-arc-border bg-white/[0.015] p-4">
                         <div className="mb-3 flex items-center justify-between">
                             <span className="text-sm text-arc-text-muted">Token</span>
-                            <button
+                            <button type="button"
                                 onClick={() => setPickerOpen("reward")}
                                 className="group flex items-center gap-2 rounded-xl bg-arc-surface-2 px-3 py-2 text-base font-semibold transition-colors hover:bg-arc-surface-3"
                             >
@@ -397,7 +397,7 @@ export default function IncentivizePage() {
                             </h2>
                         </div>
                         <div className="ml-3 flex shrink-0 items-center gap-1 rounded-xl border border-arc-border bg-white/[0.015] p-1">
-                            <button
+                            <button type="button"
                                 onClick={() => setExcludeOn(true)}
                                 className={cn(
                                     "rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors",
@@ -408,7 +408,7 @@ export default function IncentivizePage() {
                             >
                                 On
                             </button>
-                            <button
+                            <button type="button"
                                 onClick={() => setExcludeOn(false)}
                                 className={cn(
                                     "rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors",
@@ -431,7 +431,7 @@ export default function IncentivizePage() {
                                     placeholder="0x... address to exclude"
                                     className="flex-1 rounded-lg border border-arc-border bg-white/[0.015] px-3 py-2 text-sm tabular-nums focus:border-arc-cta-hover focus:outline-none"
                                 />
-                                <button
+                                <button type="button"
                                     onClick={() => {
                                         const s = excludeDraft.trim();
                                         if (!isAddress(s)) {
@@ -459,7 +459,7 @@ export default function IncentivizePage() {
                                             className="flex items-center justify-between gap-2 rounded-lg border border-arc-border bg-arc-bg-elevated px-3 py-2 text-xs"
                                         >
                                             <span className="truncate font-mono tabular-nums">{a}</span>
-                                            <button
+                                            <button type="button"
                                                 onClick={() =>
                                                     setExcludedAddresses((p) =>
                                                         p.filter((x) => x !== a),
@@ -484,7 +484,7 @@ export default function IncentivizePage() {
                         terms and acknowledge that distributed rewards cannot be recovered.
                     </p>
 
-                    <button
+                    <button type="button"
                         onClick={onLaunch}
                         disabled={!formValid || insufficientBalance}
                         className={cn(
@@ -558,7 +558,7 @@ function TokenPickerButton({
             <span className="text-sm text-arc-text-muted">{label}</span>
             {/* Pill button styled exactly like the SwapCard token chip so the
                 picker UX is consistent between the swap and incentivize forms. */}
-            <button
+            <button type="button"
                 onClick={onClick}
                 className="group flex items-center gap-2 rounded-xl bg-arc-surface-2 px-3 py-2 text-base font-semibold transition-colors hover:bg-arc-surface-3"
             >

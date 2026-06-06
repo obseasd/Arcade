@@ -38,7 +38,7 @@ export default function GlobalError({ error, reset }: Props) {
         </code>
       )}
       <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
-        <button onClick={reset} className="arc-button-primary px-5 py-2.5 text-sm">
+        <button type="button" onClick={reset} className="arc-button-primary px-5 py-2.5 text-sm">
           <RotateCcw className="h-4 w-4" /> Retry
         </button>
         <Link href="/" className="arc-button-secondary px-5 py-2.5 text-sm">

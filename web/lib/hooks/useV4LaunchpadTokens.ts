@@ -101,9 +101,9 @@ export function useV4LaunchpadTokens(): {
 
     const addresses = useMemo(
         () =>
-            (addrCalls.data ?? [])
-                .map((r) => (r.status === "success" ? (r.result as unknown as Address) : undefined))
-                .filter(Boolean) as Address[],
+            (addrCalls.data ?? []).flatMap((r) =>
+                r.status === "success" ? [r.result as unknown as Address] : [],
+            ),
         [addrCalls.data],
     );
 

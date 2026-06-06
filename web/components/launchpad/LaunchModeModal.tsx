@@ -48,7 +48,7 @@ export function LaunchModeModal({ open, onClose }: Props) {
     >
       <div className="flex items-center justify-between border-b border-arc-border px-6 py-4">
         <h3 className="text-lg font-semibold">Launch mode</h3>
-        <button onClick={onClose} className="text-arc-text-muted hover:text-arc-text">
+        <button type="button" onClick={onClose} className="text-arc-text-muted hover:text-arc-text">
           <X className="h-5 w-5" />
         </button>
       </div>
@@ -65,7 +65,7 @@ export function LaunchModeModal({ open, onClose }: Props) {
         )}
       >
         {MODES.map((m) => (
-          <button
+          <button type="button"
             key={m.label}
             onClick={() => pick(m.mode)}
             className={cn(
@@ -82,7 +82,7 @@ export function LaunchModeModal({ open, onClose }: Props) {
           </button>
         ))}
         {V4_ENABLED && (
-          <button
+          <button type="button"
             onClick={() => {
               onClose();
               router.push("/launchpad/v4");
@@ -104,7 +104,7 @@ export function LaunchModeModal({ open, onClose }: Props) {
           </button>
         )}
         {V4_HOOK_ENABLED && (
-          <button
+          <button type="button"
             onClick={() => {
               onClose();
               router.push("/launchpad/v4hook/create");

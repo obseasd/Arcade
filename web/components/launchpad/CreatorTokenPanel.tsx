@@ -323,7 +323,7 @@ export function CreatorTokenPanel({ token, symbol, pool, volumeRaw, volumeTokenR
               )}
               {iAmAdmin && !isTreasury && (
                 <div className="mt-2 flex gap-2">
-                  <button
+                  <button type="button"
                     onClick={() => {
                       setEditing({ index: i, kind: "recipient" });
                       setEditValue(r.recipient);
@@ -332,7 +332,7 @@ export function CreatorTokenPanel({ token, symbol, pool, volumeRaw, volumeTokenR
                   >
                     <Pencil className="h-3 w-3" /> Recipient
                   </button>
-                  <button
+                  <button type="button"
                     onClick={() => {
                       setEditing({ index: i, kind: "admin" });
                       setEditValue(r.admin);
@@ -348,7 +348,7 @@ export function CreatorTokenPanel({ token, symbol, pool, volumeRaw, volumeTokenR
         })}
       </div>
 
-      <button
+      <button type="button"
         onClick={claim}
         disabled={claiming}
         className={cn(
@@ -387,7 +387,7 @@ export function CreatorTokenPanel({ token, symbol, pool, volumeRaw, volumeTokenR
             className="arc-input w-full rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2 font-mono text-sm"
           />
           <div className="flex gap-2">
-            <button
+            <button type="button"
               onClick={() => {
                 if (!editSubmitting) {
                   setEditing(null);
@@ -399,7 +399,7 @@ export function CreatorTokenPanel({ token, symbol, pool, volumeRaw, volumeTokenR
             >
               Cancel
             </button>
-            <button
+            <button type="button"
               onClick={submitEdit}
               disabled={editSubmitting || !isAddress(editValue.trim())}
               className="arc-button-primary flex-1 py-2 text-sm"

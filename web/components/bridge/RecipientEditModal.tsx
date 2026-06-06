@@ -81,7 +81,7 @@ export function RecipientEditModal({
     >
       <div className="flex items-center justify-between border-b border-arc-border px-5 py-4">
         <h3 className="text-base font-semibold">{title}</h3>
-        <button onClick={onClose} className="text-arc-text-muted hover:text-arc-text">
+        <button type="button" onClick={onClose} className="text-arc-text-muted hover:text-arc-text">
           <X className="h-5 w-5" />
         </button>
       </div>
@@ -106,7 +106,7 @@ export function RecipientEditModal({
         </label>
 
         {!isCurrentlyOwn && ownAccount && (
-          <button
+          <button type="button"
             onClick={useOwnWallet}
             className="flex w-full items-center justify-center gap-2 rounded-xl border border-arc-border bg-arc-surface-2/40 py-2 text-xs text-arc-text-muted hover:bg-arc-surface-3/60"
           >
@@ -114,7 +114,7 @@ export function RecipientEditModal({
           </button>
         )}
 
-        <button onClick={onSubmit} className="arc-button-primary w-full py-3 text-sm">
+        <button type="button" onClick={onSubmit} className="arc-button-primary w-full py-3 text-sm">
           Save recipient
         </button>
       </div>

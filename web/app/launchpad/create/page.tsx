@@ -714,7 +714,7 @@ function CreateTokenInner() {
                     />
                     <span className="text-xs text-arc-text-muted">%</span>
                     {recipients.length > 1 && (
-                      <button
+                      <button type="button"
                         onClick={() => removeRecipient(i)}
                         className="text-arc-text-faint transition-colors hover:text-arc-danger"
                       >
@@ -778,7 +778,7 @@ function CreateTokenInner() {
               );
             })}
             {recipients.length < 3 && (
-              <button onClick={addRecipient} className="text-xs font-medium text-arc-cta-hover hover:underline">
+              <button type="button" onClick={addRecipient} className="text-xs font-medium text-arc-cta-hover hover:underline">
                 + Add recipient
               </button>
             )}
@@ -1120,7 +1120,7 @@ function CreateTokenInner() {
             )}
           </div>
 
-          <button
+          <button type="button"
             onClick={onSubmit}
             disabled={
               !account ||

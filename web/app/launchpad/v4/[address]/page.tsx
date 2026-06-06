@@ -465,7 +465,7 @@ function ActionsCard({
                         Initialise pool (creator)
                     </Link>
                 )}
-                <button
+                <button type="button"
                     disabled
                     className="block w-full rounded-xl border border-arc-border bg-arc-surface px-4 py-2 text-center text-sm text-arc-text-muted disabled:cursor-not-allowed"
                     title="Swap UI ships in Session 4"

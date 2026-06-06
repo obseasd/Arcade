@@ -155,7 +155,7 @@ export function useTokenTrades(args: {
         // Phase 1: fast window, immediate render.
         let stoppedAt = await scanWindow(latest, fastTarget);
         const snapshot = (): Trade[] => {
-          const sorted = [...collected].sort((a, b) => Number(b.blockNumber - a.blockNumber));
+          const sorted = collected.toSorted((a, b) => Number(b.blockNumber - a.blockNumber));
           return sorted.slice(0, MAX_TRADES);
         };
         if (!cancelled) {

@@ -187,7 +187,7 @@ function PositionRow({ position }: { position: CreatorPosition }) {
         </div>
         <div className="flex shrink-0 items-center gap-3">
           <Volume24h volume={vol24h} />
-          <button
+          <button type="button"
             onClick={claim}
             disabled={claiming || !hasFees}
             className={cn(

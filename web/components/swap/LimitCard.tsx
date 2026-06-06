@@ -514,7 +514,7 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
                 />
 
                 <div className="relative z-10 -my-2 flex justify-center">
-                    <button
+                    <button type="button"
                         onClick={swapDirection}
                         className="rounded-xl border border-arc-border bg-arc-surface-2/40 p-2 backdrop-blur-md transition-all hover:bg-arc-surface-3/60 active:scale-95"
                     >
@@ -623,7 +623,7 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
                     <div className="mb-2 text-xs text-arc-text-muted">Expiry</div>
                     <div className="flex flex-wrap gap-1.5">
                         {EXPIRY_PRESETS.map((p) => (
-                            <button
+                            <button type="button"
                                 key={p.id}
                                 onClick={() => setExpiryId(p.id)}
                                 className={cn(
@@ -646,7 +646,7 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
                     )}
                 </div>
 
-                <button
+                <button type="button"
                     onClick={onSubmit}
                     disabled={!canSubmit}
                     className={cn(
@@ -726,7 +726,7 @@ function TokenRow({
             {/* Header: label + token chip */}
             <div className="mb-3 flex items-center justify-between">
                 <span className="text-sm text-arc-text-muted">{label}</span>
-                <button
+                <button type="button"
                     onClick={onTokenPick}
                     className="group flex items-center gap-2 rounded-xl bg-arc-surface-2 px-3 py-2 text-base font-semibold transition-colors hover:bg-arc-surface-3"
                 >

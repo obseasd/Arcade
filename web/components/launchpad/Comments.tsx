@@ -117,7 +117,7 @@ export function Comments({ token }: Props) {
         />
         <div className="mt-2 flex items-center justify-between">
           <span className="text-xs text-arc-text-faint">{text.length}/280</span>
-          <button
+          <button type="button"
             onClick={onPost}
             disabled={!account || !text.trim() || tx.status === "pending"}
             className="arc-button-primary px-4 py-1.5 text-sm"

@@ -64,7 +64,7 @@ export function TransactionSettings({
 
     return (
         <div ref={ref} className="relative">
-            <button
+            <button type="button"
                 onClick={onToggle}
                 aria-expanded={open}
                 className={cn(
@@ -95,7 +95,7 @@ export function TransactionSettings({
                         {presets.map((bps) => {
                             const active = slippageCustom === "" && slippageBps === bps;
                             return (
-                                <button
+                                <button type="button"
                                     key={bps}
                                     onClick={() => onPreset(bps)}
                                     className={cn(

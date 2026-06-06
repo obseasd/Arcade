@@ -514,7 +514,7 @@ function AddLiquidityInner() {
                     user pick which side they're zapping IN from). */}
                 <div className="relative flex justify-center">
                     {mode === "single" ? (
-                        <button
+                        <button type="button"
                             onClick={() => {
                                 if (!tokenB) return;
                                 const params = new URLSearchParams(sp.toString());
@@ -634,7 +634,7 @@ function AddLiquidityInner() {
                     </div>
                 )}
 
-                <button
+                <button type="button"
                     onClick={onSubmit}
                     disabled={!canSubmit}
                     className={cn(
@@ -680,7 +680,7 @@ function ModeTab({
     children: React.ReactNode;
 }) {
     return (
-        <button
+        <button type="button"
             onClick={onClick}
             className={cn(
                 "relative pb-1 text-sm font-semibold transition-colors",
@@ -741,7 +741,7 @@ function TokenInput({
                 <span>$-</span>
                 <span className="inline-flex items-center gap-2">
                     {balDisplay} {token?.symbol}
-                    <button
+                    <button type="button"
                         onClick={() =>
                             balance && token && onChange(formatUnits(balance, token.decimals))
                         }

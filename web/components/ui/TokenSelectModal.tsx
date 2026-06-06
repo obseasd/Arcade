@@ -169,7 +169,7 @@ export function TokenSelectModal({ open, onClose, tokens, onSelect, selectedAddr
     >
       <div className="flex items-center justify-between border-b border-arc-border px-6 py-4">
         <h3 className="text-base font-semibold">Select a token</h3>
-        <button onClick={onClose} className="text-arc-text-muted hover:text-arc-text">
+        <button type="button" onClick={onClose} className="text-arc-text-muted hover:text-arc-text">
           <X className="h-5 w-5" />
         </button>
       </div>
@@ -193,7 +193,7 @@ export function TokenSelectModal({ open, onClose, tokens, onSelect, selectedAddr
             const enabled = !!tpl.address && tpl.address !== zeroAddress;
             const active = isSelected(tpl.address);
             return (
-              <button
+              <button type="button"
                 key={tpl.symbol}
                 onClick={() => handlePinnedClick(tpl)}
                 disabled={!enabled || active}
@@ -230,7 +230,7 @@ export function TokenSelectModal({ open, onClose, tokens, onSelect, selectedAddr
           {importedMetaQ.isLoading ? (
             <div className="text-sm text-arc-text-muted">Looking up token at {short(pastedAddress)}…</div>
           ) : importedToken ? (
-            <button
+            <button type="button"
               onClick={() => {
                 onSelect(importedToken);
                 onClose();
@@ -266,7 +266,7 @@ export function TokenSelectModal({ open, onClose, tokens, onSelect, selectedAddr
           const price = prices.get(t.address.toLowerCase());
           return (
             <li key={t.address}>
-              <button
+              <button type="button"
                 onClick={() => {
                   if (active) return;
                   onSelect(t);

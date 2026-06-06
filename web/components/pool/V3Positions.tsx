@@ -424,7 +424,7 @@ function V3PositionRow({
                     </div>
                     <div>
                         <div className="flex flex-wrap items-center gap-1.5">
-                            <button
+                            <button type="button"
                                 onClick={() => setInverted((v) => !v)}
                                 title="Invert price units"
                                 className="group inline-flex items-center gap-1 text-base font-semibold text-arc-text transition-colors hover:text-arc-cta-hover"
@@ -602,7 +602,7 @@ function V3PositionRow({
                         Manage
                     </Link>
                 ) : (
-                    <button
+                    <button type="button"
                         disabled
                         className="inline-flex cursor-not-allowed items-center justify-center gap-1.5 rounded-xl border border-arc-border bg-white/[0.04] px-3 py-2.5 text-sm font-semibold text-arc-text-faint"
                     >

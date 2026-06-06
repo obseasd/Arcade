@@ -32,9 +32,9 @@ export function useV2Tokens() {
     query: { enabled: pairsLength > 0n },
   });
 
-  const pairs = (pairAddrCalls.data ?? [])
-    .map((c) => (c.status === "success" ? (c.result as unknown as Address) : undefined))
-    .filter(Boolean) as Address[];
+  const pairs = (pairAddrCalls.data ?? []).flatMap((c) =>
+    c.status === "success" ? [c.result as unknown as Address] : [],
+  );
 
   // Read token0 + token1 for each pair (to identify the non-USDC side)
   const tokenCalls = useReadContracts({

@@ -327,7 +327,7 @@ function ClaimPageInner() {
           </div>
         )}
 
-        <button
+        <button type="button"
           onClick={onClaim}
           disabled={submitting || alreadyClaimed || expired || !account}
           className={cn(

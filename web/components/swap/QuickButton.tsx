@@ -15,7 +15,7 @@ export function QuickButton({
     disabled?: boolean;
 }) {
     return (
-        <button
+        <button type="button"
             onClick={onClick}
             disabled={disabled || !onClick}
             className={cn(

@@ -60,7 +60,7 @@ export function LimitOrdersPanel({ account, variant = "card", className }: Props
     const { tokens: v2Tokens } = useV2Tokens();
     const { tokens: v3Tokens } = useV3Tokens();
     const [tab, setTab] = useState<"open" | "history">("open");
-    const [now, setNow] = useState(Math.floor(Date.now() / 1000));
+    const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
     // Local spin state for the refresh button. We hold it true for at least
     // 600ms so the user actually sees the icon animate even when the wagmi
     // cache returns instantly. Tied to a count so consecutive clicks restart
@@ -202,7 +202,7 @@ export function LimitOrdersPanel({ account, variant = "card", className }: Props
         // pixel for pixel was the explicit UX direction.
         <div className={cn("arc-card flex flex-col p-5 sm:p-6", className)}>
             <div className="mb-4 flex items-center gap-4">
-                <button
+                <button type="button"
                     onClick={() => setTab("open")}
                     className={cn(
                         "text-sm font-semibold transition-colors",
@@ -213,7 +213,7 @@ export function LimitOrdersPanel({ account, variant = "card", className }: Props
                 >
                     Open Orders
                 </button>
-                <button
+                <button type="button"
                     onClick={() => setTab("history")}
                     className={cn(
                         "text-sm font-semibold transition-colors",
@@ -224,7 +224,7 @@ export function LimitOrdersPanel({ account, variant = "card", className }: Props
                 >
                     Order History
                 </button>
-                <button
+                <button type="button"
                     onClick={onRefreshClick}
                     title="Refresh"
                     className="ml-auto rounded-lg border border-arc-border bg-arc-bg-elevated p-1.5 text-arc-text-muted transition-colors hover:bg-white/5 hover:text-arc-text active:scale-95"
@@ -268,7 +268,7 @@ export function LimitOrdersPanel({ account, variant = "card", className }: Props
 
             {tab === "open" && openOrders.length > 0 && (
                 <div className="mt-4 flex justify-end">
-                    <button
+                    <button type="button"
                         onClick={onCancelAll}
                         disabled={isPending}
                         className="inline-flex items-center gap-1.5 rounded-xl border border-arc-danger/40 bg-arc-danger/10 px-3 py-1.5 text-xs font-medium text-arc-danger transition-colors hover:bg-arc-danger/20 disabled:opacity-50"
@@ -361,7 +361,7 @@ function OrderRow({
                     )}
                 </div>
                 {state === "open" && (
-                    <button
+                    <button type="button"
                         onClick={() => onCancel(order.id)}
                         disabled={cancelling}
                         title="Cancel this order on-chain"

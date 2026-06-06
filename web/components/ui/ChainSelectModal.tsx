@@ -33,7 +33,7 @@ export function ChainSelectModal({
     >
       <div className="flex items-center justify-between border-b border-arc-border px-6 py-4">
         <h3 className="text-base font-semibold">{title}</h3>
-        <button onClick={onClose} className="text-arc-text-muted hover:text-arc-text">
+        <button type="button" onClick={onClose} className="text-arc-text-muted hover:text-arc-text">
           <X className="h-5 w-5" />
         </button>
       </div>
@@ -44,7 +44,7 @@ export function ChainSelectModal({
           const isExcluded = chain.id === excludeChainId;
           return (
             <li key={chain.id}>
-              <button
+              <button type="button"
                 onClick={() => {
                   if (isExcluded) return;
                   onSelect(chain.id);

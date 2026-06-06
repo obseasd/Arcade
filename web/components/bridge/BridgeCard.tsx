@@ -442,7 +442,7 @@ export function BridgeCard() {
         <h2 className="text-lg font-semibold">Bridge</h2>
         <div className="flex items-center gap-2">
           {/* Fast Transfer toggle - flash icon turns yellow when active */}
-          <button
+          <button type="button"
             onClick={() => setFastTransfer((f) => !f)}
             disabled={isProcessing}
             title={
@@ -494,7 +494,7 @@ export function BridgeCard() {
                 keep polling Circle and prompt you to mint as soon as it&apos;s ready.
               </div>
             </div>
-            <button
+            <button type="button"
               onClick={discardPendingClaim}
               className="rounded-md px-2 py-1 text-[11px] font-medium text-arc-text-faint hover:bg-arc-surface-2/60 hover:text-arc-text-muted"
               title="Stop watching this burn (does not affect funds - anyone can still mint it on the destination chain)"
@@ -524,7 +524,7 @@ export function BridgeCard() {
 
       {/* Flip */}
       <div className="relative z-10 -my-2 flex justify-center">
-        <button
+        <button type="button"
           onClick={flipChains}
           disabled={isProcessing}
           className="rounded-xl border border-arc-border bg-arc-surface-2/40 p-2 backdrop-blur-md transition-all hover:bg-arc-surface-3/60 active:scale-95 disabled:opacity-50"
@@ -596,7 +596,7 @@ export function BridgeCard() {
       {/* CTA */}
       <div className="mt-4">
         {step.kind === "idle" || step.kind === "error" ? (
-          <button
+          <button type="button"
             onClick={doBurn}
             disabled={!canBridge}
             className="arc-button-primary w-full py-3.5 text-base"
@@ -620,7 +620,7 @@ export function BridgeCard() {
               className="pointer-events-none absolute inset-0 -m-1 rounded-2xl bg-arc-success/40 opacity-70 blur-md animate-bridge-pulse"
               aria-hidden
             />
-            <button
+            <button type="button"
               onClick={doMint}
               className="relative inline-flex w-full items-center justify-center gap-2 rounded-xl bg-arc-success py-3.5 text-base font-medium text-white shadow-[0_18px_36px_-8px_rgba(16,185,129,0.55)] transition-colors hover:bg-arc-success/90 ring-2 ring-arc-success/60"
             >
@@ -628,11 +628,11 @@ export function BridgeCard() {
             </button>
           </div>
         ) : step.kind === "done" ? (
-          <button onClick={reset} className="arc-button-secondary w-full py-3.5 text-base">
+          <button type="button" onClick={reset} className="arc-button-secondary w-full py-3.5 text-base">
             Bridge another
           </button>
         ) : (
-          <button disabled className="arc-button-primary w-full py-3.5 text-base">
+          <button type="button" disabled className="arc-button-primary w-full py-3.5 text-base">
             <Loader2 className="h-4 w-4 animate-spin" />
             {step.kind === "approving" && "Approving USDC…"}
             {step.kind === "burning" && `Sending USDC from ${srcChain.name}…`}
@@ -777,7 +777,7 @@ function ChainBox({
       {/* Header: label + chain chip */}
       <div className="mb-2 flex items-center justify-between">
         <span className="text-sm text-arc-text-muted">{label}</span>
-        <button
+        <button type="button"
           onClick={onChainClick}
           disabled={disabled}
           className="group flex items-center gap-2 rounded-xl bg-arc-surface-2 px-3 py-2 text-base font-semibold transition-colors hover:bg-arc-surface-3 disabled:opacity-50"
@@ -816,7 +816,7 @@ function ChainBox({
           <span>{usdLabel}</span>
           {recipientLabel &&
             (onRecipientClick ? (
-              <button
+              <button type="button"
                 onClick={onRecipientClick}
                 className={cn(
                   "group inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 transition-colors",
@@ -855,7 +855,7 @@ function ChainBox({
 
 function QuickButton({ onClick, children }: { onClick?: () => void; children: React.ReactNode }) {
   return (
-    <button
+    <button type="button"
       onClick={onClick}
       disabled={!onClick}
       className={cn(

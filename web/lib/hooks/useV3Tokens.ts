@@ -41,9 +41,9 @@ export function useV3Tokens() {
     })),
     query: { enabled: count > 0 },
   });
-  const addrs = (addrCalls.data ?? [])
-    .map((c) => (c.status === "success" ? (c.result as unknown as Address) : undefined))
-    .filter(Boolean) as Address[];
+  const addrs = (addrCalls.data ?? []).flatMap((c) =>
+    c.status === "success" ? [c.result as unknown as Address] : [],
+  );
 
   // Each token's state (to read mode + migrated)
   const stateCalls = useReadContracts({

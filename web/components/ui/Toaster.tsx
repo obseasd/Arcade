@@ -88,7 +88,7 @@ function ToastCard({ payload, onClose }: { payload: ToastPayload; onClose: () =>
             )}
           </div>
         </div>
-        <button onClick={onClose} className="text-arc-text-faint hover:text-arc-text">
+        <button type="button" onClick={onClose} className="text-arc-text-faint hover:text-arc-text">
           <X className="h-3.5 w-3.5" />
         </button>
       </div>
@@ -149,7 +149,7 @@ function ToastCard({ payload, onClose }: { payload: ToastPayload; onClose: () =>
             )}
           </div>
         </div>
-        <button onClick={onClose} className="text-arc-text-faint hover:text-arc-text">
+        <button type="button" onClick={onClose} className="text-arc-text-faint hover:text-arc-text">
           <X className="h-3.5 w-3.5" />
         </button>
       </div>
@@ -185,7 +185,7 @@ function ToastCard({ payload, onClose }: { payload: ToastPayload; onClose: () =>
             </a>
           )}
         </div>
-        <button onClick={onClose} className="text-arc-text-faint hover:text-arc-text">
+        <button type="button" onClick={onClose} className="text-arc-text-faint hover:text-arc-text">
           <X className="h-3.5 w-3.5" />
         </button>
       </div>
@@ -212,7 +212,7 @@ function ToastCard({ payload, onClose }: { payload: ToastPayload; onClose: () =>
         <div className="text-sm font-semibold text-arc-text">{payload.title}</div>
         {payload.message && <div className="mt-0.5 text-xs text-arc-text-muted">{payload.message}</div>}
       </div>
-      <button onClick={onClose} className="text-arc-text-faint hover:text-arc-text">
+      <button type="button" onClick={onClose} className="text-arc-text-faint hover:text-arc-text">
         <X className="h-3.5 w-3.5" />
       </button>
     </div>

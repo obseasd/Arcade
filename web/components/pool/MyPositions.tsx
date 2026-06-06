@@ -68,9 +68,9 @@ export function MyPositions({
 
   const pairs = useMemo(
     () =>
-      (pairAddrs.data ?? [])
-        .map((c) => (c.status === "success" ? (c.result as unknown as Address) : undefined))
-        .filter(Boolean) as Address[],
+      (pairAddrs.data ?? []).flatMap((c) =>
+        c.status === "success" ? [c.result as unknown as Address] : [],
+      ),
     [pairAddrs.data],
   );
 
@@ -411,7 +411,7 @@ function PositionRow({
           card and the Hyperswap pattern - destructive action on the left,
           constructive action on the right. */}
       <div className="mt-4 grid grid-cols-2 gap-2">
-        <button
+        <button type="button"
           onClick={onToggle}
           className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-arc-border bg-white/[0.04] px-3 py-2.5 text-sm font-semibold text-arc-text transition-colors hover:bg-white/[0.08]"
         >
@@ -446,7 +446,7 @@ function PositionRow({
           />
           <div className="mt-2 flex gap-2">
             {[25, 50, 75, 100].map((v) => (
-              <button
+              <button type="button"
                 key={v}
                 onClick={() => setPct(v)}
                 className={cn(
@@ -468,7 +468,7 @@ function PositionRow({
                 { label: "1%", bps: 100 },
                 { label: "3%", bps: 300 },
               ].map((opt) => (
-                <button
+                <button type="button"
                   key={opt.bps}
                   onClick={() => setSlippageBps(opt.bps)}
                   className={cn(
@@ -496,7 +496,7 @@ function PositionRow({
               {fmt(expected0, p.decimals0)} {p.symbol0} + {fmt(expected1, p.decimals1)} {p.symbol1}
             </div>
           </div>
-          <button
+          <button type="button"
             onClick={onRemove}
             disabled={removing}
             className={cn(

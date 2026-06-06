@@ -129,7 +129,7 @@ export function CreatePoolModal({
             >
                 <div className="flex items-center justify-between px-5 pb-3 pt-5">
                     <h3 className="text-lg font-semibold">Create a new pool</h3>
-                    <button
+                    <button type="button"
                         onClick={onClose}
                         className="rounded-full border border-arc-border bg-black/30 p-1.5 text-arc-text-muted transition-colors hover:bg-white/5 hover:text-arc-text"
                         aria-label="Close"
@@ -170,7 +170,7 @@ export function CreatePoolModal({
                     {/* Fee tier (V3 only) */}
                     {poolType === "v3" && (
                         <div className="overflow-hidden rounded-2xl border border-arc-border bg-white/[0.015]">
-                            <button
+                            <button type="button"
                                 onClick={() => setExpandedFee((v) => !v)}
                                 className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-white/[0.02]"
                             >
@@ -201,7 +201,7 @@ export function CreatePoolModal({
                             {expandedFee && (
                                 <div className="grid grid-cols-2 gap-2 border-t border-arc-border p-3">
                                     {FEE_TIERS.map((tier) => (
-                                        <button
+                                        <button type="button"
                                             key={tier.bps}
                                             onClick={() => setFeeBps(tier.bps)}
                                             className={cn(
@@ -232,7 +232,7 @@ export function CreatePoolModal({
                         </div>
                     )}
 
-                    <button
+                    <button type="button"
                         onClick={handleContinue}
                         disabled={!canContinue}
                         className={cn(
@@ -279,7 +279,7 @@ function TypeButton({
     children: React.ReactNode;
 }) {
     return (
-        <button
+        <button type="button"
             onClick={onClick}
             className={cn(
                 "rounded-xl px-3.5 py-1.5 text-sm font-medium transition-colors",
@@ -303,7 +303,7 @@ function TokenRow({
     label: string;
 }) {
     return (
-        <button
+        <button type="button"
             onClick={onPick}
             className="flex w-full items-center justify-between gap-3 rounded-2xl border border-arc-border bg-white/[0.015] px-4 py-3.5 text-left transition-colors hover:bg-white/[0.025]"
         >

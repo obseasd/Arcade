@@ -165,7 +165,7 @@ export function PriceChart({ token, mode, pool }: Props) {
       <div className="mb-2 flex items-center justify-between gap-1 text-xs">
         <div className="flex items-center gap-1 rounded-lg border border-arc-border bg-arc-bg-elevated p-0.5">
           {(["price", "mcap"] as const).map((m) => (
-            <button
+            <button type="button"
               key={m}
               onClick={() => setMetric(m)}
               className={cn(
@@ -181,7 +181,7 @@ export function PriceChart({ token, mode, pool }: Props) {
         </div>
         <div className="flex items-center gap-1">
           {(["1s", "1m", "5m", "1h", "1d"] as Timeframe[]).map((tf) => (
-            <button
+            <button type="button"
               key={tf}
               onClick={() => setTimeframe(tf)}
               className={cn(

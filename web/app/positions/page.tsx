@@ -156,7 +156,7 @@ function PositionsInner() {
           is V3-only and would do nothing on an empty list). */}
       <div className="mb-6 flex flex-wrap items-center justify-end gap-2">
         {v3Count > 0 && (
-          <button
+          <button type="button"
             onClick={() => setClaimOpen(true)}
             className="inline-flex items-center gap-1.5 rounded-xl border border-arc-border bg-arc-bg-elevated px-4 py-2 text-sm font-semibold text-arc-text transition-colors hover:bg-white/5"
           >
@@ -164,7 +164,7 @@ function PositionsInner() {
             Claim All Fees
           </button>
         )}
-        <button
+        <button type="button"
           onClick={() => setNewOpen(true)}
           className="arc-button-primary relative overflow-hidden bg-cover bg-center bg-no-repeat px-5 py-2.5 text-base shadow-[0_10px_30px_-12px_rgba(52,90,120,0.55)] ring-1 ring-arc-cta-hover/40"
           style={{ backgroundImage: "url('/create%20token.png')" }}
@@ -232,7 +232,7 @@ function PositionsInner() {
               setSortOpen(false);
             }}
           />
-          <button
+          <button type="button"
             onClick={() => {
               setRefreshKey((k) => k + 1);
               setRefreshing(true);
@@ -318,7 +318,7 @@ function RangeFilterDropdown({
   }, [open, onClose]);
   return (
     <div ref={ref} className="relative">
-      <button
+      <button type="button"
         onClick={onToggle}
         className={cn(
           "inline-flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-semibold transition-colors",
@@ -366,7 +366,7 @@ function FilterToggle({
   onClick: () => void;
 }) {
   return (
-    <button
+    <button type="button"
       onClick={onClick}
       className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-sm text-arc-text-muted transition-colors hover:bg-white/5 hover:text-arc-text"
     >
@@ -413,7 +413,7 @@ function TabButton({
   children: React.ReactNode;
 }) {
   return (
-    <button
+    <button type="button"
       onClick={onClick}
       disabled={disabled}
       className={cn(
@@ -494,7 +494,7 @@ function PositionsSortDropdown({
   }, [open, onClose]);
   return (
     <div ref={ref} className="relative">
-      <button
+      <button type="button"
         onClick={onToggle}
         title="Sort"
         aria-expanded={open}
@@ -510,7 +510,7 @@ function PositionsSortDropdown({
           {(["tvl", "apr", "volume"] as PositionsSortKey[]).map((k) => {
             const isActive = k === sortKey;
             return (
-              <button
+              <button type="button"
                 key={k}
                 onClick={() => {
                   if (isActive) {

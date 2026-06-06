@@ -124,7 +124,7 @@ export function PendingClaimBanner({ token, slotIndex }: Props) {
                     </Link>
                 </div>
             </div>
-            <button
+            <button type="button"
                 onClick={dismiss}
                 aria-label="Dismiss"
                 className="text-arc-text-faint transition-colors hover:text-arc-text"

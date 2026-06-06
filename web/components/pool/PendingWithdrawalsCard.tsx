@@ -214,7 +214,7 @@ function PendingRow({
           </div>
         </div>
       </div>
-      <button
+      <button type="button"
         onClick={onClaim}
         disabled={claiming}
         className={cn(

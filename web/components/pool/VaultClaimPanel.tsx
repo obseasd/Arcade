@@ -142,7 +142,7 @@ export function VaultClaimPanel() {
                 </div>
               </div>
             </div>
-            <button
+            <button type="button"
               onClick={() => claim(row)}
               disabled={claiming === row.token || row.claimable === 0n}
               className={cn(

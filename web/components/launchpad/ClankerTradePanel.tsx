@@ -193,7 +193,7 @@ export function ClankerTradePanel({ token, symbol, pool, image, onTradeSuccess }
   return (
     <div className="arc-card p-5">
       <div className="mb-4 grid grid-cols-2 gap-1 rounded-xl border border-arc-border bg-arc-bg-elevated p-1">
-        <button
+        <button type="button"
           onClick={() => {
             setSide("buy");
             setAmount("");
@@ -205,7 +205,7 @@ export function ClankerTradePanel({ token, symbol, pool, image, onTradeSuccess }
         >
           Buy
         </button>
-        <button
+        <button type="button"
           onClick={() => {
             setSide("sell");
             setAmount("");
@@ -252,7 +252,7 @@ export function ClankerTradePanel({ token, symbol, pool, image, onTradeSuccess }
           <span>Slippage tolerance</span>
           <span className="flex gap-1">
             {[50, 100, 300].map((bps) => (
-              <button
+              <button type="button"
                 key={bps}
                 onClick={() => setSlippageBps(bps)}
                 className={cn(
@@ -267,7 +267,7 @@ export function ClankerTradePanel({ token, symbol, pool, image, onTradeSuccess }
         </div>
       </div>
 
-      <button
+      <button type="button"
         onClick={onTrade}
         disabled={!account || amountRaw === 0n || fee === 0 || tx.status === "pending"}
         className={cn(

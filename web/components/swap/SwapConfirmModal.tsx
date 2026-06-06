@@ -76,7 +76,7 @@ export function SwapConfirmModal({
         <h3 className={"text-base font-semibold " + (dangerous ? "text-arc-danger" : "")}>
           {dangerous ? "Confirm swap (high loss)" : "Confirm swap"}
         </h3>
-        <button
+        <button type="button"
           onClick={onClose}
           disabled={busy}
           className="text-arc-text-muted hover:text-arc-text disabled:opacity-50"
@@ -127,7 +127,7 @@ export function SwapConfirmModal({
           <Row label="Protocol" value="Arcade V2" />
         </div>
 
-        <button
+        <button type="button"
           onClick={onConfirm}
           disabled={busy}
           className={

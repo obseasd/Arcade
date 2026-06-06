@@ -456,7 +456,7 @@ export default function ExplorePage() {
 
             {/* + New position - opens the Create-a-new-pool modal */}
             <div className="mb-4 flex justify-end">
-                <button
+                <button type="button"
                     onClick={() => setCreateOpen(true)}
                     className="inline-flex items-center gap-2 rounded-xl bg-arc-cta px-[1.1rem] py-[0.55rem] text-[0.9625rem] font-semibold text-white transition-colors hover:bg-arc-cta-hover"
                 >
@@ -472,7 +472,7 @@ export default function ExplorePage() {
             <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div className="flex flex-wrap items-center gap-2">
                     {FILTERS.map((f) => (
-                        <button
+                        <button type="button"
                             key={f.value}
                             onClick={() => setFilter(f.value)}
                             className={cn(
@@ -513,7 +513,7 @@ export default function ExplorePage() {
                         setSortOpen(false);
                     }}
                 />
-                <button
+                <button type="button"
                     title={viewMode === "list" ? "Switch to card view" : "Switch to list view"}
                     onClick={() =>
                         setViewMode((m) => (m === "list" ? "card" : "list"))
@@ -694,7 +694,7 @@ function ChartCard({
                     ~10% larger than the previous spec. */}
                 <div className="flex items-center gap-1">
                     {(["7D", "30D", "90D"] as Win[]).map((w) => (
-                        <button
+                        <button type="button"
                             key={w}
                             onClick={() => onWindow(w)}
                             className={cn(
@@ -930,7 +930,7 @@ function PoolPairRowCard({
                         <SwapIcon tone="white" />
                         Swap
                     </Link>
-                    <button
+                    <button type="button"
                         onClick={onToggle}
                         className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-xl border border-arc-border bg-white/[0.04] px-3 py-[0.575rem] text-xs font-medium text-arc-text transition-colors hover:bg-white/[0.08]"
                     >
@@ -1316,7 +1316,7 @@ function PageBtn({
     children: React.ReactNode;
 } & React.AriaAttributes) {
     return (
-        <button
+        <button type="button"
             onClick={onClick}
             disabled={disabled}
             className={cn(
@@ -1382,7 +1382,7 @@ function Metric({
 function CopyAddressButton({ address }: { address: string }) {
     const [copied, setCopied] = useState(false);
     return (
-        <button
+        <button type="button"
             onClick={async (e) => {
                 e.stopPropagation();
                 e.preventDefault();
@@ -1490,7 +1490,7 @@ function SortDropdown({
 
     return (
         <div ref={ref} className="relative">
-            <button
+            <button type="button"
                 onClick={onToggle}
                 title="Sort"
                 aria-expanded={open}
@@ -1506,7 +1506,7 @@ function SortDropdown({
                     {(["tvl", "apr", "volume"] as SortKey[]).map((k) => {
                         const isActive = k === sortKey;
                         return (
-                            <button
+                            <button type="button"
                                 key={k}
                                 onClick={() => {
                                     // Same key clicked → flip direction; new

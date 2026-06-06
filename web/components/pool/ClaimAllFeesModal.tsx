@@ -332,7 +332,7 @@ export function ClaimAllFeesModal({ open, onClose, onSuccess }: Props) {
         >
             <div className="flex items-center justify-between border-b border-arc-border px-5 py-4">
                 <h3 className="text-base font-semibold">Claim rewards</h3>
-                <button
+                <button type="button"
                     onClick={onClose}
                     className="rounded-full border border-arc-border bg-black/30 p-1.5 text-arc-text-muted hover:text-arc-text"
                 >
@@ -345,7 +345,7 @@ export function ClaimAllFeesModal({ open, onClose, onSuccess }: Props) {
                         {claimable.length} position{claimable.length === 1 ? "" : "s"} with
                         unclaimed fees
                     </div>
-                    <button
+                    <button type="button"
                         onClick={selected.size === positions.length ? clearAll : selectAll}
                         className="rounded-lg border border-arc-border bg-arc-bg-elevated px-3 py-1 text-xs font-semibold text-arc-text transition-colors hover:bg-white/5"
                     >
@@ -381,7 +381,7 @@ export function ClaimAllFeesModal({ open, onClose, onSuccess }: Props) {
                                 decimals: 18,
                             };
                             return (
-                                <button
+                                <button type="button"
                                     key={p.tokenId.toString()}
                                     onClick={() => toggle(p.tokenId.toString())}
                                     className={cn(
@@ -474,7 +474,7 @@ export function ClaimAllFeesModal({ open, onClose, onSuccess }: Props) {
                 )}
 
                 <div className="flex items-center gap-2 pt-1">
-                    <button
+                    <button type="button"
                         onClick={onClaim}
                         disabled={selected.size === 0 || submitting}
                         className={cn(
@@ -492,7 +492,7 @@ export function ClaimAllFeesModal({ open, onClose, onSuccess }: Props) {
                                 ? "Claim"
                                 : "Claim all"}
                     </button>
-                    <button
+                    <button type="button"
                         onClick={onClose}
                         className="rounded-xl border border-arc-border bg-arc-bg-elevated px-4 py-2.5 text-sm font-semibold text-arc-text transition-colors hover:bg-white/5"
                     >

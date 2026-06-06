@@ -60,7 +60,7 @@ export function PositionsList({ positions, onChange }: Props) {
           <span className={cn("text-xs font-medium", Math.abs(total - 100) < 0.5 ? "text-arc-success" : "text-amber-400")}>
             {total.toFixed(1)}%
           </span>
-          <button
+          <button type="button"
             onClick={add}
             className="rounded-md border border-arc-border bg-arc-surface-2 p-1.5 text-arc-text-muted hover:text-arc-text"
             aria-label="Add position"
@@ -98,7 +98,7 @@ export function PositionsList({ positions, onChange }: Props) {
                   style={{ background: sliderFill(p.pctOfPool * 100) }}
                 />
                 <span className="w-10 text-right text-xs font-medium">{(p.pctOfPool * 100).toFixed(0)}%</span>
-                <button
+                <button type="button"
                   onClick={() => remove(i)}
                   disabled={positions.length <= 1}
                   className="rounded-md p-1 text-arc-text-faint hover:text-arc-danger disabled:opacity-40"

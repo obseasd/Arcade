@@ -836,7 +836,7 @@ export function V3AddLiquidity({
                 renders below the tab; we hide the non-max chips in single
                 mode to keep the surface tidy. */}
             {mode === "single" && preset !== "max" && (
-                <button
+                <button type="button"
                     onClick={() => setPreset("max")}
                     className="w-full rounded-xl border border-arc-warn/30 bg-arc-warn/10 px-3 py-2 text-xs text-arc-warn transition-colors hover:bg-arc-warn/15"
                 >
@@ -864,7 +864,7 @@ export function V3AddLiquidity({
                     )
                         .filter((p) => mode !== "single" || p.key === "max")
                         .map((p) => (
-                            <button
+                            <button type="button"
                                 key={p.key}
                                 onClick={() => setPreset(p.key)}
                                 className={cn(
@@ -1002,7 +1002,7 @@ export function V3AddLiquidity({
                         />
                     )}
                     <div className="flex justify-center">
-                        <button
+                        <button type="button"
                             onClick={() => {
                                 // Flip which leg the user is paying with.
                                 // Clear the other-side amount to avoid
@@ -1061,7 +1061,7 @@ export function V3AddLiquidity({
                 />
             )}
 
-            <button
+            <button type="button"
                 onClick={onSubmit}
                 disabled={!canSubmit}
                 className={cn(
@@ -1203,7 +1203,7 @@ function V3TokenInput({
                 <span className="inline-flex items-center gap-2">
                     {balText} {token.symbol}
                     {!disabled && (
-                        <button
+                        <button type="button"
                             onClick={() =>
                                 balance && onChange(formatUnits(balance, token.decimals))
                             }
@@ -1232,7 +1232,7 @@ function ModeTab({
     children: React.ReactNode;
 }) {
     return (
-        <button
+        <button type="button"
             onClick={onClick}
             disabled={disabled}
             title={disabled ? disabledReason : undefined}

@@ -183,7 +183,7 @@ export function TradePanel({ token, symbol, migrated, image, onTradeSuccess }: P
   return (
     <div className="arc-card p-5">
       <div className="mb-4 grid grid-cols-2 gap-1 rounded-xl border border-arc-border bg-arc-bg-elevated p-1">
-        <button
+        <button type="button"
           onClick={() => {
             setSide("buy");
             setAmount("");
@@ -195,7 +195,7 @@ export function TradePanel({ token, symbol, migrated, image, onTradeSuccess }: P
         >
           Buy
         </button>
-        <button
+        <button type="button"
           onClick={() => {
             setSide("sell");
             setAmount("");
@@ -242,7 +242,7 @@ export function TradePanel({ token, symbol, migrated, image, onTradeSuccess }: P
           <span>Slippage tolerance</span>
           <span className="flex gap-1">
             {[50, 100, 300].map((bps) => (
-              <button
+              <button type="button"
                 key={bps}
                 onClick={() => setSlippageBps(bps)}
                 className={cn(
@@ -263,7 +263,7 @@ export function TradePanel({ token, symbol, migrated, image, onTradeSuccess }: P
         {migrated && <div className="mt-2 text-[11px] text-arc-text-faint">DEX fee: 0.3% to LPs</div>}
       </div>
 
-      <button
+      <button type="button"
         onClick={onTrade}
         disabled={!account || amountRaw === 0n || tx.status === "pending"}
         className={cn(

@@ -91,13 +91,13 @@ export function ChainGuard() {
         </div>
 
         <div className="flex gap-2">
-          <button
+          <button type="button"
             onClick={() => setDismissed(true)}
             className="arc-button-secondary flex-1 py-2.5 text-sm"
           >
             Continue anyway
           </button>
-          <button
+          <button type="button"
             onClick={handleSwitch}
             disabled={isPending}
             className="arc-button-primary flex-1 py-2.5 text-sm"

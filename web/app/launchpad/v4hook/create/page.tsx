@@ -441,7 +441,7 @@ function Inner() {
                 </div>
 
                 {/* Submit -------------------------------------------------- */}
-                <button
+                <button type="button"
                     onClick={onCreate}
                     disabled={!formValid || txState.status === "pending"}
                     className={cn(

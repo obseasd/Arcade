@@ -39,7 +39,7 @@ export default function LaunchpadIndexPage() {
   // dedicated /launchpad/v4/list page exposes the full set with filters.
   const v4Preview = useMemo(() => {
     if (!V4_ENABLED) return [];
-    const sorted = [...v4Tokens].sort((a, b) => Number(b.launchedAt - a.launchedAt));
+    const sorted = v4Tokens.toSorted((a, b) => Number(b.launchedAt - a.launchedAt));
     return sorted.slice(0, V4_PREVIEW_LIMIT);
   }, [v4Tokens]);
 
@@ -103,7 +103,7 @@ export default function LaunchpadIndexPage() {
             Launch and trade tokens on Arc&apos;s bonding-curve launchpad. USDC-quoted.
           </p>
         </div>
-        <button
+        <button type="button"
           onClick={() => setLaunchOpen(true)}
           className="arc-button-primary relative overflow-hidden bg-cover bg-center bg-no-repeat px-5 py-2.5 shadow-[0_10px_30px_-12px_rgba(52,90,120,0.55)] ring-1 ring-arc-cta-hover/40"
           style={{ backgroundImage: "url('/create%20token.png')" }}
@@ -195,7 +195,7 @@ export default function LaunchpadIndexPage() {
       <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex flex-wrap items-center gap-1 rounded-xl border border-arc-border bg-arc-bg-elevated p-1">
           {(["all", "new", "trending", "migrating", "migrated"] as Filter[]).map((f) => (
-            <button
+            <button type="button"
               key={f}
               onClick={() => setFilter(f)}
               className={cn(
@@ -238,7 +238,7 @@ export default function LaunchpadIndexPage() {
       {!isLoading && filtered.length === 0 && (
         <div className="arc-card p-12 text-center text-arc-text-muted">
           No tokens yet.{" "}
-          <button onClick={() => setLaunchOpen(true)} className="text-arc-primary hover:underline">
+          <button type="button" onClick={() => setLaunchOpen(true)} className="text-arc-primary hover:underline">
             Launch the first one →
           </button>
         </div>

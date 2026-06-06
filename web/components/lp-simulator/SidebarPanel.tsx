@@ -34,7 +34,7 @@ export function SidebarPanel({ config, presetId, onPreset, onConfigChange, onRes
           {PRESETS.map((p) => {
             const active = p.id === presetId;
             return (
-              <button
+              <button type="button"
                 key={p.id}
                 onClick={() => onPreset(p)}
                 className={cn(
@@ -101,7 +101,7 @@ export function SidebarPanel({ config, presetId, onPreset, onConfigChange, onRes
         </div>
       </div>
 
-      <button
+      <button type="button"
         onClick={onReset}
         className="arc-button-secondary w-full px-3 py-2.5 text-sm"
       >

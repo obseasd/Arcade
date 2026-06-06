@@ -85,7 +85,7 @@ export function SimulationPanel({ config, quotePriceUsd, quoteSymbol }: Props) {
         </div>
         <div className="grid grid-cols-3 gap-2">
           {QUICK_BUYS.map((amount) => (
-            <button
+            <button type="button"
               key={amount}
               onClick={() => addBuy(amount / quotePriceUsd)}
               className="rounded-lg border border-arc-border bg-black/40 px-2 py-2 text-xs font-medium text-arc-text hover:border-arc-cta-hover hover:bg-arc-cta/10"
@@ -103,7 +103,7 @@ export function SimulationPanel({ config, quotePriceUsd, quoteSymbol }: Props) {
             onChange={(e) => setCustom(e.target.value)}
             className="flex-1 rounded-lg border border-arc-border bg-black/40 px-3 py-2 text-xs text-arc-text focus:border-arc-cta-hover focus:outline-none"
           />
-          <button
+          <button type="button"
             onClick={() => {
               const n = Number(custom);
               if (n > 0) {
@@ -118,7 +118,7 @@ export function SimulationPanel({ config, quotePriceUsd, quoteSymbol }: Props) {
           </button>
         </div>
         {buys.length > 0 && (
-          <button
+          <button type="button"
             onClick={reset}
             className="mt-3 flex items-center gap-1.5 text-xs text-arc-text-muted hover:text-arc-text"
           >
@@ -167,7 +167,7 @@ export function SimulationPanel({ config, quotePriceUsd, quoteSymbol }: Props) {
           <label className="text-xs text-arc-text-muted">Pool fee tier</label>
           <div className="mt-1 grid grid-cols-3 gap-1.5">
             {[100, 200, 300].map((b) => (
-              <button
+              <button type="button"
                 key={b}
                 onClick={() => setFeeBps(b)}
                 className={cn(

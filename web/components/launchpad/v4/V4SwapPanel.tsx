@@ -252,7 +252,7 @@ export function V4SwapPanel({ token, symbol }: Props) {
         <div className="arc-card p-5">
             <div className="mb-4 flex items-center justify-between">
                 <h2 className="text-sm font-medium text-arc-text-muted">Swap</h2>
-                <button
+                <button type="button"
                     onClick={() => setShowSettings((s) => !s)}
                     className="rounded-md p-1 text-arc-text-muted hover:bg-arc-surface hover:text-arc-text"
                     aria-label="Slippage settings"
@@ -290,7 +290,7 @@ export function V4SwapPanel({ token, symbol }: Props) {
             />
 
             <div className="my-2 flex justify-center">
-                <button
+                <button type="button"
                     onClick={() => {
                         setDirection((d) => (d === "buy" ? "sell" : "buy"));
                         setAmountIn("");
@@ -344,7 +344,7 @@ export function V4SwapPanel({ token, symbol }: Props) {
                 </div>
             )}
 
-            <button
+            <button type="button"
                 onClick={onSwap}
                 disabled={!canSwap}
                 className={cn(

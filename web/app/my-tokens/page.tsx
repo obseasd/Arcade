@@ -226,7 +226,7 @@ function PortfolioHeader({
                     // chip (px-3 py-1.5 text-xs h-3.5 → px-4 py-2.5 text-[15px]
                     // h-[18px]). Forward icon better matches the macOS-style
                     // curved share arrow than Share2's three-node node graph.
-                    <button
+                    <button type="button"
                         onClick={onShare}
                         className="inline-flex items-center gap-2 rounded-xl border border-arc-border bg-arc-bg-elevated px-4 py-2.5 text-[15px] font-medium text-arc-text transition-colors hover:bg-white/5"
                     >
@@ -255,7 +255,7 @@ function PortfolioTabs({ current, onChange }: { current: TabKey; onChange: (k: T
         // sitting cleanly above it.
         <div className="mb-6 flex gap-6 border-b border-arc-border/60">
             {TABS.map((t) => (
-                <button
+                <button type="button"
                     key={t.key}
                     onClick={() => onChange(t.key)}
                     className={cn(
@@ -406,7 +406,7 @@ function OverviewTab({
                         {/* Timeframe row (visual only) */}
                         <div className="mt-3 flex items-center gap-1 text-xs text-arc-text-muted">
                             {["1H", "1D", "1W", "1M", "1Y", "All"].map((label) => (
-                                <button
+                                <button type="button"
                                     key={label}
                                     disabled
                                     className={cn(
@@ -478,7 +478,7 @@ function OverviewTab({
                                     {holdings.length} held{launchedCount > 0 ? ` · ${launchedCount} launched` : ""}
                                 </div>
                             </div>
-                            <button
+                            <button type="button"
                                 onClick={onShowAllTokens}
                                 className="inline-flex items-center gap-1 rounded-xl border border-arc-border px-3 py-1.5 text-xs text-arc-text-muted hover:bg-white/5 hover:text-arc-text"
                             >
@@ -500,7 +500,7 @@ function OverviewTab({
                                     {activityCount} transaction{activityCount === 1 ? "" : "s"}
                                 </div>
                             </div>
-                            <button
+                            <button type="button"
                                 onClick={onShowAllActivity}
                                 className="inline-flex items-center gap-1 rounded-xl border border-arc-border px-3 py-1.5 text-xs text-arc-text-muted hover:bg-white/5 hover:text-arc-text"
                             >
@@ -558,7 +558,7 @@ function ActionTile({
         );
     }
     return (
-        <button onClick={onClick} disabled={disabled} className={className}>
+        <button type="button" onClick={onClick} disabled={disabled} className={className}>
             {inner}
         </button>
     );
@@ -1179,7 +1179,7 @@ function FilterMenu({
 
     return (
         <div ref={ref} className="relative">
-            <button
+            <button type="button"
                 onClick={() => setOpen((v) => !v)}
                 className={cn(
                     "inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-medium transition-colors",
@@ -1195,7 +1195,7 @@ function FilterMenu({
             {open && (
                 <div className="absolute left-0 top-full z-30 mt-1 w-52 overflow-hidden rounded-xl border border-arc-border bg-arc-bg-elevated shadow-arc-card">
                     {options.map((opt) => (
-                        <button
+                        <button type="button"
                             key={opt.value}
                             onClick={() => {
                                 onChange(opt.value);

@@ -183,7 +183,7 @@ export function MultiTokenSelectModal({
     >
       <div className="flex items-center justify-between border-b border-arc-border px-6 py-4">
         <h3 className="text-base font-semibold">Select a token</h3>
-        <button onClick={onClose} className="text-arc-text-muted hover:text-arc-text">
+        <button type="button" onClick={onClose} className="text-arc-text-muted hover:text-arc-text">
           <X className="h-5 w-5" />
         </button>
       </div>
@@ -206,7 +206,7 @@ export function MultiTokenSelectModal({
             const excluded = !!tpl.address && excludeSet.has(tpl.address.toLowerCase());
             const active = isSelected(tpl.address);
             return (
-              <button
+              <button type="button"
                 key={tpl.symbol}
                 onClick={() => handlePinnedClick(tpl)}
                 disabled={!enabled || excluded}
@@ -242,7 +242,7 @@ export function MultiTokenSelectModal({
           {importedMetaQ.isLoading ? (
             <div className="text-sm text-arc-text-muted">Looking up token at {short(pastedAddress)}…</div>
           ) : importedToken ? (
-            <button
+            <button type="button"
               onClick={() => toggle(importedToken.address)}
               className="flex w-full items-center gap-3 text-left"
             >
@@ -277,7 +277,7 @@ export function MultiTokenSelectModal({
           const atCap = !active && selected.size >= maxSelected;
           return (
             <li key={t.address}>
-              <button
+              <button type="button"
                 onClick={() => toggle(t.address)}
                 disabled={atCap}
                 className={cn(
@@ -334,7 +334,7 @@ export function MultiTokenSelectModal({
         </div>
       </div>
       <div className="px-5 pb-5">
-        <button
+        <button type="button"
           onClick={onConfirmClick}
           disabled={selected.size === 0}
           className="arc-button-primary w-full py-3 text-sm"

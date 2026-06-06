@@ -38,7 +38,7 @@ function TabButton({
   children: React.ReactNode;
 }) {
   return (
-    <button
+    <button type="button"
       onClick={onClick}
       className={cn(
         "text-base font-semibold transition-colors",

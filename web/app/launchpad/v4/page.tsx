@@ -333,7 +333,7 @@ function V4LaunchInner() {
                 {/* Actions ------------------------------------------------- */}
                 <div className="flex flex-col gap-3">
                     {!tokenAddr ? (
-                        <button
+                        <button type="button"
                             onClick={onCreate}
                             disabled={!formValid || createState.status === "pending"}
                             className={cn(
@@ -343,7 +343,7 @@ function V4LaunchInner() {
                             Step 1: Create launch (pays {formatUSDC(CREATION_FEE_USDC)} USDC)
                         </button>
                     ) : (
-                        <button
+                        <button type="button"
                             onClick={onInitPool}
                             disabled={initState.status === "pending"}
                             className={cn(

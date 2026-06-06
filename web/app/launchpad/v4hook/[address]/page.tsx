@@ -550,7 +550,7 @@ function TradeCard({
             {/* Buy / Sell toggle */}
             <div className="mb-4 flex items-center gap-1 rounded-xl border border-arc-border bg-arc-bg-elevated p-1">
                 {(["buy", "sell"] as const).map((t) => (
-                    <button
+                    <button type="button"
                         key={t}
                         onClick={() => {
                             setTab(t);
@@ -634,7 +634,7 @@ function TradeCard({
                 </div>
             </div>
 
-            <button
+            <button type="button"
                 onClick={onSubmit}
                 disabled={ctaDisabled}
                 className={
@@ -654,7 +654,7 @@ function TradeCard({
 
 function QuickBtn({ onClick, children }: { onClick?: () => void; children: React.ReactNode }) {
     return (
-        <button
+        <button type="button"
             onClick={onClick}
             className="rounded-md bg-arc-surface px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-arc-text-muted hover:bg-arc-cta hover:text-white"
         >

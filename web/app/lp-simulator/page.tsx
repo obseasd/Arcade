@@ -52,7 +52,7 @@ export default function LpSimulatorPage() {
           curve → run scenarios. */}
       <div className="mb-4 flex gap-1 rounded-xl border border-arc-border bg-arc-bg-elevated p-1 lg:hidden">
         {(["setup", "chart", "simulate"] as MobileTab[]).map((t) => (
-          <button
+          <button type="button"
             key={t}
             onClick={() => setMobileTab(t)}
             className={cn(
@@ -161,7 +161,7 @@ function ExportConfig({ config }: { config: SimulatorConfig }) {
     <div className="arc-card p-5">
       <div className="mb-3 flex items-center justify-between">
         <h3 className="text-sm font-semibold">Configuration Reference</h3>
-        <button
+        <button type="button"
           onClick={() => setOpen((v) => !v)}
           className="rounded-md border border-arc-border bg-arc-surface-2 px-2.5 py-1 text-xs text-arc-text-muted hover:text-arc-text"
         >
@@ -183,7 +183,7 @@ function ExportConfig({ config }: { config: SimulatorConfig }) {
           {json}
         </pre>
       )}
-      <button
+      <button type="button"
         onClick={() => navigator.clipboard?.writeText(json).catch(() => {})}
         className="mt-3 text-xs text-arc-cta-hover hover:underline"
       >

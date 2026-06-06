@@ -36,7 +36,7 @@ export function ReceiveModal({ address, onClose }: Props) {
             >
                 <div className="flex items-center justify-between">
                     <h2 className="text-base font-semibold text-arc-text">Receive</h2>
-                    <button onClick={onClose} className="text-arc-text-faint hover:text-arc-text">
+                    <button type="button" onClick={onClose} className="text-arc-text-faint hover:text-arc-text">
                         <X className="h-4 w-4" />
                     </button>
                 </div>
@@ -46,7 +46,7 @@ export function ReceiveModal({ address, onClose }: Props) {
                 <div className="mt-4 break-all rounded-xl border border-arc-border bg-arc-surface px-3 py-3 font-mono text-xs text-arc-text">
                     {address}
                 </div>
-                <button
+                <button type="button"
                     onClick={onCopy}
                     className="arc-button-primary mt-4 flex w-full items-center justify-center gap-2 py-2.5 text-sm"
                 >

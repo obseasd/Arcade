@@ -252,7 +252,7 @@ function PauseCard() {
                 payouts. <code>creditSlot</code>, <code>veto</code>, and the admin functions
                 stay live so the locker keeps depositing and you can still respond to incidents.
             </p>
-            <button
+            <button type="button"
                 onClick={onToggle}
                 disabled={submitting}
                 className={cn(
@@ -348,7 +348,7 @@ function TimelockCard() {
                     className="arc-input w-24 rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2 text-sm"
                 />
                 <span className="text-xs text-arc-text-muted">hours</span>
-                <button
+                <button type="button"
                     onClick={onSubmit}
                     disabled={!valid || submitting}
                     className={cn("arc-button-primary ml-auto px-4 py-2 text-sm", (!valid || submitting) && "opacity-60")}
@@ -418,7 +418,7 @@ function SignerCard() {
                     onChange={(e) => setNext(e.target.value)}
                     className="arc-input flex-1 rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2 font-mono text-xs"
                 />
-                <button
+                <button type="button"
                     onClick={onSubmit}
                     disabled={!valid || submitting}
                     className={cn("arc-button-primary px-4 py-2 text-sm", (!valid || submitting) && "opacity-60")}
@@ -473,7 +473,7 @@ function PullFromLockerCard() {
                     onChange={(e) => setTokenInput(e.target.value)}
                     className="arc-input flex-1 rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2 font-mono text-xs"
                 />
-                <button
+                <button type="button"
                     onClick={onSubmit}
                     disabled={!valid || submitting}
                     className={cn("arc-button-primary px-4 py-2 text-sm", (!valid || submitting) && "opacity-60")}
@@ -555,14 +555,14 @@ function LockerRotationCard() {
                 className="arc-input mt-2 w-full rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2 font-mono text-xs"
             />
             <div className="mt-3 flex gap-2">
-                <button
+                <button type="button"
                     onClick={() => run("recipient")}
                     disabled={!canSubmit || submitting !== null}
                     className={cn("arc-button-primary flex-1 px-4 py-2 text-sm", (!canSubmit || submitting !== null) && "opacity-60")}
                 >
                     {submitting === "recipient" ? "Sending…" : "Rotate recipient"}
                 </button>
-                <button
+                <button type="button"
                     onClick={() => run("admin")}
                     disabled={!canSubmit || submitting !== null}
                     className={cn("arc-button-primary flex-1 px-4 py-2 text-sm", (!canSubmit || submitting !== null) && "opacity-60")}
@@ -719,7 +719,7 @@ function ForfeitCard() {
                 </div>
             )}
 
-            <button
+            <button type="button"
                 onClick={onSubmit}
                 disabled={!valid || submitting || (idsValid && !stale)}
                 className={cn(
@@ -808,7 +808,7 @@ function RescueCard() {
                     className="arc-input w-full rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2 text-sm"
                 />
             </div>
-            <button
+            <button type="button"
                 onClick={onSubmit}
                 disabled={!valid || submitting}
                 className={cn(
@@ -873,7 +873,7 @@ function OwnershipCard() {
                     onChange={(e) => setNext(e.target.value)}
                     className="arc-input flex-1 rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2 font-mono text-xs"
                 />
-                <button
+                <button type="button"
                     onClick={onSubmit}
                     disabled={!valid || submitting}
                     className={cn("arc-button-primary px-4 py-2 text-sm", (!valid || submitting) && "opacity-60")}

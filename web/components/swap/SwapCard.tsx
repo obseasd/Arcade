@@ -526,7 +526,7 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
 
       {/* Flip button overlapping both */}
       <div className="relative z-10 -my-2 flex justify-center">
-        <button
+        <button type="button"
           onClick={flipTokens}
           className="rounded-xl border border-arc-border bg-arc-surface-2/40 p-2 backdrop-blur-md transition-all hover:bg-arc-surface-3/60 active:scale-95"
         >
@@ -620,7 +620,7 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
         </div>
       )}
 
-      <button
+      <button type="button"
         onClick={() => setConfirmOpen(true)}
         disabled={!canSwap}
         className="arc-button-primary mt-5 w-full py-3.5 text-base"
@@ -757,7 +757,7 @@ function TokenBox({
       {/* Header: label + token chip */}
       <div className="mb-3 flex items-center justify-between">
         <span className="text-sm text-arc-text-muted">{label}</span>
-        <button
+        <button type="button"
           onClick={onTokenClick}
           className="group flex items-center gap-2 rounded-xl bg-arc-surface-2 px-3 py-2 text-base font-semibold transition-colors hover:bg-arc-surface-3"
         >

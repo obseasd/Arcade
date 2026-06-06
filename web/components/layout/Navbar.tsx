@@ -80,7 +80,7 @@ export function Navbar() {
         {/* Right cluster: wallet widget + mobile hamburger */}
         <div className="flex items-center gap-2">
           <HeaderWalletWidget />
-          <button
+          <button type="button"
             onClick={() => setMobileOpen((v) => !v)}
             aria-label={mobileOpen ? "Close menu" : "Open menu"}
             className="flex h-10 w-10 items-center justify-center rounded-xl border border-arc-border bg-black/15 text-arc-text backdrop-blur-xl transition-colors hover:bg-white/5 md:hidden"

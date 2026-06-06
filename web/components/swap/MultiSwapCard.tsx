@@ -374,7 +374,7 @@ export function MultiSwapCard({ tab, onTabChange }: MultiSwapCardProps) {
       {/* Top button - always dashed (it's the "action" CTA). The empty-state
           placeholder rectangle below stays solid so it reads as the primary
           target instead of competing with this button. */}
-      <button
+      <button type="button"
         onClick={() => setPickerOpen("add")}
         disabled={inputs.length >= MULTISWAP_MAX_INPUTS}
         className={cn(
@@ -417,7 +417,7 @@ export function MultiSwapCard({ tab, onTabChange }: MultiSwapCardProps) {
           "Select tokens" button at the top. */}
       <div className="relative z-10 my-3 flex flex-col items-center gap-1.5">
         {inputs.length > 0 && inputs.length < MULTISWAP_MAX_INPUTS && (
-          <button
+          <button type="button"
             onClick={() => setPickerOpen("add")}
             className="flex h-7 w-7 items-center justify-center rounded-full border border-arc-success/50 bg-arc-success/15 text-arc-success transition-all hover:bg-arc-success/30 active:scale-90"
             title="Add another input token"
@@ -462,7 +462,7 @@ export function MultiSwapCard({ tab, onTabChange }: MultiSwapCardProps) {
         </div>
       )}
 
-      <button
+      <button type="button"
         onClick={onSwap}
         disabled={!canSwap}
         className="arc-button-primary mt-4 w-full py-3.5 text-base"
@@ -579,7 +579,7 @@ function InputBox({
             <TokenIcon symbol={row.token.symbol} size={20} />
             {row.token.symbol ?? "-"}
           </span>
-          <button
+          <button type="button"
             onClick={onRemove}
             className="flex h-8 w-8 items-center justify-center rounded-full bg-arc-surface-2/60 text-arc-text-muted opacity-70 transition-all hover:bg-arc-danger/20 hover:text-arc-danger hover:opacity-100 sm:h-6 sm:w-6"
             title="Remove this token"
@@ -622,7 +622,7 @@ function PlaceholderInputBox({ onClick }: { onClick: () => void }) {
     <div className="rounded-2xl border border-arc-border bg-white/[0.015] p-4">
       <div className="flex items-center justify-between">
         <span className="text-2xl font-medium leading-tight text-arc-text-faint sm:text-3xl">0.0</span>
-        <button
+        <button type="button"
           onClick={onClick}
           className="group flex items-center gap-2 rounded-xl bg-arc-surface-2 px-3 py-1.5 text-sm font-semibold transition-colors hover:bg-arc-surface-3"
         >
@@ -651,7 +651,7 @@ function OutputBox({
     <div className="rounded-2xl border border-arc-border bg-white/[0.015] p-5">
       <div className="mb-2 flex items-center justify-between">
         <span className="text-sm text-arc-text-muted">For (Estimated)</span>
-        <button
+        <button type="button"
           onClick={onTokenClick}
           className="group flex items-center gap-2 rounded-xl bg-arc-surface-2 px-3 py-2 text-base font-semibold transition-colors hover:bg-arc-surface-3"
         >
