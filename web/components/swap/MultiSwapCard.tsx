@@ -1,7 +1,6 @@
 "use client";
 
-import { ArrowDown, ChevronDown, HelpCircle, Plus, X as XIcon } from "lucide-react";
-import Image from "next/image";
+import { ArrowDown, ChevronDown, Plus, X as XIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Address, erc20Abi, formatUnits, maxUint256, parseUnits } from "viem";
 import {
@@ -13,6 +12,8 @@ import {
 } from "wagmi";
 import { MULTISWAP_ABI } from "@/lib/abis/multiSwap";
 import { ADDRESSES, MULTISWAP_MAX_INPUTS, USDC_DECIMALS } from "@/lib/constants";
+import { TransactionSettings } from "@/components/ui/TransactionSettings";
+import { QuickButton } from "@/components/swap/QuickButton";
 import { useV2Tokens } from "@/lib/hooks/useV2Tokens";
 import { useV3Tokens } from "@/lib/hooks/useV3Tokens";
 import { V3_QUOTER_ABI } from "@/lib/abis/v3";
@@ -359,7 +360,7 @@ export function MultiSwapCard({ tab, onTabChange }: MultiSwapCardProps) {
     <div className="arc-card relative p-5">
       <div className="mb-4 flex items-center justify-between">
         <SwapTabs tab={tab} onTabChange={onTabChange} />
-        <SlippagePopover
+        <TransactionSettings
           open={showSettings}
           onToggle={() => setShowSettings((s) => !s)}
           onClose={() => setShowSettings(false)}
@@ -697,138 +698,9 @@ function outputSizeClass(s: string): string {
   return "text-base";
 }
 
-function QuickButton({
-  onClick,
-  children,
-  disabled,
-}: {
-  onClick?: () => void;
-  children: React.ReactNode;
-  disabled?: boolean;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      disabled={disabled || !onClick}
-      className={cn(
-        // Bigger touch target on mobile (~36px tall), back to compact on
-        // sm: up. Apple HIG asks for 44px but our 36px+padding sits in
-        // the acceptable range for inline secondary actions.
-        "rounded-md px-2.5 py-1.5 text-[11px] font-semibold uppercase tracking-wide transition-all sm:px-2 sm:py-1",
-        "bg-arc-surface text-arc-text-muted",
-        "hover:bg-arc-cta hover:text-white",
-        "active:scale-90 active:bg-arc-cta-hover",
-        "disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-arc-surface disabled:hover:text-arc-text-muted",
-      )}
-    >
-      {children}
-    </button>
-  );
-}
+// QuickButton lives in components/swap/QuickButton (audit item 8).
 
-interface SlippagePopoverProps {
-  open: boolean;
-  onToggle: () => void;
-  onClose: () => void;
-  slippageBps: number;
-  slippageCustom: string;
-  onPreset: (bps: number) => void;
-  onCustom: (s: string) => void;
-}
-
-function SlippagePopover({
-  open,
-  onToggle,
-  onClose,
-  slippageBps,
-  slippageCustom,
-  onPreset,
-  onCustom,
-}: SlippagePopoverProps) {
-  const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const onDocClick = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
-    };
-    document.addEventListener("mousedown", onDocClick);
-    return () => document.removeEventListener("mousedown", onDocClick);
-  }, [open, onClose]);
-
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
-
-  return (
-    <div ref={ref} className="relative">
-      <button
-        onClick={onToggle}
-        aria-expanded={open}
-        className={cn(
-          "rounded-lg p-2 transition-colors",
-          open ? "bg-arc-surface-2 text-arc-text" : "text-arc-text-muted hover:bg-arc-surface hover:text-arc-text",
-        )}
-      >
-        <Image src="/slider.png" alt="Slippage" width={18} height={18} className="h-4 w-4 opacity-80" />
-      </button>
-      {open && (
-        <div className="absolute right-0 top-full z-20 mt-2 w-72 max-w-[calc(100vw-1rem)] rounded-2xl border border-arc-border bg-black/45 p-4 shadow-arc-card backdrop-blur-2xl">
-          <div className="mb-3 text-sm font-semibold text-arc-text">Transaction settings</div>
-          <div className="mb-2 flex items-center gap-1.5 text-xs text-arc-text-muted">
-            Slippage tolerance
-            <HelpCircle className="h-3 w-3" />
-          </div>
-          <div className="flex items-center gap-1.5">
-            {PRESETS_BPS.map((bps) => {
-              const active = slippageCustom === "" && slippageBps === bps;
-              return (
-                <button
-                  key={bps}
-                  onClick={() => onPreset(bps)}
-                  className={cn(
-                    "rounded-full px-3 py-1.5 text-xs font-semibold transition-colors",
-                    active
-                      ? "bg-arc-cta text-white"
-                      : "bg-arc-surface text-arc-text-muted hover:bg-arc-surface-2 hover:text-arc-text",
-                  )}
-                >
-                  {bps / 100}%
-                </button>
-              );
-            })}
-            <div
-              className={cn(
-                "ml-auto flex items-center gap-0.5 rounded-full border px-2.5 py-1 transition-colors",
-                slippageCustom !== "" ? "border-arc-cta bg-arc-bg" : "border-arc-border bg-arc-surface",
-              )}
-            >
-              <input
-                type="text"
-                inputMode="decimal"
-                value={slippageCustom}
-                onChange={(e) => onCustom(e.target.value)}
-                placeholder="0.10"
-                className="arc-input w-10 text-right text-xs"
-              />
-              <span className="text-[10px] text-arc-text-muted">%</span>
-            </div>
-          </div>
-          {slippageBps > 500 && (
-            <div className="mt-3 rounded-lg border border-arc-warn/30 bg-arc-warn/10 p-2 text-[11px] text-arc-warn">
-              High slippage - your trade may be front-run.
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
+// SlippagePopover replaced by shared TransactionSettings (audit item 8).
 
 // ===== Helpers =====
 

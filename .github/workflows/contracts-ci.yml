@@ -27,6 +27,13 @@ jobs:
         with:
           version: nightly
 
+      # Patch v3-periphery's PoolAddress.POOL_INIT_CODE_HASH so the NPM
+      # computes the address that our Foundry-built UniswapV3Pool actually
+      # deploys to. Idempotent, see contracts/scripts/patch-v3-periphery.sh
+      # and memory/project_arcade_v3_init_hash.md for the full rationale.
+      - name: patch v3-periphery init hash
+        run: bash scripts/patch-v3-periphery.sh
+
       # The V3 layer (Uniswap V3 fork in 0.7.6 + our v3src/) lives in a separate
       # foundry profile because of the Solidity version split. Build it FIRST so
       # the default-profile DeploySecurityV3.s.sol script can vm.getCode the

@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowDownUp, ChevronDown, HelpCircle } from "lucide-react";
+import { ArrowDownUp, ChevronDown } from "lucide-react";
 import Image from "next/image";
 import { useRef } from "react";
 import { useEffect, useMemo, useState } from "react";
@@ -10,6 +10,8 @@ import { ROUTER_ABI } from "@/lib/abis/dex";
 import { LAUNCHPAD_ABI } from "@/lib/abis/launchpad";
 import { V3_QUOTER_ABI, V3_ROUTER_ABI } from "@/lib/abis/v3";
 import { ADDRESSES, USDC_DECIMALS } from "@/lib/constants";
+import { TransactionSettings } from "@/components/ui/TransactionSettings";
+import { QuickButton } from "@/components/swap/QuickButton";
 import { useApproveIfNeeded } from "@/lib/hooks/useApproveIfNeeded";
 import { useV2Tokens } from "@/lib/hooks/useV2Tokens";
 import { useV3Tokens } from "@/lib/hooks/useV3Tokens";
@@ -480,7 +482,7 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
     <div className="arc-card relative p-5">
       <div className="mb-4 flex items-center justify-between">
         <SwapTabs tab={tab} onTabChange={onTabChange} />
-        <SlippagePopover
+        <TransactionSettings
           open={showSettings}
           onToggle={() => setShowSettings((s) => !s)}
           onClose={() => setShowSettings(false)}
@@ -819,131 +821,11 @@ function TokenBox({
   );
 }
 
-function QuickButton({ onClick, children }: { onClick?: () => void; children: React.ReactNode }) {
-  return (
-    <button
-      onClick={onClick}
-      disabled={!onClick}
-      className={cn(
-        "rounded-md px-2 py-1 text-[11px] font-semibold uppercase tracking-wide transition-all",
-        "bg-arc-surface text-arc-text-muted",
-        "hover:bg-arc-cta hover:text-white",
-        "active:scale-90 active:bg-arc-cta-hover",
-        "disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-arc-surface disabled:hover:text-arc-text-muted",
-      )}
-    >
-      {children}
-    </button>
-  );
-}
-
-interface SlippagePopoverProps {
-  open: boolean;
-  onToggle: () => void;
-  onClose: () => void;
-  slippageBps: number;
-  slippageCustom: string;
-  onPreset: (bps: number) => void;
-  onCustom: (s: string) => void;
-}
-
-function SlippagePopover({
-  open,
-  onToggle,
-  onClose,
-  slippageBps,
-  slippageCustom,
-  onPreset,
-  onCustom,
-}: SlippagePopoverProps) {
-  const ref = useRef<HTMLDivElement>(null);
-
-  // Close on outside click
-  useEffect(() => {
-    if (!open) return;
-    const onDocClick = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
-    };
-    document.addEventListener("mousedown", onDocClick);
-    return () => document.removeEventListener("mousedown", onDocClick);
-  }, [open, onClose]);
-
-  // Close on Escape
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
-
-  return (
-    <div ref={ref} className="relative">
-      <button
-        onClick={onToggle}
-        aria-expanded={open}
-        className={cn(
-          "rounded-lg p-2 transition-colors",
-          open ? "bg-arc-surface-2 text-arc-text" : "text-arc-text-muted hover:bg-arc-surface hover:text-arc-text",
-        )}
-      >
-        <Image src="/slider.png" alt="Slippage" width={18} height={18} className="h-4 w-4 opacity-80" />
-      </button>
-      {open && (
-        <div
-          className="absolute right-0 top-full z-20 mt-2 w-72 max-w-[calc(100vw-1rem)] rounded-2xl border border-arc-border bg-black/45 p-4 shadow-arc-card backdrop-blur-2xl"
-        >
-          <div className="mb-3 text-sm font-semibold text-arc-text">Transaction settings</div>
-          <div className="mb-2 flex items-center gap-1.5 text-xs text-arc-text-muted">
-            Slippage tolerance
-            <HelpCircle className="h-3 w-3" />
-          </div>
-          <div className="flex items-center gap-1.5">
-            {PRESETS_BPS.map((bps) => {
-              const active = slippageCustom === "" && slippageBps === bps;
-              return (
-                <button
-                  key={bps}
-                  onClick={() => onPreset(bps)}
-                  className={cn(
-                    "rounded-full px-3 py-1.5 text-xs font-semibold transition-colors",
-                    active
-                      ? "bg-arc-cta text-white"
-                      : "bg-arc-surface text-arc-text-muted hover:bg-arc-surface-2 hover:text-arc-text",
-                  )}
-                >
-                  {bps / 100}%
-                </button>
-              );
-            })}
-            <div
-              className={cn(
-                "ml-auto flex items-center gap-0.5 rounded-full border px-2.5 py-1 transition-colors",
-                slippageCustom !== "" ? "border-arc-cta bg-arc-bg" : "border-arc-border bg-arc-surface",
-              )}
-            >
-              <input
-                type="text"
-                inputMode="decimal"
-                value={slippageCustom}
-                onChange={(e) => onCustom(e.target.value)}
-                placeholder="0.10"
-                className="arc-input w-10 text-right text-xs"
-              />
-              <span className="text-[10px] text-arc-text-muted">%</span>
-            </div>
-          </div>
-          {slippageBps > 500 && (
-            <div className="mt-3 rounded-lg border border-arc-warn/30 bg-arc-warn/10 p-2 text-[11px] text-arc-warn">
-              High slippage - your trade may be front-run.
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
+// QuickButton + SlippagePopover used to be inline. Both were duplicated
+// across SwapCard / LimitCard / MultiSwapCard with ~85% identical code.
+// Now QuickButton lives in components/swap/QuickButton and the slippage
+// popover is the shared TransactionSettings in components/ui (also used
+// by /positions/add). Audit item 8.
 
 // ===== Helpers =====
 

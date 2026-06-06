@@ -8,6 +8,8 @@ import { useAccount, useReadContract, useWriteContract } from "wagmi";
 import { ROUTER_ABI } from "@/lib/abis/dex";
 import { V3_QUOTER_ABI } from "@/lib/abis/v3";
 import { ADDRESSES, LIMIT_ORDERS_ENABLED, USDC_DECIMALS, V3_FEE } from "@/lib/constants";
+import { TransactionSettings } from "@/components/ui/TransactionSettings";
+import { QuickButton } from "@/components/swap/QuickButton";
 import { useV2Tokens } from "@/lib/hooks/useV2Tokens";
 import { useV3Tokens } from "@/lib/hooks/useV3Tokens";
 import { useApproveIfNeeded } from "@/lib/hooks/useApproveIfNeeded";
@@ -476,7 +478,7 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
         <div className="arc-card relative p-5">
                 <div className="mb-4 flex items-center justify-between">
                     <SwapTabs tab={tab} onTabChange={onTabChange} />
-                    <SlippagePopover
+                    <TransactionSettings
                         open={showSettings}
                         onToggle={() => setShowSettings((s) => !s)}
                         onClose={() => setShowSettings(false)}
@@ -778,29 +780,8 @@ function TokenRow({
     );
 }
 
-function QuickButton({
-    onClick,
-    children,
-}: {
-    onClick?: () => void;
-    children: React.ReactNode;
-}) {
-    return (
-        <button
-            onClick={onClick}
-            disabled={!onClick}
-            className={cn(
-                "rounded-md px-2 py-1 text-[11px] font-semibold uppercase tracking-wide transition-all",
-                "bg-arc-surface text-arc-text-muted",
-                "hover:bg-arc-cta hover:text-white",
-                "active:scale-90 active:bg-arc-cta-hover",
-                "disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-arc-surface disabled:hover:text-arc-text-muted",
-            )}
-        >
-            {children}
-        </button>
-    );
-}
+// QuickButton lives in components/swap/QuickButton (extracted 2026-06-06,
+// audit item 8).
 
 function CustomNumInput({
     label,
@@ -825,130 +806,7 @@ function CustomNumInput({
     );
 }
 
-const SLIPPAGE_PRESETS_BPS = [10, 50, 100];
-
-/**
- * Transaction settings popover for the Limit card. Lets the maker configure
- * the slippage tolerance applied below the trigger price when computing the
- * on-chain dstMinAmount floor. Mirrors the regular Swap card's slippage UX
- * so the controls feel consistent.
- */
-function SlippagePopover({
-    open,
-    onToggle,
-    onClose,
-    slippageBps,
-    slippageCustom,
-    onPreset,
-    onCustom,
-}: {
-    open: boolean;
-    onToggle: () => void;
-    onClose: () => void;
-    slippageBps: number;
-    slippageCustom: string;
-    onPreset: (bps: number) => void;
-    onCustom: (v: string) => void;
-}) {
-    const ref = useRef<HTMLDivElement>(null);
-
-    useEffect(() => {
-        if (!open) return;
-        const onDocClick = (e: MouseEvent) => {
-            if (ref.current && !ref.current.contains(e.target as Node)) onClose();
-        };
-        document.addEventListener("mousedown", onDocClick);
-        return () => document.removeEventListener("mousedown", onDocClick);
-    }, [open, onClose]);
-
-    useEffect(() => {
-        if (!open) return;
-        const onKey = (e: KeyboardEvent) => {
-            if (e.key === "Escape") onClose();
-        };
-        window.addEventListener("keydown", onKey);
-        return () => window.removeEventListener("keydown", onKey);
-    }, [open, onClose]);
-
-    return (
-        <div ref={ref} className="relative">
-            <button
-                onClick={onToggle}
-                aria-expanded={open}
-                className={cn(
-                    "rounded-lg p-2 transition-colors",
-                    open
-                        ? "bg-arc-bg-elevated text-arc-text"
-                        : "text-arc-text-muted hover:bg-arc-bg-elevated hover:text-arc-text",
-                )}
-                title="Transaction settings"
-            >
-                <Image
-                    src="/slider.png"
-                    alt="Settings"
-                    width={18}
-                    height={18}
-                    className="h-4 w-4 opacity-80"
-                />
-            </button>
-            {open && (
-                <div className="absolute right-0 top-full z-20 mt-2 w-72 max-w-[calc(100vw-1rem)] rounded-2xl border border-arc-border bg-black/45 p-4 shadow-arc-card backdrop-blur-2xl">
-                    <div className="mb-3 text-sm font-semibold text-arc-text">
-                        Transaction settings
-                    </div>
-                    <div className="mb-2 text-xs text-arc-text-muted">
-                        Slippage tolerance
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                        {SLIPPAGE_PRESETS_BPS.map((bps) => {
-                            const active = slippageCustom === "" && slippageBps === bps;
-                            return (
-                                <button
-                                    key={bps}
-                                    onClick={() => onPreset(bps)}
-                                    className={cn(
-                                        "rounded-full px-3 py-1.5 text-xs font-semibold transition-colors",
-                                        active
-                                            ? "bg-arc-cta text-white"
-                                            : "bg-arc-bg-elevated text-arc-text-muted hover:bg-white/5 hover:text-arc-text",
-                                    )}
-                                >
-                                    {bps / 100}%
-                                </button>
-                            );
-                        })}
-                        <div
-                            className={cn(
-                                "ml-auto flex items-center gap-0.5 rounded-full border px-2.5 py-1 transition-colors",
-                                slippageCustom !== ""
-                                    ? "border-arc-cta-hover bg-arc-bg-elevated"
-                                    : "border-arc-border bg-arc-bg-elevated",
-                            )}
-                        >
-                            <input
-                                type="text"
-                                inputMode="decimal"
-                                value={slippageCustom}
-                                onChange={(e) => onCustom(e.target.value)}
-                                placeholder="0.50"
-                                className="w-12 bg-transparent text-right text-xs text-arc-text outline-none"
-                            />
-                            <span className="text-[10px] text-arc-text-muted">%</span>
-                        </div>
-                    </div>
-                    {slippageBps > 500 && (
-                        <div className="mt-3 rounded-lg border border-arc-warn/30 bg-arc-warn/10 p-2 text-[11px] text-arc-warn">
-                            High slippage. Your minimum output is more than 5% below
-                            the trigger price.
-                        </div>
-                    )}
-                    <div className="mt-3 text-[10px] text-arc-text-faint">
-                        Limit orders fill at or above the trigger price; slippage is
-                        the floor below the trigger you are willing to accept on the
-                        on-chain Ask.
-                    </div>
-                </div>
-            )}
-        </div>
-    );
-}
+// SlippagePopover replaced by the shared TransactionSettings (components/ui).
+// Same gear icon + presets + custom field; the prior Limit-specific footer
+// note ("Limit orders fill at or above the trigger price...") was moved into
+// the trigger-price input help text where it actually reads.
