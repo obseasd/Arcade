@@ -518,10 +518,14 @@ export function V3AddLiquidity({
                 },
             ] as const;
 
-            // Simulate the mint before broadcasting so a revert (M0/M1/
-            // TLU/etc) surfaces with the actual on-chain reason instead of
-            // burning gas to discover it. simulateContract uses the same
-            // RPC eth_call path the pool uses for its require checks.
+            // Simulate the mint before broadcasting. NOT fatal: if simulate
+            // reverts we still try the real tx, because Arc's USDC blocklist
+            // precompile and other chain-specific quirks can produce false
+            // positives in eth_call that don't reproduce on-chain. The
+            // simulate output goes to the browser console so DevTools shows
+            // the full revert chain — short / cause / data — for diagnosis,
+            // and a warning toast tells the user we proceeded despite a sim
+            // warning so a real on-chain revert isn't a surprise.
             try {
                 await publicClient.simulateContract({
                     address: ADDRESSES.v3PositionManager,
@@ -531,17 +535,37 @@ export function V3AddLiquidity({
                     account,
                 });
             } catch (simErr: unknown) {
-                const o = simErr as Record<string, unknown> | null;
-                const reason =
-                    o && typeof o === "object"
-                        ? ((o.cause as Record<string, unknown> | undefined)?.reason as string | undefined) ??
-                          (o.shortMessage as string | undefined) ??
-                          (o.details as string | undefined) ??
-                          (o.message as string | undefined)
-                        : undefined;
-                throw new Error(
-                    `V3 simulate-mint reverted: ${reason || "unknown"}. Pool ${resolvedPool.slice(0, 10)}…, range [${actualTickLower}, ${actualTickUpper}], exactA0=${exactA0}, exactA1=${exactA1}, min0=${amount0Min}, min1=${amount1Min}.`,
-                );
+                // Walk every level of the viem error chain so a bare
+                // "execution reverted" still surfaces the underlying revert
+                // data (4byte selector, ABI-decoded args, etc).
+                const chain: string[] = [];
+                let cur: unknown = simErr;
+                for (let i = 0; cur && i < 6; i++) {
+                    const o = cur as Record<string, unknown>;
+                    const bits = [
+                        o.errorName,
+                        o.reason,
+                        o.shortMessage,
+                        o.signature,
+                        o.data,
+                    ]
+                        .filter((v) => v !== undefined && v !== null && v !== "")
+                        .map((v) => String(v));
+                    if (bits.length > 0) chain.push(bits.join(" | "));
+                    cur = (o.cause as unknown) ?? null;
+                }
+                // eslint-disable-next-line no-console
+                console.warn("[V3 mint] simulate reverted, proceeding anyway:", {
+                    err: simErr,
+                    chain,
+                    mintArgs,
+                    resolvedPool,
+                });
+                pushToast({
+                    kind: "error",
+                    title: "V3 mint sim warning",
+                    message: `Simulate flagged a revert (${chain[0] ?? "unknown"}); broadcasting the real tx anyway. Open DevTools console for the full chain.`,
+                });
             }
 
             // Use the EXACT consumed amounts as Desired so V3's mint binds
