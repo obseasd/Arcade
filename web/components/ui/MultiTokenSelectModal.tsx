@@ -1,7 +1,7 @@
 "use client";
 
 import { Search, X, Check, Plus } from "lucide-react";
-import { useState, useMemo, useEffect, useCallback } from "react";
+import { useState, useMemo, useCallback } from "react";
 import { Address, erc20Abi, isAddress, zeroAddress } from "viem";
 import { useReadContracts } from "wagmi";
 import { Modal } from "./Modal";
@@ -52,12 +52,20 @@ export function MultiTokenSelectModal({
   // Working selection (lowercased addresses) - staged client-side until Confirm.
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
-  useEffect(() => {
+  // Reset on the open=false -> true transition. Stored as a prev-prop check
+  // during render rather than a useEffect: the effect-based version showed a
+  // brief stale UI between the prop change and the re-render committed by the
+  // setQ/setSelected calls (`https://react.doctr/r/state-synced-to-prop-in-effect`).
+  // Doing it in render schedules the state update synchronously so the next
+  // paint already sees the cleared input + seeded selection set.
+  const [prevOpen, setPrevOpen] = useState(open);
+  if (open !== prevOpen) {
+    setPrevOpen(open);
     if (open) {
       setQ("");
       setSelected(new Set(initialSelected.map((a) => a.toLowerCase())));
     }
-  }, [open, initialSelected]);
+  }
 
   const pinnedTemplates: PinnedTemplate[] = useMemo(
     () => PINNED.map((p, i) => (i === 0 ? { ...p, address: ADDRESSES.usdc } : p)),

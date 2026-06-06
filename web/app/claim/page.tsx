@@ -57,58 +57,51 @@ function ClaimPageInner() {
     nonce &&
     sig;
 
-  if (error) {
-    return <ErrorState error={error} />;
-  }
-
-  if (!hasSigParams) {
-    return <Lobby />;
-  }
-
-  const positionId = BigInt(positionIdStr!);
-  const slotIndex = BigInt(slotIndexStr!);
-  const pairedAmount = BigInt(pairedAmountStr!);
-  const clankerAmount = BigInt(clankerAmountStr!);
-  const deadline = BigInt(deadlineStr!);
-
+  // --------------------------------------------------------------
+  // Hooks live BEFORE the early returns. Rules of Hooks: every render
+  // must call the same hooks in the same order. The prior layout had
+  // these useReadContract() calls after `if (error)` / `if
+  // (!hasSigParams)` returns, which means React saw N hooks on the
+  // first render (error branch) and N+6 on the second (claim branch),
+  // tripping the "rendered more hooks than during the previous render"
+  // invariant. Each query is already gated by `query.enabled` so a
+  // missing param parks the query in idle state - no extra RPC, no
+  // crash, identical user-visible behaviour to the prior version.
+  // --------------------------------------------------------------
   const escrow = ADDRESSES.twitterEscrow;
+  const positionId = hasSigParams ? BigInt(positionIdStr!) : 0n;
+  const slotIndex = hasSigParams ? BigInt(slotIndexStr!) : 0n;
+  const pairedAmount = hasSigParams ? BigInt(pairedAmountStr!) : 0n;
+  const clankerAmount = hasSigParams ? BigInt(clankerAmountStr!) : 0n;
+  const deadline = hasSigParams ? BigInt(deadlineStr!) : 0n;
 
   const pairedSymbolQ = useReadContract({
-    address: pairedToken!,
+    address: pairedToken ?? undefined,
     abi: erc20Abi,
     functionName: "symbol",
-    query: { enabled: !!pairedToken },
+    query: { enabled: !!pairedToken && !!hasSigParams },
   });
   const tokenSymbolQ = useReadContract({
-    address: token!,
+    address: token ?? undefined,
     abi: erc20Abi,
     functionName: "symbol",
-    query: { enabled: !!token },
+    query: { enabled: !!token && !!hasSigParams },
   });
-  const pairedSymbol = (pairedSymbolQ.data as string | undefined) ?? "?";
-  const tokenSymbol = (tokenSymbolQ.data as string | undefined) ?? "?";
-  const isPairedUsdc = pairedToken!.toLowerCase() === ADDRESSES.usdc.toLowerCase();
-  const pairedDecimals = isPairedUsdc ? USDC_DECIMALS : 18;
-
   // Check if already claimed on-chain.
   const claimedQ = useReadContract({
     address: escrow,
     abi: TWITTER_ESCROW_V3_ABI,
     functionName: "claimed",
     args: [positionId, slotIndex],
-    query: { enabled: !!escrow },
+    query: { enabled: !!escrow && !!hasSigParams },
   });
-  const alreadyClaimed = !!(claimedQ.data as boolean | undefined);
-
   // Read the on-chain timelock so we can show the user a wait countdown.
   const timelockQ = useReadContract({
     address: escrow,
     abi: TWITTER_ESCROW_V3_ABI,
     functionName: "claimTimelock",
-    query: { enabled: !!escrow },
+    query: { enabled: !!escrow && !!hasSigParams },
   });
-  const timelockSec = Number((timelockQ.data as bigint | undefined) ?? 0n);
-
   // Live escrow balances for both pots. If both are zero AND signed amounts
   // are zero too, the user landed here without anyone having called
   // locker.collectFees yet - the fees are sitting in the V3 pool. We then
@@ -121,16 +114,31 @@ function ClaimPageInner() {
     address: escrow,
     abi: TWITTER_ESCROW_V3_ABI,
     functionName: "balances",
-    args: [positionId, slotIndex, pairedToken!],
-    query: { enabled: !!escrow && !!pairedToken },
+    args: [positionId, slotIndex, pairedToken ?? ("0x0000000000000000000000000000000000000000" as Address)],
+    query: { enabled: !!escrow && !!pairedToken && !!hasSigParams },
   });
   const balanceClankerQ = useReadContract({
     address: escrow,
     abi: TWITTER_ESCROW_V3_ABI,
     functionName: "balances",
-    args: [positionId, slotIndex, clankerToken!],
-    query: { enabled: !!escrow && !!clankerToken },
+    args: [positionId, slotIndex, clankerToken ?? ("0x0000000000000000000000000000000000000000" as Address)],
+    query: { enabled: !!escrow && !!clankerToken && !!hasSigParams },
   });
+
+  if (error) {
+    return <ErrorState error={error} />;
+  }
+
+  if (!hasSigParams) {
+    return <Lobby />;
+  }
+
+  const pairedSymbol = (pairedSymbolQ.data as string | undefined) ?? "?";
+  const tokenSymbol = (tokenSymbolQ.data as string | undefined) ?? "?";
+  const isPairedUsdc = pairedToken!.toLowerCase() === ADDRESSES.usdc.toLowerCase();
+  const pairedDecimals = isPairedUsdc ? USDC_DECIMALS : 18;
+  const alreadyClaimed = !!(claimedQ.data as boolean | undefined);
+  const timelockSec = Number((timelockQ.data as bigint | undefined) ?? 0n);
   const livePaired = (balancePairedQ.data as bigint | undefined) ?? 0n;
   const liveClanker = (balanceClankerQ.data as bigint | undefined) ?? 0n;
   const needsSync = livePaired === 0n && liveClanker === 0n;

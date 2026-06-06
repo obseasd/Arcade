@@ -16,8 +16,25 @@ const TWITTER_AUTH_URL = "https://twitter.com/i/oauth2/authorize";
  *
  * Stores a signed cookie with the PKCE verifier and the params, then redirects
  * the user to Twitter's authorization page.
+ *
+ * CSRF protection: the GET has a side effect (sets a state cookie), which
+ * react-doctor flagged. We can't switch to POST without breaking the
+ * <a href> click flow OAuth needs, so we instead check Sec-Fetch-Site:
+ * - "same-origin" (link click from our own page) -> allowed
+ * - "none" (typed URL, bookmark) -> allowed
+ * - "cross-site" / "same-site" (cross-origin <img>, iframe, etc.) -> blocked
+ * Older browsers that don't send Sec-Fetch-Site fall through (fail open),
+ * matching the modern OWASP guidance for legacy compat.
  */
 export async function GET(req: NextRequest) {
+  const fetchSite = req.headers.get("sec-fetch-site");
+  if (fetchSite && fetchSite !== "same-origin" && fetchSite !== "none") {
+    return NextResponse.json(
+      { error: "Cross-origin OAuth init not allowed" },
+      { status: 403 },
+    );
+  }
+
   const { searchParams } = req.nextUrl;
   const token = searchParams.get("token");
   const slotIndex = searchParams.get("slotIndex");
