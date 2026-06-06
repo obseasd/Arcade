@@ -439,12 +439,13 @@ function V3PositionRow({
                             </span>
                             <span
                                 className={cn(
+                                    // Status chip text in white (per design):
+                                    // the coloured dot still encodes the
+                                    // in/out-of-range signal so we don't
+                                    // need the green/amber text duplicating
+                                    // it.
                                     "inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-semibold",
-                                    !slot0
-                                        ? "text-arc-text-muted"
-                                        : inRange
-                                          ? "text-arc-success"
-                                          : "text-arc-warn",
+                                    !slot0 ? "text-arc-text-muted" : "text-white",
                                 )}
                             >
                                 <span
@@ -513,28 +514,29 @@ function V3PositionRow({
                     </div>
                 </div>
                 <div className="space-y-1.5">
-                    <div className="flex items-center justify-between text-sm">
-                        <span className="inline-flex items-center gap-2">
-                            <TokenIcon symbol={t0Info.symbol} size={18} />
-                            <span className="tabular-nums font-semibold text-arc-text">
-                                {formatTok(underlying.amount0, t0Info.decimals)}
-                            </span>
-                            <span className="text-arc-text-muted">{t0Info.symbol}</span>
+                    {/* Per-token row. The pct chip sits IN THE FLEX flow
+                        right next to the symbol (instead of being pushed
+                        to the far right by justify-between), so it reads
+                        as "1.7459 USDC (72.27%)" rather than orphaned in
+                        the right gutter. */}
+                    <div className="flex items-center gap-2 text-sm">
+                        <TokenIcon symbol={t0Info.symbol} size={18} />
+                        <span className="tabular-nums font-semibold text-arc-text">
+                            {formatTok(underlying.amount0, t0Info.decimals)}
                         </span>
+                        <span className="text-arc-text-muted">{t0Info.symbol}</span>
                         {pct0 !== undefined && (
                             <span className="rounded-md bg-sky-400/10 px-1.5 py-0.5 text-[10px] font-semibold text-sky-400">
                                 {pct0.toFixed(2)}%
                             </span>
                         )}
                     </div>
-                    <div className="flex items-center justify-between text-sm">
-                        <span className="inline-flex items-center gap-2">
-                            <TokenIcon symbol={t1Info.symbol} size={18} />
-                            <span className="tabular-nums font-semibold text-arc-text">
-                                {formatTok(underlying.amount1, t1Info.decimals)}
-                            </span>
-                            <span className="text-arc-text-muted">{t1Info.symbol}</span>
+                    <div className="flex items-center gap-2 text-sm">
+                        <TokenIcon symbol={t1Info.symbol} size={18} />
+                        <span className="tabular-nums font-semibold text-arc-text">
+                            {formatTok(underlying.amount1, t1Info.decimals)}
                         </span>
+                        <span className="text-arc-text-muted">{t1Info.symbol}</span>
                         {pct1 !== undefined && (
                             <span className="rounded-md bg-sky-400/10 px-1.5 py-0.5 text-[10px] font-semibold text-sky-400">
                                 {pct1.toFixed(2)}%
@@ -639,16 +641,15 @@ function PriceTile({
     return (
         <div
             className={cn(
-                // Padding pulled in from p-3 -> p-2.5 and value font from
-                // text-base -> text-[13px] so very-wide values (huge max
-                // prices, or exponentials for very thin pools) still fit on
-                // one line. truncate keeps it from breaking the row if the
-                // upstream price ever overflows the new ceiling.
+                // Tight tile: p-2.5, value text-[13px] truncated. Label is
+                // text-[9px] + whitespace-nowrap so "CURRENT PRICE" never
+                // wraps onto two lines (was breaking on the middle tile
+                // because the column is narrowest there).
                 "rounded-xl border bg-white/[0.015] p-2.5",
                 highlight ? "border-sky-400/60" : "border-arc-border",
             )}
         >
-            <div className="text-[10px] uppercase tracking-wider text-arc-text-muted">
+            <div className="whitespace-nowrap text-[9px] uppercase tracking-wider text-arc-text-muted">
                 {label}
             </div>
             <div className="mt-1 truncate text-[13px] font-semibold tabular-nums text-arc-text">
