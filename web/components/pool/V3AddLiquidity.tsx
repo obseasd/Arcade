@@ -17,6 +17,7 @@ import { arcTestnet } from "@/lib/chains";
 import { useApproveIfNeeded } from "@/lib/hooks/useApproveIfNeeded";
 import { pushToast } from "@/lib/toast";
 import { TokenIcon } from "@/components/ui/TokenIcon";
+import { ZapBreakdownPanel } from "@/components/pool/ZapBreakdownPanel";
 import {
     defaultTickSpacingForFee,
     encodeSqrtPriceX96,
@@ -256,6 +257,55 @@ export function V3AddLiquidity({
     );
 
     const [submitting, setSubmitting] = useState(false);
+
+    // V3 zap quote for the pre-sign breakdown panel. Pulls the contract's
+    // own closed-form math via the new quoteZap view helper (audit
+    // improvement #4) so the user reads the same swap leg + expected
+    // liquidity the contract will execute. Only fires in Single Asset mode
+    // with a pool + amount in flight.
+    const singleTypedRaw = (() => {
+        try {
+            if (mode !== "single") return 0n;
+            if (zapTokenSide === "0" && amount0)
+                return parseUnits(amount0, t0.decimals);
+            if (zapTokenSide === "1" && amount1)
+                return parseUnits(amount1, t1.decimals);
+        } catch {
+            /* ignore parse errors during typing */
+        }
+        return 0n;
+    })();
+    const v3QuoteQ = useReadContract({
+        address: ADDRESSES.v3Zap,
+        abi: V3_ZAP_ABI,
+        functionName: "quoteZap",
+        args: [
+            {
+                tokenIn: zapTokenSide === "0" ? t0.address : t1.address,
+                otherToken: zapTokenSide === "0" ? t1.address : t0.address,
+                fee: feePip,
+                amountIn: singleTypedRaw,
+                tickLower: tickLower,
+                tickUpper: tickUpper,
+            },
+        ],
+        query: {
+            enabled:
+                mode === "single" &&
+                zapEnabled &&
+                hasPool &&
+                singleTypedRaw > 0n,
+        },
+    });
+    const v3Quote = v3QuoteQ.data as
+        | {
+              swapAmount: bigint;
+              expectedOut: bigint;
+              expectedAmount0: bigint;
+              expectedAmount1: bigint;
+              expectedLiquidity: bigint;
+          }
+        | undefined;
 
     // Out-of-range single-sided logic only makes sense when a pool already
     // exists (we know the current tick). On a fresh pool the user is
@@ -994,6 +1044,32 @@ export function V3AddLiquidity({
                         token={zapTokenSide === "0" ? t1 : t0}
                     />
                 </>
+            )}
+
+            {/* Pre-sign breakdown - Single Asset only. Calls quoteZap on the
+                V3 zap contract so the user reads the SAME split + expected
+                liquidity the on-chain mint will use. Audit improvement #5. */}
+            {mode === "single" && v3Quote && singleTypedRaw > 0n && (
+                <ZapBreakdownPanel
+                    variant="v3"
+                    tokenIn={
+                        zapTokenSide === "0"
+                            ? { symbol: t0.symbol, decimals: t0.decimals }
+                            : { symbol: t1.symbol, decimals: t1.decimals }
+                    }
+                    tokenOther={
+                        zapTokenSide === "0"
+                            ? { symbol: t1.symbol, decimals: t1.decimals }
+                            : { symbol: t0.symbol, decimals: t0.decimals }
+                    }
+                    amountIn={singleTypedRaw}
+                    swapAmount={v3Quote.swapAmount}
+                    expectedOut={v3Quote.expectedOut}
+                    expectedAmount0={v3Quote.expectedAmount0}
+                    expectedAmount1={v3Quote.expectedAmount1}
+                    expectedLiquidity={v3Quote.expectedLiquidity}
+                    slippageBps={slippageBps}
+                />
             )}
 
             <button

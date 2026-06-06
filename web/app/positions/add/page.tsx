@@ -34,6 +34,7 @@ import { pushToast } from "@/lib/toast";
 import { TokenIcon } from "@/components/ui/TokenIcon";
 import { TransactionSettings } from "@/components/ui/TransactionSettings";
 import { V3AddLiquidity } from "@/components/pool/V3AddLiquidity";
+import { ZapBreakdownPanel } from "@/components/pool/ZapBreakdownPanel";
 import { cn, formatLpBalance } from "@/lib/utils";
 
 type Mode = "dual" | "single";
@@ -560,6 +561,25 @@ function AddLiquidityInner() {
                                 : undefined
                         }
                     />
+                )}
+
+                {/* Pre-sign breakdown - Single Asset only. Audit improvement
+                    #5 from the 2026-06-06 zap review: render swap leg +
+                    expected LP + slippage before the user signs the
+                    black-box "Zap" tx. */}
+                {mode === "single" && tokenB && zapAmountIn > 0n && zapQuote && (
+                    <div className="mt-3">
+                        <ZapBreakdownPanel
+                            variant="v2"
+                            tokenIn={{ symbol: tokenA.symbol, decimals: tokenA.decimals }}
+                            tokenOther={{ symbol: tokenB.symbol, decimals: tokenB.decimals }}
+                            amountIn={zapAmountIn}
+                            swapAmount={zapQuote[0]}
+                            expectedOut={zapQuote[1]}
+                            expectedLp={zapQuote[2]}
+                            slippageBps={slippageBps}
+                        />
+                    </div>
                 )}
 
                 {/* Prices + pool share */}
