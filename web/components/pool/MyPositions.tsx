@@ -329,16 +329,24 @@ function PositionRow({
 
   const explorerUrl = arcTestnet.blockExplorers?.default.url ?? "https://testnet.arcscan.app";
 
-  // Hyperswap-style V2 card: token icons + pair name (no version chips),
-  // APR / 1D Volume / Total TVL row, "Your total pool tokens" with USD
-  // value, per-token "Pooled X" rows, "Your pool share", and +Add | -Remove
-  // CTAs. Remove opens an inline slider below the card.
+  // LP balance render: Hyperswap shows "0" for sub-0.001 balances and
+  // surfaces the USD value next to it. Our prior formatLpBalance fell
+  // through to scientific for tiny balances which read like a bug for a
+  // $46 position whose share is < 1e-6 of the pool's LP supply.
+  const lpDisplay = (() => {
+    const n = Number(p.lpBalance) / 1e18;
+    if (n >= 1) return n.toLocaleString(undefined, { maximumFractionDigits: 4 });
+    if (n >= 0.001) return n.toFixed(4);
+    return "0";
+  })();
+
   void explorerUrl;
   return (
     <div className="arc-card p-4">
-      {/* Header: token icons + pair name. No version chips - all V2 cards
-          live under the Standard AMM tab so the version is implicit. */}
-      <div className="flex items-center gap-3">
+      {/* Header: token icons + pair name. Extra vertical breathing room
+          above + below the pair name (py-2 on the row, mb-4 below) so the
+          card doesn't feel cramped. */}
+      <div className="flex items-center gap-3 py-2">
         <div className="flex -space-x-2">
           <TokenIcon symbol={p.symbol0} size={40} />
           <TokenIcon symbol={p.symbol1} size={40} />
@@ -350,7 +358,7 @@ function PositionRow({
 
       {/* Pool-level metrics row. APR / 1D Volume / Total TVL placeholders
           until the indexer (ArcLens) ships. */}
-      <div className="mt-3 grid grid-cols-3 gap-3 text-xs">
+      <div className="mt-4 grid grid-cols-3 gap-3 text-xs">
         <div>
           <div className="text-[10px] uppercase tracking-wider text-arc-text-faint">APR</div>
           <div className="mt-0.5 text-sm font-semibold tabular-nums text-arc-text-faint">—</div>
@@ -366,15 +374,12 @@ function PositionRow({
       </div>
 
       {/* Hyperswap LP info block: total pool tokens with USD value, per-
-          token pooled balances, pool share. Reads as a tidy info ladder
-          rather than the previous mixed "Your reserve" panel. */}
+          token pooled balances, pool share. Reads as a tidy info ladder. */}
       <div className="mt-3 space-y-2 text-sm">
         <div className="flex items-center justify-between">
           <span className="text-arc-text-muted">Your total pool tokens:</span>
           <span className="tabular-nums">
-            <span className="font-semibold text-arc-text">
-              {formatLpBalance(p.lpBalance)}
-            </span>
+            <span className="font-semibold text-arc-text">{lpDisplay}</span>
             {usdTotal !== undefined && (
               <span className="ml-1 text-arc-text-muted">({fmtUsd(usdTotal)})</span>
             )}
@@ -397,24 +402,25 @@ function PositionRow({
         <div className="flex items-center justify-between">
           <span className="text-arc-text-muted">Your pool share:</span>
           <span className="font-semibold tabular-nums text-arc-text">
-            {sharePct < 0.01 ? "<0.01%" : `${sharePct.toFixed(4)}%`}
+            {sharePct < 0.01 ? "<0.01%" : `${sharePct.toFixed(2)}%`}
           </span>
         </div>
       </div>
 
-      {/* CTA bar: + Add (routes to /positions/add) | - Remove (toggles
-          inline slider panel below). Mirrors Hyperswap V2 spec exactly. */}
-      <div className="mt-3 grid grid-cols-2 gap-2">
+      {/* CTA bar: + Add | - Remove. Translucent treatment (bg-white/[0.04]
+          with hover bump) replaces the prior bg-arc-bg-elevated solid look
+          so the CTAs sit lighter on the card. */}
+      <div className="mt-4 grid grid-cols-2 gap-2">
         <Link
           href={`/positions/add?type=amm&t0=${p.token0}&t1=${p.token1}`}
-          className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2.5 text-sm font-semibold text-arc-text transition-colors hover:bg-white/5"
+          className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-arc-border bg-white/[0.04] px-3 py-2.5 text-sm font-semibold text-arc-text transition-colors hover:bg-white/[0.08]"
         >
           <Plus className="h-3.5 w-3.5" />
           Add
         </Link>
         <button
           onClick={onToggle}
-          className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2.5 text-sm font-semibold text-arc-text transition-colors hover:bg-white/5"
+          className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-arc-border bg-white/[0.04] px-3 py-2.5 text-sm font-semibold text-arc-text transition-colors hover:bg-white/[0.08]"
         >
           <Minus className="h-3.5 w-3.5" />
           {expanded ? "Hide" : "Remove"}
