@@ -57,20 +57,26 @@ export function BridgeHistory() {
           !!e.burnTxHash &&
           getCctpChain(e.srcChainId)?.cctpDomain !== undefined,
       );
-      for (const entry of candidates) {
-        if (cancelled) return;
-        const cfg = getCctpChain(entry.srcChainId);
-        if (!cfg) continue;
-        try {
-          const att = await fetchAttestation(cfg.cctpDomain, entry.burnTxHash);
-          if (att && att.status === "complete" && !cancelled) {
-            updateBridge(entry.id, { attestationReady: true });
-            setEntries(loadBridgeHistory());
+      // Fire attestation polls in parallel - each is an independent
+      // Circle Iris API GET keyed on (domain, burnTxHash), with no
+      // shared cursor or rate-limit semantics. Wall time drops from
+      // N * latency to max(latency).
+      await Promise.all(
+        candidates.map(async (entry) => {
+          if (cancelled) return;
+          const cfg = getCctpChain(entry.srcChainId);
+          if (!cfg) return;
+          try {
+            const att = await fetchAttestation(cfg.cctpDomain, entry.burnTxHash);
+            if (att && att.status === "complete" && !cancelled) {
+              updateBridge(entry.id, { attestationReady: true });
+              setEntries(loadBridgeHistory());
+            }
+          } catch {
+            /* network blip - try again next interval */
           }
-        } catch {
-          /* network blip — try again next interval */
-        }
-      }
+        }),
+      );
     };
     poll();
     const id = setInterval(poll, 60_000);

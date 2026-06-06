@@ -96,26 +96,40 @@ export async function getAggregateStats(): Promise<StatsSnapshot> {
     // because we want every interaction. The cost is we cannot disambiguate
     // event types from the log alone, so the per-contract counts (tokensLaunched
     // etc) require separate filtered scans below.
+    //
+    // Windows are scanned in parallel via Promise.all: every getLogs is
+    // independent (different block range, same topic filter) so we can
+    // pipeline the RPC roundtrips. Wall time drops from N*latency to
+    // ~max(latency). The seen* Sets are mutated AFTER all windows
+    // resolved, so there's no race on iteration order.
+    const windows: Array<{ from: bigint; to: bigint }> = [];
     for (let from = fromBlock; from <= head; from += BLOCK_WINDOW) {
         const to = from + BLOCK_WINDOW - 1n > head ? head : from + BLOCK_WINDOW - 1n;
-        try {
-            const logs = await client.getLogs({
-                address: contracts,
-                fromBlock: from,
-                toBlock: to,
-            });
-            for (const log of logs) {
-                seenTxs.add(log.transactionHash.toLowerCase());
-                // topics[1] is typically the indexed sender / creator for our
-                // events. Best-effort attribution; the indexer will replace
-                // this with proper per-event decoding.
-                if (log.topics[1]) seenWallets.add(log.topics[1].toLowerCase());
+        windows.push({ from, to });
+    }
+    const windowResults = await Promise.all(
+        windows.map(async ({ from, to }) => {
+            try {
+                return await client.getLogs({
+                    address: contracts,
+                    fromBlock: from,
+                    toBlock: to,
+                });
+            } catch {
+                // Window blew past the RPC's range cap (shouldn't happen at
+                // 50k but the documented Arc behavior is "silent empty").
+                truncated = true;
+                return [];
             }
-        } catch {
-            // Window blew past the RPC's range cap (shouldn't happen at 50k
-            // but the documented Arc behavior is "silent empty"). Mark
-            // truncated and continue.
-            truncated = true;
+        }),
+    );
+    for (const logs of windowResults) {
+        for (const log of logs) {
+            seenTxs.add(log.transactionHash.toLowerCase());
+            // topics[1] is typically the indexed sender / creator for our
+            // events. Best-effort attribution; the indexer will replace
+            // this with proper per-event decoding.
+            if (log.topics[1]) seenWallets.add(log.topics[1].toLowerCase());
         }
     }
 
@@ -173,22 +187,28 @@ async function countHookLaunches(
     const TOKEN_LAUNCHED_TOPIC =
         "0xefc07ba8ee8f7015e511a8f24566606d5aaa4200644aeb0584d888fba8a7dd53" as `0x${string}`;
 
-    let count = 0;
+    // Parallel chunked scan (same shape as the txs/wallets pass above).
+    const windows: Array<{ from: bigint; to: bigint }> = [];
     for (let from = fromBlock; from <= head; from += BLOCK_WINDOW) {
         const to = from + BLOCK_WINDOW - 1n > head ? head : from + BLOCK_WINDOW - 1n;
-        try {
-            const logs = await client.getLogs({
-                address,
-                fromBlock: from,
-                toBlock: to,
-                topics: [TOKEN_LAUNCHED_TOPIC],
-            });
-            count += logs.length;
-        } catch {
-            // Range cap hit; keep going.
-        }
+        windows.push({ from, to });
     }
-    return count;
+    const counts = await Promise.all(
+        windows.map(async ({ from, to }) => {
+            try {
+                const logs = await client.getLogs({
+                    address,
+                    fromBlock: from,
+                    toBlock: to,
+                    topics: [TOKEN_LAUNCHED_TOPIC],
+                });
+                return logs.length;
+            } catch {
+                return 0;
+            }
+        }),
+    );
+    return counts.reduce((a, b) => a + b, 0);
 }
 
 /**
@@ -212,22 +232,28 @@ async function countLaunchpadEvents(
     const TOKEN_CREATED_TOPIC =
         "0x12902ddf3a68b76ea3ba6ef278e7fd7c3b59e05cb7e64bd406bb21bb1ddd8d23" as `0x${string}`;
 
-    let count = 0;
+    // Parallel chunked scan (same shape as the V4 launches counter above).
+    const windows: Array<{ from: bigint; to: bigint }> = [];
     for (let from = fromBlock; from <= head; from += BLOCK_WINDOW) {
         const to = from + BLOCK_WINDOW - 1n > head ? head : from + BLOCK_WINDOW - 1n;
-        try {
-            const logs = await client.getLogs({
-                address,
-                fromBlock: from,
-                toBlock: to,
-                topics: [TOKEN_CREATED_TOPIC],
-            });
-            count += logs.length;
-        } catch {
-            // Range cap hit; keep going.
-        }
+        windows.push({ from, to });
     }
-    return count;
+    const counts = await Promise.all(
+        windows.map(async ({ from, to }) => {
+            try {
+                const logs = await client.getLogs({
+                    address,
+                    fromBlock: from,
+                    toBlock: to,
+                    topics: [TOKEN_CREATED_TOPIC],
+                });
+                return logs.length;
+            } catch {
+                return 0;
+            }
+        }),
+    );
+    return counts.reduce((a, b) => a + b, 0);
 }
 
 /**
