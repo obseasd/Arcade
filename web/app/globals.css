@@ -192,6 +192,23 @@
   animation: arc-lp-boost-spin 8s linear infinite;
 }
 
+/* MaskIcon helper: bundles the 6 static mask-* properties needed to render
+   a PNG as a tintable shape (via the parent's `bg-*` colour). The dynamic
+   url() comes through a CSS custom property `--mask-src` set inline, so
+   the component side only needs width/height + that one prop. Keeps the
+   inline style block under react-doctor's
+   no-inline-exhaustive-style threshold. */
+.arc-mask-icon {
+  -webkit-mask-image: var(--mask-src);
+  mask-image: var(--mask-src);
+  -webkit-mask-size: contain;
+  mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+}
+
 @layer components {
   .arc-card {
     @apply rounded-2xl border border-arc-border bg-black/15 backdrop-blur-xl shadow-arc-card;

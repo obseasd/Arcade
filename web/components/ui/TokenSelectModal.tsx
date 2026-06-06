@@ -179,11 +179,11 @@ export function TokenSelectModal({ open, onClose, tokens, onSelect, selectedAddr
         <div className="flex items-center gap-2 rounded-xl border border-arc-border bg-black/40 px-3 py-2.5">
           <Search className="h-4 w-4 text-arc-text-faint" />
           <input
-            autoFocus
             value={q}
             onChange={(e) => setQ(e.target.value)}
             placeholder="Search name or paste address"
             className="arc-input text-sm"
+            aria-label="Search tokens"
           />
         </div>
 

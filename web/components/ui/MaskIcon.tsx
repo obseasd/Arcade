@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import { cn } from "@/lib/utils";
 
 /**
@@ -19,19 +20,16 @@ export function MaskIcon({
 }) {
     return (
         <span
-            className={cn("inline-block bg-arc-text", className)}
-            style={{
-                width: size,
-                height: size,
-                WebkitMaskImage: `url(${src})`,
-                maskImage: `url(${src})`,
-                WebkitMaskSize: "contain",
-                maskSize: "contain",
-                WebkitMaskRepeat: "no-repeat",
-                maskRepeat: "no-repeat",
-                WebkitMaskPosition: "center",
-                maskPosition: "center",
-            }}
+            className={cn("arc-mask-icon inline-block bg-arc-text", className)}
+            // The 6 static mask-* props live in .arc-mask-icon in
+            // globals.css; only width/height/--mask-src vary at runtime.
+            style={
+                {
+                    width: size,
+                    height: size,
+                    "--mask-src": `url(${src})`,
+                } as CSSProperties
+            }
             aria-hidden
         />
     );

@@ -2,5 +2,16 @@
   "$schema": "https://react.doctor/schema/config.json",
   "rules": {
     "react-doctor/nextjs-missing-metadata": "off"
+  },
+  "ignore": {
+    "overrides": [
+      {
+        "files": ["app/api/og/**/*.tsx"],
+        "rules": [
+          "react-doctor/no-inline-exhaustive-style",
+          "react-doctor/no-large-animated-blur"
+        ]
+      }
+    ]
   }
 }
