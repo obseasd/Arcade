@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Address, erc20Abi, formatUnits } from "viem";
 import { useAccount, usePublicClient, useReadContract, useReadContracts, useWriteContract } from "wagmi";
 import { FACTORY_ABI, PAIR_ABI, ROUTER_ABI } from "@/lib/abis/dex";
@@ -31,7 +31,15 @@ interface PositionInfo {
 export function MyPositions({
   emptyState,
   search = "",
-}: { emptyState?: React.ReactNode; search?: string } = {}) {
+  onCountChange,
+}: {
+  emptyState?: React.ReactNode;
+  search?: string;
+  /** Fires whenever the user's position list size changes. The parent
+   *  uses it to gate the toolbar + Claim All Fees CTA so an empty list
+   *  doesn't surface controls that have nothing to act on. */
+  onCountChange?: (n: number) => void;
+} = {}) {
   const { address: account } = useAccount();
   const publicClient = usePublicClient();
   const [openPair, setOpenPair] = useState<Address | null>(null);
@@ -137,6 +145,13 @@ export function MyPositions({
     }
     return out;
   }, [pairs, pairData.data, tokenInfo]);
+
+  // Surface the live count to the parent so the toolbar + Claim All CTA
+  // can gate on `count > 0`. Fires whenever positions resolves to a new
+  // length; cheap to call.
+  useEffect(() => {
+    onCountChange?.(positions.length);
+  }, [positions.length, onCountChange]);
 
   if (!account) {
     return (

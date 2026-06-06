@@ -2,7 +2,7 @@
 
 import { ArrowLeftRight, ExternalLink, Plus } from "lucide-react";
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Address, erc20Abi, formatUnits } from "viem";
 import { useAccount, useReadContract, useReadContracts } from "wagmi";
 
@@ -37,10 +37,14 @@ export function V3Positions({
     emptyState,
     search = "",
     rangeFilter,
+    onCountChange,
 }: {
     emptyState?: React.ReactNode;
     search?: string;
     rangeFilter?: V3RangeFilter;
+    /** Total position count (pre-filter) emitted to the parent so it can
+     *  gate the toolbar + Claim All button on `count > 0`. */
+    onCountChange?: (n: number) => void;
 }) {
     const { address: account } = useAccount();
     const npmEnabled = ADDRESSES.v3PositionManager !== "0x0000000000000000000000000000000000000000";
@@ -118,6 +122,14 @@ export function V3Positions({
             })
             .filter((x): x is NonNullable<typeof x> => x !== undefined);
     }, [positionsQ.data, tokenIds]);
+
+    // Surface the pre-filter count to the parent so it can gate the
+    // toolbar + Claim All CTA on `count > 0`. Drops to 0 when the user
+    // disconnects (positions becomes empty as a side effect of the query
+    // disabling).
+    useEffect(() => {
+        onCountChange?.(positions.length);
+    }, [positions.length, onCountChange]);
 
     // Gather all unique token addresses for metadata.
     const tokenAddrs = useMemo(() => {

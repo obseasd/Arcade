@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronDown, Plus, RefreshCw, Search, Sparkles } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronDown, Plus, RefreshCw, Search, Sparkles } from "lucide-react";
 import Image from "next/image";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
@@ -10,6 +10,7 @@ import { MyPositions } from "@/components/pool/MyPositions";
 import { BurnedPositions } from "@/components/pool/BurnedPositions";
 import { V3Positions } from "@/components/pool/V3Positions";
 import { ClaimAllFeesModal } from "@/components/pool/ClaimAllFeesModal";
+import { MaskIcon } from "@/components/ui/MaskIcon";
 import { ADDRESSES, USDC_DECIMALS } from "@/lib/constants";
 import { useV2Tokens } from "@/lib/hooks/useV2Tokens";
 import { useV3Tokens } from "@/lib/hooks/useV3Tokens";
@@ -49,10 +50,25 @@ function PositionsInner() {
   });
   const [rangeMenuOpen, setRangeMenuOpen] = useState(false);
   const [claimOpen, setClaimOpen] = useState(false);
-  // Toolbar surfaces only on tabs that benefit from filters (V2 + V3
-  // position lists). Burned positions are a separate view and don't need
-  // the same tools.
-  const showToolbar = tab === "amm" || tab === "concentrated";
+  // Per-list position counts emitted by the child components. Drives the
+  // header gating: toolbar + Claim All only render when the active tab
+  // has at least one row. Burned has no count callback because it doesn't
+  // ship the toolbar.
+  const [v2Count, setV2Count] = useState(0);
+  const [v3Count, setV3Count] = useState(0);
+  const activeCount = tab === "amm" ? v2Count : tab === "concentrated" ? v3Count : 0;
+  const showToolbar = activeCount > 0 && (tab === "amm" || tab === "concentrated");
+  // Sort key + direction for the small sort dropdown shared with /explore.
+  // V2/V3 lists ignore "apr"/"volume" for now (no indexer) and fall back
+  // to liquidity / tokenId order; the dropdown still surfaces them so the
+  // visual matches /explore.
+  type SortKey = "tvl" | "apr" | "volume";
+  type SortDir = "asc" | "desc";
+  const [sortKey, setSortKey] = useState<SortKey>("tvl");
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
+  const [sortOpen, setSortOpen] = useState(false);
+  void sortKey;
+  void sortDir;
   const rangeBadge = useMemo(() => {
     const count = (rangeFilter.inRange ? 1 : 0) + (rangeFilter.outOfRange ? 1 : 0) + (rangeFilter.inactive ? 1 : 0);
     return `${count} range${count === 1 ? "" : "s"} selected`;
@@ -126,16 +142,18 @@ function PositionsInner() {
       </div>
 
       {/* Header CTAs: Claim All Fees + New position, right-aligned. Claim
-          is V3-specific (the only mechanism we have for unclaimed fees) but
-          surfaces on every tab so the user can hit it without switching. */}
+          surfaces only when the V3 tab actually has positions (the action
+          is V3-only and would do nothing on an empty list). */}
       <div className="mb-6 flex flex-wrap items-center justify-end gap-2">
-        <button
-          onClick={() => setClaimOpen(true)}
-          className="inline-flex items-center gap-1.5 rounded-xl border border-arc-border bg-arc-bg-elevated px-4 py-2 text-sm font-semibold text-arc-text transition-colors hover:bg-white/5"
-        >
-          <Sparkles className="h-4 w-4" />
-          Claim All Fees
-        </button>
+        {v3Count > 0 && (
+          <button
+            onClick={() => setClaimOpen(true)}
+            className="inline-flex items-center gap-1.5 rounded-xl border border-arc-border bg-arc-bg-elevated px-4 py-2 text-sm font-semibold text-arc-text transition-colors hover:bg-white/5"
+          >
+            <Sparkles className="h-4 w-4" />
+            Claim All Fees
+          </button>
+        )}
         <button
           onClick={() => setNewOpen(true)}
           className="arc-button-primary relative overflow-hidden bg-cover bg-center bg-no-repeat px-5 py-2.5 text-base shadow-[0_10px_30px_-12px_rgba(52,90,120,0.55)] ring-1 ring-arc-cta-hover/40"
@@ -166,7 +184,7 @@ function PositionsInner() {
             Burned
           </TabButton>
         </div>
-        {tab === "concentrated" && (
+        {tab === "concentrated" && v3Count > 0 && (
           <RangeFilterDropdown
             open={rangeMenuOpen}
             onToggle={() => setRangeMenuOpen((v) => !v)}
@@ -178,8 +196,9 @@ function PositionsInner() {
         )}
       </div>
 
-      {/* Tools row: search bar + refresh button. Hidden on Burned (no
-          filterable list there). */}
+      {/* Tools row: search + sort (filter icon) + refresh. Mirrors the
+          /explore control strip so the brand surface stays consistent.
+          Gated on the active tab having at least one position. */}
       {showToolbar && (
         <div className="mb-5 flex items-center gap-2">
           <div className="flex h-11 flex-1 items-center gap-2 rounded-xl border border-arc-border bg-black/15 px-3 backdrop-blur-xl">
@@ -191,6 +210,18 @@ function PositionsInner() {
               className="arc-input w-full bg-transparent text-sm"
             />
           </div>
+          <PositionsSortDropdown
+            open={sortOpen}
+            onToggle={() => setSortOpen((v) => !v)}
+            onClose={() => setSortOpen(false)}
+            sortKey={sortKey}
+            sortDir={sortDir}
+            onPick={(k, d) => {
+              setSortKey(k);
+              setSortDir(d);
+              setSortOpen(false);
+            }}
+          />
           <button
             onClick={() => setRefreshKey((k) => k + 1)}
             title="Refresh positions"
@@ -205,10 +236,20 @@ function PositionsInner() {
           full query re-run after the user adds liquidity or hits Refresh
           so the row appears without a hard reload. */}
       {tab === "amm" && (
-        <MyPositions key={refreshKey} emptyState={<EmptyState />} search={search} />
+        <MyPositions
+          key={refreshKey}
+          emptyState={<EmptyState />}
+          search={search}
+          onCountChange={setV2Count}
+        />
       )}
       {tab === "concentrated" && (
-        <V3Positions key={refreshKey} search={search} rangeFilter={rangeFilter} />
+        <V3Positions
+          key={refreshKey}
+          search={search}
+          rangeFilter={rangeFilter}
+          onCountChange={setV3Count}
+        />
       )}
       {tab === "burned" && <BurnedPositions />}
 
@@ -391,6 +432,103 @@ function EmptyState() {
         className="mx-auto mb-3 h-12 w-12 opacity-50"
       />
       <p className="text-sm text-arc-text-muted">Your V2 liquidity positions will appear here.</p>
+    </div>
+  );
+}
+
+type PositionsSortKey = "tvl" | "apr" | "volume";
+type PositionsSortDir = "asc" | "desc";
+
+const POSITIONS_SORT_LABEL: Record<PositionsSortKey, string> = {
+  tvl: "TVL",
+  apr: "APR",
+  volume: "Volume",
+};
+
+/**
+ * Sort menu matching /explore. Same icon (/filter.png), same dropdown
+ * layout, same single-tap-flips-direction behaviour. Keys are advisory
+ * for now since V2 / V3 lists fall back to liquidity order until the
+ * indexer surfaces APR / Volume.
+ */
+function PositionsSortDropdown({
+  open,
+  onToggle,
+  onClose,
+  sortKey,
+  sortDir,
+  onPick,
+}: {
+  open: boolean;
+  onToggle: () => void;
+  onClose: () => void;
+  sortKey: PositionsSortKey;
+  sortDir: PositionsSortDir;
+  onPick: (k: PositionsSortKey, d: PositionsSortDir) => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open, onClose]);
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+  return (
+    <div ref={ref} className="relative">
+      <button
+        onClick={onToggle}
+        title="Sort"
+        aria-expanded={open}
+        className={cn(
+          "flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-arc-border bg-black/15 text-arc-text backdrop-blur-xl transition-colors hover:bg-white/5",
+          open && "bg-white/5",
+        )}
+      >
+        <MaskIcon src="/filter.png" size={16} />
+      </button>
+      {open && (
+        <div className="absolute right-0 top-full z-50 mt-2 w-44 rounded-xl border border-arc-border bg-black/85 p-1 shadow-arc-card backdrop-blur-2xl">
+          {(["tvl", "apr", "volume"] as PositionsSortKey[]).map((k) => {
+            const isActive = k === sortKey;
+            return (
+              <button
+                key={k}
+                onClick={() => {
+                  if (isActive) {
+                    onPick(k, sortDir === "desc" ? "asc" : "desc");
+                  } else {
+                    onPick(k, "desc");
+                  }
+                }}
+                className={cn(
+                  "flex w-full items-center justify-between rounded-lg px-3 py-2 text-sm transition-colors",
+                  isActive
+                    ? "bg-arc-cta-hover/15 text-arc-cta-hover"
+                    : "text-arc-text-muted hover:bg-white/5 hover:text-arc-text",
+                )}
+              >
+                <span>{POSITIONS_SORT_LABEL[k]}</span>
+                {isActive &&
+                  (sortDir === "desc" ? (
+                    <ArrowDown className="h-3.5 w-3.5" />
+                  ) : (
+                    <ArrowUp className="h-3.5 w-3.5" />
+                  ))}
+              </button>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

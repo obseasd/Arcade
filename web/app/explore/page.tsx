@@ -1,7 +1,6 @@
 "use client";
 
 import {
-    ArrowDownUp,
     ArrowDown,
     ArrowUp,
     ChevronDown,
@@ -29,6 +28,7 @@ import { useReadContracts } from "wagmi";
 import { PAIR_ABI } from "@/lib/abis/dex";
 import { ADDRESSES, USDC_DECIMALS } from "@/lib/constants";
 import { useLaunchpadTokens } from "@/lib/hooks/useLaunchpadTokens";
+import { MaskIcon } from "@/components/ui/MaskIcon";
 import { useV2Tokens } from "@/lib/hooks/useV2Tokens";
 import { useV3Tokens } from "@/lib/hooks/useV3Tokens";
 import { useV3FactoryPools } from "@/lib/hooks/useV3FactoryPools";
@@ -1101,40 +1101,7 @@ function ShimmerGradient({ id, color }: { id: string; color: string }) {
     );
 }
 
-/**
- * Renders a PNG as a CSS mask so the icon picks up whatever background
- * colour the caller sets. Lets us swap the lucide icons for /public PNGs
- * (filter, viewligne, viewcard, swap) without losing the white/sky tint
- * we use across the page.
- */
-function MaskIcon({
-    src,
-    size = 16,
-    className,
-}: {
-    src: string;
-    size?: number;
-    className?: string;
-}) {
-    return (
-        <span
-            className={cn("inline-block bg-arc-text", className)}
-            style={{
-                width: size,
-                height: size,
-                WebkitMaskImage: `url(${src})`,
-                maskImage: `url(${src})`,
-                WebkitMaskSize: "contain",
-                maskSize: "contain",
-                WebkitMaskRepeat: "no-repeat",
-                maskRepeat: "no-repeat",
-                WebkitMaskPosition: "center",
-                maskPosition: "center",
-            }}
-            aria-hidden
-        />
-    );
-}
+// MaskIcon moved to @/components/ui/MaskIcon for reuse on /positions.
 
 /**
  * Compact « ‹ 1 2 3 ... 10 › » pagination strip. Built when the filtered
@@ -1343,7 +1310,7 @@ function SortDropdown({
                     open && "bg-white/5",
                 )}
             >
-                <ArrowDownUp className="h-4 w-4" />
+                <MaskIcon src="/filter.png" size={16} />
             </button>
             {open && (
                 <div className="absolute right-0 top-full z-50 mt-2 w-44 rounded-xl border border-arc-border bg-black/85 p-1 shadow-arc-card backdrop-blur-2xl">
