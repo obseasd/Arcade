@@ -21,6 +21,12 @@ export const ADDRESSES = {
   /** ArcadeV3PositionManager (Uniswap V3 NPM rebrand). Optional - the V3
    *  branch of /positions/add is gated when zeroAddress. */
   v3PositionManager: safeAddress(process.env.NEXT_PUBLIC_V3_NPM_ADDRESS),
+  /** ArcadeV3Zap: single-asset zap into a max-range V3 position. Optional -
+   *  the Single Asset tab on /positions/add v3 surfaces only when this is
+   *  set. Mirrors Hyperswap's max-range-only constraint (full-range
+   *  positions split half-and-half by value, narrow ranges need a closed
+   *  form). */
+  v3Zap: safeAddress(process.env.NEXT_PUBLIC_V3_ZAP_ADDRESS),
   tokenVault: safeAddress(process.env.NEXT_PUBLIC_TOKEN_VAULT_ADDRESS),
   /** WETH on Arc, used as the paired token for POOL_WETH Clanker launches. */
   weth: safeAddress(process.env.NEXT_PUBLIC_WETH_ADDRESS),

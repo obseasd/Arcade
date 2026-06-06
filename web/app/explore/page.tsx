@@ -1,6 +1,9 @@
 "use client";
 
 import {
+    ArrowDownUp,
+    ArrowDown,
+    ArrowUp,
     ChevronDown,
     ChevronLeft,
     ChevronRight,
@@ -12,7 +15,7 @@ import {
     Sparkles,
 } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { CreatePoolModal } from "@/components/pool/CreatePoolModal";
 import {
     Area,
@@ -111,6 +114,12 @@ export default function ExplorePage() {
     const [tvlWindow, setTvlWindow] = useState<Win>("30D");
     const [volWindow, setVolWindow] = useState<Win>("30D");
     const [feeWindow, setFeeWindow] = useState<Win>("30D");
+    // Sort key + direction. APR / Volume are indexer-sourced and undefined
+    // for every row right now, so picking those toggles a faint badge on
+    // the button but the actual sort falls back to TVL until ArcLens lands.
+    const [sortKey, setSortKey] = useState<SortKey>("tvl");
+    const [sortDir, setSortDir] = useState<SortDir>("desc");
+    const [sortOpen, setSortOpen] = useState(false);
     const [expanded, setExpanded] = useState<string | null>(null);
     const [viewMode, setViewMode] = useState<ViewMode>("list");
     const [page, setPage] = useState(1);
@@ -298,8 +307,16 @@ export default function ExplorePage() {
                     r.token1.address.toLowerCase().includes(term),
             );
         }
-        return rows.slice().sort((a, b) => (b.tvlUsdc > a.tvlUsdc ? 1 : -1));
-    }, [allRows, filter, q]);
+        return rows.slice().sort((a, b) => {
+            // Pick the per-row metric. APR is undefined for every row until
+            // the indexer ships, and Volume isn't surfaced yet, so both fall
+            // back to TVL so the click doesn't produce an apparent no-op.
+            const av = sortKey === "apr" ? (a.aprPct ?? -1) : Number(a.tvlUsdc);
+            const bv = sortKey === "apr" ? (b.aprPct ?? -1) : Number(b.tvlUsdc);
+            const cmp = av === bv ? 0 : av > bv ? 1 : -1;
+            return sortDir === "desc" ? -cmp : cmp;
+        });
+    }, [allRows, filter, q, sortKey, sortDir]);
 
     /**
      * Auto-switch to card view when a non-"all" filter narrows the list to
@@ -441,12 +458,18 @@ export default function ExplorePage() {
                         className="arc-input w-full bg-transparent text-sm"
                     />
                 </div>
-                <button
-                    title="Sort"
-                    className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-arc-border bg-black/15 text-arc-text backdrop-blur-xl transition-colors hover:bg-white/5"
-                >
-                    <MaskIcon src="/filter.png" size={16} />
-                </button>
+                <SortDropdown
+                    open={sortOpen}
+                    onToggle={() => setSortOpen((v) => !v)}
+                    onClose={() => setSortOpen(false)}
+                    sortKey={sortKey}
+                    sortDir={sortDir}
+                    onPick={(k, d) => {
+                        setSortKey(k);
+                        setSortDir(d);
+                        setSortOpen(false);
+                    }}
+                />
                 <button
                     title={viewMode === "list" ? "Switch to card view" : "Switch to list view"}
                     onClick={() =>
@@ -799,7 +822,7 @@ function PoolPairRowCard({
             {/* Row header. +10% taller than the previous spec (1.1rem -> 1.21rem). */}
             <div className="flex flex-col items-stretch gap-3 p-[1.21rem] sm:flex-row sm:items-center">
                 <div className="flex min-w-0 flex-1 items-center gap-3">
-                    <div className="flex -space-x-2">
+                    <div className="flex -space-x-4">
                         <TokenIcon
                             symbol={row.token0.symbol}
                             image={image0}
@@ -899,7 +922,7 @@ function PoolSubRowCard({
     return (
         <div className="grid grid-cols-1 items-center gap-3 px-4 py-3 sm:grid-cols-[1fr_repeat(4,_1fr)_auto]">
             <div className="flex items-center gap-3">
-                <div className="flex -space-x-2">
+                <div className="flex -space-x-3">
                     <TokenIcon symbol={token0.symbol} image={image0} size={26} />
                     <TokenIcon symbol={token1.symbol} image={image1} size={26} />
                 </div>
@@ -956,7 +979,7 @@ function PoolPairGridCard({ row }: { row: PoolPairRow }) {
     return (
         <div className="arc-card flex flex-col gap-3 p-4">
             <div className="flex items-start gap-3">
-                <div className="flex -space-x-2">
+                <div className="flex -space-x-3">
                     <TokenIcon symbol={row.token0.symbol} image={image0} size={36} />
                     <TokenIcon symbol={row.token1.symbol} image={image1} size={36} />
                 </div>
@@ -1257,4 +1280,108 @@ function formatBig(n: number): string {
     if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
     if (n >= 1_000) return `${(n / 1_000).toFixed(2)}k`;
     return n.toFixed(2);
+}
+
+type SortKey = "tvl" | "apr" | "volume";
+type SortDir = "asc" | "desc";
+
+const SORT_LABEL: Record<SortKey, string> = {
+    tvl: "TVL",
+    apr: "APR",
+    volume: "Volume",
+};
+
+interface SortDropdownProps {
+    open: boolean;
+    onToggle: () => void;
+    onClose: () => void;
+    sortKey: SortKey;
+    sortDir: SortDir;
+    onPick: (k: SortKey, d: SortDir) => void;
+}
+
+/**
+ * Sort menu on Explore. Click the icon to open; each row toggles the
+ * direction when its key is already selected (single tap to cycle
+ * asc/desc instead of needing a separate direction button). Mirrors
+ * Hyperswap's compact pattern.
+ */
+function SortDropdown({
+    open,
+    onToggle,
+    onClose,
+    sortKey,
+    sortDir,
+    onPick,
+}: SortDropdownProps) {
+    const ref = useRef<HTMLDivElement>(null);
+    useEffect(() => {
+        if (!open) return;
+        const onDoc = (e: MouseEvent) => {
+            if (ref.current && !ref.current.contains(e.target as Node)) onClose();
+        };
+        document.addEventListener("mousedown", onDoc);
+        return () => document.removeEventListener("mousedown", onDoc);
+    }, [open, onClose]);
+    useEffect(() => {
+        if (!open) return;
+        const onKey = (e: KeyboardEvent) => {
+            if (e.key === "Escape") onClose();
+        };
+        window.addEventListener("keydown", onKey);
+        return () => window.removeEventListener("keydown", onKey);
+    }, [open, onClose]);
+
+    return (
+        <div ref={ref} className="relative">
+            <button
+                onClick={onToggle}
+                title="Sort"
+                aria-expanded={open}
+                className={cn(
+                    "flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-arc-border bg-black/15 text-arc-text backdrop-blur-xl transition-colors hover:bg-white/5",
+                    open && "bg-white/5",
+                )}
+            >
+                <ArrowDownUp className="h-4 w-4" />
+            </button>
+            {open && (
+                <div className="absolute right-0 top-full z-50 mt-2 w-44 rounded-xl border border-arc-border bg-black/85 p-1 shadow-arc-card backdrop-blur-2xl">
+                    {(["tvl", "apr", "volume"] as SortKey[]).map((k) => {
+                        const isActive = k === sortKey;
+                        return (
+                            <button
+                                key={k}
+                                onClick={() => {
+                                    // Same key clicked → flip direction; new
+                                    // key → default to desc (highest first,
+                                    // matches the user mental model for TVL/
+                                    // Volume).
+                                    if (isActive) {
+                                        onPick(k, sortDir === "desc" ? "asc" : "desc");
+                                    } else {
+                                        onPick(k, "desc");
+                                    }
+                                }}
+                                className={cn(
+                                    "flex w-full items-center justify-between rounded-lg px-3 py-2 text-sm transition-colors",
+                                    isActive
+                                        ? "bg-arc-cta-hover/15 text-arc-cta-hover"
+                                        : "text-arc-text-muted hover:bg-white/5 hover:text-arc-text",
+                                )}
+                            >
+                                <span>{SORT_LABEL[k]}</span>
+                                {isActive &&
+                                    (sortDir === "desc" ? (
+                                        <ArrowDown className="h-3.5 w-3.5" />
+                                    ) : (
+                                        <ArrowUp className="h-3.5 w-3.5" />
+                                    ))}
+                            </button>
+                        );
+                    })}
+                </div>
+            )}
+        </div>
+    );
 }
