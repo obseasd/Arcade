@@ -1058,9 +1058,9 @@ function PoolSubRowCard({
             <div className="flex justify-end">
                 <Link
                     href={addLiqHref}
-                    className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-1.5 text-[11px] font-medium text-arc-text transition-colors hover:bg-white/5"
+                    className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-xl bg-arc-cta px-3 py-1.5 text-[11px] font-semibold text-white transition-colors hover:bg-arc-cta-hover"
                 >
-                    <PlusIcon size={12} />
+                    <PlusIcon size={12} className="bg-white" />
                     Add Liquidity
                 </Link>
             </div>
@@ -1171,13 +1171,13 @@ function PoolPairGridCard({
                 <Link
                     href={addLiqHref}
                     className={cn(
-                        "inline-flex items-center justify-center gap-1.5 rounded-xl border px-3 py-[0.575rem] text-xs font-semibold transition-colors",
+                        "inline-flex items-center justify-center gap-1.5 rounded-xl px-3 py-[0.575rem] text-xs font-semibold transition-colors",
                         whiteCta
-                            ? "border-white/25 bg-white/15 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.18)] hover:bg-white/20"
-                            : "border-arc-border bg-arc-bg-elevated text-arc-text hover:bg-white/5",
+                            ? "border border-white/25 bg-white/15 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.18)] hover:bg-white/20"
+                            : "bg-arc-cta text-white hover:bg-arc-cta-hover",
                     )}
                 >
-                    <PlusIcon size={14} className={whiteCta ? "bg-white" : undefined} />
+                    <PlusIcon size={14} className="bg-white" />
                     Add Liquidity
                 </Link>
                 <Link

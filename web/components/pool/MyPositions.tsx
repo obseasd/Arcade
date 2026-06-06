@@ -420,10 +420,10 @@ function PositionRow({
         </button>
         <Link
           href={`/positions/add?type=amm&t0=${p.token0}&t1=${p.token1}`}
-          className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-arc-border bg-white/[0.04] px-3 py-2.5 text-sm font-semibold text-arc-text transition-colors hover:bg-white/[0.08]"
+          className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-arc-cta px-3 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-arc-cta-hover"
         >
-          <PlusIcon size={14} />
-          Add
+          <PlusIcon size={14} className="bg-white" />
+          Add Liquidity
         </Link>
       </div>
 
