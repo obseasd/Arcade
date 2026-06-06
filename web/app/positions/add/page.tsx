@@ -385,8 +385,11 @@ function AddLiquidityInner() {
                 Back
             </Link>
 
-            {/* Pair header card */}
-            <div className="arc-card mb-3 flex items-center justify-between p-4">
+            {/* Pair header card. The relative+z-30 ensures the embedded
+                TransactionSettings popover (z-50 inside) paints above the
+                sibling main card below, whose backdrop-blur creates its own
+                stacking context. */}
+            <div className="arc-card relative z-30 mb-3 flex items-center justify-between p-4">
                 <div className="flex items-center gap-3">
                     <div className="flex -space-x-2">
                         <TokenIcon symbol={tokenA.symbol} size={36} />

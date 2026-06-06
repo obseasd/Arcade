@@ -28,6 +28,7 @@ import {
     nearestUsableTick,
     presetTickRange,
     priceToTickWithDecimals,
+    quoteOtherAmount,
     type RangePreset,
     tickToPriceWithDecimals,
 } from "@/lib/v3-math";
@@ -152,6 +153,64 @@ export function V3AddLiquidity({
 
     const [amount0, setAmount0] = useState("");
     const [amount1, setAmount1] = useState("");
+    // Which side did the user last type into. The auto-quote effect uses
+    // this to pick which derivation runs (token0 → token1 or the other
+    // way around) without the two effects clobbering each other.
+    const [lastEdited, setLastEdited] = useState<"0" | "1">("0");
+
+    // V3 auto-quote: on an existing pool, the chosen range + current sqrt
+    // price fix the ratio between token0 and token1 deposits. Typing one
+    // side should reveal what the other will be — same UX shape as V2
+    // reserves dictating the counter-amount, just driven by tick math. On
+    // a fresh pool we skip this because the user is SETTING the seed price
+    // via the typed amounts themselves; auto-quoting would erase intent.
+    const sqrtPriceX96 = slot0Q.data
+        ? ((slot0Q.data as readonly [bigint, number, ...unknown[]])[0])
+        : 0n;
+
+    useEffect(() => {
+        if (!hasPool || sqrtPriceX96 === 0n) return;
+        if (lastEdited !== "0" || !amount0) return;
+        try {
+            const a0Raw = parseUnits(amount0, t0.decimals);
+            if (a0Raw <= 0n) return;
+            const sqrtLower = getSqrtRatioAtTick(tickLower);
+            const sqrtUpper = getSqrtRatioAtTick(tickUpper);
+            const a1Raw = quoteOtherAmount(
+                sqrtPriceX96,
+                sqrtLower,
+                sqrtUpper,
+                /* typedIsToken0 */ true,
+                a0Raw,
+            );
+            setAmount1(a1Raw > 0n ? formatUnits(a1Raw, t1.decimals) : "");
+        } catch {
+            /* parse / range errors ignored mid-typing */
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [amount0, tickLower, tickUpper, sqrtPriceX96, hasPool, lastEdited, t0.decimals, t1.decimals]);
+
+    useEffect(() => {
+        if (!hasPool || sqrtPriceX96 === 0n) return;
+        if (lastEdited !== "1" || !amount1) return;
+        try {
+            const a1Raw = parseUnits(amount1, t1.decimals);
+            if (a1Raw <= 0n) return;
+            const sqrtLower = getSqrtRatioAtTick(tickLower);
+            const sqrtUpper = getSqrtRatioAtTick(tickUpper);
+            const a0Raw = quoteOtherAmount(
+                sqrtPriceX96,
+                sqrtLower,
+                sqrtUpper,
+                /* typedIsToken0 */ false,
+                a1Raw,
+            );
+            setAmount0(a0Raw > 0n ? formatUnits(a0Raw, t0.decimals) : "");
+        } catch {
+            /* parse / range errors ignored mid-typing */
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [amount1, tickLower, tickUpper, sqrtPriceX96, hasPool, lastEdited, t0.decimals, t1.decimals]);
 
     const bal0 = useReadContract({
         address: t0.address,
@@ -652,10 +711,13 @@ export function V3AddLiquidity({
                 label={`Token 1 (${t0.symbol})`}
                 token={t0}
                 value={amount0}
-                onChange={setAmount0}
+                onChange={(v) => {
+                    setLastEdited("0");
+                    setAmount0(v);
+                }}
                 balance={bal0.data as bigint | undefined}
                 disabled={aboveRange}
-                disabledReason="Above range — only Token 2 is needed"
+                disabledReason="Above range - only Token 2 is needed"
             />
             <div className="flex justify-center">
                 <div className="-my-2 rounded-xl border border-arc-border bg-arc-bg-elevated p-2">
@@ -666,10 +728,13 @@ export function V3AddLiquidity({
                 label={`Token 2 (${t1.symbol})`}
                 token={t1}
                 value={amount1}
-                onChange={setAmount1}
+                onChange={(v) => {
+                    setLastEdited("1");
+                    setAmount1(v);
+                }}
                 balance={bal1.data as bigint | undefined}
                 disabled={belowRange}
-                disabledReason="Below range — only Token 1 is needed"
+                disabledReason="Below range - only Token 1 is needed"
             />
 
             <button

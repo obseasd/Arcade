@@ -263,6 +263,41 @@ function getLiquidityForAmount1(sqrtA: bigint, sqrtB: bigint, amount1: bigint): 
 }
 
 /**
+ * Given a typed amount on one side, the current sqrtPrice, and the active
+ * range, return how much of the other side V3 will actually consume on
+ * mint. This is the UI auto-quote: same idea as V2 reserves dictating the
+ * other-side amount, except in V3 it's the chosen range relative to the
+ * current price that fixes the ratio (and out-of-range positions need only
+ * one side).
+ */
+export function quoteOtherAmount(
+    sqrtPriceX96: bigint,
+    sqrtLowerX96: bigint,
+    sqrtUpperX96: bigint,
+    typedIsToken0: boolean,
+    typedAmount: bigint,
+): bigint {
+    if (typedAmount <= 0n) return 0n;
+    const [sLow, sHigh] = sqrtLowerX96 < sqrtUpperX96
+        ? [sqrtLowerX96, sqrtUpperX96]
+        : [sqrtUpperX96, sqrtLowerX96];
+    if (sLow >= sHigh) return 0n;
+    if (typedIsToken0) {
+        // Below range: only token0 contributes, token1 = 0.
+        if (sqrtPriceX96 <= sLow) return 0n;
+        // Above range: token0 typed is "wasted" on the live ratio side; UI
+        // returns 0 so the user notices their range is out of bounds.
+        if (sqrtPriceX96 >= sHigh) return 0n;
+        const L = getLiquidityForAmount0(sqrtPriceX96, sHigh, typedAmount);
+        return getAmount1ForLiquidity(sLow, sqrtPriceX96, L);
+    }
+    if (sqrtPriceX96 >= sHigh) return 0n;
+    if (sqrtPriceX96 <= sLow) return 0n;
+    const L = getLiquidityForAmount1(sLow, sqrtPriceX96, typedAmount);
+    return getAmount0ForLiquidity(sqrtPriceX96, sHigh, L);
+}
+
+/**
  * Compute the liquidity placed by depositing amount0 + amount1 across the
  * range [sqrtA, sqrtB] given the current sqrtPriceX96. Mirrors
  * LiquidityAmounts.getLiquidityForAmounts.

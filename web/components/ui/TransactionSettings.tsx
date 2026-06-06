@@ -83,7 +83,7 @@ export function TransactionSettings({
                 />
             </button>
             {open && (
-                <div className="absolute right-0 top-full z-20 mt-2 w-72 max-w-[calc(100vw-1rem)] rounded-2xl border border-arc-border bg-black/45 p-4 shadow-arc-card backdrop-blur-2xl">
+                <div className="absolute right-0 top-full z-50 mt-2 w-72 max-w-[calc(100vw-1rem)] rounded-2xl border border-arc-border bg-black/45 p-4 shadow-arc-card backdrop-blur-2xl">
                     <div className="mb-3 text-sm font-semibold text-arc-text">
                         Transaction settings
                     </div>
