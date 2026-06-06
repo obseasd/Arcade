@@ -8,13 +8,21 @@ import {Script, console2} from "forge-std/Script.sol";
 // pre-compiled 0.7.6 artifacts and forwarding constructor args via create.
 // Same pattern as DeployV3.s.sol for the core Factory.
 //
-// Prerequisites (one-time setup):
+// Prerequisites (one-time setup, run from contracts/):
 //   1. Vendor the OZ 0.7-compatible release v3-periphery was authored
 //      against. v5 (in lib/openzeppelin-contracts) is the wrong API
 //      surface.
 //        rm -rf lib/oz-v3
 //        forge install oz-v3=OpenZeppelin/openzeppelin-contracts@v3.4.1-solc-0.7-2 --no-git
-//   2. Compile the 0.7.6 layer (writes both artifacts to out-v3/):
+//   2. Patch v3-periphery's PoolAddress.POOL_INIT_CODE_HASH so it matches
+//      the bytecode hash Foundry actually produces for UniswapV3Pool
+//      (Uniswap's canonical hash is from a hardhat build; Forge bakes
+//      different metadata bytes). Without this the NPM resolves the
+//      WRONG pool address for every mint and reverts with "call to
+//      non-contract address". One-shot bash script:
+//        bash scripts/patch-v3-periphery.sh
+//      Idempotent - re-running after `forge install` is safe.
+//   3. Compile the 0.7.6 layer (writes both artifacts to out-v3/):
 //        FOUNDRY_PROFILE=v3 forge build
 //
 // Required env:
