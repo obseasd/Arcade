@@ -145,8 +145,11 @@
 
 .animate-lp-boost {
   position: relative;
-  border-color: rgba(66, 114, 154, 0.6) !important;
-  box-shadow: 0 0 30px -6px rgba(66, 114, 154, 0.6);
+  /* Card's native 1px border made transparent so the ::before rim is the
+     only thing the eye reads as the outline. Removed the outer box-shadow
+     glow that previously leaked the highlight outside the bottom edge of
+     the card. The animation now lives strictly INSIDE the contour. */
+  border-color: transparent !important;
 }
 
 .animate-lp-boost::before {
@@ -154,14 +157,25 @@
   position: absolute;
   inset: 0;
   border-radius: inherit;
-  padding: 2px;
+  /* 3px rim (~50% thicker than the prior 2px) so the eye actually
+     catches the highlight rolling along it. The padding/mask trick
+     keeps the gradient confined to that 3px frame. */
+  padding: 3px;
+  /* Conic-gradient that lays a steady mid-blue base all the way around,
+     then ramps up into a brighter comet head + short forward trail. The
+     spread is wide enough (~130deg) that as it rotates it reads as a
+     continuous fluid streak, not a single lobe like the prior 30deg
+     spike. The base alpha (0.55) makes the entire perimeter visibly
+     outlined even when the head is on the far side, so the rim never
+     "disappears" momentarily. */
   background: conic-gradient(
     from var(--arc-lp-angle),
-    rgba(66, 114, 154, 0) 0deg,
-    rgba(66, 114, 154, 0) 230deg,
-    rgba(149, 199, 235, 0.95) 300deg,
-    rgba(66, 114, 154, 1) 330deg,
-    rgba(66, 114, 154, 0) 360deg
+    rgba(66, 114, 154, 0.55) 0deg,
+    rgba(66, 114, 154, 0.55) 180deg,
+    rgba(110, 175, 225, 0.75) 250deg,
+    rgba(180, 220, 245, 1) 320deg,
+    rgba(110, 175, 225, 0.75) 340deg,
+    rgba(66, 114, 154, 0.55) 360deg
   );
   -webkit-mask:
     linear-gradient(#000 0 0) content-box,
@@ -172,7 +186,10 @@
   -webkit-mask-composite: xor;
   mask-composite: exclude;
   pointer-events: none;
-  animation: arc-lp-boost-spin 3.5s linear infinite;
+  /* 8s = clearly "slow" linear; ease functions would make the streak
+     visibly accelerate / decelerate which fights the "fluid in a pipe"
+     read. Linear keeps the speed constant around the loop. */
+  animation: arc-lp-boost-spin 8s linear infinite;
 }
 
 @layer components {
