@@ -564,6 +564,7 @@ export default function ExplorePage() {
                                 key={`${row.key}-${sub.poolAddress}`}
                                 row={row}
                                 sub={sub}
+                                whiteCta={filter !== "all"}
                             />
                         )),
                     )}
@@ -903,7 +904,6 @@ function PoolPairRowCard({
                             <span className="truncate text-sm font-semibold">
                                 {row.token0.symbol} / {row.token1.symbol}
                             </span>
-                            <CopyAddressButton address={row.token1.address} />
                         </div>
                         {row.aprPct !== undefined && row.aprPct > 100 && (
                             <div className="mt-1 flex flex-wrap items-center gap-1.5">
@@ -1010,6 +1010,14 @@ function PoolSubRowCard({
 }) {
     const feeLabel = `${sub.feeBps / 100}%`;
     const tvlLabel = formatUsd(sub.tvlUsdc);
+    // Skip the prior /pool/<address> transitional page - the sub-row CTA
+    // now jumps straight into /positions/add with the pair (+ fee tier for
+    // V3) pre-filled. Same query shape as PoolPairGridCard so both views
+    // land on the identical Add Liquidity form.
+    const addLiqHref =
+        sub.version === "v3"
+            ? `/positions/add?type=v3&t0=${token0.address}&t1=${token1.address}&fee=${sub.feeBps}`
+            : `/positions/add?type=amm&t0=${token0.address}&t1=${token1.address}`;
     return (
         <div className="grid grid-cols-1 items-center gap-3 px-4 py-3 sm:grid-cols-[16rem_1fr_14.5rem] sm:gap-4">
             <div className="flex items-center gap-3">
@@ -1022,7 +1030,6 @@ function PoolSubRowCard({
                         <span className="truncate text-xs font-medium">
                             {token0.symbol} / {token1.symbol}
                         </span>
-                        <CopyAddressButton address={token1.address} />
                     </div>
                     <div className="mt-0.5 flex flex-wrap items-center gap-1">
                         <span
@@ -1054,11 +1061,11 @@ function PoolSubRowCard({
             </div>
             <div className="flex justify-end">
                 <Link
-                    href={`/pool/${sub.poolAddress}`}
+                    href={addLiqHref}
                     className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-1.5 text-[11px] font-medium text-arc-text transition-colors hover:bg-white/5"
                 >
-                    Open pool
-                    <ChevronDown className="h-3 w-3 -rotate-90" />
+                    <Plus className="h-3 w-3" />
+                    Add Liquidity
                 </Link>
             </div>
         </div>
@@ -1079,9 +1086,16 @@ function PoolSubRowCard({
 function PoolPairGridCard({
     row,
     sub,
+    whiteCta = false,
 }: {
     row: PoolPairRow;
     sub: PoolSubRow;
+    /** When the user filters the grid to anything other than "All" (Hyped,
+     *  Points, Incentivized, Standard AMM, Concentrated), the action
+     *  buttons shift to the same white/glass palette as the selected
+     *  filter chip. Visually anchors "you filtered this in" so the card
+     *  CTAs read in the same language as the filter row above. */
+    whiteCta?: boolean;
 }) {
     const { image: image0 } = useTokenImage(row.token0.address);
     const { image: image1 } = useTokenImage(row.token1.address);
@@ -1106,7 +1120,6 @@ function PoolPairGridCard({
                         <span className="truncate text-sm font-semibold">
                             {row.token0.symbol} / {row.token1.symbol}
                         </span>
-                        <CopyAddressButton address={row.token1.address} />
                     </div>
                     <div className="mt-1 flex flex-wrap items-center gap-1">
                         <span
@@ -1161,16 +1174,26 @@ function PoolPairGridCard({
             <div className="mt-2 grid grid-cols-2 gap-2">
                 <Link
                     href={addLiqHref}
-                    className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-[0.575rem] text-xs font-semibold text-arc-text transition-colors hover:bg-white/5"
+                    className={cn(
+                        "inline-flex items-center justify-center gap-1.5 rounded-xl border px-3 py-[0.575rem] text-xs font-semibold transition-colors",
+                        whiteCta
+                            ? "border-white/25 bg-white/15 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.18)] hover:bg-white/20"
+                            : "border-arc-border bg-arc-bg-elevated text-arc-text hover:bg-white/5",
+                    )}
                 >
                     <Plus className="h-3.5 w-3.5" />
-                    Add Liq.
+                    Add Liquidity
                 </Link>
                 <Link
                     href="/swap"
-                    className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-arc-border bg-sky-400/10 px-3 py-[0.575rem] text-xs font-semibold text-sky-400 transition-colors hover:bg-sky-400/20"
+                    className={cn(
+                        "inline-flex items-center justify-center gap-1.5 rounded-xl border px-3 py-[0.575rem] text-xs font-semibold transition-colors",
+                        whiteCta
+                            ? "border-white/15 bg-white/[0.06] text-white hover:bg-white/[0.12]"
+                            : "border-arc-border bg-sky-400/10 text-sky-400 hover:bg-sky-400/20",
+                    )}
                 >
-                    <SwapIcon />
+                    <SwapIcon tone={whiteCta ? "white" : "sky"} />
                     Swap
                 </Link>
             </div>
@@ -1182,8 +1205,14 @@ function PoolPairGridCard({
 // Small helpers
 // -------------------------------------------------------------------
 
-function SwapIcon() {
-    return <MaskIcon src="/swap.png" size={14} className="bg-sky-400" />;
+function SwapIcon({ tone = "sky" }: { tone?: "sky" | "white" }) {
+    return (
+        <MaskIcon
+            src="/swap.png"
+            size={14}
+            className={tone === "white" ? "bg-white" : "bg-sky-400"}
+        />
+    );
 }
 
 /**
