@@ -11,6 +11,12 @@
           "react-doctor/no-inline-exhaustive-style",
           "react-doctor/no-large-animated-blur"
         ]
+      },
+      {
+        "files": ["lib/v3-math.ts", "lib/v4/**/*.ts"],
+        "rules": [
+          "react-doctor/deslop/unused-export"
+        ]
       }
     ]
   }

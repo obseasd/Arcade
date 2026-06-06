@@ -419,11 +419,11 @@ function ActivityFeed({ address, onLinkClick }: { address: Address; onLinkClick:
             <div className="space-y-2">
                 {items.map((it, i) =>
                     it.kind === "bridge" ? (
-                        <BridgeRow key={i} entry={it.row} />
+                        <BridgeRow key={`bridge-${it.row.id}`} entry={it.row} />
                     ) : it.kind === "claim" ? (
-                        <ClaimRow key={i} entry={it.row} />
+                        <ClaimRow key={`claim-${it.row.token}-${it.row.slotIndex}-${i}`} entry={it.row} />
                     ) : (
-                        <AppActivityRow key={i} entry={it.row} />
+                        <AppActivityRow key={`act-${it.row.id}`} entry={it.row} />
                     ),
                 )}
             </div>

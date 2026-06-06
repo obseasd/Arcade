@@ -1,5 +1,6 @@
 import { Github, Globe, BookOpen } from "lucide-react";
 import Image from "next/image";
+import Link from "next/link";
 
 export function Footer() {
   return (
@@ -42,20 +43,20 @@ export function Footer() {
           >
             <Github className="h-4 w-4" />
           </a>
-          <a
+          <Link
             href="/docs"
             className="transition-colors hover:text-arc-cta-hover"
             aria-label="Docs"
           >
             <BookOpen className="h-4 w-4" />
-          </a>
+          </Link>
         </div>
 
         {/* Right: legal + copyright */}
         <div className="flex flex-col items-end gap-1 font-display text-xs text-arc-gray">
           <div className="flex items-center gap-3">
-            <a href="/terms" className="hover:text-arc-cta-hover">Terms</a>
-            <a href="/privacy" className="hover:text-arc-cta-hover">Privacy</a>
+            <Link href="/terms" className="hover:text-arc-cta-hover">Terms</Link>
+            <Link href="/privacy" className="hover:text-arc-cta-hover">Privacy</Link>
           </div>
           <span>© 2026 Arcade Labs. All rights reserved.</span>
         </div>

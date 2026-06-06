@@ -319,9 +319,9 @@ function Table({ rows, headers }: { rows: string[][]; headers: string[] }) {
         </thead>
         <tbody>
           {rows.map((row, i) => (
-            <tr key={i} className="border-t border-arc-border">
+            <tr key={`row-${i}-${row[0] ?? ""}`} className="border-t border-arc-border">
               {row.map((cell, j) => (
-                <td key={j} className="px-3 py-2 align-top text-arc-text">
+                <td key={`cell-${i}-${j}`} className="px-3 py-2 align-top text-arc-text">
                   {cell}
                 </td>
               ))}

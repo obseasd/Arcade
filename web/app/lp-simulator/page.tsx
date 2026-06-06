@@ -1,14 +1,32 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { useMemo, useState } from "react";
 import type { SimulatorConfig } from "@/lib/lpSimulator/math";
 import { DEFAULT_PRESET_ID, getPreset, type PresetDef } from "@/lib/lpSimulator/presets";
 import { positionColor } from "@/lib/lpSimulator/colors";
-import { LiquidityChart } from "@/components/lp-simulator/LiquidityChart";
 import { PositionsList } from "@/components/lp-simulator/PositionsList";
 import { SidebarPanel } from "@/components/lp-simulator/SidebarPanel";
 import { SimulationPanel } from "@/components/lp-simulator/SimulationPanel";
 import { cn } from "@/lib/utils";
+
+// LiquidityChart pulls recharts (~80 KB gzipped). Dynamic-import so it's
+// fetched only when the page mounts, not eagerly in the route bundle.
+// ssr: false because recharts uses ResizeObserver / DOM APIs that don't
+// exist server-side. Skeleton placeholder keeps the layout stable
+// during the lazy fetch.
+const LiquidityChart = dynamic(
+  () =>
+    import("@/components/lp-simulator/LiquidityChart").then((m) => ({
+      default: m.LiquidityChart,
+    })),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="h-full min-h-[260px] w-full animate-pulse rounded-xl border border-arc-border bg-arc-bg-elevated/50" />
+    ),
+  },
+);
 
 const DEFAULT_PRESET = getPreset(DEFAULT_PRESET_ID)!;
 
@@ -98,7 +116,7 @@ export default function LpSimulatorPage() {
               <LegendItem color="#f97316" label="R: Cumulative Sold %" />
               {config.positions.map((p, i) => (
                 <LegendItem
-                  key={i}
+                  key={`legend-pos-${i}`}
                   color={positionColor(i)}
                   label={`Position ${i + 1} (${(p.pctOfPool * 100).toFixed(0)}%)`}
                 />

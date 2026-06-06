@@ -139,7 +139,7 @@ export function Comments({ token }: Props) {
         {comments.map((c, i) => {
           const isSelf = account && c.author.toLowerCase() === account.toLowerCase();
           return (
-            <div key={i} className="rounded-xl border border-arc-border bg-arc-bg-elevated p-3">
+            <div key={`${c.author}-${c.timestamp}-${i}`} className="rounded-xl border border-arc-border bg-arc-bg-elevated p-3">
               <div className="flex items-center justify-between text-xs text-arc-text-muted">
                 <span className={isSelf ? "font-medium text-arc-primary" : "tabular-nums"}>
                   {isSelf ? "You" : formatAddress(c.author)}

@@ -30,8 +30,8 @@ import {
 } from "recharts";
 import { Address, erc20Abi, formatUnits } from "viem";
 import { useAccount, useReadContracts } from "wagmi";
+import dynamic from "next/dynamic";
 import { TokenCard } from "@/components/launchpad/TokenCard";
-import { CreatorEarningsCard } from "@/components/pool/CreatorEarningsCard";
 import { CreatorFeesPanel } from "@/components/pool/CreatorFeesPanel";
 import { PendingWithdrawalsCard } from "@/components/pool/PendingWithdrawalsCard";
 import { VaultClaimPanel } from "@/components/pool/VaultClaimPanel";
@@ -49,6 +49,23 @@ import { listPendingClaims, type PendingTwitterClaim } from "@/lib/pendingClaims
 import { iconForActivity, loadActivity, type ActivityEntry } from "@/lib/activityFeed";
 import { pushToast } from "@/lib/toast";
 import { cn, formatAddress, formatAgo, formatToken, formatUSDC } from "@/lib/utils";
+
+// CreatorEarningsCard pulls recharts (~80 KB gzipped) for its sparkline.
+// Dynamic-import so the chart bundle only loads on /my-tokens, not on
+// every page in the app's shared route bundle. ssr: false because
+// recharts needs ResizeObserver.
+const CreatorEarningsCard = dynamic(
+  () =>
+    import("@/components/pool/CreatorEarningsCard").then((m) => ({
+      default: m.CreatorEarningsCard,
+    })),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="h-44 w-full animate-pulse rounded-2xl border border-arc-border bg-arc-bg-elevated/50" />
+    ),
+  },
+);
 
 const CURVE_SUPPLY = 800_000_000n * 10n ** 18n;
 const V4_GRAD_USDC = 20_000n * 10n ** 6n;

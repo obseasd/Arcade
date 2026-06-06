@@ -89,6 +89,27 @@ type Step =
   | { kind: "done"; mintTxHash: `0x${string}`; dstId: number }
   | { kind: "error"; message: string };
 
+/**
+ * Upper-bound on how long Circle's attestation can take per source
+ * chain. Beyond this we tell the user we're still polling. Module-scope
+ * so it's not rebuilt on every BridgeCard render.
+ */
+function expectedAttestUpperSec(srcChainId: number, fast: boolean): number {
+  if (fast) return 45; // ~10-30s + buffer
+  switch (srcChainId) {
+    case 11_155_111: return 25 * 60; // Eth Sepolia 15-20 min + buffer
+    case 84_532:
+    case 421_614:
+    case 11_155_420:
+      return 4 * 60; // 1-3 min + buffer
+    case 43_113:
+    case 5_042_002:
+      return 90; // 30-60s + buffer
+    default:
+      return 4 * 60;
+  }
+}
+
 export function BridgeCard() {
   const { address: account } = useAccount();
   const chainId = useChainId();
@@ -354,25 +375,8 @@ export function BridgeCard() {
 
   /**
    * Upper bound (in seconds) of the "normal" attestation window per source
-   * chain. Beyond this we tell the user we're still polling. Drives the
-   * "Taking longer than usual" notice without making the user think
-   * something's broken.
+   * chain - duplicated comment from the module-scope helper below.
    */
-  function expectedAttestUpperSec(srcChainId: number, fast: boolean): number {
-    if (fast) return 45; // ~10-30s + buffer
-    switch (srcChainId) {
-      case 11_155_111: return 25 * 60; // Eth Sepolia 15-20 min + buffer
-      case 84_532:
-      case 421_614:
-      case 11_155_420:
-        return 4 * 60; // 1-3 min + buffer
-      case 43_113:
-      case 5_042_002:
-        return 90; // 30-60s + buffer
-      default:
-        return 4 * 60;
-    }
-  }
 
   const attestingSlow =
     step.kind === "attesting" &&

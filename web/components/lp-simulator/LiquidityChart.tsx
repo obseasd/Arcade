@@ -99,7 +99,7 @@ export function LiquidityChart({ config }: Props) {
           />
           {config.positions.map((_, i) => (
             <Area
-              key={i}
+              key={`pos-${i}`}
               yAxisId="left"
               type="monotone"
               dataKey={`pos${i}`}

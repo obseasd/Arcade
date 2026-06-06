@@ -682,7 +682,7 @@ function CreateTokenInner() {
             <span className="text-sm font-medium text-arc-text">Fee recipients</span>
             {recipients.map((r, i) => {
               return (
-              <div key={i} className="space-y-2 rounded-lg border border-arc-border bg-white/[0.03] p-3">
+              <div key={`recipient-${i}`} className="space-y-2 rounded-lg border border-arc-border bg-white/[0.03] p-3">
                 {/* On mobile the 0x address input needs full width to be readable;
                     the share input + delete button drop to their own row. On
                     sm: and up we restore the inline layout. */}
@@ -1164,15 +1164,18 @@ function CreateTokenInner() {
   );
 }
 
+/** Reward-token preference options. Module-scope so they're not rebuilt on
+ *  every PrefSelect render. */
+const PREF_SELECT_OPTS: { v: RewardPref; label: string }[] = [
+  { v: 0, label: "Both" },
+  { v: 1, label: "USDC only" },
+  { v: 2, label: "Token only" },
+];
+
 /** Dark-themed dropdown for a recipient's reward-token preference. */
 function PrefSelect({ value, onChange }: { value: RewardPref; onChange: (v: RewardPref) => void }) {
   const [open, setOpen] = useState(false);
-  const opts: { v: RewardPref; label: string }[] = [
-    { v: 0, label: "Both" },
-    { v: 1, label: "USDC only" },
-    { v: 2, label: "Token only" },
-  ];
-  const current = opts.find((o) => o.v === value)?.label ?? "Both";
+  const current = PREF_SELECT_OPTS.find((o) => o.v === value)?.label ?? "Both";
   return (
     <div className="relative">
       <button
@@ -1193,7 +1196,7 @@ function PrefSelect({ value, onChange }: { value: RewardPref; onChange: (v: Rewa
             onClick={() => setOpen(false)}
           />
           <div className="absolute left-0 z-20 mt-1 min-w-[8rem] overflow-hidden rounded-lg border border-arc-border bg-arc-bg-elevated shadow-arc-card">
-            {opts.map((o) => (
+            {PREF_SELECT_OPTS.map((o) => (
               <button
                 key={o.v}
                 type="button"

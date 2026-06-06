@@ -73,7 +73,7 @@ export function PositionsList({ positions, onChange }: Props) {
 
       <div className="space-y-3">
         {positions.map((p, i) => (
-          <div key={i} className="rounded-xl border border-arc-border bg-black/30 p-3">
+          <div key={`pos-${p.lowerMcap}-${p.upperMcap}-${i}`} className="rounded-xl border border-arc-border bg-black/30 p-3">
             <div className="mb-2 flex items-center justify-between gap-2">
               <div className="flex items-center gap-2 text-xs">
                 <span

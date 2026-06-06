@@ -308,8 +308,6 @@ function PositionRow({
     }
   };
 
-  const fmt = (b: bigint, dec: number) =>
-    dec === USDC_DECIMALS ? formatUSDC(b, dec, 2) : formatToken(b, dec, 4);
 
   // USD valuation - works when one side is USDC (V2 reserves directly
   // give us the price). Falls back to undefined for exotic non-USDC pairs.
@@ -519,4 +517,10 @@ function fmtUsd(n: number): string {
   if (n === 0) return "$0";
   if (n < 0.01) return "<$0.01";
   return `$${n.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+}
+
+/** Token-decimals-aware balance formatter. Used by PositionRow. Module-scope
+ *  so it's not rebuilt on every row render. */
+function fmt(b: bigint, dec: number): string {
+  return dec === USDC_DECIMALS ? formatUSDC(b, dec, 2) : formatToken(b, dec, 4);
 }

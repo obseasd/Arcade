@@ -12,6 +12,11 @@ import { pushToast } from "@/lib/toast";
 import { Modal } from "@/components/ui/Modal";
 import { cn, formatAddress, formatToken, formatUSDC } from "@/lib/utils";
 
+/** RewardPref label mapper. Module-scope so it's not rebuilt on every
+ *  CreatorTokenPanel render. */
+const tokenPrefLabel = (p: number): string =>
+  p === 0 ? "Both" : p === 1 ? "Paired" : "Clanker";
+
 interface Props {
   /** Clanker token (mode=2). */
   token: Address;
@@ -173,7 +178,6 @@ export function CreatorTokenPanel({ token, symbol, pool, volumeRaw, volumeTokenR
     }
   };
 
-  const tokenPrefLabel = (p: number) => (p === 0 ? "Both" : p === 1 ? "Paired" : "Clanker");
 
   return (
     <div className="arc-card p-5">
@@ -248,7 +252,7 @@ export function CreatorTokenPanel({ token, symbol, pool, volumeRaw, volumeTokenR
           if (isTwitterPending) {
             return (
               <div
-                key={i}
+                key={`${r.recipient}-${i}`}
                 className="flex items-center justify-between gap-2 px-3 py-1 text-xs"
               >
                 <div className="flex min-w-0 items-center gap-1.5 truncate">
@@ -282,7 +286,7 @@ export function CreatorTokenPanel({ token, symbol, pool, volumeRaw, volumeTokenR
           }
           return (
             <div
-              key={i}
+              key={`${r.recipient}-${i}`}
               className={cn(
                 "rounded-xl border p-3 text-xs",
                 isMineSlot
