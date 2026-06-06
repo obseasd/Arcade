@@ -339,6 +339,7 @@ function TimelockCard() {
             </div>
             <div className="mt-4 flex items-center gap-2">
                 <input
+                    aria-label="Timelock hours"
                     type="number"
                     min={1}
                     max={168}
@@ -412,6 +413,7 @@ function SignerCard() {
             <Row label="Current" value={current ?? "(loading)"} mono />
             <div className="mt-4 flex items-center gap-2">
                 <input
+                    aria-label="New signer address"
                     type="text"
                     placeholder="0x… new signer address"
                     value={next}
@@ -468,6 +470,7 @@ function PullFromLockerCard() {
             </p>
             <div className="mt-4 flex items-center gap-2">
                 <input
+                    aria-label="Token address"
                     type="text"
                     value={tokenInput}
                     onChange={(e) => setTokenInput(e.target.value)}
@@ -531,6 +534,7 @@ function LockerRotationCard() {
             </p>
             <div className="mt-3 grid grid-cols-2 gap-2">
                 <input
+                    aria-label="Position ID"
                     type="number"
                     min={0}
                     placeholder="positionId"
@@ -539,6 +543,7 @@ function LockerRotationCard() {
                     className="arc-input rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2 text-sm"
                 />
                 <input
+                    aria-label="Slot index"
                     type="number"
                     min={0}
                     placeholder="slotIndex"
@@ -548,6 +553,7 @@ function LockerRotationCard() {
                 />
             </div>
             <input
+                aria-label="New recipient or admin address"
                 type="text"
                 placeholder="0x… new recipient / admin"
                 value={addr}
@@ -662,6 +668,7 @@ function ForfeitCard() {
             </p>
             <div className="mt-3 grid grid-cols-2 gap-2">
                 <input
+                    aria-label="Position ID"
                     type="number"
                     min={0}
                     placeholder="positionId"
@@ -670,6 +677,7 @@ function ForfeitCard() {
                     className="arc-input rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2 text-sm"
                 />
                 <input
+                    aria-label="Slot index"
                     type="number"
                     min={0}
                     placeholder="slotIndex"
@@ -679,6 +687,7 @@ function ForfeitCard() {
                 />
             </div>
             <input
+                aria-label="Paired token address"
                 type="text"
                 placeholder="Paired token address (typically USDC)"
                 value={pairedStr}
@@ -686,6 +695,7 @@ function ForfeitCard() {
                 className="arc-input mt-2 w-full rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2 font-mono text-xs"
             />
             <input
+                aria-label="Launch token address"
                 type="text"
                 placeholder="Clanker / launch token address (optional)"
                 value={clankerStr}
@@ -693,6 +703,7 @@ function ForfeitCard() {
                 className="arc-input mt-2 w-full rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2 font-mono text-xs"
             />
             <input
+                aria-label="Recipient address"
                 type="text"
                 placeholder="Recipient (treasury, creator, charity…)"
                 value={toStr}
@@ -786,6 +797,7 @@ function RescueCard() {
             </p>
             <div className="mt-3 space-y-2">
                 <input
+                    aria-label="Token address"
                     type="text"
                     placeholder="Token address"
                     value={tokenInput}
@@ -793,6 +805,7 @@ function RescueCard() {
                     className="arc-input w-full rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2 font-mono text-xs"
                 />
                 <input
+                    aria-label="Recipient address"
                     type="text"
                     placeholder="Recipient address"
                     value={toInput}
@@ -800,6 +813,7 @@ function RescueCard() {
                     className="arc-input w-full rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2 font-mono text-xs"
                 />
                 <input
+                    aria-label="Amount"
                     type="text"
                     inputMode="decimal"
                     placeholder={`Amount in ${isUsdc ? "USDC" : "tokens"}`}
@@ -867,6 +881,7 @@ function OwnershipCard() {
             </p>
             <div className="mt-4 flex items-center gap-2">
                 <input
+                    aria-label="New owner address"
                     type="text"
                     placeholder="0x… new owner (typically a Safe multisig)"
                     value={next}

@@ -730,6 +730,7 @@ function TokenInput({
                 </div>
             </div>
             <input
+                aria-label={`${label} amount`}
                 type="text"
                 inputMode="decimal"
                 placeholder="0.0"

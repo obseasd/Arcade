@@ -21,7 +21,7 @@ export const MAX_TICK = 887272;
  * mint. Mismatched spacing is the silent-revert classic for fresh-pool
  * mints because the v3-pool's mint() asserts (tick % tickSpacing == 0).
  */
-export const FEE_TICK_SPACING: Record<number, number> = {
+const FEE_TICK_SPACING: Record<number, number> = {
     100: 1, // 0.01%
     500: 10, // 0.05%
     3000: 60, // 0.30%
@@ -39,12 +39,12 @@ export function defaultTickSpacingForFee(feePip: number): number {
  * `price` is token1-per-token0 in raw on-chain ratio (no decimals scaling
  * yet — the caller is responsible for converting decimal-aware to raw).
  */
-export function priceToTick(price: number): number {
+function priceToTick(price: number): number {
     if (!isFinite(price) || price <= 0) return 0;
     return Math.floor(Math.log(price) / Math.log(1.0001));
 }
 
-export function tickToPrice(tick: number): number {
+function tickToPrice(tick: number): number {
     return Math.pow(1.0001, tick);
 }
 
@@ -77,12 +77,12 @@ export function tickToPriceWithDecimals(
  * the lower/upper tick we feed into mint() is a valid tick at the pool's
  * spacing (the V3 core reverts otherwise).
  */
-export function roundTickDown(tick: number, spacing: number): number {
+function roundTickDown(tick: number, spacing: number): number {
     const r = tick - (tick % spacing);
     return tick < 0 && tick % spacing !== 0 ? r - spacing : r;
 }
 
-export function roundTickUp(tick: number, spacing: number): number {
+function roundTickUp(tick: number, spacing: number): number {
     // JS modulo: (-7) % 60 == -7, so the naive `(spacing - tick % spacing)`
     // path yields a value > spacing for negative non-aligned ticks and
     // overshoots by one whole spacing. Normalise the modulus to [0, spacing)
@@ -95,7 +95,7 @@ export function roundTickUp(tick: number, spacing: number): number {
 /**
  * Clamp a tick to the global Uniswap V3 [MIN_TICK, MAX_TICK] domain.
  */
-export function clampTick(tick: number): number {
+function clampTick(tick: number): number {
     if (tick < MIN_TICK) return MIN_TICK;
     if (tick > MAX_TICK) return MAX_TICK;
     return tick;
@@ -171,7 +171,7 @@ export function presetTickRange(
 }
 
 // Uniswap V3 sqrt-price bounds (matches v3-core TickMath constants).
-export const MIN_SQRT_RATIO = 4295128739n;
+const MIN_SQRT_RATIO = 4295128739n;
 export const MAX_SQRT_RATIO = 1461446703485210103287273052203988822378723970342n;
 
 /**
@@ -403,38 +403,3 @@ export function getSqrtRatioAtTick(tick: number): bigint {
     return (ratio >> 32n) + (ratio % (1n << 32n) === 0n ? 0n : 1n);
 }
 
-/**
- * Mirror of Uniswap V3's LiquidityAmounts.getLiquidityForAmounts for the UI
- * preview. Float math, accurate enough for "you'll receive ~X liquidity".
- */
-export function previewLiquidity(
-    amount0: bigint,
-    amount1: bigint,
-    currentTick: number,
-    tickLower: number,
-    tickUpper: number,
-): bigint {
-    if (tickUpper <= tickLower) return 0n;
-    const sqrtP = Math.sqrt(tickToPrice(currentTick));
-    const sqrtA = Math.sqrt(tickToPrice(tickLower));
-    const sqrtB = Math.sqrt(tickToPrice(tickUpper));
-
-    // Below range: only token0
-    if (currentTick < tickLower) {
-        const num = Number(amount0) * (sqrtA * sqrtB);
-        const den = sqrtB - sqrtA;
-        if (den === 0) return 0n;
-        return BigInt(Math.floor(num / den));
-    }
-    // Above range: only token1
-    if (currentTick >= tickUpper) {
-        const num = Number(amount1);
-        const den = sqrtB - sqrtA;
-        if (den === 0) return 0n;
-        return BigInt(Math.floor(num / den));
-    }
-    // In range: choose the binding leg
-    const l0 = (Number(amount0) * (sqrtP * sqrtB)) / (sqrtB - sqrtP || 1);
-    const l1 = Number(amount1) / (sqrtP - sqrtA || 1);
-    return BigInt(Math.floor(Math.min(l0, l1)));
-}

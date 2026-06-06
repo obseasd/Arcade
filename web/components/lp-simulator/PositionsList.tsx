@@ -88,6 +88,7 @@ export function PositionsList({ positions, onChange }: Props) {
               </div>
               <div className="flex items-center gap-3">
                 <input
+                  aria-label="Position share of pool"
                   type="range"
                   min={0}
                   max={100}
@@ -128,6 +129,7 @@ export function PositionsList({ positions, onChange }: Props) {
 function McapInput({ value, onCommit }: { value: number; onCommit: (v: number) => void }) {
   return (
     <input
+      aria-label="Market cap"
       type="text"
       defaultValue={fmtShort(value)}
       key={value}

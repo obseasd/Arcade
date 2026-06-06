@@ -105,11 +105,3 @@ export function removeBridge(id: string): void {
   save(existing.filter((e) => e.id !== id));
 }
 
-export function clearBridgeHistory(): void {
-  if (!isBrowser()) return;
-  try {
-    window.localStorage.removeItem(KEY);
-  } catch {
-    /* ignore */
-  }
-}

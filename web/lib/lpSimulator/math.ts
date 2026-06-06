@@ -254,10 +254,10 @@ export function sampleCumulativeSold(c: SimulatorConfig, buckets = 80): Array<{ 
 }
 
 /** mcapToTick / tickToMcap (Uniswap V3): tick = log(price) / log(1.0001). */
-export function mcapToTick(mcap: number, totalSupply: number): number {
+function mcapToTick(mcap: number, totalSupply: number): number {
   const price = mcap / totalSupply;
   return Math.floor(Math.log(price) / Math.log(1.0001));
 }
-export function tickToMcap(tick: number, totalSupply: number): number {
+function tickToMcap(tick: number, totalSupply: number): number {
   return Math.pow(1.0001, tick) * totalSupply;
 }

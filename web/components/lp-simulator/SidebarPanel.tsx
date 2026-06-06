@@ -58,6 +58,7 @@ export function SidebarPanel({ config, presetId, onPreset, onConfigChange, onRes
         <div className="mt-1 flex items-center gap-2 rounded-xl border border-arc-border bg-black/40 px-3 py-2.5">
           <span className="text-arc-text-faint">$</span>
           <input
+            aria-label="Starting market cap"
             type="text"
             defaultValue={shortMcap(config.startingMcap)}
             key={config.startingMcap}
@@ -116,6 +117,7 @@ function AllocInput({ label, value, onChange }: { label: string; value: number; 
     <div>
       <label className="text-xs text-arc-text-muted">{label}</label>
       <input
+        aria-label={label}
         type="number"
         min={0}
         max={100}

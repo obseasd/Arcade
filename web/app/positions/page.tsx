@@ -214,6 +214,7 @@ function PositionsInner() {
           <div className="flex h-11 flex-1 items-center gap-2 rounded-xl border border-arc-border bg-black/15 px-3 backdrop-blur-xl">
             <Search className="h-4 w-4 text-arc-text-faint" />
             <input
+              aria-label="Search positions"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Search by token name..."

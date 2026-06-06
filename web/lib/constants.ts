@@ -83,7 +83,6 @@ export const V4_HOOK_ENABLED: boolean =
   !!process.env.NEXT_PUBLIC_LOCKED_VAULT_ADDRESS;
 
 /** V4 pool params used for every Arcade launch (1% fee tier). */
-export const V4_POOL_FEE = 10_000;
 export const V4_TICK_SPACING = 200;
 
 /** V3 fee tier used for all CLANKER_V3 pools (1%). */
@@ -96,7 +95,6 @@ export const MULTISWAP_MAX_INPUTS = 5;
 export const USDC_DECIMALS = 6;
 export const LAUNCHPAD_TOKEN_DECIMALS = 18;
 export const LAUNCHPAD_TOTAL_SUPPLY = 1_000_000_000n; // 1B fixed supply
-export const TRADE_FEE_BPS = 100; // 1% total - split 0.5% platform + 0.5% creator
 export const CREATION_FEE_USDC = 3_000_000n; // 3 USDC (6 decimals)
 
 /** Featured token addresses surfaced at the top of the launchpad list. Set via

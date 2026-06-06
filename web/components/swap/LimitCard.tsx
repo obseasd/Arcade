@@ -552,6 +552,7 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
                     </div>
                     <div className="flex items-center justify-between gap-3">
                         <input
+                            aria-label="Trigger price"
                             type="text"
                             inputMode="decimal"
                             value={triggerPrice}
@@ -747,6 +748,7 @@ function TokenRow({
 
             {/* Amount input */}
             <input
+                aria-label="Amount"
                 type="text"
                 inputMode="decimal"
                 value={amount}
@@ -795,6 +797,7 @@ function CustomNumInput({
     return (
         <div className="rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2">
             <input
+                aria-label={label}
                 type="text"
                 inputMode="numeric"
                 value={value}

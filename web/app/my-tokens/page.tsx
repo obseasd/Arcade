@@ -17,6 +17,7 @@ import {
     ShoppingCart,
     Wallet,
 } from "lucide-react";
+import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -230,11 +231,12 @@ function PortfolioHeader({
                         onClick={onShare}
                         className="inline-flex items-center gap-2 rounded-xl border border-arc-border bg-arc-bg-elevated px-4 py-2.5 text-[15px] font-medium text-arc-text transition-colors hover:bg-white/5"
                     >
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img
+                        <Image
                             src="/share.png"
                             alt=""
                             aria-hidden
+                            width={18}
+                            height={18}
                             className="h-[18px] w-[18px] object-contain"
                         />
                         Share
@@ -1223,8 +1225,7 @@ function ActivityRowFull({ item }: { item: UnifiedActivityItem }) {
             <td className="px-4 py-3 text-xs text-arc-text-muted">{date}</td>
             <td className="px-4 py-3">
                 <div className="flex items-center gap-2">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={item.iconSrc} alt={item.type} className="h-5 w-5 shrink-0 object-contain" />
+                    <Image src={item.iconSrc} alt={item.type} width={20} height={20} className="h-5 w-5 shrink-0 object-contain" unoptimized />
                     <span className="text-arc-text">{item.type}</span>
                 </div>
             </td>
@@ -1334,8 +1335,7 @@ function ActivityList({ account, limit }: { account: Address; limit: number }) {
         <div className="space-y-3">
             {items.map((it) => (
                 <div key={it.id} className="flex items-center gap-2.5">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={it.iconSrc} alt={it.type} className="h-9 w-9 shrink-0 object-contain" />
+                    <Image src={it.iconSrc} alt={it.type} width={36} height={36} className="h-9 w-9 shrink-0 object-contain" unoptimized />
                     <div className="min-w-0 flex-1">
                         <div className="truncate text-sm text-arc-text-faint">{it.label}</div>
                         <div className="truncate text-xs font-medium text-arc-text">{it.value}</div>

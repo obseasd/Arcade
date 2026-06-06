@@ -1,6 +1,7 @@
 "use client";
 
 import { ArrowLeft, X, Image as ImageIcon, Upload, ChevronDown, Pencil, Check } from "lucide-react";
+import NextImage from "next/image";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useRef, useState } from "react";
@@ -568,14 +569,16 @@ function CreateTokenInner() {
         <div className="flex gap-2">
           <label className="flex w-32 shrink-0 cursor-pointer flex-col items-center justify-center gap-1.5 self-stretch overflow-hidden rounded-xl border border-dashed border-arc-border bg-arc-bg-elevated transition-colors hover:border-arc-cta-hover">
             {imagePreview || image.trim() ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
+              <NextImage
                 src={imagePreview || displayImage(image.trim())}
                 alt=""
+                width={128}
+                height={128}
                 className={cn(
                   "h-full w-full object-cover",
                   imageUploading && "opacity-60",
                 )}
+                unoptimized
               />
             ) : (
               <>
@@ -840,8 +843,7 @@ function CreateTokenInner() {
         {isV3 && (
           <details className="rounded-xl border border-arc-border bg-arc-bg-elevated open:bg-arc-surface">
             <summary className="flex cursor-pointer select-none items-center gap-2 px-4 py-3 text-sm text-arc-text-muted hover:text-arc-text">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src="/safe.png" alt="" className="h-4 w-4 shrink-0" />
+              <NextImage src="/safe.png" alt="" width={16} height={16} className="h-4 w-4 shrink-0" />
               <span>Team vault</span>
               <ChevronDown className="arc-disclosure ml-auto h-4 w-4 shrink-0 text-arc-text-faint" />
             </summary>
@@ -908,8 +910,7 @@ function CreateTokenInner() {
         {isV3 && (
           <details className="rounded-xl border border-arc-border bg-arc-bg-elevated open:bg-arc-surface">
             <summary className="flex cursor-pointer select-none items-center gap-2 px-4 py-3 text-sm text-arc-text-muted hover:text-arc-text">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src="/target.png" alt="" className="h-4 w-4 shrink-0" />
+              <NextImage src="/target.png" alt="" width={16} height={16} className="h-4 w-4 shrink-0" />
               <span>Anti-sniper tax - tax early buys, decaying to zero (optional)</span>
               <ChevronDown className="arc-disclosure ml-auto h-4 w-4 shrink-0 text-arc-text-faint" />
             </summary>
@@ -951,8 +952,7 @@ function CreateTokenInner() {
         {mode === LaunchMode.CLANKER && (
           <details className="rounded-xl border border-arc-border bg-arc-bg-elevated open:bg-arc-surface">
             <summary className="flex cursor-pointer select-none items-center gap-2 px-4 py-3 text-sm text-arc-text-muted hover:text-arc-text">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src="/social.png" alt="" className="h-4 w-4 shrink-0" />
+              <NextImage src="/social.png" alt="" width={16} height={16} className="h-4 w-4 shrink-0" />
               <span>Secondary creator fee receiver (optional)</span>
               <ChevronDown className="arc-disclosure ml-auto h-4 w-4 shrink-0 text-arc-text-faint" />
             </summary>
@@ -992,8 +992,7 @@ function CreateTokenInner() {
 
         <details className="rounded-xl border border-arc-border bg-arc-bg-elevated open:bg-arc-surface">
           <summary className="flex cursor-pointer select-none items-center gap-2 px-4 py-3 text-sm text-arc-text-muted hover:text-arc-text">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/social.png" alt="" className="h-4 w-4 shrink-0" />
+            <NextImage src="/social.png" alt="" width={16} height={16} className="h-4 w-4 shrink-0" />
             <span>Socials (optional)</span>
             <ChevronDown className="arc-disclosure ml-auto h-4 w-4 shrink-0 text-arc-text-faint" />
           </summary>
@@ -1043,11 +1042,13 @@ function CreateTokenInner() {
           <div className="arc-card space-y-4 p-5">
             <div className="flex items-center gap-3">
               {imagePreview || image.trim() ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
+                <NextImage
                   src={imagePreview || displayImage(image.trim())}
                   alt=""
+                  width={48}
+                  height={48}
                   className="h-12 w-12 rounded-xl object-cover ring-1 ring-arc-border"
+                  unoptimized
                 />
               ) : (
                 <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-white/[0.04] ring-1 ring-arc-border">

@@ -1,3 +1,4 @@
+import Image from "next/image";
 import { cn } from "@/lib/utils";
 import { TokenLogo } from "./TokenLogo";
 import { resolveIpfs } from "@/lib/metadata";
@@ -38,14 +39,14 @@ export function TokenIcon({ symbol, image, size = 32, className }: Props) {
   const src = rawImage || (cleanSymbol ? PNG_LOGOS[cleanSymbol.toUpperCase()] : undefined);
   if (src) {
     return (
-      // eslint-disable-next-line @next/next/no-img-element
-      <img
+      <Image
         src={src}
         alt={symbol ?? "token"}
         width={size}
         height={size}
         style={{ width: size, height: size }}
         className={cn("shrink-0 rounded-full object-cover", className)}
+        unoptimized
       />
     );
   }

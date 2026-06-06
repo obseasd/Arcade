@@ -20,7 +20,7 @@ import { Address } from "viem";
 export const CCTP_V2_TOKEN_MESSENGER: Address = "0x8FE6B999Dc680CcFDD5Bf7EB0974218be2542DAA";
 export const CCTP_V2_MESSAGE_TRANSMITTER: Address = "0xE737e5cEBEEBa77EFE34D4aa090756590b1CE275";
 
-export const IRIS_BASE_TESTNET = "https://iris-api-sandbox.circle.com";
+const IRIS_BASE_TESTNET = "https://iris-api-sandbox.circle.com";
 
 export interface CctpChainConfig {
   /** EVM chain ID */
@@ -99,10 +99,6 @@ export const CCTP_CHAINS: CctpChainConfig[] = [
 
 export function getCctpChain(chainId: number): CctpChainConfig | undefined {
   return CCTP_CHAINS.find((c) => c.id === chainId);
-}
-
-export function getCctpChainByDomain(domain: number): CctpChainConfig | undefined {
-  return CCTP_CHAINS.find((c) => c.cctpDomain === domain);
 }
 
 // ============ ABIs ============

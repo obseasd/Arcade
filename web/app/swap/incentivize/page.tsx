@@ -346,6 +346,7 @@ export default function IncentivizePage() {
                             </button>
                         </div>
                         <input
+                            aria-label="Reward amount"
                             type="text"
                             inputMode="decimal"
                             value={rewardAmount}
@@ -426,6 +427,7 @@ export default function IncentivizePage() {
                         <div className="mt-4 space-y-3">
                             <div className="flex items-center gap-2">
                                 <input
+                                    aria-label="Address to exclude"
                                     value={excludeDraft}
                                     onChange={(e) => setExcludeDraft(e.target.value)}
                                     placeholder="0x... address to exclude"

@@ -13,7 +13,7 @@ const TOTAL_SUPPLY_RAW = LAUNCHPAD_TOTAL_SUPPLY * 10n ** BigInt(LAUNCHPAD_TOKEN_
  * Implied FDV of a Clanker V3 token, in the paired token's raw units.
  * `sqrtPriceX96` from `pool.slot0()`; `token0` from `pool.token0()`.
  */
-export function computeClankerFdv(sqrtPriceX96: bigint, token0: Address, clankerToken: Address): bigint {
+function computeClankerFdv(sqrtPriceX96: bigint, token0: Address, clankerToken: Address): bigint {
   const isClankerToken0 = token0.toLowerCase() === clankerToken.toLowerCase();
   const num = sqrtPriceX96 * sqrtPriceX96;
   // raw price = num / Q192 = token1-per-token0 (raw units, no decimal adjustment).

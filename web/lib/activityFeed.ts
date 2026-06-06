@@ -110,11 +110,6 @@ export function loadActivity(account: Address | undefined): ActivityEntry[] {
     return loadAll().filter((e) => e.account === acc);
 }
 
-/** Drop one row by id. The X button on a row uses this. */
-export function removeActivity(id: string): void {
-    saveAll(loadAll().filter((e) => e.id !== id));
-}
-
 /**
  * Map an activity type to the public-folder icon path. Keep this in sync
  * with the PNGs in `web/public/`. Generic "contract" covers launches,

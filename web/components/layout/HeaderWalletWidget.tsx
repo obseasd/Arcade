@@ -13,6 +13,7 @@ import {
     Send,
     Shield,
 } from "lucide-react";
+import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Address, erc20Abi } from "viem";
@@ -454,8 +455,7 @@ function ActivityIcon({ src, alt }: { src: string; alt: string }) {
         // Bare PNG, no background container. Sized to match the two-line
         // text block on the row (text-sm + text-xs = ~36px stacked) so
         // the icon visually anchors the row instead of floating small.
-        // eslint-disable-next-line @next/next/no-img-element
-        <img src={src} alt={alt} className="h-10 w-10 shrink-0 object-contain" />
+        <Image src={src} alt={alt} width={40} height={40} className="h-10 w-10 shrink-0 object-contain" unoptimized />
     );
 }
 

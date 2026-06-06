@@ -36,13 +36,6 @@ export function formatToken(value: bigint, decimals = 18, fractionDigits = 4): s
     : `${sign}${whole.toLocaleString("en-US")}`;
 }
 
-export function parseUSDC(value: string, decimals = 6): bigint {
-  if (!value) return 0n;
-  const [whole, frac = ""] = value.split(".");
-  const fracPadded = (frac + "0".repeat(decimals)).slice(0, decimals);
-  return BigInt(whole || "0") * 10n ** BigInt(decimals) + BigInt(fracPadded || "0");
-}
-
 /**
  * Pretty-print an LP-token balance with whatever precision is required to keep
  * it from rendering as "0". V2 first-LP mints are sqrt(amount0 * amount1) -

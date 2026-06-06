@@ -207,16 +207,6 @@ export const ORBS_TWAP_ABI = [
     },
 ] as const;
 
-/** Order status constants matching the on-chain enum. */
-export const ORBS_ORDER_STATUS = {
-    /** Status field is a timestamp (deadline) while order is open. */
-    OPEN: 0,
-    /** Order was cancelled by the maker. */
-    CANCELED: 1,
-    /** Order is fully filled. */
-    COMPLETED: 2,
-} as const;
-
 /**
  * The status field encodes 3 things:
  *   - 1 = STATUS_CANCELED

@@ -108,6 +108,7 @@ export function Comments({ token }: Props) {
       <h3 className="mb-3 text-base font-semibold">Comments</h3>
       <div className="mb-4">
         <textarea
+          aria-label="New comment"
           value={text}
           onChange={(e) => setText(e.target.value.slice(0, 280))}
           rows={2}

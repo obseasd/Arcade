@@ -556,6 +556,7 @@ function InputBox({
       {/* Top: amount on the left, token chip on the right */}
       <div className="flex items-center justify-between">
         <input
+          aria-label="Swap amount"
           type="text"
           inputMode="decimal"
           placeholder="0.0"

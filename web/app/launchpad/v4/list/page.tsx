@@ -116,6 +116,7 @@ function V4ListInner() {
                 <div className="flex items-center gap-2 rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2 sm:w-72">
                     <Search className="h-4 w-4 text-arc-text-faint" />
                     <input
+                        aria-label="Search launches"
                         value={q}
                         onChange={(e) => setQ(e.target.value)}
                         placeholder="Search name, symbol, address"

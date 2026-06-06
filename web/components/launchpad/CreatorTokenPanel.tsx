@@ -1,6 +1,7 @@
 "use client";
 
 import { Pencil, Coins, TrendingUp, Twitter } from "lucide-react";
+import Image from "next/image";
 import { useMemo, useState } from "react";
 import { Address, isAddress } from "viem";
 import { useAccount, usePublicClient, useReadContract, useReadContracts, useWriteContract } from "wagmi";
@@ -181,8 +182,7 @@ export function CreatorTokenPanel({ token, symbol, pool, volumeRaw, volumeTokenR
       <div className="mb-1 grid gap-1 sm:grid-cols-2">
         <div className="rounded-xl border border-arc-cta-hover/30 bg-arc-cta-hover/5 px-3 py-2 text-xs">
           <div className="flex items-center gap-1.5 text-arc-text-muted">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/bill.png" alt="" className="h-4 w-4 object-contain" />
+            <Image src="/bill.png" alt="" width={16} height={16} className="h-4 w-4 object-contain" />
             {isMine && myRecipientBps > 0 ? "Your share, claimable" : "LP fees pending"}
           </div>
           <div className="mt-0.5 text-base font-semibold tabular-nums text-arc-text">
@@ -198,8 +198,7 @@ export function CreatorTokenPanel({ token, symbol, pool, volumeRaw, volumeTokenR
         </div>
         <div className="rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2 text-xs">
           <div className="flex items-center gap-1.5 text-arc-text-muted">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/lifetimefees.png" alt="" className="h-4 w-4 object-contain" />
+            <Image src="/lifetimefees.png" alt="" width={16} height={16} className="h-4 w-4 object-contain" />
             {isMine && myRecipientBps > 0 ? "Lifetime earnings" : "Lifetime fees earned"}
           </div>
           <div className="mt-0.5 text-base font-semibold tabular-nums text-arc-text">

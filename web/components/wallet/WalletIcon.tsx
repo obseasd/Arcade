@@ -1,3 +1,5 @@
+import Image from "next/image";
+
 /**
  * Small avatar element that prefers the connected wallet's own logo
  * (Backpack, MetaMask, Rabby, etc.) and falls back to a gradient
@@ -21,14 +23,14 @@ export function WalletIcon({ icon, name, size = 24, shape = "lg" }: Props) {
     const radius = shape === "full" ? "rounded-full" : "rounded-lg";
     if (icon) {
         return (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
+            <Image
                 src={icon}
                 alt={name}
                 width={size}
                 height={size}
                 style={{ width: size, height: size }}
                 className={radius}
+                unoptimized
             />
         );
     }

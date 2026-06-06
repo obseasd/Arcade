@@ -1,3 +1,4 @@
+import Image from "next/image";
 import { cn } from "@/lib/utils";
 
 /** Known PNG logos shipped with the app, keyed by EVM chain ID. */
@@ -30,9 +31,8 @@ interface Props {
 export function ChainIcon({ chainId, size = 24, className }: Props) {
   const logo = CHAIN_LOGOS[chainId];
   if (logo) {
-    // eslint-disable-next-line @next/next/no-img-element
     return (
-      <img
+      <Image
         src={logo}
         alt=""
         width={size}

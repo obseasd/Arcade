@@ -1,8 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Address, erc20Abi, parseAbiItem } from "viem";
+import { Address, erc20Abi } from "viem";
 import { CHUNK_SMALL, MAX_BACK_BLOCKS, scanLogsChunked } from "@/lib/eventScan";
+import { GRADUATED_EVT, TOKEN_LAUNCHED_EVT } from "@/lib/eventSignatures";
 import { usePublicClient, useReadContract, useReadContracts } from "wagmi";
 import {
     ARCADE_HOOK_ABI,
@@ -31,15 +32,9 @@ import { useWatchEvent } from "./useWatchEvent";
  * Gated behind `V4_HOOK_ENABLED` so it's a no-op when the address is unset.
  */
 
-const TOKEN_LAUNCHED_EVT = parseAbiItem(
-    "event TokenLaunched(address indexed token, address indexed creator, uint8 mode, string name, string symbol, string metadataURI)",
-);
-
-const GRADUATED_EVT = parseAbiItem(
-    "event Graduated(bytes32 indexed poolId, uint256 finalUsdcReserve, uint256 tokensInLP)",
-);
-
-// CHUNK + MAX_BACK live in @/lib/eventScan now.
+// Event signatures live in @/lib/eventSignatures (shared with the V4
+// hook page + other indexer hooks). CHUNK + MAX_BACK live in
+// @/lib/eventScan.
 
 export interface ArcadeHookTokenInfo {
     address: Address;
@@ -293,5 +288,3 @@ export function useArcadeHookCurveState(token: Address | undefined): {
     };
 }
 
-// Re-export the constants so consumers don't need a second import.
-export { ARCADE_HOOK_MODE, ARCADE_HOOK_STATUS };

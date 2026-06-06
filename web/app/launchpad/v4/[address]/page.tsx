@@ -228,6 +228,7 @@ function V4DetailInner() {
         <div className="mx-auto max-w-5xl px-4 py-10 sm:px-6">
             <div className="mb-6 flex items-center gap-3">
                 <Link
+                    aria-label="Back to launches"
                     href="/launchpad/v4/list"
                     className="rounded-lg border border-arc-border bg-arc-surface p-2 hover:border-arc-primary/40"
                 >

@@ -268,6 +268,7 @@ export function V4SwapPanel({ token, symbol }: Props) {
                         <span className="font-medium">{(slippageBps / 100).toFixed(2)}%</span>
                     </div>
                     <input
+                        aria-label="Slippage tolerance"
                         type="range"
                         min={10}
                         max={500}

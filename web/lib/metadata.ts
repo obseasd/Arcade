@@ -91,18 +91,3 @@ export async function fetchMetadata(uri: string, timeoutMs = 5_000): Promise<Tok
   return null;
 }
 
-/**
- * Best-effort: returns just the image URL given the on-chain metadataURI.
- * Doesn't make network calls - for inline metadata it parses synchronously,
- * for URI-based metadata it returns the URI itself (caller can fetch).
- */
-export function getImageUrl(metadataURI: string): string | undefined {
-  if (!metadataURI) return undefined;
-  const inline = parseInlineMetadata(metadataURI);
-  if (inline) return inline.image ? resolveIpfs(inline.image) : undefined;
-  // Heuristic: looks like a direct image URL?
-  if (/^https?:\/\//.test(metadataURI) && /\.(png|jpe?g|gif|webp|svg)(\?|#|$)/i.test(metadataURI)) {
-    return metadataURI;
-  }
-  return undefined;
-}

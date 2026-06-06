@@ -437,6 +437,7 @@ function PositionRow({
             <span className="tabular-nums text-arc-text-muted">{pct}%</span>
           </div>
           <input
+            aria-label="Remove liquidity percentage"
             type="range"
             min={1}
             max={100}
