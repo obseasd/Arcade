@@ -789,6 +789,7 @@ function TokenBox({
           onAmountChange(v);
         }}
         className="arc-input w-full bg-transparent text-3xl font-medium leading-tight sm:text-4xl"
+        aria-label="Amount"
       />
 
       {/* Footer: USD + balance | HALF/MAX or fee */}

@@ -54,10 +54,11 @@ export function SidebarPanel({ config, presetId, onPreset, onConfigChange, onRes
 
       <div className="arc-card p-5">
         <h3 className="mb-3 text-sm font-semibold">Starting Market Cap</h3>
-        <label className="text-xs text-arc-text-muted">USD Value</label>
+        <label htmlFor="starting-mcap-usd" className="text-xs text-arc-text-muted">USD Value</label>
         <div className="mt-1 flex items-center gap-2 rounded-xl border border-arc-border bg-black/40 px-3 py-2.5">
           <span className="text-arc-text-faint">$</span>
           <input
+            id="starting-mcap-usd"
             aria-label="Starting market cap"
             type="text"
             defaultValue={shortMcap(config.startingMcap)}

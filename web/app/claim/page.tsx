@@ -406,6 +406,7 @@ function Lobby() {
             onChange={(e) => setTokenInput(e.target.value)}
             placeholder="0x token address"
             className="arc-input w-full rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2 font-mono text-sm"
+            aria-label="Token address"
           />
         )}
         {!prefilledToken && (
@@ -415,6 +416,7 @@ function Lobby() {
             placeholder="Slot index (usually 0)"
             inputMode="numeric"
             className="arc-input w-full rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2 font-mono text-sm"
+            aria-label="Slot index"
           />
         )}
         {!account && (

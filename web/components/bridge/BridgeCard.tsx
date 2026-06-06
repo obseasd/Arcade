@@ -811,6 +811,7 @@ function ChainBox({
             onAmountChange?.(v);
           }}
           className="arc-input w-full bg-transparent text-4xl font-medium leading-tight"
+          aria-label="Amount"
         />
       )}
 

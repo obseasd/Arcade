@@ -620,12 +620,14 @@ function CreateTokenInner() {
               onChange={(e) => setName(e.target.value.slice(0, 32))}
               placeholder="Token name"
               className="arc-input rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-1.5"
+              aria-label="Token name"
             />
             <input
               value={symbol}
               onChange={(e) => setSymbol(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 12))}
               placeholder="$SYMBOL"
               className="arc-input rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-1.5 tabular-nums"
+              aria-label="Token symbol"
             />
           </div>
         </div>
@@ -636,6 +638,7 @@ function CreateTokenInner() {
             placeholder="A short description visible on the token page…"
             rows={3}
             className="arc-input w-full resize-none rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2"
+            aria-label="Description"
           />
         </Field>
 
@@ -668,6 +671,7 @@ function CreateTokenInner() {
                   onChange={(e) => setLegacyMcapStr(e.target.value.replace(/[^0-9]/g, ""))}
                   placeholder="35000"
                   className="arc-input rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2 tabular-nums"
+                  aria-label="Starting market cap"
                 />
               </Field>
             )}
@@ -697,6 +701,7 @@ function CreateTokenInner() {
                         }
                         placeholder="twitterhandle"
                         className="arc-input flex-1 bg-transparent text-sm"
+                        aria-label="Twitter handle"
                       />
                     </div>
                   ) : (
@@ -705,6 +710,7 @@ function CreateTokenInner() {
                       onChange={(e) => setRecipient(i, { recipient: e.target.value })}
                       placeholder="0x recipient"
                       className="arc-input w-full rounded-lg border border-arc-border bg-arc-bg-elevated px-2 py-1.5 text-sm tabular-nums sm:flex-1"
+                      aria-label="Recipient address"
                     />
                   )}
                   <div className="flex items-center justify-end gap-2 sm:justify-start">
@@ -714,6 +720,7 @@ function CreateTokenInner() {
                       readOnly={recipients.length === 1}
                       onChange={(e) => setRecipientPct(i, parseInt(e.target.value.replace(/[^0-9]/g, "") || "0", 10))}
                       className="arc-input w-14 rounded-lg border border-arc-border bg-arc-bg-elevated px-2 py-1.5 text-right text-sm tabular-nums"
+                      aria-label="Recipient share percent"
                     />
                     <span className="text-xs text-arc-text-muted">%</span>
                     {recipients.length > 1 && (
@@ -833,6 +840,7 @@ function CreateTokenInner() {
                   inputMode="decimal"
                   disabled={isWethPool}
                   className="arc-input flex-1 bg-transparent text-sm tabular-nums"
+                  aria-label="Creator buy amount"
                 />
                 {!isWethPool && <span className="text-xs text-arc-text-muted">USDC</span>}
               </div>
@@ -858,6 +866,7 @@ function CreateTokenInner() {
                   onChange={(e) => setVaultPct(Number(e.target.value))}
                   className="arc-slider"
                   style={{ background: sliderFill((vaultPct / 90) * 100) }}
+                  aria-label="Vaulted supply percent"
                 />
               </RangeField>
               {vaultPct > 0 && (
@@ -870,6 +879,7 @@ function CreateTokenInner() {
                         value={vaultLockupDays}
                         onChange={(e) => setVaultLockupDays(Number(e.target.value))}
                         className="arc-input rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2 tabular-nums"
+                        aria-label="Vault lockup days"
                       />
                     </Field>
                     <Field label="Vesting" hint="Days.">
@@ -879,6 +889,7 @@ function CreateTokenInner() {
                         value={vaultVestingDays}
                         onChange={(e) => setVaultVestingDays(Number(e.target.value))}
                         className="arc-input rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2 tabular-nums"
+                        aria-label="Vault vesting days"
                       />
                     </Field>
                   </div>
@@ -928,6 +939,7 @@ function CreateTokenInner() {
                   onChange={(e) => setSnipeStartPct(Number(e.target.value))}
                   className="arc-slider"
                   style={{ background: sliderFill((snipeStartPct / 50) * 100) }}
+                  aria-label="Anti-sniper starting tax"
                 />
               </RangeField>
               {snipeStartPct > 0 && (
@@ -937,6 +949,7 @@ function CreateTokenInner() {
                     value={snipeDecaySeconds}
                     onChange={(e) => setSnipeDecaySeconds(parseInt(e.target.value.replace(/[^0-9]/g, "") || "0", 10))}
                     className="arc-input rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2 tabular-nums"
+                    aria-label="Decay window seconds"
                   />
                 </Field>
               )}
@@ -966,6 +979,7 @@ function CreateTokenInner() {
                   onChange={(e) => setCreator2(e.target.value)}
                   placeholder="0x…"
                   className="arc-input rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2 tabular-nums"
+                  aria-label="Second creator address"
                 />
               </Field>
               {creator2 && !isAddress(creator2.trim()) && (
@@ -984,6 +998,7 @@ function CreateTokenInner() {
                   onChange={(e) => setCreator2SharePct(Number(e.target.value))}
                   className="arc-slider"
                   style={{ background: sliderFill(creator2SharePct) }}
+                  aria-label="Second creator share percent"
                 />
               </RangeField>
             </div>
@@ -1003,6 +1018,7 @@ function CreateTokenInner() {
                 onChange={(e) => setCreatorTwitter(e.target.value)}
                 placeholder="@yourhandle"
                 className="arc-input rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2"
+                aria-label="Creator Twitter handle"
               />
               <p className="mt-1 text-[11px] text-arc-text-faint">
                 Display attribution. Fees always go to the recipient address(es) — the handle is unverified metadata.
@@ -1014,6 +1030,7 @@ function CreateTokenInner() {
                 onChange={(e) => setTwitter(e.target.value)}
                 placeholder="https://twitter.com/..."
                 className="arc-input rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2"
+                aria-label="Token Twitter URL"
               />
             </Field>
             <Field label="Telegram">
@@ -1022,6 +1039,7 @@ function CreateTokenInner() {
                 onChange={(e) => setTelegram(e.target.value)}
                 placeholder="https://t.me/..."
                 className="arc-input rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2"
+                aria-label="Telegram URL"
               />
             </Field>
             <Field label="Website">
@@ -1030,6 +1048,7 @@ function CreateTokenInner() {
                 onChange={(e) => setWebsite(e.target.value)}
                 placeholder="https://..."
                 className="arc-input rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2"
+                aria-label="Website URL"
               />
             </Field>
           </div>

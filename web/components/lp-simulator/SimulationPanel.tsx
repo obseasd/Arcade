@@ -102,6 +102,7 @@ export function SimulationPanel({ config, quotePriceUsd, quoteSymbol }: Props) {
             value={custom}
             onChange={(e) => setCustom(e.target.value)}
             className="flex-1 rounded-lg border border-arc-border bg-black/40 px-3 py-2 text-xs text-arc-text focus:border-arc-cta-hover focus:outline-none"
+            aria-label="Custom buy amount"
           />
           <button type="button"
             onClick={() => {

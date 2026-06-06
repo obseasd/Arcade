@@ -124,6 +124,7 @@ export function TransactionSettings({
                                 onChange={(e) => onCustom(e.target.value)}
                                 placeholder="0.50"
                                 className="arc-input w-10 text-right text-xs"
+                                aria-label="Custom slippage tolerance"
                             />
                             <span className="text-[10px] text-arc-text-muted">%</span>
                         </div>
@@ -150,6 +151,7 @@ export function TransactionSettings({
                                         onDeadlineChange(n);
                                     }}
                                     className="w-20 rounded-lg border border-arc-border bg-arc-surface px-3 py-1.5 text-right text-xs text-arc-text"
+                                    aria-label="Transaction deadline minutes"
                                 />
                                 <span className="text-xs text-arc-text-muted">minutes</span>
                             </div>

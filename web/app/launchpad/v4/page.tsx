@@ -267,6 +267,7 @@ function V4LaunchInner() {
                         onChange={(e) => setSnipeStartBps(Number(e.target.value))}
                         className="arc-slider w-full"
                         style={{ background: sliderFill((snipeStartBps / 5_000) * 100) }}
+                        aria-label="Snipe tax start"
                     />
                     <div className="mt-3 flex items-center justify-between text-sm">
                         <span className="text-arc-text-muted">Decay window</span>
@@ -282,6 +283,7 @@ function V4LaunchInner() {
                         disabled={snipeStartBps === 0}
                         className="arc-slider w-full"
                         style={{ background: sliderFill((snipeDecayMinutes / 60) * 100) }}
+                        aria-label="Snipe decay window"
                     />
                 </div>
 
@@ -300,6 +302,7 @@ function V4LaunchInner() {
                         onChange={(e) => setCreatorBps(Number(e.target.value))}
                         className="arc-slider w-full"
                         style={{ background: sliderFill((creatorBps / 1_000) * 100) }}
+                        aria-label="Creator allocation"
                     />
                     <p className="mt-2 text-xs text-arc-text-muted">
                         Max 10%. The rest of the 1 B supply locks into the V4 pool as

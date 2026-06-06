@@ -585,6 +585,7 @@ function TradeCard({
                     onChange={(e) => setAmountStr(e.target.value.replace(/[^0-9.]/g, ""))}
                     placeholder="0.0"
                     className="arc-input w-full bg-transparent text-3xl font-medium leading-tight sm:text-4xl"
+                    aria-label="Amount"
                 />
                 <div className="mt-2 flex items-center justify-between text-[11px]">
                     <span className="text-arc-text-faint">

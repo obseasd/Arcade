@@ -76,6 +76,7 @@ export function AmountInput({
             // Stays at text-3xl for normal-length values, then steps down.
             sizeFromLength(value),
           )}
+          aria-label="Amount"
         />
         {rightAccessory ?? (
           <div className="flex shrink-0 items-center gap-1.5 rounded-xl bg-arc-surface-2 px-3 py-1.5 text-sm font-medium text-arc-text">

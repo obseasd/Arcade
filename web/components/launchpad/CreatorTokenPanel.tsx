@@ -388,6 +388,7 @@ export function CreatorTokenPanel({ token, symbol, pool, volumeRaw, volumeTokenR
             onChange={(e) => setEditValue(e.target.value)}
             placeholder="0x…"
             className="arc-input w-full rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2 font-mono text-sm"
+            aria-label="Address"
           />
           <div className="flex gap-2">
             <button type="button"

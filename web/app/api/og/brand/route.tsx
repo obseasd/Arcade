@@ -49,13 +49,13 @@ export async function GET(req: NextRequest) {
     const logo = `${origin}/arcade.png`;
 
     // Pull Space Grotesk for the wordmark; fall back to the embedded default
-    // sans if Google blocks the edge fetch.
-    const headingFont = await loadGoogleFont("Space Grotesk", 700, "Arcade");
-    const subFont = await loadGoogleFont(
-        "Inter",
-        500,
-        "USDC-native AMM on Arc",
-    );
+    // sans if Google blocks the edge fetch. The two font fetches are
+    // independent (different family/weight/subset) so we kick them off in
+    // parallel to halve the cold-cache latency on first OG render.
+    const [headingFont, subFont] = await Promise.all([
+        loadGoogleFont("Space Grotesk", 700, "Arcade"),
+        loadGoogleFont("Inter", 500, "USDC-native AMM on Arc"),
+    ]);
 
     return new ImageResponse(
         (
