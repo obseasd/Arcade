@@ -160,6 +160,22 @@ export default function ExplorePage() {
 
     const allRows: PoolPairRow[] = useMemo(() => {
         const grouped = new Map<string, PoolPairRow>();
+        // Curated "incentivized" set surfaces a pulsing LP Boost wrapper on
+        // the pair row + sub-rows. Hyperswap-style hand-curated for now;
+        // when the indexer ships rule-based incentives this collapses into
+        // a real incentivesOf(token0, token1) lookup. The check uses
+        // lowercased sorted (token0, token1) keys so direction-independent.
+        const seedEthLc = ADDRESSES.seedEth.toLowerCase();
+        const isIncentivisedKey = (ka: string, kb: string): boolean => {
+            // USDC <> SeedETH on Arc testnet.
+            if (seedEthLc === "0x0000000000000000000000000000000000000000") return false;
+            const sortedA = ka < kb ? ka : kb;
+            const sortedB = ka < kb ? kb : ka;
+            return (
+                (sortedA === USDC_LOWER && sortedB === seedEthLc) ||
+                (sortedA === seedEthLc && sortedB === USDC_LOWER)
+            );
+        };
 
         if (reservesQ.data) {
             for (let i = 0; i < v2Pairs.length; i++) {
@@ -194,7 +210,7 @@ export default function ExplorePage() {
                         subRows: [],
                         tvlUsdc: 0n,
                         aprPct: undefined,
-                        isIncentivized: false,
+                        isIncentivized: isIncentivisedKey(ka, kb),
                     });
                 }
                 const row = grouped.get(key)!;
@@ -224,7 +240,7 @@ export default function ExplorePage() {
                     subRows: [],
                     tvlUsdc: 0n,
                     aprPct: undefined,
-                    isIncentivized: false,
+                    isIncentivized: isIncentivisedKey(ka, kb),
                 });
             }
             const row = grouped.get(key)!;
@@ -258,7 +274,7 @@ export default function ExplorePage() {
                     subRows: [],
                     tvlUsdc: 0n,
                     aprPct: undefined,
-                    isIncentivized: false,
+                    isIncentivized: isIncentivisedKey(ka, kb),
                 });
             }
             const row = grouped.get(key)!;
@@ -425,7 +441,10 @@ export default function ExplorePage() {
                 </button>
             </div>
 
-            {/* Filter chips */}
+            {/* Filter chips - Hyperswap-style: white text on dark glass, the
+                selected chip gets a brighter white-tinted background to read as
+                "on" without a coloured border ring. Icons stay tinted (orange
+                Flame, sky Sparkles, etc) so the row still reads visually. */}
             <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div className="flex flex-wrap items-center gap-2">
                     {FILTERS.map((f) => (
@@ -433,10 +452,10 @@ export default function ExplorePage() {
                             key={f.value}
                             onClick={() => setFilter(f.value)}
                             className={cn(
-                                "inline-flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-medium text-arc-text backdrop-blur-xl transition-colors",
+                                "inline-flex items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-xs font-medium backdrop-blur-xl transition-all",
                                 filter === f.value
-                                    ? "border-arc-cta-hover bg-arc-cta-hover/15"
-                                    : "border-arc-border bg-black/15 hover:border-arc-cta-hover/40",
+                                    ? "border-white/30 bg-white/15 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.15)]"
+                                    : "border-white/10 bg-white/[0.04] text-arc-text hover:border-white/20 hover:bg-white/[0.08]",
                             )}
                         >
                             {f.icon}
@@ -824,8 +843,12 @@ function PoolPairRowCard({
                 className={cn(
                     "arc-card overflow-hidden p-0 transition-colors",
                     expanded && "border-arc-cta-hover/30",
-                    row.isIncentivized &&
-                        "border-arc-success/70 shadow-[0_0_20px_-4px_rgba(16,185,129,0.45)] ring-1 ring-arc-success/40",
+                    // Incentivized: replace the prior static green ring with
+                    // animate-lp-boost (slow 2.6s box-shadow heartbeat keyed
+                    // in globals.css). The border stays the same hue so the
+                    // pulse reads as the SAME card breathing, not a separate
+                    // element flickering on top.
+                    row.isIncentivized && "border-arc-success/70 animate-lp-boost",
                 )}
             >
             {/* Row header. p-[1.331rem] is 1.21rem * 1.1 = +10% height vs the

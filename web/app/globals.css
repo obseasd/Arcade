@@ -121,6 +121,28 @@
   animation: arc-bridge-pulse 1.8s ease-in-out infinite;
 }
 
+/* Slow heartbeat on the LP Boost outline used by Explore incentivized pools.
+   The ring + glow breathe between two intensities so the card draws attention
+   without being shouty. Subtle enough that the rest of the page reads as
+   static. */
+@keyframes arc-lp-boost-pulse {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 1px rgba(16, 185, 129, 0.35),
+      0 0 24px -6px rgba(16, 185, 129, 0.55);
+  }
+  50% {
+    box-shadow:
+      0 0 0 1.5px rgba(16, 185, 129, 0.65),
+      0 0 36px -4px rgba(16, 185, 129, 0.9);
+  }
+}
+
+.animate-lp-boost {
+  animation: arc-lp-boost-pulse 2.6s ease-in-out infinite;
+}
+
 @layer components {
   .arc-card {
     @apply rounded-2xl border border-arc-border bg-black/15 backdrop-blur-xl shadow-arc-card;
