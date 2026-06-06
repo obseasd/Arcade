@@ -28,7 +28,10 @@ interface PositionInfo {
   lpBalance: bigint;
 }
 
-export function MyPositions({ emptyState }: { emptyState?: React.ReactNode } = {}) {
+export function MyPositions({
+  emptyState,
+  search = "",
+}: { emptyState?: React.ReactNode; search?: string } = {}) {
   const { address: account } = useAccount();
   const publicClient = usePublicClient();
   const [openPair, setOpenPair] = useState<Address | null>(null);
@@ -152,9 +155,26 @@ export function MyPositions({ emptyState }: { emptyState?: React.ReactNode } = {
     );
   }
 
+  const searchLower = search.trim().toLowerCase();
+  const filtered = searchLower
+    ? positions.filter(
+        (p) =>
+          p.symbol0.toLowerCase().includes(searchLower) ||
+          p.symbol1.toLowerCase().includes(searchLower),
+      )
+    : positions;
+
+  if (filtered.length === 0) {
+    return (
+      <div className="arc-card p-8 text-center text-sm text-arc-text-muted">
+        No positions match the current search.
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-4">
-      {positions.map((p) => (
+      {filtered.map((p) => (
         <PositionRow
           key={p.pair}
           position={p}

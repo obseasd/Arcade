@@ -27,7 +27,21 @@ const USDC_LOWER = ADDRESSES.usdc.toLowerCase();
  * link to /positions/add and the explorer for now; full manage UI lands
  * with the next iteration.
  */
-export function V3Positions({ emptyState }: { emptyState?: React.ReactNode }) {
+interface V3RangeFilter {
+    inRange: boolean;
+    outOfRange: boolean;
+    inactive: boolean;
+}
+
+export function V3Positions({
+    emptyState,
+    search = "",
+    rangeFilter,
+}: {
+    emptyState?: React.ReactNode;
+    search?: string;
+    rangeFilter?: V3RangeFilter;
+}) {
     const { address: account } = useAccount();
     const npmEnabled = ADDRESSES.v3PositionManager !== "0x0000000000000000000000000000000000000000";
 
@@ -231,9 +245,47 @@ export function V3Positions({ emptyState }: { emptyState?: React.ReactNode }) {
         );
     }
 
+    // Filter pipeline: search by token symbol (case-insensitive), then
+    // bucket each position via the rangeFilter checkboxes. Default
+    // rangeFilter (when the page doesn't pass one) keeps everything on.
+    const rf = rangeFilter ?? { inRange: true, outOfRange: true, inactive: true };
+    const searchLower = search.trim().toLowerCase();
+    const filtered = positions
+        .map((p, i) => ({ p, i }))
+        .filter(({ p }) => {
+            if (!searchLower) return true;
+            const s0 = (tokenInfo[p.token0.toLowerCase()]?.symbol ?? "").toLowerCase();
+            const s1 = (tokenInfo[p.token1.toLowerCase()]?.symbol ?? "").toLowerCase();
+            return s0.includes(searchLower) || s1.includes(searchLower);
+        })
+        .filter(({ p, i }) => {
+            const isInactive = p.liquidity === 0n;
+            const slot0 = poolAddrs[i]
+                ? slot0ByPool.get(poolAddrs[i]!.toLowerCase())
+                : undefined;
+            const isInRange =
+                !isInactive &&
+                !!slot0 &&
+                slot0.tick >= p.tickLower &&
+                slot0.tick < p.tickUpper;
+            const isOutOfRange = !isInactive && !isInRange;
+            if (isInactive) return rf.inactive;
+            if (isInRange) return rf.inRange;
+            if (isOutOfRange) return rf.outOfRange;
+            return true;
+        });
+
+    if (filtered.length === 0) {
+        return (
+            <div className="arc-card p-8 text-center text-sm text-arc-text-muted">
+                No positions match the current filters.
+            </div>
+        );
+    }
+
     return (
         <div className="space-y-3">
-            {positions.map((p, i) => (
+            {filtered.map(({ p, i }) => (
                 <V3PositionRow
                     key={p.tokenId.toString()}
                     position={p}

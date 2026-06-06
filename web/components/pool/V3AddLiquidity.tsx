@@ -1,6 +1,6 @@
 "use client";
 
-import { Info, Plus } from "lucide-react";
+import { ArrowUpDown, Info, Lock, Plus } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { Address, erc20Abi, formatUnits, parseUnits, zeroAddress } from "viem";
@@ -11,6 +11,7 @@ import {
     V3_NPM_ABI,
     V3_POOL_ABI,
 } from "@/lib/abis/v3-npm";
+import { V3_ZAP_ABI } from "@/lib/abis/v3-zap";
 import { ADDRESSES } from "@/lib/constants";
 import { arcTestnet } from "@/lib/chains";
 import { useApproveIfNeeded } from "@/lib/hooks/useApproveIfNeeded";
@@ -73,6 +74,14 @@ export function V3AddLiquidity({
 
     const npmEnabled = ADDRESSES.v3PositionManager !== zeroAddress;
     const factoryEnabled = ADDRESSES.v3Factory !== zeroAddress;
+    const zapEnabled = ADDRESSES.v3Zap !== zeroAddress;
+
+    // Dual = both legs typed. Single = user provides one token, the zap
+    // contract swaps half via the pool and mints a max-range position. Zap
+    // tab is gated on the contract being wired AND a pool existing (zap
+    // can't seed a fresh pool because there's no price to swap against).
+    const [mode, setMode] = useState<"dual" | "single">("dual");
+    const [zapTokenSide, setZapTokenSide] = useState<"0" | "1">("0");
 
     // V3 expects token0 < token1 by address. Order the user's selection.
     const [t0, t1] = useMemo(() => {
@@ -235,6 +244,16 @@ export function V3AddLiquidity({
         t1.address,
         ADDRESSES.v3PositionManager,
     );
+    // Single Asset Zap approval routes to the Zap contract (separate
+    // allowance scope from the NPM-side dual flow).
+    const { ensureAllowance: approveZap0 } = useApproveIfNeeded(
+        t0.address,
+        ADDRESSES.v3Zap,
+    );
+    const { ensureAllowance: approveZap1 } = useApproveIfNeeded(
+        t1.address,
+        ADDRESSES.v3Zap,
+    );
 
     const [submitting, setSubmitting] = useState(false);
 
@@ -313,19 +332,100 @@ export function V3AddLiquidity({
     // submit with a stale hasPool=false closure if the user hit Submit
     // before the factory.getPool query resolved, taking the fresh-pool
     // branch on a pool that already existed.
+    // Single mode has its own gate: zap deployed + pool exists + the active
+    // side typed AND backed by enough balance. Range validity matters less
+    // because the zap is hardcoded to Max Range, but we still require the
+    // preset to be "max" defensively (a stale state could otherwise sign
+    // a different range).
+    const singleSideTyped = zapTokenSide === "0" ? a0Positive : a1Positive;
+    const singleSideHasBalance =
+        zapTokenSide === "0" ? enoughBalance0 : enoughBalance1;
     const canSubmit =
-        !!account &&
-        npmEnabled &&
-        !submitting &&
-        !poolAddrQ.isLoading &&
-        validRange &&
-        sufficientAmounts &&
-        enoughBalance;
+        mode === "dual"
+            ? !!account &&
+              npmEnabled &&
+              !submitting &&
+              !poolAddrQ.isLoading &&
+              validRange &&
+              sufficientAmounts &&
+              enoughBalance
+            : !!account &&
+              zapEnabled &&
+              hasPool &&
+              !submitting &&
+              preset === "max" &&
+              singleSideTyped &&
+              singleSideHasBalance;
 
     async function onSubmit() {
         if (!account || !publicClient) return;
         try {
             setSubmitting(true);
+
+            // Single Asset Zap branch. Pulls the typed side, calls
+            // v3Zap.zapInMaxRange which swaps half via the pool and mints
+            // a max-range NFT to the user.
+            if (mode === "single") {
+                if (ADDRESSES.v3Zap === zeroAddress) {
+                    throw new Error("V3 Zap not wired in this env.");
+                }
+                const typedRaw = zapTokenSide === "0"
+                    ? a0Positive ? parseUnits(amount0, t0.decimals) : 0n
+                    : a1Positive ? parseUnits(amount1, t1.decimals) : 0n;
+                if (typedRaw <= 0n) throw new Error("Enter an amount.");
+                const tokenIn = zapTokenSide === "0" ? t0.address : t1.address;
+                const otherToken = zapTokenSide === "0" ? t1.address : t0.address;
+
+                // Approve the zap for the typed side only. Zap pulls tokenIn
+                // up-front then swaps via pool callback.
+                if (zapTokenSide === "0") await approveZap0(typedRaw);
+                else await approveZap1(typedRaw);
+
+                const deadline = BigInt(Math.floor(Date.now() / 1000) + deadlineMin * 60);
+
+                const zapArgs = [
+                    {
+                        tokenIn,
+                        otherToken,
+                        fee: feePip,
+                        amountIn: typedRaw,
+                        // Slippage on the final mint. 0/0 because the half-and-
+                        // half split for max-range is well-conditioned; the
+                        // zap's dust sweep returns anything that didn't fit
+                        // back to the user. Tighter mins land with the close
+                        // form for narrow ranges (queued).
+                        amount0Min: 0n,
+                        amount1Min: 0n,
+                        deadline,
+                        recipient: account,
+                    },
+                ] as const;
+
+                const hash = await writeContractAsync({
+                    address: ADDRESSES.v3Zap,
+                    abi: V3_ZAP_ABI,
+                    functionName: "zapInMaxRange",
+                    args: zapArgs,
+                });
+                const receipt = await publicClient.waitForTransactionReceipt({ hash });
+                if (receipt.status !== "success") {
+                    throw new Error(
+                        `V3 Zap reverted on-chain (tx ${hash.slice(0, 10)}…). Common causes: pool moved between read and exec, USDC blocklist precompile, insufficient input.`,
+                    );
+                }
+                pushToast({
+                    kind: "liquidity",
+                    token0: { address: t0.address, symbol: t0.symbol },
+                    token1: { address: t1.address, symbol: t1.symbol },
+                    amount0Formatted: zapTokenSide === "0" ? amount0 : "—",
+                    amount1Formatted: zapTokenSide === "1" ? amount1 : "—",
+                    lpFormatted: "1 NFT (Max Range)",
+                    poolHref: pool ? `/pool/${pool}` : "/positions",
+                    explorerUrl: `${arcTestnet.blockExplorers?.default.url}/tx/${hash}`,
+                });
+                router.push("/positions?tab=concentrated");
+                return;
+            }
 
             const a0Raw = amount0 ? parseUnits(amount0, t0.decimals) : 0n;
             const a1Raw = amount1 ? parseUnits(amount1, t1.decimals) : 0n;
@@ -640,7 +740,47 @@ export function V3AddLiquidity({
 
     return (
         <div className="space-y-4">
-            {/* Range presets */}
+            {/* Dual / Single tabs. Single Asset shows only when zap is wired
+                AND a pool exists (zap needs price + tokens to swap). */}
+            <div className="flex items-center gap-4 text-sm">
+                <ModeTab
+                    active={mode === "dual"}
+                    onClick={() => setMode("dual")}
+                >
+                    Dual Token
+                </ModeTab>
+                <ModeTab
+                    active={mode === "single"}
+                    onClick={() => zapEnabled && hasPool && setMode("single")}
+                    disabled={!zapEnabled || !hasPool}
+                    disabledReason={
+                        !zapEnabled
+                            ? "Zap not deployed in this env"
+                            : "Single Asset Zap needs an existing pool to swap through"
+                    }
+                >
+                    Single Asset
+                </ModeTab>
+            </div>
+
+            {/* Single Asset mode forces Max Range. Switching to Single auto-
+                sets preset to "max" so the user can't sign a narrow-range
+                zap (the half/half split assumes full range). The preset row
+                renders below the tab; we hide the non-max chips in single
+                mode to keep the surface tidy. */}
+            {mode === "single" && preset !== "max" && (
+                <button
+                    onClick={() => setPreset("max")}
+                    className="w-full rounded-xl border border-arc-warn/30 bg-arc-warn/10 px-3 py-2 text-xs text-arc-warn transition-colors hover:bg-arc-warn/15"
+                >
+                    Single Asset Zap requires Max Range. Click to switch.
+                </button>
+            )}
+
+            {/* Range presets. In single mode we only render the Max chip
+                because the zap's half/half split is well-conditioned only
+                for full-range positions (narrow ranges need a closed-form
+                split that depends on the chosen ticks). */}
             <div>
                 <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-arc-text-muted">
                     Price range
@@ -654,20 +794,22 @@ export function V3AddLiquidity({
                             { key: "narrow", label: "Narrow (±5%)" },
                             { key: "aggressive", label: "Aggressive (±1%)" },
                         ] as { key: RangePreset; label: string }[]
-                    ).map((p) => (
-                        <button
-                            key={p.key}
-                            onClick={() => setPreset(p.key)}
-                            className={cn(
-                                "rounded-xl border px-3 py-1.5 text-xs font-medium transition-colors",
-                                preset === p.key
-                                    ? "border-arc-cta-hover bg-arc-cta-hover/15 text-arc-text"
-                                    : "border-arc-border bg-black/15 text-arc-text-muted hover:text-arc-text",
-                            )}
-                        >
-                            {p.label}
-                        </button>
-                    ))}
+                    )
+                        .filter((p) => mode !== "single" || p.key === "max")
+                        .map((p) => (
+                            <button
+                                key={p.key}
+                                onClick={() => setPreset(p.key)}
+                                className={cn(
+                                    "rounded-xl border px-3 py-1.5 text-xs font-medium transition-colors",
+                                    preset === p.key
+                                        ? "border-arc-cta-hover bg-arc-cta-hover/15 text-arc-text"
+                                        : "border-arc-border bg-black/15 text-arc-text-muted hover:text-arc-text",
+                                )}
+                            >
+                                {p.label}
+                            </button>
+                        ))}
                 </div>
             </div>
 
@@ -730,36 +872,94 @@ export function V3AddLiquidity({
                 </div>
             )}
 
-            {/* Token inputs */}
-            <V3TokenInput
-                label={`Token 1 (${t0.symbol})`}
-                token={t0}
-                value={amount0}
-                onChange={(v) => {
-                    setLastEdited("0");
-                    setAmount0(v);
-                }}
-                balance={bal0.data as bigint | undefined}
-                disabled={aboveRange}
-                disabledReason="Above range - only Token 2 is needed"
-            />
-            <div className="flex justify-center">
-                <div className="-my-2 rounded-xl border border-arc-border bg-arc-bg-elevated p-2">
-                    <Plus className="h-4 w-4 text-arc-text-muted" />
-                </div>
-            </div>
-            <V3TokenInput
-                label={`Token 2 (${t1.symbol})`}
-                token={t1}
-                value={amount1}
-                onChange={(v) => {
-                    setLastEdited("1");
-                    setAmount1(v);
-                }}
-                balance={bal1.data as bigint | undefined}
-                disabled={belowRange}
-                disabledReason="Below range - only Token 1 is needed"
-            />
+            {/* Token inputs. Single-mode renders one editable input + one
+                clearly-locked stub so the user instantly reads which side
+                they're zapping FROM. The arrow icon between flips the
+                input side. */}
+            {mode === "dual" ? (
+                <>
+                    <V3TokenInput
+                        label={`Token 1 (${t0.symbol})`}
+                        token={t0}
+                        value={amount0}
+                        onChange={(v) => {
+                            setLastEdited("0");
+                            setAmount0(v);
+                        }}
+                        balance={bal0.data as bigint | undefined}
+                        disabled={aboveRange}
+                        disabledReason="Above range - only Token 2 is needed"
+                    />
+                    <div className="flex justify-center">
+                        <div className="-my-2 rounded-xl border border-arc-border bg-arc-bg-elevated p-2">
+                            <Plus className="h-4 w-4 text-arc-text-muted" />
+                        </div>
+                    </div>
+                    <V3TokenInput
+                        label={`Token 2 (${t1.symbol})`}
+                        token={t1}
+                        value={amount1}
+                        onChange={(v) => {
+                            setLastEdited("1");
+                            setAmount1(v);
+                        }}
+                        balance={bal1.data as bigint | undefined}
+                        disabled={belowRange}
+                        disabledReason="Below range - only Token 1 is needed"
+                    />
+                </>
+            ) : (
+                <>
+                    {/* Active side (the one the user pays in). */}
+                    {zapTokenSide === "0" ? (
+                        <V3TokenInput
+                            label={`Token 1 (${t0.symbol})`}
+                            token={t0}
+                            value={amount0}
+                            onChange={(v) => {
+                                setLastEdited("0");
+                                setAmount0(v);
+                            }}
+                            balance={bal0.data as bigint | undefined}
+                        />
+                    ) : (
+                        <V3TokenInput
+                            label={`Token 1 (${t1.symbol})`}
+                            token={t1}
+                            value={amount1}
+                            onChange={(v) => {
+                                setLastEdited("1");
+                                setAmount1(v);
+                            }}
+                            balance={bal1.data as bigint | undefined}
+                        />
+                    )}
+                    <div className="flex justify-center">
+                        <button
+                            onClick={() => {
+                                // Flip which leg the user is paying with.
+                                // Clear the other-side amount to avoid
+                                // confusing partial state across the flip.
+                                setZapTokenSide((s) => (s === "0" ? "1" : "0"));
+                                setAmount0("");
+                                setAmount1("");
+                            }}
+                            title="Flip zap direction"
+                            className="-my-2 rounded-xl border border-arc-border bg-arc-bg-elevated p-2 transition-colors hover:bg-white/5"
+                        >
+                            <ArrowUpDown className="h-4 w-4 text-arc-text" />
+                        </button>
+                    </div>
+                    {/* Locked counter-side stub. Heavier border + dimmed
+                        backdrop + centered Lock badge to mirror Hyperswap's
+                        clarity ("this side comes from the swap, you don't
+                        type it"). */}
+                    <V3LockedLeg
+                        label={`Token 2 (${zapTokenSide === "0" ? t1.symbol : t0.symbol})`}
+                        token={zapTokenSide === "0" ? t1 : t0}
+                    />
+                </>
+            )}
 
             <button
                 onClick={onSubmit}
@@ -774,22 +974,30 @@ export function V3AddLiquidity({
                 {!account
                     ? "Connect wallet"
                     : submitting
-                      ? hasPool
-                          ? "Minting position…"
-                          : "Initialising pool + minting…"
-                      : !validRange
-                        ? "Set a valid price range"
-                        : !sufficientAmounts
-                          ? hasPool
-                              ? "Enter an amount"
-                              : "Enter both amounts"
-                          : !enoughBalance0
-                            ? `Insufficient ${t0.symbol} balance`
-                            : !enoughBalance1
-                              ? `Insufficient ${t1.symbol} balance`
-                              : hasPool
-                                ? "Add concentrated liquidity"
-                                : "Create pool + add liquidity"}
+                      ? mode === "single"
+                          ? "Zapping into pool…"
+                          : hasPool
+                            ? "Minting position…"
+                            : "Initialising pool + minting…"
+                      : mode === "single"
+                        ? !singleSideTyped
+                            ? "Enter an amount"
+                            : !singleSideHasBalance
+                              ? `Insufficient ${zapTokenSide === "0" ? t0.symbol : t1.symbol} balance`
+                              : "Zap into pool"
+                        : !validRange
+                          ? "Set a valid price range"
+                          : !sufficientAmounts
+                            ? hasPool
+                                ? "Enter an amount"
+                                : "Enter both amounts"
+                            : !enoughBalance0
+                              ? `Insufficient ${t0.symbol} balance`
+                              : !enoughBalance1
+                                ? `Insufficient ${t1.symbol} balance`
+                                : hasPool
+                                  ? "Add concentrated liquidity"
+                                  : "Create pool + add liquidity"}
             </button>
         </div>
     );
@@ -905,6 +1113,75 @@ function V3TokenInput({
                         </button>
                     )}
                 </span>
+            </div>
+        </div>
+    );
+}
+
+function ModeTab({
+    active,
+    onClick,
+    disabled,
+    disabledReason,
+    children,
+}: {
+    active: boolean;
+    onClick: () => void;
+    disabled?: boolean;
+    disabledReason?: string;
+    children: React.ReactNode;
+}) {
+    return (
+        <button
+            onClick={onClick}
+            disabled={disabled}
+            title={disabled ? disabledReason : undefined}
+            className={cn(
+                "relative pb-1 text-sm font-semibold transition-colors",
+                disabled
+                    ? "cursor-not-allowed text-arc-text-faint"
+                    : active
+                      ? "text-arc-text after:absolute after:-bottom-1 after:left-0 after:right-0 after:h-[2px] after:rounded-full after:bg-arc-cta-hover"
+                      : "text-arc-text-muted hover:text-arc-text",
+            )}
+        >
+            {children}
+        </button>
+    );
+}
+
+/**
+ * Locked counter-side stub for the Single Asset Zap. The whole field gets
+ * a dimmed backdrop + centered Lock badge with a clear "auto-zapped via
+ * the pool" caption so the user instantly reads "this side comes from
+ * the swap, you don't type it". Replaces the prior thin grey '$-' line
+ * which felt like a bug.
+ */
+function V3LockedLeg({ label, token }: { label: string; token: V3Token }) {
+    return (
+        <div className="relative overflow-hidden rounded-2xl border border-arc-border bg-white/[0.015] p-4">
+            <div className="mb-2 flex items-center justify-between">
+                <span className="text-sm text-arc-text-muted">{label}</span>
+                <div className="flex items-center gap-2 rounded-xl bg-arc-surface-2 px-3 py-1.5 text-sm font-semibold opacity-70">
+                    <TokenIcon symbol={token.symbol} size={20} />
+                    {token.symbol}
+                </div>
+            </div>
+            <div className="text-3xl font-semibold tabular-nums text-arc-text-faint">
+                0
+            </div>
+            <div className="mt-1 inline-flex items-center gap-1.5 text-[11px] text-arc-text-muted">
+                <Lock className="h-3 w-3" />
+                Auto-zapped via the pool
+            </div>
+            {/* Dim overlay reinforces the lock visually without obscuring
+                the value entirely - matches the Hyperswap pattern. */}
+            <div className="pointer-events-none absolute inset-0 bg-black/35 backdrop-blur-[1px]" />
+            <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                <div className="flex items-center gap-2 rounded-full border border-arc-border bg-black/70 px-3 py-1.5 text-[11px] font-semibold text-arc-text-muted shadow-arc-card backdrop-blur-md">
+                    <Lock className="h-3 w-3" />
+                    This field is locked in Single Asset Zap
+                </div>
             </div>
         </div>
     );

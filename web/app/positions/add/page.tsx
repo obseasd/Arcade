@@ -738,7 +738,7 @@ function LockedField({
           })
         : "0";
     return (
-        <div className="relative rounded-2xl border border-arc-border bg-white/[0.015] p-4">
+        <div className="relative overflow-hidden rounded-2xl border border-arc-border bg-white/[0.015] p-4">
             <div className="mb-2 flex items-center justify-between">
                 <span className="text-sm text-arc-text-muted">{label}</span>
                 <div className="flex items-center gap-2 rounded-xl bg-arc-surface-2 px-3 py-1.5 text-sm font-semibold opacity-70">
@@ -753,8 +753,19 @@ function LockedField({
             <div className="mt-1 inline-flex items-center gap-1 text-[11px] text-arc-text-muted">
                 <Lock className="h-3 w-3" />
                 {previewAmount
-                    ? "auto-zapped via the pool"
-                    : "locked in Single Asset Zap"}
+                    ? "Auto-zapped via the pool"
+                    : "Locked in Single Asset Zap"}
+            </div>
+            {/* Visual lock overlay - dim backdrop + centered badge mirrors
+                Hyperswap's pattern so the locked side reads as intentional
+                instead of broken. The badge sits above the live amount so a
+                running preview is still visible behind the blur. */}
+            <div className="pointer-events-none absolute inset-0 bg-black/35 backdrop-blur-[1px]" />
+            <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                <div className="flex items-center gap-2 rounded-full border border-arc-border bg-black/70 px-3 py-1.5 text-[11px] font-semibold text-arc-text-muted shadow-arc-card backdrop-blur-md">
+                    <Lock className="h-3 w-3" />
+                    This field is locked in Single Asset Zap
+                </div>
             </div>
         </div>
     );
