@@ -6,7 +6,7 @@ import { useMemo, useState } from "react";
 import { useV4LaunchpadTokens, V4LaunchpadTokenInfo } from "@/lib/hooks/useV4LaunchpadTokens";
 import { V4_ENABLED } from "@/lib/constants";
 import { SkeletonCard } from "@/components/ui/Skeleton";
-import { cn, formatAddress } from "@/lib/utils";
+import { cn, formatAddress, formatRemaining } from "@/lib/utils";
 
 type Filter = "all" | "live" | "pending" | "decayed";
 
@@ -232,10 +232,4 @@ function V4TokenCard({
     );
 }
 
-function formatRemaining(seconds: number): string {
-    if (seconds <= 0) return "0s";
-    if (seconds < 60) return `${seconds}s`;
-    const minutes = Math.floor(seconds / 60);
-    if (minutes < 60) return `${minutes}m`;
-    return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
-}
+// formatRemaining lives in @/lib/utils now.

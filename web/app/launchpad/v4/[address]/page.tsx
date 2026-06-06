@@ -21,7 +21,7 @@ import { useWatchEvent } from "@/lib/hooks/useWatchEvent";
 import { TokenIcon } from "@/components/ui/TokenIcon";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { V4SwapPanel } from "@/components/launchpad/v4/V4SwapPanel";
-import { cn, formatAddress } from "@/lib/utils";
+import { cn, formatAddress, formatRemaining } from "@/lib/utils";
 
 const TOKEN_LAUNCHED_EVT = parseAbiItem(
     "event TokenLaunched(address indexed token, address indexed creator, uint16 snipeStartBps, uint32 snipeDecaySeconds, uint64 launchedAt, uint16 creatorBps, string name, string symbol, string metadataURI)",
@@ -520,10 +520,4 @@ function TimelineCard({ entries }: { entries: TimelineEntry[] }) {
     );
 }
 
-function formatRemaining(seconds: number): string {
-    if (seconds <= 0) return "0s";
-    if (seconds < 60) return `${seconds}s`;
-    const minutes = Math.floor(seconds / 60);
-    if (minutes < 60) return `${minutes}m`;
-    return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
-}
+// formatRemaining lives in @/lib/utils now.

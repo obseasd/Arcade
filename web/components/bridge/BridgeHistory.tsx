@@ -11,7 +11,7 @@ import {
 } from "@/lib/bridgeHistory";
 import { fetchAttestation, getCctpChain } from "@/lib/cctp";
 import { ChainIcon } from "@/components/ui/ChainIcon";
-import { formatUSDC, cn } from "@/lib/utils";
+import { formatAgo, formatUSDC, cn } from "@/lib/utils";
 
 /**
  * Recent bridges list below the main BridgeCard. Reads from localStorage so
@@ -131,7 +131,7 @@ function Row({ entry, onDismiss }: { entry: HistoryEntry; onDismiss: () => void 
       return "?";
     }
   })();
-  const ago = formatAgo(entry.burnedAt);
+  const ago = formatAgo(entry.burnedAt, { suffix: "ago" });
   const explorerTx = src?.explorer ? `${src.explorer}/tx/${entry.burnTxHash}` : undefined;
 
   return (
@@ -213,10 +213,5 @@ function StatusBadge({
   );
 }
 
-function formatAgo(ts: number): string {
-  const seconds = Math.max(0, Math.floor((Date.now() - ts) / 1000));
-  if (seconds < 60) return `${seconds}s ago`;
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
-  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
-  return `${Math.floor(seconds / 86400)}d ago`;
-}
+// formatAgo lives in @/lib/utils now. Call with { suffix: "ago" } for the
+// explicit "12s ago" variant used here.

@@ -35,7 +35,7 @@ import { useV3FactoryPools } from "@/lib/hooks/useV3FactoryPools";
 import { useTokenImage } from "@/lib/hooks/useTokenImage";
 import { TokenIcon } from "@/components/ui/TokenIcon";
 import { SkeletonCard } from "@/components/ui/Skeleton";
-import { cn } from "@/lib/utils";
+import { cn, formatUsd } from "@/lib/utils";
 
 const USDC_LOWER = ADDRESSES.usdc.toLowerCase();
 
@@ -1357,14 +1357,7 @@ function CopyAddressButton({ address }: { address: string }) {
     );
 }
 
-function formatUsd(raw: bigint): string {
-    if (raw === 0n) return "—";
-    const usd = Number(formatUnits(raw, USDC_DECIMALS));
-    if (usd >= 1_000_000) return `$${(usd / 1_000_000).toFixed(2)}M`;
-    if (usd >= 1_000) return `$${(usd / 1_000).toFixed(2)}k`;
-    if (usd < 0.01) return "<$0.01";
-    return `$${usd.toFixed(2)}`;
-}
+// formatUsd lives in @/lib/utils now.
 
 function formatBig(n: number): string {
     if (n === 0) return "—";

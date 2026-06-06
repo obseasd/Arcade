@@ -13,7 +13,7 @@ import { ADDRESSES, USDC_DECIMALS } from "@/lib/constants";
 import { arcTestnet } from "@/lib/chains";
 import { TokenIcon } from "@/components/ui/TokenIcon";
 import { tickToPriceWithDecimals } from "@/lib/v3-math";
-import { cn, formatAddress } from "@/lib/utils";
+import { cn, formatAddress, formatUsd } from "@/lib/utils";
 
 const USDC_LOWER = ADDRESSES.usdc.toLowerCase();
 
@@ -466,13 +466,7 @@ function Row({ left, right }: { left: React.ReactNode; right: React.ReactNode })
     );
 }
 
-function formatUsd(raw: bigint): string {
-    const usd = Number(formatUnits(raw, USDC_DECIMALS));
-    if (usd >= 1_000_000) return `$${(usd / 1_000_000).toFixed(2)}M`;
-    if (usd >= 1_000) return `$${(usd / 1_000).toFixed(2)}k`;
-    if (usd < 0.01) return "<$0.01";
-    return `$${usd.toFixed(2)}`;
-}
+// formatUsd lives in @/lib/utils now.
 
 function formatAmount(raw: bigint, decimals: number): string {
     if (raw === 0n) return "0";

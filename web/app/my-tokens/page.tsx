@@ -47,7 +47,7 @@ import { loadBridgeHistory, type HistoryEntry } from "@/lib/bridgeHistory";
 import { listPendingClaims, type PendingTwitterClaim } from "@/lib/pendingClaims";
 import { iconForActivity, loadActivity, type ActivityEntry } from "@/lib/activityFeed";
 import { pushToast } from "@/lib/toast";
-import { cn, formatAddress, formatToken, formatUSDC } from "@/lib/utils";
+import { cn, formatAddress, formatAgo, formatToken, formatUSDC } from "@/lib/utils";
 
 const CURVE_SUPPLY = 800_000_000n * 10n ** 18n;
 const V4_GRAD_USDC = 20_000n * 10n ** 6n;
@@ -1347,13 +1347,7 @@ function ActivityList({ account, limit }: { account: Address; limit: number }) {
     );
 }
 
-function formatAgo(ts: number): string {
-    const seconds = Math.max(0, Math.floor((Date.now() - ts) / 1000));
-    if (seconds < 60) return `${seconds}s`;
-    if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
-    if (seconds < 86400) return `${Math.floor(seconds / 3600)}h`;
-    return `${Math.floor(seconds / 86400)}d`;
-}
+// formatAgo lives in @/lib/utils.
 
 // Suppress unused-import warnings for icons / utilities reserved for
 // follow-up sections (e.g. an upcoming filters panel on Activity).

@@ -5,7 +5,7 @@ import { Clock, ShieldCheck, ShieldOff } from "lucide-react";
 import { useTokenImage } from "@/lib/hooks/useTokenImage";
 import type { V4LaunchpadTokenInfo } from "@/lib/hooks/useV4LaunchpadTokens";
 import { TokenIcon } from "@/components/ui/TokenIcon";
-import { cn, formatAddress } from "@/lib/utils";
+import { cn, formatAddress, formatRemaining } from "@/lib/utils";
 
 /**
  * Compact V4 launch card for the `/launchpad` main list. Slimmer than the
@@ -95,10 +95,4 @@ export function V4LaunchCard({
     );
 }
 
-function formatRemaining(seconds: number): string {
-    if (seconds <= 0) return "0s";
-    if (seconds < 60) return `${seconds}s`;
-    const minutes = Math.floor(seconds / 60);
-    if (minutes < 60) return `${minutes}m`;
-    return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
-}
+// formatRemaining lives in @/lib/utils now.

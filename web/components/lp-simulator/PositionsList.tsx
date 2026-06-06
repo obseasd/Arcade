@@ -4,7 +4,7 @@ import { useCallback } from "react";
 import { Plus, Trash2 } from "lucide-react";
 import type { PositionInput } from "@/lib/lpSimulator/math";
 import { positionColor } from "@/lib/lpSimulator/colors";
-import { cn } from "@/lib/utils";
+import { cn, parseMcap } from "@/lib/utils";
 
 interface Props {
   positions: PositionInput[];
@@ -18,16 +18,7 @@ function fmtMcap(v: number): string {
   return `$${Math.round(v)}`;
 }
 
-function parseMcap(raw: string): number | undefined {
-  const s = raw.trim().toUpperCase().replace(/[$,_\s]/g, "");
-  if (!s) return undefined;
-  const m = s.match(/^(\d*\.?\d+)([KMB])?$/);
-  if (!m) return undefined;
-  const n = parseFloat(m[1]);
-  if (!isFinite(n)) return undefined;
-  const mult = m[2] === "K" ? 1e3 : m[2] === "M" ? 1e6 : m[2] === "B" ? 1e9 : 1;
-  return n * mult;
-}
+// parseMcap lives in @/lib/utils now.
 
 /** Filled-track gradient for the position % slider. */
 function sliderFill(pct: number): string {

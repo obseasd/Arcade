@@ -4,7 +4,7 @@ import { RotateCcw } from "lucide-react";
 import type { SimulatorConfig } from "@/lib/lpSimulator/math";
 import { poolFraction } from "@/lib/lpSimulator/math";
 import { PRESETS, type PresetDef } from "@/lib/lpSimulator/presets";
-import { cn } from "@/lib/utils";
+import { cn, parseMcap } from "@/lib/utils";
 
 interface Props {
   config: SimulatorConfig;
@@ -21,16 +21,7 @@ function fmtMcap(v: number): string {
   return `$${v.toFixed(0)}`;
 }
 
-function parseMcap(raw: string): number | undefined {
-  const s = raw.trim().toUpperCase().replace(/[$,_\s]/g, "");
-  if (!s) return undefined;
-  const m = s.match(/^(\d*\.?\d+)([KMB])?$/);
-  if (!m) return undefined;
-  const n = parseFloat(m[1]);
-  if (!isFinite(n)) return undefined;
-  const mult = m[2] === "K" ? 1e3 : m[2] === "M" ? 1e6 : m[2] === "B" ? 1e9 : 1;
-  return n * mult;
-}
+// parseMcap lives in @/lib/utils now.
 
 export function SidebarPanel({ config, presetId, onPreset, onConfigChange, onReset }: Props) {
   const poolPct = poolFraction(config) * 100;

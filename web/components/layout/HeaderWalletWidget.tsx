@@ -28,7 +28,7 @@ import {
     type ActivityEntry,
 } from "@/lib/activityFeed";
 import { pushToast } from "@/lib/toast";
-import { cn, formatUSDC } from "@/lib/utils";
+import { cn, formatAgo, formatUSDC } from "@/lib/utils";
 import { TokenIcon } from "@/components/ui/TokenIcon";
 import { WalletIcon } from "@/components/wallet/WalletIcon";
 import { ReceiveModal } from "@/components/wallet/ReceiveModal";
@@ -514,13 +514,7 @@ function ClaimRow({ entry }: { entry: PendingTwitterClaim }) {
     );
 }
 
-function formatAgo(ts: number): string {
-    const seconds = Math.max(0, Math.floor((Date.now() - ts) / 1000));
-    if (seconds < 60) return `${seconds}s`;
-    if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
-    if (seconds < 86400) return `${Math.floor(seconds / 3600)}h`;
-    return `${Math.floor(seconds / 86400)}d`;
-}
+// formatAgo lives in @/lib/utils now.
 
 // ===================== shared primitives =====================
 
