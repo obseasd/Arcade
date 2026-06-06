@@ -121,26 +121,58 @@
   animation: arc-bridge-pulse 1.8s ease-in-out infinite;
 }
 
-/* Slow heartbeat on the LP Boost outline used by Explore incentivized pools.
-   The ring + glow breathe between two intensities so the card draws attention
-   without being shouty. Subtle enough that the rest of the page reads as
-   static. */
-@keyframes arc-lp-boost-pulse {
-  0%,
-  100% {
-    box-shadow:
-      0 0 0 1px rgba(16, 185, 129, 0.35),
-      0 0 24px -6px rgba(16, 185, 129, 0.55);
-  }
-  50% {
-    box-shadow:
-      0 0 0 1.5px rgba(16, 185, 129, 0.65),
-      0 0 36px -4px rgba(16, 185, 129, 0.9);
+/* LP Boost flowing border: a 2px blue rim around the card with a bright
+   highlight that orbits the perimeter, like a fluid running through a
+   pipe. Replaces the prior green breathing pulse - now in the Arc blue
+   palette and ~33% thicker (2px vs prior 1.5px peak). The ::before pseudo
+   carries the conic-gradient and uses the padding+mask trick to clip it
+   to the perimeter only (hollow centre). The angle is animated through a
+   CSS Houdini @property so the browser interpolates the conic angle
+   natively; on engines without @property (very old WebKit) the gradient
+   stays still but the rim and outer glow still read as a blue
+   highlight. */
+@property --arc-lp-angle {
+  syntax: "<angle>";
+  initial-value: 0deg;
+  inherits: false;
+}
+
+@keyframes arc-lp-boost-spin {
+  to {
+    --arc-lp-angle: 360deg;
   }
 }
 
 .animate-lp-boost {
-  animation: arc-lp-boost-pulse 2.6s ease-in-out infinite;
+  position: relative;
+  border-color: rgba(66, 114, 154, 0.6) !important;
+  box-shadow: 0 0 30px -6px rgba(66, 114, 154, 0.6);
+}
+
+.animate-lp-boost::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 2px;
+  background: conic-gradient(
+    from var(--arc-lp-angle),
+    rgba(66, 114, 154, 0) 0deg,
+    rgba(66, 114, 154, 0) 230deg,
+    rgba(149, 199, 235, 0.95) 300deg,
+    rgba(66, 114, 154, 1) 330deg,
+    rgba(66, 114, 154, 0) 360deg
+  );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+  animation: arc-lp-boost-spin 3.5s linear infinite;
 }
 
 @layer components {

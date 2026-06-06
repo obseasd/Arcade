@@ -857,7 +857,7 @@ function PoolPairRowCard({
                 glow mirrors HyperSwap's badge, adapted to Arcade's palette
                 via arc-success (emerald). */}
             {row.isIncentivized && (
-                <div className="absolute -top-2.5 left-4 z-10 inline-flex items-center gap-1 rounded-md border border-arc-success bg-arc-bg-elevated px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-arc-success">
+                <div className="absolute -top-2.5 left-4 z-10 inline-flex items-center gap-1 rounded-md border border-arc-primary-hover bg-arc-bg-elevated px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-sky-300">
                     <Sparkles className="h-2.5 w-2.5" />
                     LP Boost
                 </div>
@@ -866,12 +866,13 @@ function PoolPairRowCard({
                 className={cn(
                     "arc-card overflow-hidden p-0 transition-colors",
                     expanded && "border-arc-cta-hover/30",
-                    // Incentivized: replace the prior static green ring with
-                    // animate-lp-boost (slow 2.6s box-shadow heartbeat keyed
-                    // in globals.css). The border stays the same hue so the
-                    // pulse reads as the SAME card breathing, not a separate
-                    // element flickering on top.
-                    row.isIncentivized && "border-arc-success/70 animate-lp-boost",
+                    // Incentivized: animate-lp-boost (defined in globals.css)
+                    // applies a blue 2px rim with a conic-gradient highlight
+                    // that orbits the perimeter like a fluid through a pipe.
+                    // Border-color override + outer glow live in the same
+                    // class, so we don't pre-apply a border colour here that
+                    // the animation would have to fight.
+                    row.isIncentivized && "animate-lp-boost",
                 )}
             >
             {/* Row header. p-[1.331rem] is 1.21rem * 1.1 = +10% height vs the
