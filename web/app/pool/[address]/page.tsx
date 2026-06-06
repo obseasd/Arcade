@@ -8,21 +8,23 @@ import { Address, erc20Abi, formatUnits, isAddress, zeroAddress } from "viem";
 import { useAccount, useReadContract } from "wagmi";
 
 import { PAIR_ABI } from "@/lib/abis/dex";
+import { V3_POOL_ABI } from "@/lib/abis/v3-npm";
 import { ADDRESSES, USDC_DECIMALS } from "@/lib/constants";
 import { arcTestnet } from "@/lib/chains";
 import { TokenIcon } from "@/components/ui/TokenIcon";
+import { tickToPriceWithDecimals } from "@/lib/v3-math";
 import { cn, formatAddress } from "@/lib/utils";
 
 const USDC_LOWER = ADDRESSES.usdc.toLowerCase();
 
 /**
- * Generic V2 pair detail page. Reads the pair contract directly so any address
- * routed here (eg from the post-add toast or a deep link) renders even before
- * the indexer has caught the new pair.
- *
- * V3 detail rendering is queued for the ArcLens ship - the page will detect a
- * V3 pool via slot0() and switch to a Concentrated layout. For now V3-only
- * addresses fall through to the "data not yet indexed" empty state.
+ * Generic pair / pool detail page. Reads the contract directly so any address
+ * routed here (post-add toast, deep link, explore Open Pool button) renders
+ * even before an indexer has caught up. Both V2 pairs and V3 pools expose
+ * token0/token1, so token reads work for both. V3 detection happens via a
+ * slot0() probe - if it succeeds, the page renders a concentrated-liquidity
+ * panel (current price, raw token reserves) instead of the V2-only
+ * reserves/totalSupply/share triad which would read as zero on a V3 pool.
  */
 export default function PoolDetailPage() {
     const params = useParams<{ address: string }>();
@@ -45,24 +47,54 @@ export default function PoolDetailPage() {
         functionName: "token1",
         query: { enabled: isPair },
     });
+    // V3 detection probe. slot0() exists on V3 pools but not V2 pairs.
+    // If this succeeds, we render the V3 layout below.
+    const slot0Q = useReadContract({
+        address: pair,
+        abi: V3_POOL_ABI,
+        functionName: "slot0",
+        query: { enabled: isPair, retry: false },
+    });
+    const v3FeeQ = useReadContract({
+        address: pair,
+        abi: V3_POOL_ABI,
+        functionName: "fee",
+        query: { enabled: isPair, retry: false },
+    });
+    const isV3 = !!slot0Q.data && !slot0Q.isError;
     const reservesQ = useReadContract({
         address: pair,
         abi: PAIR_ABI,
         functionName: "getReserves",
-        query: { enabled: isPair },
+        query: { enabled: isPair && !isV3 },
     });
     const totalSupplyQ = useReadContract({
         address: pair,
         abi: PAIR_ABI,
         functionName: "totalSupply",
-        query: { enabled: isPair },
+        query: { enabled: isPair && !isV3 },
     });
     const lpBalanceQ = useReadContract({
         address: pair,
         abi: PAIR_ABI,
         functionName: "balanceOf",
         args: account ? [account] : undefined,
-        query: { enabled: isPair && !!account },
+        query: { enabled: isPair && !isV3 && !!account },
+    });
+    // V3 raw token balances (used for the composition card + TVL approx).
+    const t0BalQ = useReadContract({
+        address: token0Q.data as Address | undefined,
+        abi: erc20Abi,
+        functionName: "balanceOf",
+        args: [pair],
+        query: { enabled: isPair && isV3 && !!token0Q.data },
+    });
+    const t1BalQ = useReadContract({
+        address: token1Q.data as Address | undefined,
+        abi: erc20Abi,
+        functionName: "balanceOf",
+        args: [pair],
+        query: { enabled: isPair && isV3 && !!token1Q.data },
     });
 
     const token0 = token0Q.data as Address | undefined;
@@ -125,9 +157,34 @@ export default function PoolDetailPage() {
 
     const sym0 = token0Meta?.symbol ?? "?";
     const sym1 = token1Meta?.symbol ?? "?";
+    const v3Fee = (v3FeeQ.data as number | undefined) ?? 0;
+    // Fee bps shown in the header chip. V2 pairs are always 0.30%; V3 fee
+    // tier comes from the pool's fee() function (pip = bps * 100).
+    const feeLabel = isV3 ? `${(v3Fee / 10_000).toFixed(2)}%` : "0.30%";
+    const versionLabel = isV3 ? "v3" : "v2";
     const addLiqHref = token0 && token1
-        ? `/positions/add?type=amm&t0=${token0}&t1=${token1}`
+        ? isV3
+            ? `/positions/add?type=v3&t0=${token0}&t1=${token1}&fee=${Math.round(v3Fee / 100)}`
+            : `/positions/add?type=amm&t0=${token0}&t1=${token1}`
         : "/positions/add";
+    // V3 current price + range info derived from slot0 + token decimals.
+    const v3Tick = slot0Q.data
+        ? Number((slot0Q.data as readonly [bigint, number, ...unknown[]])[1])
+        : 0;
+    const v3CurrentPrice = isV3 && token0Meta && token1Meta
+        ? tickToPriceWithDecimals(v3Tick, token0Meta.decimals, token1Meta.decimals)
+        : 0;
+    const v3T0Bal = (t0BalQ.data as bigint | undefined) ?? 0n;
+    const v3T1Bal = (t1BalQ.data as bigint | undefined) ?? 0n;
+    // V3 TVL ~= USDC side x 2. Pick whichever leg is USDC.
+    const v3Tvl =
+        isV3 && token0 && token1
+            ? token0.toLowerCase() === USDC_LOWER
+                ? v3T0Bal * 2n
+                : token1.toLowerCase() === USDC_LOWER
+                  ? v3T1Bal * 2n
+                  : 0n
+            : 0n;
 
     return (
         <div className="mx-auto max-w-5xl px-4 py-8 sm:px-6">
@@ -151,11 +208,18 @@ export default function PoolDetailPage() {
                             {sym0} / {sym1}
                         </div>
                         <div className="mt-1 flex items-center gap-1.5">
-                            <span className="rounded-md border border-cyan-400/40 bg-cyan-400/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-cyan-400">
-                                v2
+                            <span
+                                className={cn(
+                                    "rounded-md border px-1.5 py-0.5 text-[10px] uppercase tracking-wider",
+                                    isV3
+                                        ? "border-arc-cta-hover/40 bg-arc-cta-hover/10 text-arc-cta-hover"
+                                        : "border-cyan-400/40 bg-cyan-400/10 text-cyan-400",
+                                )}
+                            >
+                                {versionLabel}
                             </span>
                             <span className="rounded-md border border-arc-success/40 bg-arc-success/10 px-1.5 py-0.5 text-[10px] font-semibold text-arc-success">
-                                0.30%
+                                {feeLabel}
                             </span>
                             <a
                                 href={`${explorerUrl}/address/${pair}`}
@@ -187,9 +251,16 @@ export default function PoolDetailPage() {
                 </div>
             </div>
 
-            {/* KPI strip */}
+            {/* KPI strip. TVL surfaces from on-chain reserves (V2) or
+                USDC-leg x 2 (V3); volume/fees ship with ArcLens. */}
             <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
-                <Kpi label="TVL" value={tvlUsdc > 0n ? formatUsd(tvlUsdc) : "—"} />
+                <Kpi
+                    label="TVL"
+                    value={(() => {
+                        const tvl = isV3 ? v3Tvl : tvlUsdc;
+                        return tvl > 0n ? formatUsd(tvl) : "—";
+                    })()}
+                />
                 <Kpi label="24h Volume" value="—" pendingIndexer />
                 <Kpi label="24h Fees" value="—" pendingIndexer />
             </div>
@@ -216,7 +287,10 @@ export default function PoolDetailPage() {
                                 }
                                 right={
                                     <span className="tabular-nums">
-                                        {formatAmount(reserve0, token0Meta?.decimals ?? 18)}
+                                        {formatAmount(
+                                            isV3 ? v3T0Bal : reserve0,
+                                            token0Meta?.decimals ?? 18,
+                                        )}
                                     </span>
                                 }
                             />
@@ -229,23 +303,64 @@ export default function PoolDetailPage() {
                                 }
                                 right={
                                     <span className="tabular-nums">
-                                        {formatAmount(reserve1, token1Meta?.decimals ?? 18)}
+                                        {formatAmount(
+                                            isV3 ? v3T1Bal : reserve1,
+                                            token1Meta?.decimals ?? 18,
+                                        )}
                                     </span>
                                 }
                             />
                             <div className="border-t border-arc-border" />
-                            <Row
-                                left={<span className="text-arc-text-muted">{sym1} per {sym0}</span>}
-                                right={<span className="tabular-nums">{ratio01 ?? "—"}</span>}
-                            />
-                            <Row
-                                left={<span className="text-arc-text-muted">{sym0} per {sym1}</span>}
-                                right={<span className="tabular-nums">{ratio10 ?? "—"}</span>}
-                            />
+                            {isV3 ? (
+                                <Row
+                                    left={
+                                        <span className="text-arc-text-muted">
+                                            Current price
+                                        </span>
+                                    }
+                                    right={
+                                        <span className="tabular-nums">
+                                            {v3CurrentPrice > 0
+                                                ? `${v3CurrentPrice.toLocaleString(undefined, { maximumFractionDigits: 6 })} ${sym1}/${sym0}`
+                                                : "—"}
+                                        </span>
+                                    }
+                                />
+                            ) : (
+                                <>
+                                    <Row
+                                        left={
+                                            <span className="text-arc-text-muted">
+                                                {sym1} per {sym0}
+                                            </span>
+                                        }
+                                        right={
+                                            <span className="tabular-nums">
+                                                {ratio01 ?? "—"}
+                                            </span>
+                                        }
+                                    />
+                                    <Row
+                                        left={
+                                            <span className="text-arc-text-muted">
+                                                {sym0} per {sym1}
+                                            </span>
+                                        }
+                                        right={
+                                            <span className="tabular-nums">
+                                                {ratio10 ?? "—"}
+                                            </span>
+                                        }
+                                    />
+                                </>
+                            )}
                         </div>
                     </div>
 
-                    {account ? (
+                    {/* V2 LP balance card. V3 positions are NFTs and aren't
+                        scoped to the pool address, so the equivalent panel
+                        lives on /positions where the NPM enumeration runs. */}
+                    {!isV3 && account ? (
                         <div className="arc-card p-4">
                             <div className="mb-3 text-xs font-semibold uppercase tracking-wider text-arc-text-muted">
                                 Your position
@@ -270,9 +385,20 @@ export default function PoolDetailPage() {
                                 }
                             />
                         </div>
-                    ) : (
+                    ) : !isV3 && !account ? (
                         <div className="arc-card p-4 text-sm text-arc-text-muted">
                             Connect a wallet to see your LP balance + share.
+                        </div>
+                    ) : (
+                        <div className="arc-card p-4 text-sm text-arc-text-muted">
+                            V3 positions are NFTs - see{" "}
+                            <Link
+                                href="/positions?tab=concentrated"
+                                className="text-arc-cta-hover hover:underline"
+                            >
+                                Your Positions
+                            </Link>{" "}
+                            for your liquidity in this pool.
                         </div>
                     )}
                 </div>

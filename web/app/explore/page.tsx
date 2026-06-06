@@ -86,7 +86,12 @@ interface PoolPairRow {
 }
 
 interface PoolSubRow {
+    /** Token address for V3 sub-rows (used as router param for add liquidity);
+     *  pair address for V2 sub-rows. Use `poolAddress` for the actual pool. */
     address: Address;
+    /** Concrete on-chain pool/pair address. For V2 it equals `address`; for V3
+     *  it's the factory-resolved pool, distinct from the non-USDC token. */
+    poolAddress: Address;
     version: "v2" | "v3";
     feeBps: number;
     tvlUsdc: bigint;
@@ -94,7 +99,7 @@ interface PoolSubRow {
 
 export default function ExplorePage() {
     const { pairs: v2Pairs, tokens: v2Tokens } = useV2Tokens();
-    const { tokens: v3Tokens, feeOf: v3FeeOf } = useV3Tokens();
+    const { tokens: v3Tokens, feeOf: v3FeeOf, poolOf: v3PoolOf } = useV3Tokens();
     // Manually-created V3 pools (not launchpad-driven). USDC/SeedETH style
     // pools land here so they appear in the explore list alongside the
     // launchpad's locked-LP CLANKER_V3 pools.
@@ -186,6 +191,7 @@ export default function ExplorePage() {
                 const row = grouped.get(key)!;
                 row.subRows.push({
                     address: v2Pairs[i],
+                    poolAddress: v2Pairs[i],
                     version: "v2",
                     feeBps: 30,
                     tvlUsdc,
@@ -213,8 +219,10 @@ export default function ExplorePage() {
                 });
             }
             const row = grouped.get(key)!;
+            const launchpadPool = v3PoolOf(t.address);
             row.subRows.push({
                 address: t.address,
+                poolAddress: launchpadPool ?? t.address,
                 version: "v3",
                 feeBps: Math.round(v3FeeOf(t.address) / 100),
                 tvlUsdc: 0n,
@@ -258,14 +266,16 @@ export default function ExplorePage() {
             if (dup) continue;
             row.subRows.push({
                 address: fp.token,
+                poolAddress: fp.pool,
                 version: "v3",
                 feeBps: Math.round(fp.feePip / 100),
-                tvlUsdc: 0n,
+                tvlUsdc: fp.tvlUsdc,
             });
+            row.tvlUsdc += fp.tvlUsdc;
         }
 
         return Array.from(grouped.values());
-    }, [v2Pairs, reservesQ.data, v3Tokens, v3FeeOf, v3FactoryPools, tokenLookup]);
+    }, [v2Pairs, reservesQ.data, v3Tokens, v3FeeOf, v3PoolOf, v3FactoryPools, tokenLookup]);
 
     const filteredRows = useMemo(() => {
         let rows = allRows;
@@ -921,7 +931,7 @@ function PoolSubRowCard({
             <span className="text-right text-xs tabular-nums sm:text-sm">{tvlLabel}</span>
             <span className="text-right text-xs tabular-nums text-arc-text-faint sm:text-sm">—</span>
             <Link
-                href={`/pool/${sub.address}`}
+                href={`/pool/${sub.poolAddress}`}
                 className="inline-flex items-center justify-end gap-1 rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-1.5 text-[11px] font-medium text-arc-text transition-colors hover:bg-white/5"
             >
                 Open pool

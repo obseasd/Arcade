@@ -1,6 +1,6 @@
 "use client";
 
-import { Address, zeroAddress } from "viem";
+import { Address, erc20Abi, zeroAddress } from "viem";
 import { useReadContracts } from "wagmi";
 
 import { V3_FACTORY_ABI } from "@/lib/abis/v3-npm";
@@ -26,6 +26,12 @@ export interface V3FactoryPool {
     token: Address;
     /** Pool fee in pip (eg 3000 == 0.30%). */
     feePip: number;
+    /** Approximate TVL = USDC.balanceOf(pool) * 2 (assumes 50/50 USDC-token
+     *  weighting at current price; over-counts for out-of-range positions and
+     *  CLANKER_V3 single-sided launches). Best we can do without a price
+     *  feed for the non-USDC leg. Replaces with the indexer's value when
+     *  ArcLens ships. */
+    tvlUsdc: bigint;
 }
 
 const FEE_TIERS = [500, 3000, 10000, 20000, 30000];
@@ -71,7 +77,7 @@ export function useV3FactoryPools(extraTokens: Address[] = []): {
         query: { enabled: factoryEnabled && candidateTokens.length > 0 },
     });
 
-    const pools: V3FactoryPool[] = [];
+    const poolsBare: Omit<V3FactoryPool, "tvlUsdc">[] = [];
     if (probesQ.data) {
         for (let i = 0; i < candidateTokens.length; i++) {
             for (let j = 0; j < FEE_TIERS.length; j++) {
@@ -80,7 +86,7 @@ export function useV3FactoryPools(extraTokens: Address[] = []): {
                 if (res?.status !== "success") continue;
                 const addr = res.result as Address;
                 if (!addr || addr === zeroAddress) continue;
-                pools.push({
+                poolsBare.push({
                     pool: addr,
                     token: candidateTokens[i],
                     feePip: FEE_TIERS[j],
@@ -89,8 +95,29 @@ export function useV3FactoryPools(extraTokens: Address[] = []): {
         }
     }
 
+    // Multicall USDC.balanceOf(pool) for every resolved V3 pool. Multiplied
+    // by 2 in the consumer to approximate TVL (see V3FactoryPool.tvlUsdc
+    // commentary above for the caveats).
+    const balanceQ = useReadContracts({
+        contracts: poolsBare.map((p) => ({
+            address: ADDRESSES.usdc,
+            abi: erc20Abi,
+            functionName: "balanceOf" as const,
+            args: [p.pool] as const,
+        })),
+        query: { enabled: poolsBare.length > 0 },
+    });
+
+    const pools: V3FactoryPool[] = poolsBare.map((p, i) => {
+        const usdcBal =
+            balanceQ.data?.[i]?.status === "success"
+                ? (balanceQ.data[i].result as bigint)
+                : 0n;
+        return { ...p, tvlUsdc: usdcBal * 2n };
+    });
+
     return {
         pools,
-        isLoading: v2Loading || probesQ.isLoading,
+        isLoading: v2Loading || probesQ.isLoading || balanceQ.isLoading,
     };
 }

@@ -6,11 +6,15 @@ import { useMemo, useState } from "react";
 import { Address, erc20Abi, formatUnits } from "viem";
 import { useAccount, useReadContract, useReadContracts } from "wagmi";
 
-import { V3_NPM_ABI } from "@/lib/abis/v3-npm";
+import { V3_FACTORY_ABI, V3_NPM_ABI, V3_POOL_ABI } from "@/lib/abis/v3-npm";
 import { ADDRESSES, USDC_DECIMALS } from "@/lib/constants";
 import { arcTestnet } from "@/lib/chains";
 import { TokenIcon } from "@/components/ui/TokenIcon";
-import { tickToPriceWithDecimals } from "@/lib/v3-math";
+import {
+    getAmountsForLiquidity,
+    getSqrtRatioAtTick,
+    tickToPriceWithDecimals,
+} from "@/lib/v3-math";
 import { cn } from "@/lib/utils";
 
 const USDC_LOWER = ADDRESSES.usdc.toLowerCase();
@@ -119,6 +123,55 @@ export function V3Positions({ emptyState }: { emptyState?: React.ReactNode }) {
         query: { enabled: tokenAddrs.length > 0 },
     });
 
+    // Resolve the pool address for each position via factory.getPool. The
+    // NPM doesn't store the pool address - the canonical Uniswap approach is
+    // to derive it via PoolAddress.computeAddress (which we patched server-
+    // side, see [[project-arcade-v3-init-hash]]), but on the JS side a
+    // factory.getPool round-trip is the simplest match. Parallel to
+    // `positions`, indexed by the same i.
+    const poolAddrQ = useReadContracts({
+        contracts: positions.map((p) => ({
+            address: ADDRESSES.v3Factory,
+            abi: V3_FACTORY_ABI,
+            functionName: "getPool" as const,
+            args: [p.token0, p.token1, p.fee] as const,
+        })),
+        query: { enabled: positions.length > 0 },
+    });
+    const poolAddrs = useMemo(
+        () =>
+            (poolAddrQ.data ?? []).map((r) =>
+                r.status === "success" ? (r.result as Address) : undefined,
+            ),
+        [poolAddrQ.data],
+    );
+
+    // slot0 for each resolved pool. Needed for underlying-amount computation
+    // (getAmountsForLiquidity wants the current sqrtPriceX96) and the
+    // in-range badge (current tick vs the position's [tickLower, tickUpper)).
+    const slot0Q = useReadContracts({
+        contracts: poolAddrs
+            .filter((a): a is Address => !!a)
+            .map((a) => ({
+                address: a,
+                abi: V3_POOL_ABI,
+                functionName: "slot0" as const,
+            })),
+        query: { enabled: poolAddrs.some((a) => !!a) },
+    });
+    // Index slot0 results back by pool address so the per-row lookup is
+    // robust against partial query results.
+    const slot0ByPool = useMemo(() => {
+        const m = new Map<string, { sqrtPriceX96: bigint; tick: number }>();
+        const live = poolAddrs.filter((a): a is Address => !!a);
+        slot0Q.data?.forEach((res, i) => {
+            if (res.status !== "success") return;
+            const r = res.result as readonly [bigint, number, ...unknown[]];
+            m.set(live[i].toLowerCase(), { sqrtPriceX96: r[0], tick: Number(r[1]) });
+        });
+        return m;
+    }, [slot0Q.data, poolAddrs]);
+
     const tokenInfo = useMemo(() => {
         const m: Record<string, { symbol: string; decimals: number }> = {};
         if (metaQ.data) {
@@ -180,11 +233,17 @@ export function V3Positions({ emptyState }: { emptyState?: React.ReactNode }) {
 
     return (
         <div className="space-y-3">
-            {positions.map((p) => (
+            {positions.map((p, i) => (
                 <V3PositionRow
                     key={p.tokenId.toString()}
                     position={p}
                     tokenInfo={tokenInfo}
+                    poolAddress={poolAddrs[i]}
+                    slot0={
+                        poolAddrs[i]
+                            ? slot0ByPool.get(poolAddrs[i]!.toLowerCase())
+                            : undefined
+                    }
                 />
             ))}
         </div>
@@ -204,9 +263,16 @@ interface V3PositionRowProps {
         tokensOwed1: bigint;
     };
     tokenInfo: Record<string, { symbol: string; decimals: number }>;
+    poolAddress: Address | undefined;
+    slot0: { sqrtPriceX96: bigint; tick: number } | undefined;
 }
 
-function V3PositionRow({ position: p, tokenInfo }: V3PositionRowProps) {
+function V3PositionRow({
+    position: p,
+    tokenInfo,
+    poolAddress,
+    slot0,
+}: V3PositionRowProps) {
     const t0Info = tokenInfo[p.token0.toLowerCase()] ?? { symbol: "?", decimals: 18 };
     const t1Info = tokenInfo[p.token1.toLowerCase()] ?? { symbol: "?", decimals: 18 };
     const minPrice = tickToPriceWithDecimals(p.tickLower, t0Info.decimals, t1Info.decimals);
@@ -224,20 +290,51 @@ function V3PositionRow({ position: p, tokenInfo }: V3PositionRowProps) {
     const numerator = inverted ? t0Info.symbol : t1Info.symbol;
     const denominator = inverted ? t1Info.symbol : t0Info.symbol;
 
+    // Underlying token amounts the position currently represents: derive via
+    // LiquidityAmounts.getAmountsForLiquidity using the pool's live sqrtP and
+    // the position's tick range. This is the human number the user actually
+    // expects to see ("how much of each token is in this position") rather
+    // than the raw uint128 L scalar. Falls back to "—" when slot0 is still
+    // loading.
+    const underlying = (() => {
+        if (!slot0 || p.liquidity === 0n) return { amount0: 0n, amount1: 0n };
+        try {
+            const sqrtA = getSqrtRatioAtTick(p.tickLower);
+            const sqrtB = getSqrtRatioAtTick(p.tickUpper);
+            return getAmountsForLiquidity(slot0.sqrtPriceX96, sqrtA, sqrtB, p.liquidity);
+        } catch {
+            return { amount0: 0n, amount1: 0n };
+        }
+    })();
+
+    const currentPriceRaw = slot0
+        ? tickToPriceWithDecimals(slot0.tick, t0Info.decimals, t1Info.decimals)
+        : 0;
+    const displayCurrent = inverted
+        ? currentPriceRaw > 0
+            ? 1 / currentPriceRaw
+            : 0
+        : currentPriceRaw;
+
+    // V3's "in range" check is current tick ∈ [lower, upper). Outside that
+    // interval the position is single-sided and earns no fees.
+    const inRange =
+        !!slot0 && slot0.tick >= p.tickLower && slot0.tick < p.tickUpper;
+
     return (
         <div className="arc-card p-4">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div className="flex items-center gap-3">
                     <div className="flex -space-x-2">
-                        <TokenIcon symbol={t0Info.symbol} size={36} />
-                        <TokenIcon symbol={t1Info.symbol} size={36} />
+                        <TokenIcon symbol={t0Info.symbol} size={40} />
+                        <TokenIcon symbol={t1Info.symbol} size={40} />
                     </div>
                     <div>
-                        <div className="flex items-center gap-2">
+                        <div className="flex flex-wrap items-center gap-1.5">
                             <button
                                 onClick={() => setInverted((v) => !v)}
                                 title="Invert price units"
-                                className="group inline-flex items-center gap-1 text-sm font-semibold text-arc-text transition-colors hover:text-arc-cta-hover"
+                                className="group inline-flex items-center gap-1 text-base font-semibold text-arc-text transition-colors hover:text-arc-cta-hover"
                             >
                                 {t0Info.symbol} / {t1Info.symbol}
                                 <ArrowLeftRight className="h-3 w-3 opacity-0 transition-opacity group-hover:opacity-70" />
@@ -248,10 +345,28 @@ function V3PositionRow({ position: p, tokenInfo }: V3PositionRowProps) {
                             <span className="rounded-md border border-arc-success/40 bg-arc-success/10 px-1.5 py-0.5 text-[10px] font-semibold text-arc-success">
                                 {(p.fee / 10000).toFixed(2)}%
                             </span>
-                        </div>
-                        <div className="mt-1 text-xs text-arc-text-muted">
-                            Range {fmtPrice(displayMin)} - {fmtPrice(displayMax)}{" "}
-                            {numerator}/{denominator}
+                            <span
+                                className={cn(
+                                    "inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-semibold",
+                                    !slot0
+                                        ? "bg-arc-bg-elevated text-arc-text-muted"
+                                        : inRange
+                                          ? "bg-arc-success/15 text-arc-success"
+                                          : "bg-arc-warn/15 text-arc-warn",
+                                )}
+                            >
+                                <span
+                                    className={cn(
+                                        "h-1.5 w-1.5 rounded-full",
+                                        !slot0
+                                            ? "bg-arc-text-muted"
+                                            : inRange
+                                              ? "bg-arc-success"
+                                              : "bg-arc-warn",
+                                    )}
+                                />
+                                {!slot0 ? "…" : inRange ? "In range" : "Out of range"}
+                            </span>
                         </div>
                     </div>
                 </div>
@@ -264,6 +379,14 @@ function V3PositionRow({ position: p, tokenInfo }: V3PositionRowProps) {
                     >
                         NFT #{p.tokenId.toString()} <ExternalLink className="h-3 w-3" />
                     </a>
+                    {poolAddress && (
+                        <Link
+                            href={`/pool/${poolAddress}`}
+                            className="inline-flex items-center gap-1 rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-1.5 text-xs font-medium text-arc-text transition-colors hover:bg-white/5"
+                        >
+                            Open pool
+                        </Link>
+                    )}
                     <Link
                         href={`/positions/add?type=v3&t0=${p.token0}&t1=${p.token1}&fee=${p.fee / 100}`}
                         className="inline-flex items-center gap-1 rounded-xl border border-arc-cta-hover/40 bg-arc-cta-hover/10 px-3 py-1.5 text-xs font-semibold text-arc-cta-hover transition-colors hover:bg-arc-cta-hover/20"
@@ -273,54 +396,105 @@ function V3PositionRow({ position: p, tokenInfo }: V3PositionRowProps) {
                     </Link>
                 </div>
             </div>
-            {/* Three-stat strip mirrors the V2 row's underlying-amount footer.
-                Liquidity is raw V3 L units (uint128) -- it has no direct
-                token meaning, it scales the position's contribution to the
-                pool at every price inside the range. Uncollected fees ("Owed")
-                start at 0 and tick up as swaps hit the range. */}
-            <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
-                <Stat
-                    label="Liquidity (L)"
-                    value={p.liquidity === 0n ? "0" : abbreviate(p.liquidity)}
+
+            {/* Underlying balances - the actual token amounts the user gets if
+                they close the position now. Replaces the raw uint128 L scalar
+                which carried no human meaning. */}
+            <div className="mt-3 rounded-xl border border-arc-border bg-white/[0.015] p-3">
+                <div className="mb-1 text-[10px] uppercase tracking-wider text-arc-text-faint">
+                    Your reserve
+                </div>
+                <div className="grid grid-cols-2 gap-2 text-sm">
+                    <div className="inline-flex items-center gap-2">
+                        <TokenIcon symbol={t0Info.symbol} size={20} />
+                        <span className="tabular-nums text-arc-text">
+                            {formatTok(underlying.amount0, t0Info.decimals)}
+                        </span>
+                        <span className="text-arc-text-muted">{t0Info.symbol}</span>
+                    </div>
+                    <div className="inline-flex items-center gap-2">
+                        <TokenIcon symbol={t1Info.symbol} size={20} />
+                        <span className="tabular-nums text-arc-text">
+                            {formatTok(underlying.amount1, t1Info.decimals)}
+                        </span>
+                        <span className="text-arc-text-muted">{t1Info.symbol}</span>
+                    </div>
+                </div>
+            </div>
+
+            {/* Min / Current / Max price tiles - mirrors the Hyperswap layout
+                so the user sees their range relative to the live price at a
+                glance. The numerator/denominator labels follow the inverted
+                toggle above. */}
+            <div className="mt-3 grid grid-cols-3 gap-2">
+                <PriceTile
+                    label="Min price"
+                    value={fmtPrice(displayMin)}
+                    unit={`${numerator}/${denominator}`}
                 />
-                <Stat
-                    label={`Unclaimed ${t0Info.symbol}`}
-                    value={formatTok(p.tokensOwed0, t0Info.decimals)}
+                <PriceTile
+                    label="Current price"
+                    value={fmtPrice(displayCurrent)}
+                    unit={`${numerator}/${denominator}`}
+                    highlight={inRange}
                 />
-                <Stat
-                    label={`Unclaimed ${t1Info.symbol}`}
-                    value={formatTok(p.tokensOwed1, t1Info.decimals)}
+                <PriceTile
+                    label="Max price"
+                    value={fmtPrice(displayMax)}
+                    unit={`${numerator}/${denominator}`}
                 />
             </div>
+
+            {/* Unclaimed fees row. Starts at 0 and ticks up when swaps cross
+                the range. Hidden when both legs are zero to keep the card
+                quiet on a fresh position. */}
+            {(p.tokensOwed0 > 0n || p.tokensOwed1 > 0n) && (
+                <div className="mt-3 flex items-center justify-between gap-2 rounded-xl border border-arc-border bg-white/[0.015] p-3 text-xs">
+                    <span className="text-arc-text-muted">Unclaimed fees</span>
+                    <span className="inline-flex items-center gap-3 tabular-nums">
+                        <span>
+                            {formatTok(p.tokensOwed0, t0Info.decimals)}{" "}
+                            <span className="text-arc-text-muted">{t0Info.symbol}</span>
+                        </span>
+                        <span className="text-arc-text-faint">/</span>
+                        <span>
+                            {formatTok(p.tokensOwed1, t1Info.decimals)}{" "}
+                            <span className="text-arc-text-muted">{t1Info.symbol}</span>
+                        </span>
+                    </span>
+                </div>
+            )}
         </div>
     );
 }
 
-function Stat({ label, value }: { label: string; value: string }) {
+function PriceTile({
+    label,
+    value,
+    unit,
+    highlight,
+}: {
+    label: string;
+    value: string;
+    unit: string;
+    highlight?: boolean;
+}) {
     return (
-        <div className="rounded-xl border border-arc-border bg-white/[0.015] px-3 py-2">
-            <div className="text-[9px] uppercase tracking-wider text-arc-text-faint">
+        <div
+            className={cn(
+                "rounded-xl border bg-white/[0.015] p-3",
+                highlight ? "border-arc-success/40" : "border-arc-border",
+            )}
+        >
+            <div className="text-[10px] uppercase tracking-wider text-arc-text-muted">
                 {label}
             </div>
-            <div
-                className={cn(
-                    "mt-0.5 text-sm font-semibold tabular-nums",
-                    value === "0" ? "text-arc-text-faint" : "text-arc-text",
-                )}
-            >
+            <div className="mt-1 text-base font-semibold tabular-nums text-arc-text">
                 {value}
             </div>
+            <div className="mt-0.5 text-[10px] text-arc-text-faint">{unit}</div>
         </div>
     );
-}
-
-function abbreviate(n: bigint): string {
-    const v = Number(n);
-    if (v < 1e3) return v.toString();
-    if (v < 1e6) return (v / 1e3).toFixed(2) + "k";
-    if (v < 1e9) return (v / 1e6).toFixed(2) + "M";
-    if (v < 1e12) return (v / 1e9).toFixed(2) + "B";
-    return v.toExponential(2);
 }
 
 function formatTok(raw: bigint, decimals: number): string {

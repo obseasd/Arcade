@@ -104,6 +104,14 @@ export function useV3Tokens() {
     feeMap.set(a.toLowerCase(), f ?? 10_000);
   });
 
+  // Map of lowercased V3 token address -> on-chain pool address. Exposed so
+  // callers that need the pool itself (eg the explore Open Pool route) don't
+  // have to re-resolve via factory.getPool.
+  const poolMap = new Map<string, Address>();
+  v3Addrs.forEach((a, i) => {
+    poolMap.set(a.toLowerCase(), v3Pools[i]);
+  });
+
   // Set of lowercased V3 addresses for quick membership checks.
   const v3Set = new Set(v3Addrs.map((a) => a.toLowerCase()));
 
@@ -113,5 +121,6 @@ export function useV3Tokens() {
     tokens,
     isV3Token: (addr?: Address) => !!addr && v3Set.has(addr.toLowerCase()),
     feeOf: (addr?: Address) => (addr ? feeMap.get(addr.toLowerCase()) ?? 10_000 : 10_000),
+    poolOf: (addr?: Address) => (addr ? poolMap.get(addr.toLowerCase()) : undefined),
   };
 }
