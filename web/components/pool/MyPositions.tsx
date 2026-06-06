@@ -192,7 +192,10 @@ export function MyPositions({
   }
 
   return (
-    <div className="space-y-4">
+    // Card grid - matches the V3 list so both tabs read as one component.
+    // The Manage panel expands inline within the card so the grid keeps
+    // its row balance regardless of which card is open.
+    <div className="grid grid-cols-1 gap-3 lg:grid-cols-2 2xl:grid-cols-3">
       {filtered.map((p) => (
         <PositionRow
           key={p.pair}

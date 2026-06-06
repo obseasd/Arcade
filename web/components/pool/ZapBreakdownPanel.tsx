@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowRight, Info } from "lucide-react";
+import { ArrowDown, ArrowRight, Info } from "lucide-react";
 import { formatUnits } from "viem";
 import { TokenIcon } from "@/components/ui/TokenIcon";
 import { cn } from "@/lib/utils";
@@ -75,10 +75,23 @@ export function ZapBreakdownPanel({
                 </span>
             </div>
 
-            {/* Swap leg */}
+            {/* Input - what the user is paying. */}
             <div className="rounded-lg border border-arc-border bg-black/15 p-2.5 text-xs">
                 <div className="mb-1 text-[10px] uppercase tracking-wider text-arc-text-faint">
-                    Swap leg
+                    You pay
+                </div>
+                <TokenAmount amount={amountIn} token={tokenIn} />
+            </div>
+
+            {/* Internal split - swap leg vs kept leg. Visual flow with the
+                output ETH carrying a "to pool" caption so the user reads
+                "this ETH gets paired with the kept USDC", not "extra ETH". */}
+            <div className="mt-1 flex justify-center text-arc-text-muted">
+                <ArrowDown className="h-3.5 w-3.5" />
+            </div>
+            <div className="rounded-lg border border-arc-border bg-black/15 p-2.5 text-xs">
+                <div className="mb-1.5 text-[10px] uppercase tracking-wider text-arc-text-faint">
+                    Internal swap (pool 0.30% fee)
                 </div>
                 <div className="flex items-center gap-2">
                     <TokenAmount amount={swapAmount} token={tokenIn} />
@@ -86,14 +99,19 @@ export function ZapBreakdownPanel({
                     <TokenAmount amount={expectedOut} token={tokenOther} />
                 </div>
                 <div className="mt-1 text-[10px] text-arc-text-faint">
-                    Includes the pool&apos;s 0.30% swap fee. Dust returns to your wallet.
+                    Paired with the {fmtRaw(remainingIn, tokenIn.decimals)} {tokenIn.symbol} you didn&apos;t swap.
                 </div>
             </div>
 
-            {/* Add liquidity */}
-            <div className="mt-2 rounded-lg border border-arc-border bg-black/15 p-2.5 text-xs">
-                <div className="mb-1 text-[10px] uppercase tracking-wider text-arc-text-faint">
-                    {variant === "v3" ? "Mint position" : "Add liquidity"}
+            {/* Pool deposit. For V3 we show what mint() will actually consume
+                (which can differ from kept+swapOut by a small rounding amount).
+                For V2 the addLiquidity inputs ARE remainingIn + swapOut. */}
+            <div className="mt-1 flex justify-center text-arc-text-muted">
+                <ArrowDown className="h-3.5 w-3.5" />
+            </div>
+            <div className="rounded-lg border border-arc-cta-hover/30 bg-arc-cta-hover/5 p-2.5 text-xs">
+                <div className="mb-1.5 text-[10px] uppercase tracking-wider text-arc-text-faint">
+                    {variant === "v3" ? "Mint into the V3 pool" : "Add to the V2 pair"}
                 </div>
                 {variant === "v3" && expectedAmount0 !== undefined && expectedAmount1 !== undefined ? (
                     <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
@@ -122,22 +140,20 @@ export function ZapBreakdownPanel({
                         <TokenAmount amount={expectedOut} token={tokenOther} />
                     </div>
                 )}
-            </div>
-
-            {/* Receipt */}
-            <div className="mt-2 flex items-center justify-between rounded-lg border border-arc-cta-hover/30 bg-arc-cta-hover/5 p-2.5 text-xs">
-                <span className="text-arc-text-muted">
-                    {variant === "v3" ? "Expected liquidity (L)" : "Expected LP"}
-                </span>
-                <span className="font-semibold tabular-nums text-arc-text">
-                    {variant === "v3"
-                        ? expectedLiquidity !== undefined
-                            ? abbreviate(expectedLiquidity)
-                            : "—"
-                        : expectedLp !== undefined
-                          ? fmtRaw(expectedLp, 18)
-                          : "—"}
-                </span>
+                <div className="mt-1.5 flex items-center justify-between border-t border-arc-border/50 pt-1.5 text-[11px]">
+                    <span className="text-arc-text-muted">
+                        {variant === "v3" ? "Expected liquidity (L)" : "Expected LP"}
+                    </span>
+                    <span className="font-semibold tabular-nums text-arc-text">
+                        {variant === "v3"
+                            ? expectedLiquidity !== undefined
+                                ? abbreviate(expectedLiquidity)
+                                : "—"
+                            : expectedLp !== undefined
+                              ? fmtRaw(expectedLp, 18)
+                              : "—"}
+                    </span>
+                </div>
             </div>
         </div>
     );

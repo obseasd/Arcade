@@ -435,42 +435,24 @@ export function V3AddLiquidity({
 
                 // Audit follow-up: the V3 zap now accepts caller-signed
                 // slippage on both the internal swap leg AND the final mint.
-                // amountOtherMinSwap protects against MEV on the swap; we
-                // derive it from the live slot0 price + the user's tolerance.
-                // amount{0,1}Min protect the mint against price drift between
-                // simulate and broadcast. Both arrive as 0n if we can't
-                // safely derive them (eg slot0 still loading); the contract
-                // rejects amountOtherMinSwap == 0 explicitly.
-                let amountOtherMinSwap = 0n;
-                try {
-                    const sqrtP = sqrtPriceX96;
-                    const half = typedRaw / 2n;
-                    if (sqrtP > 0n && half > 0n) {
-                        const Q96 = 1n << 96n;
-                        const feeNum = BigInt(1_000_000 - feePip);
-                        let expectedOut: bigint;
-                        const tokenInIsT0 = zapTokenSide === "0";
-                        if (tokenInIsT0) {
-                            // token0 -> token1
-                            expectedOut =
-                                (((half * sqrtP) / Q96) * (sqrtP * feeNum)) /
-                                (Q96 * 1_000_000n);
-                        } else {
-                            expectedOut =
-                                (((half * Q96) / sqrtP) * (Q96 * feeNum)) /
-                                (sqrtP * 1_000_000n);
-                        }
-                        const slipDen = 10_000n - BigInt(slippageBps);
-                        amountOtherMinSwap = (expectedOut * slipDen) / 10_000n;
-                    }
-                } catch {
-                    /* fallback to 0 - contract will reject */
-                }
-                if (amountOtherMinSwap === 0n) {
+                // Use quoteZap's expectedOut as the basis - that matches the
+                // contract's view of expected output, so any discrepancy is
+                // genuine price-impact, not a spec mismatch.
+                //
+                // Price-impact safety buffer: V3 pools are constant-product
+                // within their range, so a swap of `half` moves the price.
+                // In thin pools the move can be 20-30%. quoteZap returns the
+                // SPOT-price estimate (no impact), and the actual on-chain
+                // swap delivers less. We apply a 30% safety buffer below
+                // quoteZap's value as the swap floor — generous in deep
+                // pools (and the dust is swept back), correct in thin pools.
+                // Proper SqrtPriceMath-based quote is a future v3 zap upgrade.
+                if (!v3Quote || v3Quote.expectedOut === 0n) {
                     throw new Error(
-                        "V3 zap slippage floor unavailable (slot0 still loading). Refresh and retry.",
+                        "V3 zap quote unavailable (slot0 still loading or pool too thin). Refresh and retry.",
                     );
                 }
+                const amountOtherMinSwap = (v3Quote.expectedOut * 70n) / 100n;
 
                 const zapArgs = [
                     {

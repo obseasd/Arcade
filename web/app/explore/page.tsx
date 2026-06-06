@@ -884,7 +884,7 @@ function PoolPairRowCard({
                     </Link>
                     <button
                         onClick={onToggle}
-                        className="inline-flex items-center gap-1 rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-[0.575rem] text-xs font-medium text-arc-text transition-colors hover:bg-white/5"
+                        className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-[0.575rem] text-xs font-medium text-arc-text transition-colors hover:bg-white/5"
                     >
                         {expanded ? "Hide pools" : `Show all pools (${subCount})`}
                         <ChevronDown
@@ -1005,13 +1005,15 @@ function PoolSubRowCard({
                 <span className="text-center tabular-nums">{tvlLabel}</span>
                 <span className="text-center tabular-nums text-arc-text-faint">—</span>
             </div>
-            <Link
-                href={`/pool/${sub.poolAddress}`}
-                className="inline-flex items-center justify-end gap-1 rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-1.5 text-[11px] font-medium text-arc-text transition-colors hover:bg-white/5"
-            >
-                Open pool
-                <ChevronDown className="h-3 w-3 -rotate-90" />
-            </Link>
+            <div className="flex justify-end">
+                <Link
+                    href={`/pool/${sub.poolAddress}`}
+                    className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-1.5 text-[11px] font-medium text-arc-text transition-colors hover:bg-white/5"
+                >
+                    Open pool
+                    <ChevronDown className="h-3 w-3 -rotate-90" />
+                </Link>
+            </div>
         </div>
     );
 }

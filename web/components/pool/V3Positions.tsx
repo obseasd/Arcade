@@ -296,7 +296,10 @@ export function V3Positions({
     }
 
     return (
-        <div className="space-y-3">
+        // Card grid - 1 col on mobile, 2 on lg, 3 on 2xl. Matches the Hyper-
+        // swap layout the user pointed at; previously the cards rendered in
+        // a tall single-column stack.
+        <div className="grid grid-cols-1 gap-3 lg:grid-cols-2 2xl:grid-cols-3">
             {filtered.map(({ p, i }) => (
                 <V3PositionRow
                     key={p.tokenId.toString()}
