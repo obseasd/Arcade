@@ -180,25 +180,6 @@ export const V3_LOCKER_ABI = [
       { name: "clankerAmount", type: "uint256" },
     ],
   },
-  // Pull-payment ledger for locker payouts that failed inline. Token is the
-  // ERC20 the recipient is owed (USDC, WETH, or the launch token).
-  {
-    type: "function",
-    name: "pendingWithdrawals",
-    stateMutability: "view",
-    inputs: [
-      { name: "token", type: "address" },
-      { name: "recipient", type: "address" },
-    ],
-    outputs: [{ type: "uint256" }],
-  },
-  {
-    type: "function",
-    name: "withdrawPending",
-    stateMutability: "nonpayable",
-    inputs: [{ name: "token", type: "address" }],
-    outputs: [{ name: "amount", type: "uint256" }],
-  },
   // Emitted once per recipient per `collectFees` call. Used by the creator
   // earnings dashboard to build per-token / per-day claim history.
   {

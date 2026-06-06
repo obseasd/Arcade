@@ -3,7 +3,7 @@
 import { useMemo } from "react";
 import { Address, erc20Abi } from "viem";
 import { useAccount, useReadContracts } from "wagmi";
-import { LAUNCHPAD_TOTAL_SUPPLY, LAUNCHPAD_TOKEN_DECIMALS, USDC_DECIMALS } from "@/lib/constants";
+import { LAUNCHPAD_TOTAL_SUPPLY, LAUNCHPAD_TOKEN_DECIMALS } from "@/lib/constants";
 import { useLaunchpadTokens, type LaunchpadTokenInfo } from "./useLaunchpadTokens";
 
 export interface HoldingInfo {
@@ -82,9 +82,6 @@ export function useMyHoldings(): { holdings: HoldingInfo[]; isLoading: boolean }
         });
         return out;
     }, [candidates, balanceCalls.data]);
-
-    // silence unused-import lint on USDC_DECIMALS (kept for future PnL math)
-    void USDC_DECIMALS;
 
     return {
         holdings,

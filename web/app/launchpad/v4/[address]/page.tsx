@@ -15,7 +15,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Address, erc20Abi, formatUnits, isAddress, parseAbiItem } from "viem";
 import { usePublicClient, useReadContract } from "wagmi";
 import { V4_LAUNCHPAD_ABI } from "@/lib/abis/v4Launchpad";
-import { ADDRESSES, USDC_DECIMALS, V4_ENABLED } from "@/lib/constants";
+import { ADDRESSES, V4_ENABLED } from "@/lib/constants";
 import { useTokenImage } from "@/lib/hooks/useTokenImage";
 import { useWatchEvent } from "@/lib/hooks/useWatchEvent";
 import { TokenIcon } from "@/components/ui/TokenIcon";
@@ -527,6 +527,3 @@ function formatRemaining(seconds: number): string {
     if (minutes < 60) return `${minutes}m`;
     return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
-
-// silence USDC_DECIMALS unused warning (used in adjacent flows, kept for symmetry)
-void USDC_DECIMALS;
