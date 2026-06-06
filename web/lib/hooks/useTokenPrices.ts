@@ -6,25 +6,24 @@ import { useReadContracts } from "wagmi";
 import { LAUNCHPAD_ABI } from "@/lib/abis/launchpad";
 import { ADDRESSES } from "@/lib/constants";
 
-const EURC_ADDRESS = "0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a".toLowerCase();
-
 /**
  * Best-effort live USD prices for a list of tokens, used in the token-select
- * dropdown. Returns a map keyed by lowercased address → price string ($X.YZ).
+ * dropdown. Returns a map keyed by lowercased address -> price string ($X.YZ).
  *
  * Strategy:
  *   - USDC: $1.00
- *   - EURC: ~$1.08 (a placeholder constant; replace with a feed when needed)
  *   - Anything else: read launchpad.marketCap(token) / 1B supply for an
  *     implied price. Returns undefined for tokens not on the launchpad.
+ *
+ * EURC used to be hardcoded at $1.08 here. The audit (2026-06-06) flagged
+ * that as a fake price surfaced in the swap picker; removed until a real
+ * EUR/USD feed lands.
  */
 export function useTokenPrices(tokens: { address: Address }[]): Map<string, string> {
   const launchpadTokens = useMemo(
     () =>
       tokens.filter(
-        (t) =>
-          t.address.toLowerCase() !== ADDRESSES.usdc.toLowerCase() &&
-          t.address.toLowerCase() !== EURC_ADDRESS,
+        (t) => t.address.toLowerCase() !== ADDRESSES.usdc.toLowerCase(),
       ),
     [tokens],
   );
@@ -42,7 +41,6 @@ export function useTokenPrices(tokens: { address: Address }[]): Map<string, stri
   return useMemo(() => {
     const out = new Map<string, string>();
     out.set(ADDRESSES.usdc.toLowerCase(), "$1.00");
-    out.set(EURC_ADDRESS, "$1.08");
 
     if (mcapCalls.data) {
       for (let i = 0; i < launchpadTokens.length; i++) {

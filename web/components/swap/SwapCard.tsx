@@ -34,13 +34,9 @@ const USDC_TOKEN: TokenOption = {
   pinned: true,
 };
 
-const EURC_TOKEN: TokenOption = {
-  address: "0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a",
-  symbol: "EURC",
-  name: "Euro Coin",
-  decimals: 6,
-  pinned: true,
-};
+// EURC used to be pinned here. Audit 2026-06-06 flagged that it carried a
+// hardcoded $1.08 price (useTokenPrices.ts), which surfaced as a fake quote
+// in the swap dropdown. EURC is unlisted until a real EUR/USD feed lands.
 
 const PRESETS_BPS = [10, 50, 100];
 const DEFAULT_BPS = 10;
@@ -63,7 +59,7 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
   const allTokens: TokenOption[] = useMemo(() => {
     const seen = new Set<string>();
     const out: TokenOption[] = [];
-    for (const t of [USDC_TOKEN, EURC_TOKEN, ...v2Tokens, ...v3Tokens]) {
+    for (const t of [USDC_TOKEN, ...v2Tokens, ...v3Tokens]) {
       const k = t.address.toLowerCase();
       if (seen.has(k)) continue;
       seen.add(k);

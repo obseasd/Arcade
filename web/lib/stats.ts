@@ -166,22 +166,23 @@ async function countHookLaunches(
     fromBlock: bigint,
     head: bigint,
 ): Promise<number> {
-    // keccak256("TokenLaunched(address,address,uint8,string,string,string)")
+    // Canonical keccak of TokenLaunched(address,address,uint8,string,string,string)
+    // verified against contracts/v4src/ArcadeHook.sol:240. Pre-2026-06-06 this
+    // was a placeholder + a void; the page over-counted by including every log
+    // emitted on the address. Now we filter by topic for a precise count.
     const TOKEN_LAUNCHED_TOPIC =
-        "0xd7f7c08f0c6fe9e6f6c2ad2b8e4a0e9a8c9b7c8d6e5f4a3b2c1d0e9f8a7b6c5d4" as `0x${string}`;
-    // The topic above is a placeholder until the actual ArcadeHook event topic
-    // is captured at deploy time; when ArcLens (Milestone 3) lands it replaces
-    // this naive scan with a typed Ponder subscription. For the MVP we fall
-    // back to counting all logs on the address, which over-counts but stays
-    // monotonic. Replace with a precise per-topic scan as soon as the
-    // canonical TokenLaunched topic is committed to the abi exports.
-    void TOKEN_LAUNCHED_TOPIC;
+        "0xefc07ba8ee8f7015e511a8f24566606d5aaa4200644aeb0584d888fba8a7dd53" as `0x${string}`;
 
     let count = 0;
     for (let from = fromBlock; from <= head; from += BLOCK_WINDOW) {
         const to = from + BLOCK_WINDOW - 1n > head ? head : from + BLOCK_WINDOW - 1n;
         try {
-            const logs = await client.getLogs({ address, fromBlock: from, toBlock: to });
+            const logs = await client.getLogs({
+                address,
+                fromBlock: from,
+                toBlock: to,
+                topics: [TOKEN_LAUNCHED_TOPIC],
+            });
             count += logs.length;
         } catch {
             // Range cap hit; keep going.
@@ -203,22 +204,24 @@ async function countLaunchpadEvents(
     head: bigint,
 ): Promise<number> {
     if (!address) return 0;
-    // keccak256("TokenCreated(address,address,uint8,address,uint16,string,string,string)")
-    // for the V3 launchpad event signature shipped in production.
-    const tokenCreatedTopic =
-        "0xe4d7e92f9d8a0c64a32b69e3a3e3b3a3e3b3a3e3b3a3e3b3a3e3b3a3e3b3a3e3" as `0x${string}`;
-    // The exact topic above is a placeholder; the production scanner is
-    // populated by the existing TokenCreated indexing in useLaunchpadTokens.
-    // For this MVP we simply count distinct logs on the address (which on
-    // our launchpad is dominated by TokenCreated events anyway). When the
-    // indexer lands, swap to a precise per-event count.
-    void tokenCreatedTopic;
+    // Canonical keccak of TokenCreated(address,address,uint8,address,uint16,
+    // string,string,string) per contracts/src/launchpad/interfaces/IArcadeLaunchpad.sol:37.
+    // Topic filtering replaces the prior count-all-logs heuristic which
+    // over-counted by including TokenBuy / TokenMigrated / etc events on the
+    // same address.
+    const TOKEN_CREATED_TOPIC =
+        "0x12902ddf3a68b76ea3ba6ef278e7fd7c3b59e05cb7e64bd406bb21bb1ddd8d23" as `0x${string}`;
 
     let count = 0;
     for (let from = fromBlock; from <= head; from += BLOCK_WINDOW) {
         const to = from + BLOCK_WINDOW - 1n > head ? head : from + BLOCK_WINDOW - 1n;
         try {
-            const logs = await client.getLogs({ address, fromBlock: from, toBlock: to });
+            const logs = await client.getLogs({
+                address,
+                fromBlock: from,
+                toBlock: to,
+                topics: [TOKEN_CREATED_TOPIC],
+            });
             count += logs.length;
         } catch {
             // Range cap hit; keep going.

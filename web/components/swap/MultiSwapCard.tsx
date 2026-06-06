@@ -33,13 +33,8 @@ const USDC_TOKEN: TokenOption = {
   pinned: true,
 };
 
-const EURC_TOKEN: TokenOption = {
-  address: "0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a",
-  symbol: "EURC",
-  name: "Euro Coin",
-  decimals: 6,
-  pinned: true,
-};
+// EURC removed from the picker until a real EUR/USD feed lands; see
+// SwapCard.tsx for the rationale (audit 2026-06-06).
 
 const PRESETS_BPS = [10, 50, 100];
 const DEFAULT_BPS = 10;
@@ -69,7 +64,7 @@ export function MultiSwapCard({ tab, onTabChange }: MultiSwapCardProps) {
     // Dedup by lowercase address (a token could theoretically have BOTH a
     // V2 pair and V3 pool listed, eg manually migrated tokens).
     const map = new Map<string, TokenOption>();
-    [USDC_TOKEN, EURC_TOKEN, ...v2Tokens, ...v3Tokens].forEach((t) => {
+    [USDC_TOKEN, ...v2Tokens, ...v3Tokens].forEach((t) => {
       const k = t.address.toLowerCase();
       if (!map.has(k)) map.set(k, t);
     });
