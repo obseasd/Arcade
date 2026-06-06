@@ -1050,6 +1050,13 @@ export function V3AddLiquidity({
                     expectedAmount0={v3Quote.expectedAmount0}
                     expectedAmount1={v3Quote.expectedAmount1}
                     expectedLiquidity={v3Quote.expectedLiquidity}
+                    /* zapTokenSide reflects which leg of the SORTED (t0,t1)
+                       order the user is paying with. Passing it lets the
+                       panel map expectedAmount0/1 back to tokenIn/tokenOther
+                       without inferring from symbols (which fails for
+                       USDC/ETH since "eth" < "usdc" but USDC < ETH by
+                       address). */
+                    tokenInIsT0={zapTokenSide === "0"}
                     slippageBps={slippageBps}
                 />
             )}

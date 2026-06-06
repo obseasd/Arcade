@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronDown, ExternalLink, Pencil, Plus, Settings2 } from "lucide-react";
+import { Minus, Plus } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { Address, erc20Abi, formatUnits } from "viem";
@@ -11,7 +11,7 @@ import { arcTestnet } from "@/lib/chains";
 import { useApproveIfNeeded } from "@/lib/hooks/useApproveIfNeeded";
 import { pushToast } from "@/lib/toast";
 import { TokenIcon } from "@/components/ui/TokenIcon";
-import { cn, formatToken, formatUSDC } from "@/lib/utils";
+import { cn, formatLpBalance, formatToken, formatUSDC } from "@/lib/utils";
 
 const USDC_LOWER = ADDRESSES.usdc.toLowerCase();
 
@@ -329,50 +329,27 @@ function PositionRow({
 
   const explorerUrl = arcTestnet.blockExplorers?.default.url ?? "https://testnet.arcscan.app";
 
+  // Hyperswap-style V2 card: token icons + pair name (no version chips),
+  // APR / 1D Volume / Total TVL row, "Your total pool tokens" with USD
+  // value, per-token "Pooled X" rows, "Your pool share", and +Add | -Remove
+  // CTAs. Remove opens an inline slider below the card.
+  void explorerUrl;
   return (
     <div className="arc-card p-4">
-      {/* Header row - matches V3 layout: pair label + version/fee badges
-          on the left, Edit button (explorer link) on the right. Drops the
-          'In range' badge (V2 has no concept of range) and the ID chip
-          (V2 LPs aren't NFTs). */}
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div className="flex items-center gap-3">
-          <div className="flex -space-x-2">
-            <TokenIcon symbol={p.symbol0} size={40} />
-            <TokenIcon symbol={p.symbol1} size={40} />
-          </div>
-          <div>
-            <div className="flex flex-wrap items-center gap-1.5">
-              <span className="text-base font-semibold text-arc-text">
-                {p.symbol0} / {p.symbol1}
-              </span>
-              <span className="rounded-md border border-cyan-400/40 bg-cyan-400/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-cyan-400">
-                v2
-              </span>
-              <span className="rounded-md border border-arc-success/40 bg-arc-success/10 px-1.5 py-0.5 text-[10px] font-semibold text-arc-success">
-                0.30%
-              </span>
-            </div>
-            <div className="mt-1 text-[11px] text-arc-text-muted">
-              Share: <span className="tabular-nums text-arc-text">{sharePct.toFixed(4)}%</span>
-            </div>
-          </div>
+      {/* Header: token icons + pair name. No version chips - all V2 cards
+          live under the Standard AMM tab so the version is implicit. */}
+      <div className="flex items-center gap-3">
+        <div className="flex -space-x-2">
+          <TokenIcon symbol={p.symbol0} size={40} />
+          <TokenIcon symbol={p.symbol1} size={40} />
         </div>
-        <a
-          href={`${explorerUrl}/address/${p.pair}`}
-          target="_blank"
-          rel="noopener noreferrer"
-          title="View pair on the explorer"
-          className="inline-flex items-center gap-1 self-start rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-1.5 text-xs font-medium text-arc-text transition-colors hover:bg-white/5"
-        >
-          <Pencil className="h-3 w-3" />
-          Edit
-          <ExternalLink className="h-2.5 w-2.5 opacity-60" />
-        </a>
+        <div className="text-base font-semibold text-arc-text">
+          {p.symbol0} / {p.symbol1}
+        </div>
       </div>
 
       {/* Pool-level metrics row. APR / 1D Volume / Total TVL placeholders
-          until the indexer (ArcLens) ships - same layout as V3 cards. */}
+          until the indexer (ArcLens) ships. */}
       <div className="mt-3 grid grid-cols-3 gap-3 text-xs">
         <div>
           <div className="text-[10px] uppercase tracking-wider text-arc-text-faint">APR</div>
@@ -388,65 +365,60 @@ function PositionRow({
         </div>
       </div>
 
-      {/* Your reserve + per-leg % chips - same shell as the V3 card so
-          the two tabs visually match. */}
-      <div className="mt-3 rounded-xl border border-arc-border bg-white/[0.015] p-3">
-        <div className="mb-1 flex items-center justify-between">
-          <div className="text-[10px] uppercase tracking-wider text-arc-text-faint">
-            Your reserve
-          </div>
-          {usdTotal !== undefined && (
-            <div className="text-[11px] font-semibold text-arc-text">{fmtUsd(usdTotal)}</div>
-          )}
+      {/* Hyperswap LP info block: total pool tokens with USD value, per-
+          token pooled balances, pool share. Reads as a tidy info ladder
+          rather than the previous mixed "Your reserve" panel. */}
+      <div className="mt-3 space-y-2 text-sm">
+        <div className="flex items-center justify-between">
+          <span className="text-arc-text-muted">Your total pool tokens:</span>
+          <span className="tabular-nums">
+            <span className="font-semibold text-arc-text">
+              {formatLpBalance(p.lpBalance)}
+            </span>
+            {usdTotal !== undefined && (
+              <span className="ml-1 text-arc-text-muted">({fmtUsd(usdTotal)})</span>
+            )}
+          </span>
         </div>
-        <div className="grid grid-cols-1 gap-1.5 text-sm sm:grid-cols-2">
-          <div className="inline-flex items-center gap-2">
-            <TokenIcon symbol={p.symbol0} size={20} />
-            <span className="tabular-nums text-arc-text">{fmt(amt0, p.decimals0)}</span>
-            <span className="text-arc-text-muted">{p.symbol0}</span>
-            {pct0 !== undefined && (
-              <span className="rounded-md border border-arc-success/40 bg-arc-success/10 px-1.5 py-0.5 text-[10px] font-semibold text-arc-success">
-                {pct0.toFixed(2)}%
-              </span>
-            )}
-          </div>
-          <div className="inline-flex items-center gap-2">
-            <TokenIcon symbol={p.symbol1} size={20} />
-            <span className="tabular-nums text-arc-text">{fmt(amt1, p.decimals1)}</span>
-            <span className="text-arc-text-muted">{p.symbol1}</span>
-            {pct1 !== undefined && (
-              <span className="rounded-md border border-arc-success/40 bg-arc-success/10 px-1.5 py-0.5 text-[10px] font-semibold text-arc-success">
-                {pct1.toFixed(2)}%
-              </span>
-            )}
-          </div>
+        <div className="flex items-center justify-between">
+          <span className="text-arc-text-muted">Pooled {p.symbol0}:</span>
+          <span className="inline-flex items-center gap-1.5 tabular-nums font-semibold text-arc-text">
+            {fmt(amt0, p.decimals0)}
+            <TokenIcon symbol={p.symbol0} size={16} />
+          </span>
+        </div>
+        <div className="flex items-center justify-between">
+          <span className="text-arc-text-muted">Pooled {p.symbol1}:</span>
+          <span className="inline-flex items-center gap-1.5 tabular-nums font-semibold text-arc-text">
+            {fmt(amt1, p.decimals1)}
+            <TokenIcon symbol={p.symbol1} size={16} />
+          </span>
+        </div>
+        <div className="flex items-center justify-between">
+          <span className="text-arc-text-muted">Your pool share:</span>
+          <span className="font-semibold tabular-nums text-arc-text">
+            {sharePct < 0.01 ? "<0.01%" : `${sharePct.toFixed(4)}%`}
+          </span>
         </div>
       </div>
 
-      {/* Bottom action bar: Manage (toggles inline remove panel) + Add
-          Liq (routes to /positions/add). Same shape + buttons as V3 so
-          the two cards feel like one component. */}
+      {/* CTA bar: + Add (routes to /positions/add) | - Remove (toggles
+          inline slider panel below). Mirrors Hyperswap V2 spec exactly. */}
       <div className="mt-3 grid grid-cols-2 gap-2">
-        <button
-          onClick={onToggle}
-          className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2 text-xs font-semibold text-arc-text transition-colors hover:bg-white/5"
-        >
-          <Settings2 className="h-3.5 w-3.5" />
-          {expanded ? "Hide" : "Manage"}
-          <ChevronDown
-            className={cn(
-              "h-3.5 w-3.5 transition-transform",
-              expanded && "rotate-180",
-            )}
-          />
-        </button>
         <Link
           href={`/positions/add?type=amm&t0=${p.token0}&t1=${p.token1}`}
-          className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-arc-cta-hover/40 bg-arc-cta-hover/10 px-3 py-2 text-xs font-semibold text-arc-cta-hover transition-colors hover:bg-arc-cta-hover/20"
+          className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2.5 text-sm font-semibold text-arc-text transition-colors hover:bg-white/5"
         >
           <Plus className="h-3.5 w-3.5" />
-          Add Liq.
+          Add
         </Link>
+        <button
+          onClick={onToggle}
+          className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2.5 text-sm font-semibold text-arc-text transition-colors hover:bg-white/5"
+        >
+          <Minus className="h-3.5 w-3.5" />
+          {expanded ? "Hide" : "Remove"}
+        </button>
       </div>
 
       {/* Remove panel - revealed by Manage. Uses the same slider + chip

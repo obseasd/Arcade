@@ -27,6 +27,11 @@ interface Props {
     /** V3 only: expected amount0 / amount1 actually consumed by mint. */
     expectedAmount0?: bigint;
     expectedAmount1?: bigint;
+    /** V3 only: whether tokenIn is the pool's token0. Used to map
+     *  expectedAmount0/expectedAmount1 back to tokenIn/tokenOther for
+     *  display. V3 sorts by address, not symbol, so the panel can't
+     *  derive this safely from the symbols alone. */
+    tokenInIsT0?: boolean;
     /** Active slippage tolerance, bps. */
     slippageBps: number;
 }
@@ -53,6 +58,7 @@ export function ZapBreakdownPanel({
     expectedLiquidity,
     expectedAmount0,
     expectedAmount1,
+    tokenInIsT0,
     slippageBps,
 }: Props) {
     if (amountIn === 0n || swapAmount === 0n || expectedOut === 0n) {
@@ -115,21 +121,20 @@ export function ZapBreakdownPanel({
                 </div>
                 {variant === "v3" && expectedAmount0 !== undefined && expectedAmount1 !== undefined ? (
                     <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                        {/* V3 mint amounts come back as (amount0, amount1) on
+                            the canonical token0 < token1 order. Map them
+                            back to (tokenIn, tokenOther) using the explicit
+                            tokenInIsT0 flag - inferring from symbol would
+                            be wrong because V3 sorts by address, not
+                            symbol (USDC=t0 < ETH=t1 in our case, even
+                            though "eth" < "usdc" alphabetically). */}
                         <TokenAmount
-                            amount={
-                                tokenIn.symbol.toLowerCase() < tokenOther.symbol.toLowerCase()
-                                    ? expectedAmount0
-                                    : expectedAmount1
-                            }
+                            amount={tokenInIsT0 ? expectedAmount0 : expectedAmount1}
                             token={tokenIn}
                         />
                         <span className="text-arc-text-faint">+</span>
                         <TokenAmount
-                            amount={
-                                tokenIn.symbol.toLowerCase() < tokenOther.symbol.toLowerCase()
-                                    ? expectedAmount1
-                                    : expectedAmount0
-                            }
+                            amount={tokenInIsT0 ? expectedAmount1 : expectedAmount0}
                             token={tokenOther}
                         />
                     </div>
