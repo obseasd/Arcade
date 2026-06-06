@@ -1,16 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Address, parseAbiItem } from "viem";
+import { Address } from "viem";
 import { usePublicClient } from "wagmi";
 import { ADDRESSES } from "@/lib/constants";
-
-const SWAP_EVT = parseAbiItem(
-  "event Swap(address indexed sender, address indexed recipient, int256 amount0, int256 amount1, uint160 sqrtPriceX96, uint128 liquidity, int24 tick)",
-);
+import { V3_SWAP_EVT as SWAP_EVT } from "@/lib/eventSignatures";
+import { CHUNK_SMALL } from "@/lib/eventScan";
 
 /** Per-call block window. Same conservative size used elsewhere on Arc RPC. */
-const CHUNK = 1_000n;
+const CHUNK = CHUNK_SMALL;
 /** Last 24 h on Arc (~1 s blocks). */
 const LOOKBACK = 86_400n;
 /** 60-second module-level cache, keyed by pool. Avoids re-scanning 86k blocks

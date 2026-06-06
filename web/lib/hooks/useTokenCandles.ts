@@ -1,27 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Address, parseAbiItem } from "viem";
+import { Address } from "viem";
 import { usePublicClient } from "wagmi";
 import { ADDRESSES } from "@/lib/constants";
+import { BUY_EVT, SELL_EVT, V3_SWAP_EVT } from "@/lib/eventSignatures";
+import { CHUNK_LARGE, MAX_BACK_CANDLES, scanLogsChunked } from "@/lib/eventScan";
 import { useWatchEvent } from "./useWatchEvent";
 
-const BUY_EVT = parseAbiItem(
-  "event Buy(address indexed token, address indexed buyer, uint256 usdcIn, uint256 tokensOut, uint256 newPriceQ64)",
-);
-const SELL_EVT = parseAbiItem(
-  "event Sell(address indexed token, address indexed seller, uint256 tokensIn, uint256 usdcOut, uint256 newPriceQ64)",
-);
-const V3_SWAP_EVT = parseAbiItem(
-  "event Swap(address indexed sender, address indexed recipient, int256 amount0, int256 amount1, uint160 sqrtPriceX96, uint128 liquidity, int24 tick)",
-);
-
-// Wider chunks = fewer RPC round-trips. 10k blocks per call is well below the
-// per-tx ceiling of the official Arc RPC. We also stop early once we've walked
-// 100k blocks (~28h at 1s/block) which covers the relevant history for any
-// young token; the rest can be backfilled later by a backend indexer.
-const CHUNK = 10_000n;
-const MAX_BACK = 100_000n;
 const EARLY_EXIT_TRADES = 500;
 const Q192 = 2n ** 192n;
 
@@ -312,10 +298,11 @@ async function fetchTrades(
     // (open == close == first trade post-price) and let subsequent candles
     // chain properly. See workflow w9g2a2408 for the full reasoning.
     const initialPrice: number | undefined = undefined;
-    const swaps = await getLogsChunked(
+    const swaps = await scanLogsChunked(
       publicClient,
       { address: pool, event: V3_SWAP_EVT },
       latestN,
+      { chunk: CHUNK_LARGE, maxBack: MAX_BACK_CANDLES, earlyExit: EARLY_EXIT_TRADES },
     );
     const trades: Trade[] = [];
     for (const log of swaps) {
@@ -335,15 +322,17 @@ async function fetchTrades(
 
   // PUMP / Arcade. `newPriceQ64` is USDC-per-whole-token × 2^64.
   const [buys, sells] = await Promise.all([
-    getLogsChunked(
+    scanLogsChunked(
       publicClient,
       { address: ADDRESSES.launchpad, event: BUY_EVT, args: { token } },
       latestN,
+      { chunk: CHUNK_LARGE, maxBack: MAX_BACK_CANDLES, earlyExit: EARLY_EXIT_TRADES },
     ),
-    getLogsChunked(
+    scanLogsChunked(
       publicClient,
       { address: ADDRESSES.launchpad, event: SELL_EVT, args: { token } },
       latestN,
+      { chunk: CHUNK_LARGE, maxBack: MAX_BACK_CANDLES, earlyExit: EARLY_EXIT_TRADES },
     ),
   ]);
   const allLogs = [...buys, ...sells];
@@ -361,36 +350,6 @@ async function fetchTrades(
   }
   trades.sort((a, b) => a.time - b.time);
   return { trades };
-}
-
-async function getLogsChunked(
-  publicClient: any,
-  params: { address: Address; event: any; args?: Record<string, unknown> },
-  latest: bigint,
-): Promise<any[]> {
-  const all: any[] = [];
-  let end = latest;
-  let walked = 0n;
-  while (walked < MAX_BACK) {
-    const start = end > CHUNK - 1n ? end - (CHUNK - 1n) : 0n;
-    try {
-      const logs = await publicClient.getLogs({
-        ...params,
-        fromBlock: start,
-        toBlock: end,
-      });
-      all.push(...logs);
-    } catch {
-      // If wide chunk fails on this RPC, fall back to narrower windows so the
-      // scan still progresses for the older history.
-      if (CHUNK > 1_000n) break;
-    }
-    if (start === 0n) break;
-    if (all.length >= EARLY_EXIT_TRADES) break;
-    walked += end - start + 1n;
-    end = start - 1n;
-  }
-  return all;
 }
 
 function bucketize(trades: Trade[], bucketSize: number, initialPrice?: number): Candle[] {

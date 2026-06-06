@@ -1,20 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Address, parseAbiItem } from "viem";
+import { Address } from "viem";
 import { usePublicClient } from "wagmi";
 import { ADDRESSES } from "@/lib/constants";
+import { BUY_EVT, SELL_EVT, V3_SWAP_EVT } from "@/lib/eventSignatures";
+import { CHUNK_SMALL } from "@/lib/eventScan";
 import { useWatchEvent } from "@/lib/hooks/useWatchEvent";
-
-const BUY_EVT = parseAbiItem(
-  "event Buy(address indexed token, address indexed buyer, uint256 usdcIn, uint256 tokensOut, uint256 newPriceQ64)",
-);
-const SELL_EVT = parseAbiItem(
-  "event Sell(address indexed token, address indexed seller, uint256 tokensIn, uint256 usdcOut, uint256 newPriceQ64)",
-);
-const V3_SWAP_EVT = parseAbiItem(
-  "event Swap(address indexed sender, address indexed recipient, int256 amount0, int256 amount1, uint160 sqrtPriceX96, uint128 liquidity, int24 tick)",
-);
 
 export interface Trade {
   txHash: `0x${string}`;
@@ -33,7 +25,7 @@ export interface Trade {
 // Two-phase adaptive scan. Phase 1 covers the recent window for the immediate
 // render; phase 2 silently extends history in the background so older trades
 // don't get permanently lost.
-const CHUNK = 1_000n;
+const CHUNK = CHUNK_SMALL;
 const FAST_LOOKBACK = 5_000n; // ~1.4h on Arc (1s blocks) - renders in ~1s
 const FULL_LOOKBACK = 50_000n; // ~14h - completes silently after the initial paint
 const MAX_TRADES = 100;

@@ -1,17 +1,15 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Address, parseAbiItem } from "viem";
+import { Address } from "viem";
 import { useAccount, usePublicClient, useReadContracts } from "wagmi";
 import { V3_LOCKER_ABI } from "@/lib/abis/v3";
 import { ADDRESSES, USDC_DECIMALS } from "@/lib/constants";
+import { RECIPIENT_PAID_EVT } from "@/lib/eventSignatures";
+import { CHUNK_LARGE } from "@/lib/eventScan";
 import { useV3Tokens } from "./useV3Tokens";
 
-const RECIPIENT_PAID_EVT = parseAbiItem(
-  "event RecipientPaid(uint256 indexed positionId, uint256 indexed slotIndex, address indexed token, address recipient, uint256 amount)",
-);
-
-const CHUNK = 10_000n;
+const CHUNK = CHUNK_LARGE;
 /** Phase 1 lookback (~14h on Arc 1s blocks). Fast initial render. */
 const FAST_LOOKBACK = 50_000n;
 /**

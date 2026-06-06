@@ -1,59 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Address, parseAbiItem } from "viem";
+import { Address } from "viem";
 import { usePublicClient } from "wagmi";
 import { ADDRESSES } from "@/lib/constants";
-
-const BUY_EVT = parseAbiItem(
-  "event Buy(address indexed token, address indexed buyer, uint256 usdcIn, uint256 tokensOut, uint256 newPriceQ64)",
-);
-const SELL_EVT = parseAbiItem(
-  "event Sell(address indexed token, address indexed seller, uint256 tokensIn, uint256 usdcOut, uint256 newPriceQ64)",
-);
-const V3_SWAP_EVT = parseAbiItem(
-  "event Swap(address indexed sender, address indexed recipient, int256 amount0, int256 amount1, uint160 sqrtPriceX96, uint128 liquidity, int24 tick)",
-);
-
-/** Per-call block window. Conservative size that works reliably across both
- * the official Arc RPC and the thirdweb proxy. */
-const CHUNK = 1_000n;
-/** How far back we walk total. 200k blocks ≈ 2-3 days on a 1s-block chain. */
-const MAX_BACK = 200_000n;
-
-async function getLogsChunked(
-  publicClient: any,
-  params: { address: Address; event: any; args?: Record<string, unknown> },
-  latest: bigint,
-  label: string,
-): Promise<any[]> {
-  const all: any[] = [];
-  let end = latest;
-  let walked = 0n;
-  let errors = 0;
-  while (walked < MAX_BACK) {
-    const start = end > CHUNK - 1n ? end - (CHUNK - 1n) : 0n;
-    try {
-      const logs = await publicClient.getLogs({
-        ...params,
-        fromBlock: start,
-        toBlock: end,
-      });
-      all.push(...logs);
-    } catch (err) {
-      errors += 1;
-      if (errors > 3) {
-        // eslint-disable-next-line no-console
-        console.warn(`[volume] ${label} getLogs failed (${errors} times), stopping. last err:`, err);
-        break;
-      }
-    }
-    if (start === 0n) break;
-    walked += end - start + 1n;
-    end = start - 1n;
-  }
-  return all;
-}
+import { BUY_EVT, SELL_EVT, V3_SWAP_EVT } from "@/lib/eventSignatures";
+import { CHUNK_SMALL, MAX_BACK_TRADES, scanLogsChunked } from "@/lib/eventScan";
 
 /**
  * Cumulative USDC trading volume for a launchpad token, in 6-decimal raw units.
@@ -118,11 +70,11 @@ export function useLaunchpadVolume(args: {
           const t0 = (t0Raw as Address).toLowerCase();
           const usdcLc = ADDRESSES.usdc.toLowerCase();
           const usdcIsToken0 = t0 === usdcLc;
-          const swaps = await getLogsChunked(
+          const swaps = await scanLogsChunked(
             publicClient,
             { address: pool, event: V3_SWAP_EVT },
             latest,
-            "v3.Swap",
+            { chunk: CHUNK_SMALL, maxBack: MAX_BACK_TRADES, label: "v3.Swap" },
           );
           let sumUsdc = 0n;
           let sumTok = 0n;
@@ -142,17 +94,17 @@ export function useLaunchpadVolume(args: {
           // PUMP / Arcade. Use indexed-arg filter so the RPC returns only this
           // token's events (smaller payload, less likely to time out).
           const [buys, sells] = await Promise.all([
-            getLogsChunked(
+            scanLogsChunked(
               publicClient,
               { address: ADDRESSES.launchpad, event: BUY_EVT, args: { token } },
               latest,
-              "lp.Buy",
+              { chunk: CHUNK_SMALL, maxBack: MAX_BACK_TRADES, label: "lp.Buy" },
             ),
-            getLogsChunked(
+            scanLogsChunked(
               publicClient,
               { address: ADDRESSES.launchpad, event: SELL_EVT, args: { token } },
               latest,
-              "lp.Sell",
+              { chunk: CHUNK_SMALL, maxBack: MAX_BACK_TRADES, label: "lp.Sell" },
             ),
           ]);
           let sumUsdc = 0n;

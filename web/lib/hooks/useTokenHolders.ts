@@ -3,7 +3,10 @@
 import { useEffect, useState } from "react";
 import { Address, parseAbiItem } from "viem";
 import { usePublicClient } from "wagmi";
+import { CHUNK_MEDIUM } from "@/lib/eventScan";
 
+// Generic ERC20 Transfer - not in eventSignatures since it's wagmi/erc20Abi
+// territory and would clutter the launchpad-specific export list.
 const TRANSFER_EVT = parseAbiItem(
   "event Transfer(address indexed from, address indexed to, uint256 value)",
 );
@@ -30,7 +33,7 @@ const TTL_MS = 90_000;
 /** Two-phase adaptive scan: a small fast window for the immediate render, then
  *  a longer background window that fills in older history. Tuned for Arc's 1s
  *  block time. */
-const CHUNK = 5_000n;
+const CHUNK = CHUNK_MEDIUM;
 const FAST_LOOKBACK = 5_000n; // ~1.4h on Arc, renders in ~1s
 const FULL_LOOKBACK = 100_000n; // ~28h, completes silently in the background
 
