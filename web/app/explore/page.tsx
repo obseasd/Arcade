@@ -925,9 +925,9 @@ function PoolPairRowCard({
                 <div className="flex items-center justify-end gap-2">
                     <Link
                         href="/swap"
-                        className="inline-flex items-center gap-1.5 rounded-xl border border-arc-border bg-sky-400/10 px-3 py-[0.575rem] text-xs font-semibold text-sky-400 transition-colors hover:bg-sky-400/20"
+                        className="inline-flex items-center gap-1.5 rounded-xl border border-arc-border bg-sky-400/10 px-3 py-[0.575rem] text-xs font-semibold text-white transition-colors hover:bg-sky-400/20"
                     >
-                        <SwapIcon />
+                        <SwapIcon tone="white" />
                         Swap
                     </Link>
                     <button
@@ -1183,13 +1183,13 @@ function PoolPairGridCard({
                 <Link
                     href="/swap"
                     className={cn(
-                        "inline-flex items-center justify-center gap-1.5 rounded-xl border px-3 py-[0.575rem] text-xs font-semibold transition-colors",
+                        "inline-flex items-center justify-center gap-1.5 rounded-xl border px-3 py-[0.575rem] text-xs font-semibold text-white transition-colors",
                         whiteCta
-                            ? "border-white/15 bg-white/[0.06] text-white hover:bg-white/[0.12]"
-                            : "border-arc-border bg-sky-400/10 text-sky-400 hover:bg-sky-400/20",
+                            ? "border-white/15 bg-white/[0.06] hover:bg-white/[0.12]"
+                            : "border-arc-border bg-sky-400/10 hover:bg-sky-400/20",
                     )}
                 >
-                    <SwapIcon tone={whiteCta ? "white" : "sky"} />
+                    <SwapIcon tone="white" />
                     Swap
                 </Link>
             </div>
