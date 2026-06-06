@@ -46,9 +46,16 @@ const PINNED: PinnedTemplate[] = [
 export function TokenSelectModal({ open, onClose, tokens, onSelect, selectedAddress, excludeAddress }: Props) {
   const [q, setQ] = useState("");
 
-  useEffect(() => {
+  // Reset query on the open=false -> true transition. Render-phase
+  // prev-prop check (instead of useEffect) so the cleared input shows
+  // on the first paint after the modal opens, not on the paint AFTER
+  // that. Pattern from
+  // https://react.dev/learn/you-might-not-need-an-effect#adjusting-some-state-when-a-prop-changes
+  const [prevOpen, setPrevOpen] = useState(open);
+  if (open !== prevOpen) {
+    setPrevOpen(open);
     if (open) setQ("");
-  }, [open]);
+  }
 
   // Wire the canonical ETH pin to the testnet SeedETH address when present,
   // so users can pair USDC/ETH from the chip grid without having to paste

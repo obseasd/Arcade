@@ -202,13 +202,21 @@ export function ClaimAllFeesModal({ open, onClose, onSuccess }: Props) {
             }
         });
         // Only seed when we have data + no manual selection yet to avoid
-        // clobbering a user's deliberate empty selection.
+        // clobbering a user's deliberate empty selection. Stays inside a
+        // useEffect because `positions` may arrive AFTER the modal opens
+        // (data is fetched on mount of the parent page) and we want the
+        // seed to fire when it does, not just on the open transition.
         setSelected((cur) => (cur.size === 0 && init.size > 0 ? init : cur));
     }, [open, positions]);
-    useEffect(() => {
-        // Clear selection on close so the next open re-seeds fresh.
+    // Clear-on-close moved out of useEffect into a render-phase prev-prop
+    // check. The seed effect above stays as an effect because it depends
+    // on async-arriving `positions`; this teardown only depends on the
+    // open transition itself.
+    const [prevOpen, setPrevOpen] = useState(open);
+    if (open !== prevOpen) {
+        setPrevOpen(open);
         if (!open) setSelected(new Set());
-    }, [open]);
+    }
 
     const toggle = (id: string) =>
         setSelected((s) => {

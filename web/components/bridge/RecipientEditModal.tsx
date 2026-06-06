@@ -1,7 +1,7 @@
 "use client";
 
 import { X, Wallet } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Address, isAddress } from "viem";
 import { Modal } from "@/components/ui/Modal";
 import { cn } from "@/lib/utils";
@@ -33,12 +33,21 @@ export function RecipientEditModal({
   const [value, setValue] = useState("");
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
+  // Reset on the open=false -> true transition. Render-phase prev-prop
+  // check so the input shows the new `current` value on the first paint
+  // after open, not the paint after that. `current` is also depended
+  // on so the field re-seeds if it changes while the modal stays open
+  // (matches the original useEffect dep list).
+  const [prevOpen, setPrevOpen] = useState(open);
+  const [prevCurrent, setPrevCurrent] = useState(current);
+  if (open !== prevOpen || current !== prevCurrent) {
+    setPrevOpen(open);
+    setPrevCurrent(current);
     if (open) {
       setValue(current ?? "");
       setError(null);
     }
-  }, [open, current]);
+  }
 
   const onSubmit = () => {
     const trimmed = value.trim();
