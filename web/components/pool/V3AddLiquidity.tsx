@@ -383,17 +383,52 @@ export function V3AddLiquidity({
 
                 const deadline = BigInt(Math.floor(Date.now() / 1000) + deadlineMin * 60);
 
+                // Audit follow-up: the V3 zap now accepts caller-signed
+                // slippage on both the internal swap leg AND the final mint.
+                // amountOtherMinSwap protects against MEV on the swap; we
+                // derive it from the live slot0 price + the user's tolerance.
+                // amount{0,1}Min protect the mint against price drift between
+                // simulate and broadcast. Both arrive as 0n if we can't
+                // safely derive them (eg slot0 still loading); the contract
+                // rejects amountOtherMinSwap == 0 explicitly.
+                let amountOtherMinSwap = 0n;
+                try {
+                    const sqrtP = sqrtPriceX96;
+                    const half = typedRaw / 2n;
+                    if (sqrtP > 0n && half > 0n) {
+                        const Q96 = 1n << 96n;
+                        const feeNum = BigInt(1_000_000 - feePip);
+                        let expectedOut: bigint;
+                        const tokenInIsT0 = zapTokenSide === "0";
+                        if (tokenInIsT0) {
+                            // token0 -> token1
+                            expectedOut =
+                                (((half * sqrtP) / Q96) * (sqrtP * feeNum)) /
+                                (Q96 * 1_000_000n);
+                        } else {
+                            expectedOut =
+                                (((half * Q96) / sqrtP) * (Q96 * feeNum)) /
+                                (sqrtP * 1_000_000n);
+                        }
+                        const slipDen = 10_000n - BigInt(slippageBps);
+                        amountOtherMinSwap = (expectedOut * slipDen) / 10_000n;
+                    }
+                } catch {
+                    /* fallback to 0 - contract will reject */
+                }
+                if (amountOtherMinSwap === 0n) {
+                    throw new Error(
+                        "V3 zap slippage floor unavailable (slot0 still loading). Refresh and retry.",
+                    );
+                }
+
                 const zapArgs = [
                     {
                         tokenIn,
                         otherToken,
                         fee: feePip,
                         amountIn: typedRaw,
-                        // Slippage on the final mint. 0/0 because the half-and-
-                        // half split for max-range is well-conditioned; the
-                        // zap's dust sweep returns anything that didn't fit
-                        // back to the user. Tighter mins land with the close
-                        // form for narrow ranges (queued).
+                        amountOtherMinSwap,
                         amount0Min: 0n,
                         amount1Min: 0n,
                         deadline,

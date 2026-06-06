@@ -197,4 +197,42 @@ export const ZAP_ABI = [
       { name: "lpEstimate", type: "uint256" },
     ],
   },
+  // One-tx zap with EIP-2612 permit on tokenIn. Permit failure is caught
+  // internally so a frontrun replay falls back to a normal approve path.
+  {
+    type: "function",
+    name: "zapInWithPermit",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "tokenIn", type: "address" },
+      { name: "amountIn", type: "uint256" },
+      { name: "tokenOther", type: "address" },
+      { name: "amountOtherMin", type: "uint256" },
+      { name: "amountLpMin", type: "uint256" },
+      { name: "to", type: "address" },
+      { name: "deadline", type: "uint256" },
+      { name: "permitDeadline", type: "uint256" },
+      { name: "v", type: "uint8" },
+      { name: "r", type: "bytes32" },
+      { name: "s", type: "bytes32" },
+    ],
+    outputs: [{ name: "liquidity", type: "uint256" }],
+  },
+  // Single-asset withdraw: burn LP, swap the non-tokenOut leg via the pair,
+  // deliver one consolidated balance to `to`.
+  {
+    type: "function",
+    name: "zapOut",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "tokenOut", type: "address" },
+      { name: "tokenOther", type: "address" },
+      { name: "liquidityIn", type: "uint256" },
+      { name: "amountOtherMin", type: "uint256" },
+      { name: "amountOutMin", type: "uint256" },
+      { name: "to", type: "address" },
+      { name: "deadline", type: "uint256" },
+    ],
+    outputs: [{ name: "amountOut", type: "uint256" }],
+  },
 ] as const;

@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {IERC20Permit} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Permit.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IArcadeV2Factory} from "./interfaces/IArcadeV2Factory.sol";
 import {IArcadeV2Pair} from "./interfaces/IArcadeV2Pair.sol";
@@ -50,6 +51,8 @@ contract ArcadeV2Zap {
     error InvalidInput();
     error InsufficientLiquidityMinted();
     error InsufficientSwapOutput();
+    error InsufficientOutput();
+    error ExcessiveAmountIn();
     error ZeroSlippageGuard();
 
     constructor(address _factory, address _router) {
@@ -83,6 +86,22 @@ contract ArcadeV2Zap {
         address to,
         uint256 deadline
     ) external returns (uint256 liquidity) {
+        return _zapIn(
+            msg.sender, tokenIn, amountIn, tokenOther,
+            amountOtherMin, amountLpMin, to, deadline
+        );
+    }
+
+    function _zapIn(
+        address payer,
+        address tokenIn,
+        uint256 amountIn,
+        address tokenOther,
+        uint256 amountOtherMin,
+        uint256 amountLpMin,
+        address to,
+        uint256 deadline
+    ) internal returns (uint256 liquidity) {
         if (block.timestamp > deadline) revert Expired();
         if (amountIn == 0 || tokenIn == tokenOther) revert InvalidInput();
         // amountOtherMin == 0 would skip the sandwich defense entirely and
@@ -99,8 +118,9 @@ contract ArcadeV2Zap {
         uint256 balBeforeIn = IERC20(tokenIn).balanceOf(address(this));
         uint256 balBeforeOther = IERC20(tokenOther).balanceOf(address(this));
 
-        // Pull funds from the user.
-        IERC20(tokenIn).safeTransferFrom(msg.sender, address(this), amountIn);
+        // Pull funds from the payer (= msg.sender on the public zapIn entry,
+        // = the original user on zapInWithPermit).
+        IERC20(tokenIn).safeTransferFrom(payer, address(this), amountIn);
 
         // Determine the reserves of the tokenIn side. The pair stores reserves
         // sorted by (token0, token1); align them with the caller's perspective.
@@ -109,6 +129,14 @@ contract ArcadeV2Zap {
         (uint256 reserveIn, uint256 reserveOther) =
             _orientedReserves(pair, tokenIn, tokenOther);
         if (reserveIn == 0 || reserveOther == 0) revert EmptyReserves();
+
+        // Audit LOW [6] companion fix: bound amountIn vs reserveIn so the
+        // closed-form math stays in its well-behaved regime. Beyond ~100x
+        // the reserves the user owns essentially the entire pool anyway
+        // and the dust sweep recovers most value; refusing the trade with
+        // a clear error beats a silent quadratic-overflow revert deep in
+        // _calcSwapAmount.
+        if (amountIn > reserveIn * 100) revert ExcessiveAmountIn();
 
         // Optimal split: how much of amountIn to swap so the resulting balance
         // matches the post-swap pair ratio. Derived for the V2 invariant with
@@ -151,6 +179,14 @@ contract ArcadeV2Zap {
 
         if (liquidity < amountLpMin) revert InsufficientLiquidityMinted();
 
+        // Audit LOW [8] companion fix: zero the router allowances after the
+        // calls have consumed what they need. The router is `immutable` and
+        // its pull paths only touch our balance via msg.sender == this, so
+        // there's no realistic exploit path for a stale allowance, but
+        // belt-and-braces hygiene is cheap.
+        IERC20(tokenIn).forceApprove(router, 0);
+        IERC20(tokenOther).forceApprove(router, 0);
+
         // Sweep any DELTA dust caused by rounding so nothing stays parked here.
         // Audit MEDIUM fix: subtract pre-pull balance from current so a stuck
         // residual from a previous tx's failed sweep can't be picked up by
@@ -170,6 +206,137 @@ contract ArcadeV2Zap {
             try this.sweep(tokenOther, to, dustOther) {} catch {
                 /* skip - sweep blocked, dust remains on the zap */
             }
+        }
+    }
+
+    /**
+     * @notice One-tx zap with an EIP-2612 permit signature on tokenIn,
+     *         skipping the separate approve tx. Halves the user signature
+     *         count and saves ~45k gas on the first interaction.
+     * @dev Wraps the permit call in try/catch (OZ's recommended pattern):
+     *      a frontrunner can replay the permit between the user's signing
+     *      and our broadcast, which would make `permit` revert. We tolerate
+     *      that and fall through to safeTransferFrom, which will succeed
+     *      with the allowance the frontrunner just set on our behalf.
+     */
+    function zapInWithPermit(
+        address tokenIn,
+        uint256 amountIn,
+        address tokenOther,
+        uint256 amountOtherMin,
+        uint256 amountLpMin,
+        address to,
+        uint256 deadline,
+        // EIP-2612 permit params (signed by msg.sender for tokenIn)
+        uint256 permitDeadline,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) external returns (uint256 liquidity) {
+        try IERC20Permit(tokenIn).permit(
+            msg.sender, address(this), amountIn, permitDeadline, v, r, s
+        ) {} catch {
+            /* permit replayed or token doesn't support EIP-2612; fall through
+             * to safeTransferFrom which will revert if the user truly has no
+             * allowance. */
+        }
+        return _zapIn(
+            msg.sender, tokenIn, amountIn, tokenOther,
+            amountOtherMin, amountLpMin, to, deadline
+        );
+    }
+
+    /**
+     * @notice Single-asset withdraw from a V2 pair. Burns LP, then swaps the
+     *         non-tokenOut leg through the same pair so the user gets one
+     *         consolidated balance instead of two.
+     * @param tokenOther The non-tokenOut side of the pair (the leg the zap
+     *        will swap away). Must be the actual paired token.
+     * @param amountOtherMin Caller-signed minimum tokenOut output from the
+     *        internal swap leg. Same sandwich-defense pattern as zapIn.
+     *        Set to 0 to skip the swap entirely (zap returns dual-leg).
+     * @param amountOutMin Total tokenOut the caller must receive (LP burn
+     *        side + swap output). Enforced at the end.
+     * @return amountOut Total tokenOut sent to `to`.
+     */
+    function zapOut(
+        address tokenOut,
+        address tokenOther,
+        uint256 liquidityIn,
+        uint256 amountOtherMin,
+        uint256 amountOutMin,
+        address to,
+        uint256 deadline
+    ) external returns (uint256 amountOut) {
+        if (block.timestamp > deadline) revert Expired();
+        if (liquidityIn == 0 || tokenOut == tokenOther) revert InvalidInput();
+
+        address pair = IArcadeV2Factory(factory).getPair(tokenOut, tokenOther);
+        if (pair == address(0)) revert PairNotFound();
+
+        // Delta-sweep snapshot - same pattern as zapIn so dust from prior
+        // failed sweeps can't be picked up by this caller.
+        uint256 balBeforeOut = IERC20(tokenOut).balanceOf(address(this));
+        uint256 balBeforeOther = IERC20(tokenOther).balanceOf(address(this));
+
+        // Pull LP from the user, then burn via the router.
+        IERC20(pair).safeTransferFrom(msg.sender, address(this), liquidityIn);
+        IERC20(pair).forceApprove(router, liquidityIn);
+        (uint256 receivedOut, uint256 receivedOther) = IArcadeV2Router(router).removeLiquidity(
+            tokenOut,
+            tokenOther,
+            liquidityIn,
+            0, // amountOutMin enforced at end against the SUM
+            0, // amountOtherMin gated below at the swap step
+            address(this),
+            deadline
+        );
+
+        // Swap the non-tokenOut side back to tokenOut via the same pair, if
+        // we actually received any (out-of-range burns can leave one leg at 0).
+        uint256 swapOut = 0;
+        if (receivedOther > 0 && amountOtherMin > 0) {
+            IERC20(tokenOther).forceApprove(router, receivedOther);
+            address[] memory path = new address[](2);
+            path[0] = tokenOther;
+            path[1] = tokenOut;
+            uint256[] memory amounts = IArcadeV2Router(router).swapExactTokensForTokens(
+                receivedOther,
+                amountOtherMin,
+                path,
+                address(this),
+                deadline
+            );
+            swapOut = amounts[1];
+            if (swapOut < amountOtherMin) revert InsufficientSwapOutput();
+            IERC20(tokenOther).forceApprove(router, 0);
+        }
+
+        amountOut = receivedOut + swapOut;
+        if (amountOut < amountOutMin) revert InsufficientOutput();
+
+        // Direct transfer to user. Reverts cleanly if `to` is blocklisted -
+        // that's the right behaviour for a withdraw (the user is asking us
+        // to send tokens; if they can't receive, the whole thing must roll
+        // back so they get their LP back).
+        IERC20(tokenOut).safeTransfer(to, amountOut);
+
+        // Delta dust sweep on any residual tokenOther (skipped swap branch
+        // when amountOtherMin == 0, or rounding leftovers).
+        uint256 balAfterOther = IERC20(tokenOther).balanceOf(address(this));
+        uint256 dustOther =
+            balAfterOther > balBeforeOther ? balAfterOther - balBeforeOther : 0;
+        if (dustOther > 0) {
+            try this.sweep(tokenOther, to, dustOther) {} catch {
+                /* skip - blocklisted, dust stays on the zap */
+            }
+        }
+        // tokenOut shouldn't have residual after the explicit transfer above,
+        // but check anyway in case the router quoted high.
+        uint256 balAfterOut = IERC20(tokenOut).balanceOf(address(this));
+        uint256 dustOut = balAfterOut > balBeforeOut ? balAfterOut - balBeforeOut : 0;
+        if (dustOut > 0) {
+            try this.sweep(tokenOut, to, dustOut) {} catch {}
         }
     }
 
