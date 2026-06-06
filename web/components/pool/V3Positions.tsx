@@ -434,17 +434,17 @@ function V3PositionRow({
                             <span className="rounded-md border border-arc-cta-hover/40 bg-arc-cta-hover/10 px-1.5 py-0.5 text-[10px] font-semibold text-arc-cta-hover">
                                 ID:{p.tokenId.toString()}
                             </span>
-                            <span className="rounded-md border border-arc-success/40 bg-arc-success/10 px-1.5 py-0.5 text-[10px] font-semibold text-arc-success">
+                            <span className="rounded-md border border-sky-400/40 bg-sky-400/10 px-1.5 py-0.5 text-[10px] font-semibold text-sky-400">
                                 {(p.fee / 10000).toFixed(2)}%
                             </span>
                             <span
                                 className={cn(
                                     "inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-semibold",
                                     !slot0
-                                        ? "bg-arc-bg-elevated text-arc-text-muted"
+                                        ? "text-arc-text-muted"
                                         : inRange
-                                          ? "bg-arc-success/15 text-arc-success"
-                                          : "bg-arc-warn/15 text-arc-warn",
+                                          ? "text-arc-success"
+                                          : "text-arc-warn",
                                 )}
                             >
                                 <span
@@ -522,7 +522,7 @@ function V3PositionRow({
                             <span className="text-arc-text-muted">{t0Info.symbol}</span>
                         </span>
                         {pct0 !== undefined && (
-                            <span className="rounded-md border border-arc-success/40 bg-arc-success/10 px-1.5 py-0.5 text-[10px] font-semibold text-arc-success">
+                            <span className="rounded-md bg-sky-400/10 px-1.5 py-0.5 text-[10px] font-semibold text-sky-400">
                                 {pct0.toFixed(2)}%
                             </span>
                         )}
@@ -536,7 +536,7 @@ function V3PositionRow({
                             <span className="text-arc-text-muted">{t1Info.symbol}</span>
                         </span>
                         {pct1 !== undefined && (
-                            <span className="rounded-md border border-arc-success/40 bg-arc-success/10 px-1.5 py-0.5 text-[10px] font-semibold text-arc-success">
+                            <span className="rounded-md bg-sky-400/10 px-1.5 py-0.5 text-[10px] font-semibold text-sky-400">
                                 {pct1.toFixed(2)}%
                             </span>
                         )}
@@ -567,20 +567,20 @@ function V3PositionRow({
                 />
             </div>
 
-            {/* Unclaimed fees row. Always renders (Hyperswap pattern), 0
-                values just show as muted "0 SYM / 0 SYM" so the user can
-                see fees are accumulating regardless of state. */}
+            {/* Unclaimed fees row. Token symbols rendered as <TokenIcon>
+                circles instead of the prior "0 USDC / 0 ETH" text so the
+                row stays compact on narrower grid widths. */}
             <div className="mt-3 flex items-center justify-between gap-2 rounded-xl border border-arc-border bg-white/[0.015] p-3 text-xs">
                 <span className="text-arc-text-muted">Unclaimed fees</span>
                 <span className="inline-flex items-center gap-3 tabular-nums">
-                    <span>
-                        {formatTok(p.tokensOwed0, t0Info.decimals)}{" "}
-                        <span className="text-arc-text-muted">{t0Info.symbol}</span>
+                    <span className="inline-flex items-center gap-1.5">
+                        {formatTok(p.tokensOwed0, t0Info.decimals)}
+                        <TokenIcon symbol={t0Info.symbol} size={14} />
                     </span>
                     <span className="text-arc-text-faint">/</span>
-                    <span>
-                        {formatTok(p.tokensOwed1, t1Info.decimals)}{" "}
-                        <span className="text-arc-text-muted">{t1Info.symbol}</span>
+                    <span className="inline-flex items-center gap-1.5">
+                        {formatTok(p.tokensOwed1, t1Info.decimals)}
+                        <TokenIcon symbol={t1Info.symbol} size={14} />
                     </span>
                 </span>
             </div>
@@ -639,14 +639,19 @@ function PriceTile({
     return (
         <div
             className={cn(
-                "rounded-xl border bg-white/[0.015] p-3",
-                highlight ? "border-arc-success/40" : "border-arc-border",
+                // Padding pulled in from p-3 -> p-2.5 and value font from
+                // text-base -> text-[13px] so very-wide values (huge max
+                // prices, or exponentials for very thin pools) still fit on
+                // one line. truncate keeps it from breaking the row if the
+                // upstream price ever overflows the new ceiling.
+                "rounded-xl border bg-white/[0.015] p-2.5",
+                highlight ? "border-sky-400/60" : "border-arc-border",
             )}
         >
             <div className="text-[10px] uppercase tracking-wider text-arc-text-muted">
                 {label}
             </div>
-            <div className="mt-1 text-base font-semibold tabular-nums text-arc-text">
+            <div className="mt-1 truncate text-[13px] font-semibold tabular-nums text-arc-text">
                 {value}
             </div>
             <div className="mt-0.5 text-[10px] text-arc-text-faint">{unit}</div>
@@ -665,5 +670,8 @@ function fmtPrice(p: number): string {
     if (!isFinite(p) || p === 0) return "0";
     if (p < 0.0001) return p.toExponential(2);
     if (p < 1) return p.toFixed(6);
+    // Fall back to scientific notation for very wide values so the price
+    // tile fits a single line - 338,492,131,857 was overflowing the card.
+    if (p >= 1e8) return p.toExponential(2);
     return p.toLocaleString(undefined, { maximumFractionDigits: 4 });
 }

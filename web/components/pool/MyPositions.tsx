@@ -407,17 +407,10 @@ function PositionRow({
         </div>
       </div>
 
-      {/* CTA bar: + Add | - Remove. Translucent treatment (bg-white/[0.04]
-          with hover bump) replaces the prior bg-arc-bg-elevated solid look
-          so the CTAs sit lighter on the card. */}
+      {/* CTA bar: - Remove (left) | + Add (right). Matches the V3 position
+          card and the Hyperswap pattern - destructive action on the left,
+          constructive action on the right. */}
       <div className="mt-4 grid grid-cols-2 gap-2">
-        <Link
-          href={`/positions/add?type=amm&t0=${p.token0}&t1=${p.token1}`}
-          className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-arc-border bg-white/[0.04] px-3 py-2.5 text-sm font-semibold text-arc-text transition-colors hover:bg-white/[0.08]"
-        >
-          <Plus className="h-3.5 w-3.5" />
-          Add
-        </Link>
         <button
           onClick={onToggle}
           className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-arc-border bg-white/[0.04] px-3 py-2.5 text-sm font-semibold text-arc-text transition-colors hover:bg-white/[0.08]"
@@ -425,6 +418,13 @@ function PositionRow({
           <Minus className="h-3.5 w-3.5" />
           {expanded ? "Hide" : "Remove"}
         </button>
+        <Link
+          href={`/positions/add?type=amm&t0=${p.token0}&t1=${p.token1}`}
+          className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-arc-border bg-white/[0.04] px-3 py-2.5 text-sm font-semibold text-arc-text transition-colors hover:bg-white/[0.08]"
+        >
+          <Plus className="h-3.5 w-3.5" />
+          Add
+        </Link>
       </div>
 
       {/* Remove panel - revealed by Manage. Uses the same slider + chip
