@@ -925,14 +925,14 @@ function PoolPairRowCard({
                 <div className="flex items-center justify-end gap-2">
                     <Link
                         href="/swap"
-                        className="inline-flex items-center gap-1.5 rounded-xl border border-arc-border bg-sky-400/10 px-3 py-[0.575rem] text-xs font-semibold text-white transition-colors hover:bg-sky-400/20"
+                        className="inline-flex items-center gap-1.5 rounded-xl bg-arc-cta px-3 py-[0.575rem] text-xs font-semibold text-white transition-colors hover:bg-arc-cta-hover"
                     >
                         <SwapIcon tone="white" />
                         Swap
                     </Link>
                     <button
                         onClick={onToggle}
-                        className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-[0.575rem] text-xs font-medium text-arc-text transition-colors hover:bg-white/5"
+                        className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-xl border border-arc-border bg-white/[0.04] px-3 py-[0.575rem] text-xs font-medium text-arc-text transition-colors hover:bg-white/[0.08]"
                     >
                         {expanded ? "Hide pools" : `Show all pools (${subCount})`}
                         {expanded ? <UpArrowIcon size={14} /> : <DownArrowIcon size={14} />}
@@ -1183,10 +1183,10 @@ function PoolPairGridCard({
                 <Link
                     href="/swap"
                     className={cn(
-                        "inline-flex items-center justify-center gap-1.5 rounded-xl border px-3 py-[0.575rem] text-xs font-semibold text-white transition-colors",
+                        "inline-flex items-center justify-center gap-1.5 rounded-xl px-3 py-[0.575rem] text-xs font-semibold text-white transition-colors",
                         whiteCta
-                            ? "border-white/15 bg-white/[0.06] hover:bg-white/[0.12]"
-                            : "border-arc-border bg-sky-400/10 hover:bg-sky-400/20",
+                            ? "border border-white/15 bg-white/[0.06] hover:bg-white/[0.12]"
+                            : "bg-arc-cta hover:bg-arc-cta-hover",
                     )}
                 >
                     <SwapIcon tone="white" />
