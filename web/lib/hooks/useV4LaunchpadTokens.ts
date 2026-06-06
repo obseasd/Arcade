@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Address, erc20Abi, parseAbiItem } from "viem";
+import { CHUNK_SMALL, MAX_BACK_BLOCKS, scanLogsChunked } from "@/lib/eventScan";
 import { usePublicClient, useReadContract, useReadContracts } from "wagmi";
 import { V4_LAUNCHPAD_ABI } from "@/lib/abis/v4Launchpad";
 import { ADDRESSES, V4_ENABLED } from "@/lib/constants";
@@ -29,8 +30,7 @@ const POOL_INITIALIZED_EVT = parseAbiItem(
     "event PoolInitialized(address indexed token, address indexed pool, uint160 sqrtPriceX96, int24 tickLower, int24 tickUpper, int256 liquidityDelta)",
 );
 
-const CHUNK = 1_000n;
-const MAX_BACK = 500_000n;
+// CHUNK + MAX_BACK live in @/lib/eventScan now.
 
 export interface V4LaunchpadTokenInfo {
     address: Address;
@@ -135,45 +135,38 @@ export function useV4LaunchpadTokens(): {
         (async () => {
             try {
                 const latest = await publicClient.getBlockNumber();
+                const scanOpts = {
+                    chunk: CHUNK_SMALL,
+                    maxBack: MAX_BACK_BLOCKS,
+                    label: "v4lp",
+                };
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                const [launchLogs, initLogs] = await Promise.all([
+                    scanLogsChunked<any>(
+                        publicClient,
+                        { address: ADDRESSES.v4Launchpad, event: TOKEN_LAUNCHED_EVT },
+                        latest,
+                        scanOpts,
+                    ),
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    scanLogsChunked<any>(
+                        publicClient,
+                        { address: ADDRESSES.v4Launchpad, event: POOL_INITIALIZED_EVT },
+                        latest,
+                        scanOpts,
+                    ),
+                ]);
                 const metadata = new Map<string, string>();
                 const initialised = new Map<string, bigint>();
-                let end = latest;
-                let walked = 0n;
-                while (walked < MAX_BACK) {
-                    const start = end > CHUNK - 1n ? end - (CHUNK - 1n) : 0n;
-                    try {
-                        const [launchLogs, initLogs] = await Promise.all([
-                            publicClient.getLogs({
-                                address: ADDRESSES.v4Launchpad,
-                                event: TOKEN_LAUNCHED_EVT,
-                                fromBlock: start,
-                                toBlock: end,
-                            }),
-                            publicClient.getLogs({
-                                address: ADDRESSES.v4Launchpad,
-                                event: POOL_INITIALIZED_EVT,
-                                fromBlock: start,
-                                toBlock: end,
-                            }),
-                        ]);
-                        for (const log of launchLogs) {
-                            const tokenAddr = (log.args.token as string).toLowerCase();
-                            const uri = (log.args.metadataURI as string) ?? "";
-                            if (!metadata.has(tokenAddr)) metadata.set(tokenAddr, uri);
-                        }
-                        for (const log of initLogs) {
-                            const tokenAddr = (log.args.token as string).toLowerCase();
-                            const sqrt = (log.args.sqrtPriceX96 as bigint) ?? 0n;
-                            if (!initialised.has(tokenAddr)) initialised.set(tokenAddr, sqrt);
-                        }
-                    } catch {
-                        // RPC sometimes caps individual chunks - bail out and
-                        // use what we collected so far.
-                        break;
-                    }
-                    if (start === 0n) break;
-                    walked += end - start + 1n;
-                    end = start - 1n;
+                for (const log of launchLogs) {
+                    const tokenAddr = (log.args.token as string).toLowerCase();
+                    const uri = (log.args.metadataURI as string) ?? "";
+                    if (!metadata.has(tokenAddr)) metadata.set(tokenAddr, uri);
+                }
+                for (const log of initLogs) {
+                    const tokenAddr = (log.args.token as string).toLowerCase();
+                    const sqrt = (log.args.sqrtPriceX96 as bigint) ?? 0n;
+                    if (!initialised.has(tokenAddr)) initialised.set(tokenAddr, sqrt);
                 }
                 if (!cancelled) setCache({ metadata, initialised });
             } catch {

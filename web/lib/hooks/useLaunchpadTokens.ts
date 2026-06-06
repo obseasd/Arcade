@@ -1,18 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Address, erc20Abi, parseAbiItem } from "viem";
+import { Address, erc20Abi } from "viem";
 import { usePublicClient, useReadContract, useReadContracts } from "wagmi";
 import { LAUNCHPAD_ABI } from "@/lib/abis/launchpad";
 import { ADDRESSES } from "@/lib/constants";
+import { TOKEN_CREATED_EVT } from "@/lib/eventSignatures";
+import { CHUNK_SMALL, MAX_BACK_BLOCKS, scanLogsChunked } from "@/lib/eventScan";
 import { useWatchEvent } from "./useWatchEvent";
-
-const TOKEN_CREATED_EVT = parseAbiItem(
-  "event TokenCreated(address indexed token, address indexed creator, uint8 mode, address creator2, uint16 creator2ShareBps, string name, string symbol, string metadataURI)",
-);
-
-const CHUNK = 1_000n;
-const MAX_BACK = 500_000n;
 
 export interface LaunchpadTokenInfo {
   address: Address;
@@ -89,29 +84,18 @@ export function useLaunchpadTokens(): { tokens: LaunchpadTokenInfo[]; isLoading:
     (async () => {
       try {
         const latest = await publicClient.getBlockNumber();
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const logs = await scanLogsChunked<any>(
+          publicClient,
+          { address: ADDRESSES.launchpad, event: TOKEN_CREATED_EVT },
+          latest,
+          { chunk: CHUNK_SMALL, maxBack: MAX_BACK_BLOCKS, label: "lp.TokenCreated" },
+        );
         const map = new Map<string, string>();
-        let end = latest;
-        let walked = 0n;
-        while (walked < MAX_BACK) {
-          const start = end > CHUNK - 1n ? end - (CHUNK - 1n) : 0n;
-          try {
-            const logs = await publicClient.getLogs({
-              address: ADDRESSES.launchpad,
-              event: TOKEN_CREATED_EVT,
-              fromBlock: start,
-              toBlock: end,
-            });
-            for (const log of logs) {
-              const tokenAddr = (log.args.token as string).toLowerCase();
-              const uri = (log.args.metadataURI as string) ?? "";
-              if (!map.has(tokenAddr)) map.set(tokenAddr, uri);
-            }
-          } catch {
-            break;
-          }
-          if (start === 0n) break;
-          walked += end - start + 1n;
-          end = start - 1n;
+        for (const log of logs) {
+          const tokenAddr = (log.args.token as string).toLowerCase();
+          const uri = (log.args.metadataURI as string) ?? "";
+          if (!map.has(tokenAddr)) map.set(tokenAddr, uri);
         }
         if (!cancelled) setMetadataMap(map);
       } catch {

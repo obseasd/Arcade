@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Address, erc20Abi, parseAbiItem } from "viem";
+import { CHUNK_SMALL, MAX_BACK_BLOCKS, scanLogsChunked } from "@/lib/eventScan";
 import { usePublicClient, useReadContract, useReadContracts } from "wagmi";
 import {
     ARCADE_HOOK_ABI,
@@ -38,8 +39,7 @@ const GRADUATED_EVT = parseAbiItem(
     "event Graduated(bytes32 indexed poolId, uint256 finalUsdcReserve, uint256 tokensInLP)",
 );
 
-const CHUNK = 1_000n;
-const MAX_BACK = 500_000n;
+// CHUNK + MAX_BACK live in @/lib/eventScan now.
 
 export interface ArcadeHookTokenInfo {
     address: Address;
@@ -170,32 +170,18 @@ export function useArcadeHookTokens(): {
         (async () => {
             try {
                 const latest = await publicClient.getBlockNumber();
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                const launchLogs = await scanLogsChunked<any>(
+                    publicClient,
+                    { address: ADDRESSES.arcadeHook, event: TOKEN_LAUNCHED_EVT },
+                    latest,
+                    { chunk: CHUNK_SMALL, maxBack: MAX_BACK_BLOCKS, label: "hook.TokenLaunched" },
+                );
                 const metadata = new Map<string, string>();
-                let end = latest;
-                let walked = 0n;
-                while (walked < MAX_BACK) {
-                    const start = end > CHUNK - 1n ? end - (CHUNK - 1n) : 0n;
-                    try {
-                        const launchLogs = await publicClient.getLogs({
-                            address: ADDRESSES.arcadeHook,
-                            event: TOKEN_LAUNCHED_EVT,
-                            fromBlock: start,
-                            toBlock: end,
-                        });
-                        for (const log of launchLogs) {
-                            const tokenAddr = (log.args.token as string).toLowerCase();
-                            const uri = (log.args.metadataURI as string) ?? "";
-                            if (!metadata.has(tokenAddr)) metadata.set(tokenAddr, uri);
-                        }
-                    } catch {
-                        // RPC chunk-cap fallback: stop the scan and use what
-                        // we already collected. Future tokens will appear
-                        // when their launch tx is in the watched window.
-                        break;
-                    }
-                    if (start === 0n) break;
-                    walked += end - start + 1n;
-                    end = start - 1n;
+                for (const log of launchLogs) {
+                    const tokenAddr = (log.args.token as string).toLowerCase();
+                    const uri = (log.args.metadataURI as string) ?? "";
+                    if (!metadata.has(tokenAddr)) metadata.set(tokenAddr, uri);
                 }
                 if (!cancelled) setCache({ metadata });
             } catch {
