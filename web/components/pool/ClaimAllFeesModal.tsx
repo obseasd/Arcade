@@ -8,6 +8,7 @@ import {
     usePublicClient,
     useReadContract,
     useReadContracts,
+    useWalletClient,
     useWriteContract,
 } from "wagmi";
 
@@ -44,6 +45,11 @@ export function ClaimAllFeesModal({ open, onClose, onSuccess }: Props) {
     const { address: account } = useAccount();
     const publicClient = usePublicClient();
     const { writeContractAsync } = useWriteContract();
+    // walletClient is used for the multi-position case: we encode the
+    // batched multicall calldata ourselves and send it as a raw tx,
+    // bypassing wagmi v2's writeContract type-narrowing which doesn't
+    // surface NPM's inherited Multicall function in its writable union.
+    const { data: walletClient } = useWalletClient();
     const npmEnabled = ADDRESSES.v3PositionManager !== zeroAddress;
 
     const balanceQ = useReadContract({
@@ -293,11 +299,22 @@ export function ClaimAllFeesModal({ open, onClose, onSuccess }: Props) {
                 });
                 await publicClient.waitForTransactionReceipt({ hash });
             } else {
-                // Encode one calldata blob per position, then hand them
-                // all to NPM.multicall(bytes[]). The NPM is a Multicall
-                // inheritor (verified against contracts/lib/v3-periphery/
-                // contracts/NonfungiblePositionManager.sol:25).
-                const callData = ids.map((id) =>
+                if (!walletClient) throw new Error("Wallet not ready");
+                // Encode one calldata blob per position, then wrap them
+                // ALL in a single multicall(bytes[]) call. NPM is a
+                // Multicall inheritor (verified against contracts/lib/
+                // v3-periphery/contracts/NonfungiblePositionManager.sol).
+                //
+                // We do the outer multicall encode by hand instead of
+                // calling writeContract with the typed ABI because
+                // wagmi v2's writeContract type narrowing doesn't expose
+                // multicall as a writable function (known issue with
+                // Multicall.sol-style bytes[] returning calls), and the
+                // matching runtime call in viem also rejects with
+                // "Function 'multicall' not found on ABI" depending on
+                // ABI shape. Sending raw calldata via the walletClient
+                // bypasses both layers cleanly.
+                const collectCalls = ids.map((id) =>
                     encodeFunctionData({
                         abi: V3_NPM_ABI,
                         functionName: "collect",
@@ -311,17 +328,23 @@ export function ClaimAllFeesModal({ open, onClose, onSuccess }: Props) {
                         ],
                     }),
                 );
-                // wagmi v2's writeContract type narrowing doesn't surface
-                // `multicall` cleanly when the ABI declares its outputs,
-                // even after we trimmed them. Cast through unknown so we
-                // can keep the typed ABI everywhere else; the runtime call
-                // is identical.
-                const hash = await writeContractAsync({
-                    address: ADDRESSES.v3PositionManager,
-                    abi: V3_NPM_ABI,
+                const multicallData = encodeFunctionData({
+                    abi: [
+                        {
+                            type: "function",
+                            name: "multicall",
+                            stateMutability: "payable",
+                            inputs: [{ name: "data", type: "bytes[]" }],
+                            outputs: [{ name: "results", type: "bytes[]" }],
+                        },
+                    ] as const,
                     functionName: "multicall",
-                    args: [callData],
-                } as unknown as Parameters<typeof writeContractAsync>[0]);
+                    args: [collectCalls],
+                });
+                const hash = await walletClient.sendTransaction({
+                    to: ADDRESSES.v3PositionManager,
+                    data: multicallData,
+                });
                 await publicClient.waitForTransactionReceipt({ hash });
             }
             pushToast({

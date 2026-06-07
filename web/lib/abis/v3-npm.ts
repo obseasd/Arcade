@@ -222,27 +222,15 @@ export const V3_POOL_ABI = [
         inputs: [],
         outputs: [{ type: "address" }],
     },
-    // Inherited from base/Multicall.sol on Uniswap V3 NPM (and the
-    // ArcadeV3PositionManager fork). Lets us bundle N collect() / N
-    // decreaseLiquidity() calls into ONE transaction, so the user signs
-    // once instead of once-per-position when claiming fees on multiple
-    // positions simultaneously.
-    {
-        type: "function",
-        name: "multicall",
-        // The on-chain Multicall is `payable`, but we never send ETH with
-        // it - declaring nonpayable lets wagmi's writeContract pick it up
-        // as a writable function (it filters out `payable` ones from the
-        // writable union when the args shape doesn't include a `value`).
-        stateMutability: "nonpayable",
-        inputs: [{ name: "data", type: "bytes[]" }],
-        // The on-chain multicall returns `bytes[] results`, but we never
-        // decode them client-side (we only care that the tx confirmed).
-        // Declaring outputs as [] keeps wagmi's writeContract type
-        // narrowing happy - it otherwise excludes any function with
-        // non-empty outputs from the writable union.
-        outputs: [],
-    },
+    // Note: the NPM also inherits Multicall.sol (lets you bundle
+    // collect() / decreaseLiquidity() / etc into ONE tx). We don't add
+    // the `multicall(bytes[])` entry to this ABI because wagmi v2's
+    // typed writeContract excludes it from its writable union (known
+    // issue with bytes[]-returning Multicall.sol-style calls). The
+    // ClaimAllFeesModal handles batching by encoding the multicall
+    // calldata inline and sending it via walletClient.sendTransaction
+    // - bypasses both the wagmi type layer and viem's runtime ABI
+    // matching.
 ] as const;
 
 export const V3_FACTORY_ABI = [
