@@ -3,7 +3,7 @@
 import { CheckCircle2, Coins, ExternalLink, Twitter, XCircle } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { Address, formatUnits, isAddress } from "viem";
 import { useAccount, usePublicClient, useReadContract, useWriteContract } from "wagmi";
 import { erc20Abi } from "viem";
@@ -22,6 +22,21 @@ export default function ClaimPage() {
   );
 }
 
+interface ClaimPayload {
+  token: Address;
+  positionId: string;
+  slotIndex: number;
+  recipient: Address;
+  pairedToken: Address;
+  pairedAmount: string;
+  clankerToken: Address;
+  clankerAmount: string;
+  deadline: string;
+  nonce: `0x${string}`;
+  sig: `0x${string}`;
+  handle: string;
+}
+
 function ClaimPageInner() {
   const params = useSearchParams();
   const router = useRouter();
@@ -30,19 +45,56 @@ function ClaimPageInner() {
   const { writeContractAsync } = useWriteContract();
   const [submitting, setSubmitting] = useState(false);
 
+  // sig-leak-through-browser-history-and-url-bar: claim data is delivered
+  // via an HttpOnly cookie consumed by /api/claim/payload. We fetch it
+  // once on mount. payloadStatus tracks the consume lifecycle: 'loading'
+  // until the fetch lands, 'ready' on success, 'absent' on 404 (the user
+  // navigated to /claim directly, no OAuth handshake just happened).
+  const [payload, setPayload] = useState<ClaimPayload | null>(null);
+  const [payloadStatus, setPayloadStatus] = useState<"loading" | "ready" | "absent">("loading");
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/claim/payload", { credentials: "same-origin" });
+        if (cancelled) return;
+        if (res.status === 404) {
+          setPayloadStatus("absent");
+          return;
+        }
+        if (!res.ok) {
+          setPayloadStatus("absent");
+          return;
+        }
+        const data = (await res.json()) as ClaimPayload;
+        if (cancelled) return;
+        setPayload(data);
+        setPayloadStatus("ready");
+      } catch {
+        if (!cancelled) setPayloadStatus("absent");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Error stays in URL params (the audit only flagged the signed data
+  // leak, error codes are not sensitive).
   const error = params.get("error");
-  const handle = params.get("handle");
-  const token = params.get("token") as Address | null;
-  const positionIdStr = params.get("positionId");
-  const slotIndexStr = params.get("slotIndex");
-  const recipient = params.get("recipient") as Address | null;
-  const pairedToken = params.get("pairedToken") as Address | null;
-  const pairedAmountStr = params.get("pairedAmount");
-  const clankerToken = params.get("clankerToken") as Address | null;
-  const clankerAmountStr = params.get("clankerAmount");
-  const deadlineStr = params.get("deadline");
-  const nonce = params.get("nonce") as `0x${string}` | null;
-  const sig = params.get("sig") as `0x${string}` | null;
+  const handle = payload?.handle ?? null;
+  const token = payload?.token ?? null;
+  const positionIdStr = payload?.positionId ?? null;
+  const slotIndexStr = payload ? String(payload.slotIndex) : null;
+  const recipient = payload?.recipient ?? null;
+  const pairedToken = payload?.pairedToken ?? null;
+  const pairedAmountStr = payload?.pairedAmount ?? null;
+  const clankerToken = payload?.clankerToken ?? null;
+  const clankerAmountStr = payload?.clankerAmount ?? null;
+  const deadlineStr = payload?.deadline ?? null;
+  const nonce = payload?.nonce ?? null;
+  const sig = payload?.sig ?? null;
 
   const hasSigParams =
     token &&
@@ -127,6 +179,18 @@ function ClaimPageInner() {
 
   if (error) {
     return <ErrorState error={error} />;
+  }
+
+  // Show a loading spinner while we consume the one-shot cookie. Without
+  // this gate the page would briefly render the Lobby ("nothing to claim")
+  // before the payload arrives, which is jarring after a successful
+  // OAuth handshake.
+  if (payloadStatus === "loading") {
+    return (
+      <div className="mx-auto max-w-2xl px-4 py-16 text-center text-arc-text-muted">
+        Loading claim…
+      </div>
+    );
   }
 
   if (!hasSigParams) {

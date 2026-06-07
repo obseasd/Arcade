@@ -88,6 +88,14 @@ export async function fetchMetadata(uri: string, timeoutMs = 5_000): Promise<Tok
       clearTimeout(t);
     }
   }
+  // metadata-uri-not-pinned-to-ipfs-scheme: log unsupported schemes
+  // (https://, ar://, etc.) so the backend's slot_not_attributed error
+  // is traceable to a metadata-URI mismatch instead of an OAuth bug.
+  // Returning null preserves the existing failure semantics for callers.
+  if (typeof console !== "undefined") {
+    // eslint-disable-next-line no-console
+    console.warn(`[metadata] unsupported URI scheme: ${uri.slice(0, 64)}`);
+  }
   return null;
 }
 

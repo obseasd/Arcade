@@ -428,10 +428,20 @@ export function BridgeCard() {
         args: [step.message, step.attestation],
         chainId: step.dstId,
       });
-      await dstClient.waitForTransactionReceipt({ hash });
-      const dstChainCfg = getCctpChain(step.dstId)!;
-      // Funds delivered - drop the persisted claim entry.
+      // BRIDGE-CLEAR-AFTER-MINT-RECEIPT-GAP: clear pendingBridge as soon as
+      // the mint tx is BROADCAST (writeContractAsync returns when the user
+      // signs + submits). If the user closes the tab between broadcast and
+      // confirmation we'd otherwise resume "Claim" on next visit and the
+      // user would either (a) double-mint and revert their second tx, or
+      // (b) waste gas double-paying for an already-completed mint. The
+      // bridgeHistory row stays updated below so the user still sees the
+      // pending mint when they come back.
       clearPendingBridge(account);
+      const receipt = await dstClient.waitForTransactionReceipt({ hash });
+      if (receipt.status !== "success") {
+        throw new Error(`Mint tx reverted (${hash.slice(0, 10)}...)`);
+      }
+      const dstChainCfg = getCctpChain(step.dstId)!;
       // Patch the history entry: pending → minted, store the mint tx.
       // Prefer historyId when we still have it (same session); fall back to
       // burnTxHash lookup so a refresh-then-mint flow still flips the entry
@@ -466,6 +476,20 @@ export function BridgeCard() {
    * or the burn is stale). Does NOT touch on-chain state. */
   const discardPendingClaim = () => {
     clearPendingBridge(account);
+    // BRIDGE-DISCARD-LEAVES-HISTORY-PENDING: also flip the matching
+    // history row to "failed" so BridgeHistory's auto-poll doesn't keep
+    // re-marking it as attestation-ready (which would resurrect the
+    // claim banner the user just dismissed).
+    if (account) {
+      const patch = { status: "failed" as const, attestationReady: false };
+      if (historyId) {
+        updateBridge(account, historyId, patch);
+      } else if (step.kind === "attesting" && step.burnTxHash) {
+        updateBridgeByBurnTx(account, step.burnTxHash, patch);
+      } else if (step.kind === "minting" && step.burnTxHash) {
+        updateBridgeByBurnTx(account, step.burnTxHash, patch);
+      }
+    }
     setStep({ kind: "idle" });
   };
 

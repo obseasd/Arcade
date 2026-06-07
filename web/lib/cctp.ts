@@ -169,22 +169,52 @@ export interface IrisAttestation {
   eventNonce?: string;
 }
 
+/** True iff `v` looks like a hex blob `0x[0-9a-f]+` with no garbage. */
+function isHexBlob(v: unknown): v is `0x${string}` {
+  return typeof v === "string" && /^0x[0-9a-fA-F]+$/.test(v) && v.length >= 4;
+}
+
 export async function fetchAttestation(
   srcDomain: number,
   txHash: string,
 ): Promise<IrisAttestation | null> {
+  // BRIDGE-IRIS-NO-RESPONSE-VALIDATION: validate every field before
+  // forwarding to receiveMessage(). Without these checks an unexpected
+  // Iris payload (DNS poison, MITM, Circle API regression returning
+  // null fields with status: "complete") would land the user in the
+  // 'minting' state with `null` hex blobs, the wallet rejection on
+  // signing would be the only signal it ever went wrong.
   const url = `${IRIS_BASE_TESTNET}/v2/messages/${srcDomain}?transactionHash=${txHash}`;
   try {
     const res = await fetch(url);
     if (!res.ok) return null;
-    const json = await res.json();
-    const m = json?.messages?.[0];
-    if (!m) return null;
+    const json = (await res.json()) as { messages?: unknown };
+    const messages = Array.isArray(json?.messages) ? json.messages : null;
+    if (!messages || messages.length === 0) return null;
+    const m = messages[0] as Record<string, unknown> | null;
+    if (!m || typeof m !== "object") return null;
+
+    const status = m.status;
+    if (status !== "pending_confirmations" && status !== "complete") {
+      return null;
+    }
+    // Pending: fields may still be absent/null. Surface the status so
+    // the caller knows to keep polling.
+    if (status === "pending_confirmations") {
+      return {
+        attestation: "0x" as `0x${string}`,
+        message: "0x" as `0x${string}`,
+        status,
+        eventNonce: typeof m.eventNonce === "string" ? m.eventNonce : undefined,
+      };
+    }
+    // Complete: both blobs must be syntactically valid hex.
+    if (!isHexBlob(m.attestation) || !isHexBlob(m.message)) return null;
     return {
       attestation: m.attestation,
       message: m.message,
-      status: m.status,
-      eventNonce: m.eventNonce,
+      status,
+      eventNonce: typeof m.eventNonce === "string" ? m.eventNonce : undefined,
     };
   } catch {
     return null;

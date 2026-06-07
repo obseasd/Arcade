@@ -42,6 +42,8 @@ interface StateData {
 }
 
 function redirectBackWithError(origin: string, error: string) {
+  // Error path keeps the error code in the URL because there's nothing
+  // sensitive in it and the user benefits from seeing what failed.
   const url = new URL(`${origin}/claim`);
   url.searchParams.set("error", error);
   return NextResponse.redirect(url.toString());
@@ -331,22 +333,39 @@ export async function GET(req: NextRequest) {
     },
   });
 
-  // 5) Redirect to /claim with signature + amounts.
-  const url = new URL(`${origin}/claim`);
-  url.searchParams.set("token", token);
-  url.searchParams.set("positionId", positionId.toString());
-  url.searchParams.set("slotIndex", String(slotIndex));
-  url.searchParams.set("recipient", recipient);
-  url.searchParams.set("pairedToken", pairedToken);
-  url.searchParams.set("pairedAmount", pairedAmount.toString());
-  url.searchParams.set("clankerToken", clankerToken);
-  url.searchParams.set("clankerAmount", clankerAmount.toString());
-  url.searchParams.set("deadline", deadline.toString());
-  url.searchParams.set("nonce", nonce);
-  url.searchParams.set("sig", signature);
-  url.searchParams.set("handle", oauthHandle);
+  // 5) sig-leak-through-browser-history-and-url-bar: hand the signed
+  //    claim payload to /claim via an HttpOnly one-shot cookie instead of
+  //    URL query params. The signature still leaves the server (it has
+  //    to, the user submits it) but it never enters the URL bar, browser
+  //    history, Referer header, browser-sync targets, or clipboard
+  //    managers. /claim's client code calls /api/claim/payload on mount
+  //    to consume the cookie. Cookie maxAge is 120s; the read endpoint
+  //    is idempotent for that window (clears on first 200) so a refresh
+  //    inside the window still works.
+  const payload = {
+    token,
+    positionId: positionId.toString(),
+    slotIndex,
+    recipient,
+    pairedToken,
+    pairedAmount: pairedAmount.toString(),
+    clankerToken,
+    clankerAmount: clankerAmount.toString(),
+    deadline: deadline.toString(),
+    nonce,
+    sig: signature,
+    handle: oauthHandle,
+  };
 
+  const url = new URL(`${origin}/claim`);
   const res = NextResponse.redirect(url.toString());
   res.cookies.delete(cookieName);
+  res.cookies.set("arcade_claim_payload", JSON.stringify(payload), {
+    httpOnly: true,
+    secure: req.nextUrl.protocol === "https:",
+    sameSite: "strict",
+    path: "/",
+    maxAge: 120,
+  });
   return res;
 }

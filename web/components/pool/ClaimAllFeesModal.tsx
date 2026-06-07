@@ -481,6 +481,9 @@ export function ClaimAllFeesModal({ open, onClose, onSuccess }: Props) {
                                 <button type="button"
                                     key={p.tokenId.toString()}
                                     onClick={() => toggle(p.tokenId.toString())}
+                                    role="checkbox"
+                                    aria-checked={isSelected}
+                                    aria-label={`Toggle position ${p.tokenId.toString()} (${s0.symbol} / ${s1.symbol}) for claim`}
                                     className={cn(
                                         "flex w-full items-center justify-between gap-3 rounded-xl border p-3 text-left transition-colors",
                                         isSelected

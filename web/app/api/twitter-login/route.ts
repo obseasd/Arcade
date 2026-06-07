@@ -27,8 +27,16 @@ const TWITTER_AUTH_URL = "https://twitter.com/i/oauth2/authorize";
  * matching the modern OWASP guidance for legacy compat.
  */
 export async function GET(req: NextRequest) {
+  // twitter-recipient-phishing-csrf: tighter Sec-Fetch-Site check than the
+  // shared apiGuard's "fail open on missing header". OAuth init takes a
+  // user-supplied `recipient` that ends up in the EIP-712 Claim the
+  // backend later signs, so any cross-origin path here is a phishing
+  // vector. Block requests that don't come from our own UI (Sec-Fetch-
+  // Site: same-origin) or a direct typed URL (Sec-Fetch-Site: none).
+  // Browsers that don't send the header are rare in 2026; we explicitly
+  // require it for this endpoint.
   const fetchSite = req.headers.get("sec-fetch-site");
-  if (fetchSite && fetchSite !== "same-origin" && fetchSite !== "none") {
+  if (fetchSite !== "same-origin" && fetchSite !== "none") {
     return NextResponse.json(
       { error: "Cross-origin OAuth init not allowed" },
       { status: 403 },

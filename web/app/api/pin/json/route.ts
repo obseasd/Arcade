@@ -23,9 +23,26 @@ export async function POST(req: NextRequest) {
   if (csrf) return csrf;
   const rl = rateLimit(req, "pin-json", 10, 60_000);
   if (rl) return rl;
+
+  // pin-json-bytes-vs-codeunits: reject early on Content-Length so a 5 MB
+  // body of emoji surrogate pairs (where text.length is small but the
+  // BYTE size is large) doesn't slip past the cap.
+  const declared = Number(req.headers.get("content-length") ?? "");
+  if (Number.isFinite(declared) && declared > MAX_JSON_BYTES + 1024) {
+    return NextResponse.json(
+      { error: `Metadata too large (max ${MAX_JSON_BYTES.toLocaleString()} bytes)` },
+      { status: 413 },
+    );
+  }
+
   try {
     const text = await req.text();
-    if (text.length > MAX_JSON_BYTES) {
+    // pin-json-bytes-vs-codeunits: use BYTE length, not JS code units.
+    // string.length counts UTF-16 code units, so surrogate-pair emoji
+    // count as 2 each while taking 4 UTF-8 bytes. TextEncoder gives us
+    // the actual byte size we'll forward to Pinata.
+    const byteLength = new TextEncoder().encode(text).byteLength;
+    if (byteLength > MAX_JSON_BYTES) {
       return NextResponse.json(
         { error: `Metadata too large (max ${MAX_JSON_BYTES.toLocaleString()} bytes)` },
         { status: 413 },

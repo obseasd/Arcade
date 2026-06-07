@@ -2,7 +2,7 @@
 
 import { X } from "lucide-react";
 import { RefreshIcon } from "@/components/ui/MaskIcon";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { Address } from "viem";
 import { usePublicClient, useReadContract, useReadContracts, useWriteContract } from "wagmi";
 import { ORBS_TWAP_ABI, decodeOrderStatus } from "@/lib/abis/orbsTwap";
@@ -68,10 +68,26 @@ export function LimitOrdersPanel({ account, variant = "card", className }: Props
     // the animation rather than no-op when a refetch is still in flight.
     const [refreshTick, setRefreshTick] = useState(0);
     const [isRefreshing, setIsRefreshing] = useState(false);
+    // REACT-001: hold the spin-end timer on a ref so we can cancel it on
+    // unmount or before queuing a new one. Without the cleanup, clicking
+    // Refresh and then navigating away leaves setIsRefreshing pending on
+    // an unmounted component, triggering React's "state update on
+    // unmounted component" warning and a minor memory churn.
+    const refreshTimer = useRef<number | null>(null);
 
     useEffect(() => {
         const t = setInterval(() => setNow(Math.floor(Date.now() / 1000)), 5000);
         return () => clearInterval(t);
+    }, []);
+
+    // Cancel any pending refresh-spin timer on unmount.
+    useEffect(() => {
+        return () => {
+            if (refreshTimer.current !== null) {
+                window.clearTimeout(refreshTimer.current);
+                refreshTimer.current = null;
+            }
+        };
     }, []);
 
     const idsQ = useReadContract({
@@ -209,13 +225,22 @@ export function LimitOrdersPanel({ account, variant = "card", className }: Props
     const onRefreshClick = async () => {
         setRefreshTick((n) => n + 1);
         setIsRefreshing(true);
+        // Cancel any in-flight spin-end timer from a previous click so
+        // rapid double-clicks don't shorten the second animation.
+        if (refreshTimer.current !== null) {
+            window.clearTimeout(refreshTimer.current);
+            refreshTimer.current = null;
+        }
         try {
             await Promise.all([idsQ.refetch(), ordersQ.refetch()]);
         } finally {
             // Hold the spin for a beat so the click registers visually even
             // when wagmi resolves from cache instantly. 600ms feels snappy
             // without dragging.
-            window.setTimeout(() => setIsRefreshing(false), 600);
+            refreshTimer.current = window.setTimeout(() => {
+                setIsRefreshing(false);
+                refreshTimer.current = null;
+            }, 600);
         }
     };
 
