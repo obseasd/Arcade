@@ -196,6 +196,9 @@ contract ArcadeTwitterEscrowV3 is Ownable2Step, Pausable, ReentrancyGuard {
     error InsufficientBalance();
     error ExceedsFreeBalance();
     error InvalidTokens();
+    /// @notice authorize() requires recipient == msg.sender so a backend
+    ///         signature with a phisher-supplied recipient cannot settle.
+    error RecipientNotSender();
     error DeadlineInPast();
     error NothingToClaim();
     error RenounceDisabled();
@@ -309,6 +312,18 @@ contract ArcadeTwitterEscrowV3 is Ownable2Step, Pausable, ReentrancyGuard {
     ) external whenNotPaused {
         if (deadline < block.timestamp) revert DeadlineInPast();
         if (recipient == address(0)) revert ZeroAddress();
+        // Audit twitter-oauth-recipient-not-bound-to-handle: enforce
+        // `recipient == msg.sender` on-chain. The backend still signs the
+        // recipient field (keeps the EIP-712 typehash unchanged so existing
+        // pre-deployed sigs stay verifiable for legitimate flows), but a
+        // phishing flow where an attacker tricks the user into signing
+        // OAuth with `?recipient=ATTACKER` can no longer settle because
+        // the user submits authorize() from THEIR wallet, not the
+        // attacker's. The wallet that signs the transaction is therefore
+        // always the wallet that receives the claim — `recipient` becomes
+        // a redundant parameter the user can verify in their wallet UI
+        // before signing.
+        if (recipient != msg.sender) revert RecipientNotSender();
         if (claimed[positionId][slotIndex]) revert AlreadyClaimed();
         if (hasPending[positionId][slotIndex]) revert SlotPending();
         if (nonceUsed[nonce]) revert NonceReused();

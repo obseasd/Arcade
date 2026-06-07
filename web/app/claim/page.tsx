@@ -371,6 +371,26 @@ function ClaimPageInner() {
           <Row label="Deadline" value={new Date(Number(deadline) * 1000).toLocaleString()} />
         </div>
 
+        {/* twitter-oauth-recipient-not-bound-to-handle: prominent warning
+            when the recipient signed into the claim payload doesn't match
+            the connected wallet. The contract refuses to settle this
+            mismatch (authorize() requires recipient == msg.sender), but
+            surfacing the discrepancy in the UI BEFORE the wallet popup
+            tells the user they're being phished rather than letting the
+            tx revert opaquely. */}
+        {account && recipient && account.toLowerCase() !== recipient.toLowerCase() && (
+          <div className="mt-4 rounded-xl border border-arc-danger/60 bg-arc-danger/15 p-3 text-xs text-arc-danger">
+            <div className="font-semibold">Recipient mismatch</div>
+            <div className="mt-1 leading-snug">
+              This claim was signed for {formatAddress(recipient)}, but your
+              connected wallet is {formatAddress(account)}. The on-chain
+              authorize() will revert. If you didn't initiate this claim
+              from the address shown above, this is likely a phishing link —
+              disconnect and start the claim again from your own dashboard.
+            </div>
+          </div>
+        )}
+
         {needsSync && !alreadyClaimed && !expired && (
           <div className="mt-4 rounded-xl border border-arc-cta-hover/30 bg-arc-cta-hover/5 p-3 text-xs text-arc-text-muted">
             Fees are still pending in the V3 pool. The claim button below
@@ -391,19 +411,27 @@ function ClaimPageInner() {
           </div>
         )}
 
-        <button type="button"
-          onClick={onClaim}
-          disabled={submitting || alreadyClaimed || expired || !account}
-          className={cn(
-            "mt-5 inline-flex w-full items-center justify-center gap-2 py-2.5 text-sm",
-            "arc-button-primary",
-            (submitting || alreadyClaimed || expired || !account) && "opacity-60",
-          )}
-        >
-          <Coins className="h-4 w-4" />
-          {!account
-            ? "Connect wallet to claim"
-            : submitting
+        {(() => {
+          const recipientMismatch =
+            !!account && !!recipient && account.toLowerCase() !== recipient.toLowerCase();
+          const disabled =
+            submitting || alreadyClaimed || expired || !account || recipientMismatch;
+          return (
+            <button type="button"
+              onClick={onClaim}
+              disabled={disabled}
+              className={cn(
+                "mt-5 inline-flex w-full items-center justify-center gap-2 py-2.5 text-sm",
+                "arc-button-primary",
+                disabled && "opacity-60",
+              )}
+            >
+              <Coins className="h-4 w-4" />
+              {!account
+                ? "Connect wallet to claim"
+                : recipientMismatch
+                ? "Wallet doesn't match signed recipient"
+                : submitting
               ? "Confirming…"
               : alreadyClaimed
                 ? "Already claimed"
@@ -412,7 +440,9 @@ function ClaimPageInner() {
                   : needsSync
                     ? "Sync & claim fees"
                     : "Claim fees"}
-        </button>
+            </button>
+          );
+        })()}
         <p className="mt-2 text-[10px] text-arc-text-faint">
           Submitting this transaction transfers the pending fees to your wallet and updates the on-chain
           recipient so future fees flow direct.
