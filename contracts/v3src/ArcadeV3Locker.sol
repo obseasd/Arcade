@@ -29,6 +29,11 @@ interface IArcadeLaunchpadMin {
     function weth() external view returns (address);
 }
 
+/// @dev Minimal Uniswap V3 factory surface for CSEC-013 pool re-derivation.
+interface IArcadeV3FactoryMin {
+    function getPool(address tokenA, address tokenB, uint24 fee) external view returns (address);
+}
+
 /**
  * @title ArcadeV3Locker
  * @notice Permanently custodies single-sided Uniswap V3 launch positions and
@@ -139,6 +144,23 @@ contract ArcadeV3Locker is IUniswapV3MintCallback {
         uint256 amount,
         bytes reason
     );
+    /// @notice CSEC-005: emitted when an inline payout to the twitterEscrow
+    ///         fails (USDC blocklist, escrow paused, escrow rejects). The
+    ///         amount is credited to pendingWithdrawals[token][twitterEscrow]
+    ///         but `creditSlot` is NOT called, so the escrow's per-slot
+    ///         accounting (`balances[positionId][slot][token]`) stays at 0.
+    ///         Backend / operator indexes this event to either retry
+    ///         `pullFromLocker` + manual `creditSlot` once the recipient is
+    ///         unblocked, or to mirror the credit in off-chain state for the
+    ///         slot's recipient to claim against. Distinct from
+    ///         `EscrowCreditFailed` (which fires when the TRANSFER succeeded
+    ///         but the `creditSlot` follow-up reverted).
+    event EscrowSlotPendingCredit(
+        uint256 indexed positionId,
+        uint256 indexed slotIndex,
+        address indexed token,
+        uint256 amount
+    );
 
     modifier nonReentrant() {
         require(_locked == 1, "REENTRANT");
@@ -174,6 +196,11 @@ contract ArcadeV3Locker is IUniswapV3MintCallback {
         uint256 tokenAmount; // amount of `token` to lock single-sided
         uint16[] positionBps; // supply split per range; sums to 10000 (len 1 or 3)
         Recipient[] recipients;
+        uint24 fee; // CSEC-013: pool's fee tier; locker re-derives pool from
+        // factory.getPool(token, paired, fee) and requires it == p.pool. Closes
+        // a defence-in-depth gap where a miswired launchpad could feed an
+        // arbitrary `pool` address that passed only `IUniswapV3Pool` interface
+        // duck-typing.
     }
 
     /**
@@ -203,6 +230,14 @@ contract ArcadeV3Locker is IUniswapV3MintCallback {
             address w = IArcadeLaunchpadMin(launchpad).weth();
             require(p.paired == u || (w != address(0) && p.paired == w), "BAD_PAIRED");
             require(p.token != p.paired, "SAME_TOKEN");
+        }
+        // CSEC-013: re-derive the pool address from the canonical factory
+        // and require it matches `p.pool`. Defense-in-depth against a
+        // miswired (or compromised) launchpad supplying a fake pool address
+        // that quacks like IUniswapV3Pool.
+        {
+            address expected = IArcadeV3FactoryMin(factory).getPool(p.token, p.paired, p.fee);
+            require(expected != address(0) && expected == p.pool, "BAD_POOL");
         }
         _validateRecipients(p.recipients);
         uint8 n = _validateBps(p.positionBps);
@@ -548,6 +583,14 @@ contract ArcadeV3Locker is IUniswapV3MintCallback {
         }
         pendingWithdrawals[token][to] += amount;
         emit RecipientCredited(positionId, slotIndex, token, to, amount);
+        // CSEC-005: surface the position+slot for indexers when the failed
+        // recipient is the Twitter escrow, so off-chain bookkeeping can
+        // mirror the missing creditSlot. RecipientCredited carries the
+        // recipient (= twitterEscrow), but the position+slot index lets
+        // operators reconcile against escrow's `balances[posId][slot]` map.
+        if (to == twitterEscrow && twitterEscrow != address(0)) {
+            emit EscrowSlotPendingCredit(positionId, slotIndex, token, amount);
+        }
     }
 
     /// @notice Withdraw any pending payouts of `token` credited to `msg.sender`

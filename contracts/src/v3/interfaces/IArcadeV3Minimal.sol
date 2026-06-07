@@ -98,6 +98,8 @@ interface IArcadeV3Locker {
         uint256 tokenAmount;
         uint16[] positionBps; // supply split per range; sums to 10000 (len 1 or 3)
         Recipient[] recipients;
+        uint24 fee; // CSEC-013: pool fee tier so the locker can re-derive
+        // factory.getPool(token, paired, fee) and verify it matches `pool`.
     }
 
     function lockSingleSided(SingleSidedParams calldata p)
