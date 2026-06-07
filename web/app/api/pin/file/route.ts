@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { pinFile, PinataError } from "@/lib/pinata";
+import { rateLimit, rejectCrossOrigin } from "@/lib/apiGuard";
 
 /**
  * POST /api/pin/file
@@ -17,6 +18,15 @@ const MAX_BYTES = 1_000_000;
 export const runtime = "nodejs";
 
 export async function POST(req: NextRequest) {
+  // FSEC-003: refuse cross-origin POSTs so an attacker can't burn the
+  // Pinata quota from a hidden auto-submitting form on any third-party
+  // site. Modern browsers send `Sec-Fetch-Site`; older clients fail
+  // open. Then a per-IP rate limit (5 pins / 60s) caps the worst
+  // case if the header check passes for some reason.
+  const csrf = rejectCrossOrigin(req);
+  if (csrf) return csrf;
+  const rl = rateLimit(req, "pin-file", 5, 60_000);
+  if (rl) return rl;
   try {
     const form = await req.formData();
     const file = form.get("file");

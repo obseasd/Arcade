@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { pinJson, PinataError } from "@/lib/pinata";
+import { rateLimit, rejectCrossOrigin } from "@/lib/apiGuard";
 
 /**
  * POST /api/pin/json
@@ -16,6 +17,12 @@ export const runtime = "nodejs";
 const MAX_JSON_BYTES = 100_000; // 100 KB - metadata is small key/value pairs
 
 export async function POST(req: NextRequest) {
+  // FSEC-003: same guards as the file route - cross-origin POST refused,
+  // per-IP rate-limited.
+  const csrf = rejectCrossOrigin(req);
+  if (csrf) return csrf;
+  const rl = rateLimit(req, "pin-json", 10, 60_000);
+  if (rl) return rl;
   try {
     const text = await req.text();
     if (text.length > MAX_JSON_BYTES) {

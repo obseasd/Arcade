@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
+import { rateLimit } from "@/lib/apiGuard";
 import {
   Address,
   createPublicClient,
@@ -55,6 +56,22 @@ export async function GET(req: NextRequest) {
   const origin = req.nextUrl.origin.replace(/^(https?:\/\/)www\./, "$1");
 
   if (!code || !state) return redirectBackWithError(origin, "missing_params");
+
+  // FSEC-004 hygiene: the state param is generated server-side as 16
+  // bytes of crypto.randomBytes -> 32 hex chars. Validate the shape
+  // before using it as a cookie name fragment so a hand-crafted state
+  // can't address a cookie shape we didn't pick.
+  if (!/^[0-9a-f]{32}$/.test(state)) {
+    return redirectBackWithError(origin, "invalid_state");
+  }
+
+  // FSEC-007: per-IP rate limit on the OAuth completion path. The
+  // current (0, 0)-amount sign is intentional (sync-fees-from-pool flow,
+  // see the long-form comment further down), but bounding completions
+  // per IP per minute caps the rate at which an attacker can farm
+  // stockpiled signatures for any handle they happen to control.
+  const rl = rateLimit(req, "twitter-callback", 10, 60_000);
+  if (rl) return rl;
 
   const cookieName = `tw_state_${state}`;
   const stateCookie = req.cookies.get(cookieName)?.value;

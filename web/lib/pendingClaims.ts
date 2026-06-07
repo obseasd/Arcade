@@ -16,9 +16,40 @@
  * params; the existing flow there sweeps the slot.
  */
 
-import type { Address } from "viem";
+import { isAddress, type Address } from "viem";
 
 const STORAGE_KEY_PREFIX = "arcade:pending-twitter-claim:";
+
+/**
+ * FSEC-006: localStorage entries are trusted on the same origin, but if a
+ * separate XSS ever lands the attacker could write a hostile entry that
+ * the /claim page would route to. This schema check rejects entries that
+ * don't look like the shape we wrote, so a stray field can't redirect
+ * the EIP-712 sig to an attacker-controlled recipient.
+ *
+ * Same defense is applied in bridgeHistory.ts and activityFeed.ts.
+ */
+function isValidPendingClaim(x: unknown): x is PendingTwitterClaim {
+    if (!x || typeof x !== "object") return false;
+    const v = x as Record<string, unknown>;
+    return (
+        typeof v.account === "string" && isAddress(v.account) &&
+        typeof v.token === "string" && isAddress(v.token) &&
+        typeof v.positionId === "string" &&
+        typeof v.slotIndex === "string" &&
+        typeof v.recipient === "string" && isAddress(v.recipient) &&
+        typeof v.pairedToken === "string" && isAddress(v.pairedToken) &&
+        typeof v.pairedAmount === "string" &&
+        typeof v.clankerToken === "string" && isAddress(v.clankerToken) &&
+        typeof v.clankerAmount === "string" &&
+        typeof v.deadline === "string" &&
+        typeof v.nonce === "string" && /^0x[0-9a-fA-F]{64}$/.test(v.nonce) &&
+        typeof v.sig === "string" && /^0x[0-9a-fA-F]+$/.test(v.sig) &&
+        typeof v.executeAfter === "number" &&
+        typeof v.handle === "string" &&
+        typeof v.savedAt === "number"
+    );
+}
 
 export interface PendingTwitterClaim {
     /** Wallet that initiated the authorize. */
@@ -64,7 +95,16 @@ function loadAll(account: Address): Record<string, PendingTwitterClaim> {
         const raw = window.localStorage.getItem(keyFor(account));
         if (!raw) return {};
         const parsed = JSON.parse(raw);
-        return typeof parsed === "object" && parsed !== null ? parsed : {};
+        if (!parsed || typeof parsed !== "object") return {};
+        // FSEC-006: validate each entry against the expected shape; drop
+        // anything that doesn't pass. Defends against a stray XSS having
+        // written a hostile entry that the claim page would otherwise
+        // happily route to.
+        const out: Record<string, PendingTwitterClaim> = {};
+        for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+            if (isValidPendingClaim(v)) out[k] = v;
+        }
+        return out;
     } catch {
         return {};
     }

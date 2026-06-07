@@ -44,7 +44,13 @@ async function resolveMetadata(
   for (const gw of GATEWAYS) {
     if (signal.aborted) return null;
     try {
-      const res = await fetch(`${gw}${cid}`, { cache: "force-cache", signal });
+      // FSEC-005: dropped `cache: "force-cache"` so a compromised Pinata
+      // edge / DNS poisoning event can't persist a malicious metadata JSON
+      // in the user's browser. React Query already dedupes in-flight
+      // requests by queryKey (= the metadataURI), so the same URI never
+      // double-fetches within a session; we sacrifice across-session cache
+      // for the security win.
+      const res = await fetch(`${gw}${cid}`, { signal });
       if (!res.ok) continue;
       return (await res.json()) as TokenMetadata;
     } catch {

