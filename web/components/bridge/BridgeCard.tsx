@@ -152,6 +152,25 @@ export function BridgeCard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // RACE-010: reset the recipient override + transient form state when
+  // the connected wallet changes. Without this, user A picks a custom
+  // recipient (Alice), disconnects on a shared computer, and user B
+  // connects in the same SPA session - B's burn would mint to Alice's
+  // address. We also clear `historyId` because it points at a
+  // localStorage entry scoped to the previous wallet, and the saved
+  // pending bridge is intentionally NOT reloaded for a different
+  // account (loadPendingBridge keys on burnTxHash, not account, but the
+  // resumed banner would point at A's tx which B can't claim).
+  useEffect(() => {
+    setRecipientOverride(null);
+    setHistoryId(null);
+    setRecipientModalOpen(false);
+    // Don't reset step/amount when there's an active in-flight bridge -
+    // disconnect-and-reconnect is a common recovery action for connector
+    // hiccups, and dropping the step machine would lose the user's tx.
+    // Same for amountStr - the user re-types if they restart.
+  }, [account]);
+
   // Effective recipient = override if set, otherwise the connected wallet.
   const recipient: Address | undefined = recipientOverride ?? account;
 

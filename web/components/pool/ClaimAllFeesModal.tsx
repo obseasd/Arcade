@@ -1,7 +1,7 @@
 "use client";
 
 import { CheckCircle2, Info, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Address, encodeFunctionData, erc20Abi, formatUnits, zeroAddress } from "viem";
 import {
     useAccount,
@@ -200,41 +200,54 @@ export function ClaimAllFeesModal({ open, onClose, onSuccess }: Props) {
     // non-zero unclaimed fees (the common case). The user can toggle off
     // anything before submitting.
     const [selected, setSelected] = useState<Set<string>>(new Set());
+    // RACE-006: track whether the user has touched the selection. The
+    // seed effect uses `cur.size === 0` as a proxy for "never seeded",
+    // but that can't distinguish "still loading" from "user explicitly
+    // cleared". With this ref we only seed when the user hasn't
+    // interacted yet, and the toggle/selectAll/clearAll handlers flip it
+    // permanently.
+    const userTouchedRef = useRef(false);
     useEffect(() => {
         if (!open) return;
+        if (userTouchedRef.current) return;
         const init = new Set<string>();
         positions.forEach((p) => {
             if (p.tokensOwed0 > 0n || p.tokensOwed1 > 0n) {
                 init.add(p.tokenId.toString());
             }
         });
-        // Only seed when we have data + no manual selection yet to avoid
-        // clobbering a user's deliberate empty selection. Stays inside a
-        // useEffect because `positions` may arrive AFTER the modal opens
-        // (data is fetched on mount of the parent page) and we want the
-        // seed to fire when it does, not just on the open transition.
-        setSelected((cur) => (cur.size === 0 && init.size > 0 ? init : cur));
+        if (init.size > 0) setSelected(init);
     }, [open, positions]);
-    // Clear-on-close moved out of useEffect into a render-phase prev-prop
-    // check. The seed effect above stays as an effect because it depends
-    // on async-arriving `positions`; this teardown only depends on the
-    // open transition itself.
+    // Clear-on-close + reset the interaction flag so the next open
+    // re-seeds fresh. Done as a render-phase prev-prop check (rather
+    // than a teardown effect) so the first paint after open re-mirrors
+    // the seeded state without an extra render cycle.
     const [prevOpen, setPrevOpen] = useState(open);
     if (open !== prevOpen) {
         setPrevOpen(open);
-        if (!open) setSelected(new Set());
+        if (!open) {
+            setSelected(new Set());
+            userTouchedRef.current = false;
+        }
     }
 
-    const toggle = (id: string) =>
+    const toggle = (id: string) => {
+        userTouchedRef.current = true;
         setSelected((s) => {
             const next = new Set(s);
             if (next.has(id)) next.delete(id);
             else next.add(id);
             return next;
         });
-    const selectAll = () =>
+    };
+    const selectAll = () => {
+        userTouchedRef.current = true;
         setSelected(new Set(positions.map((p) => p.tokenId.toString())));
-    const clearAll = () => setSelected(new Set());
+    };
+    const clearAll = () => {
+        userTouchedRef.current = true;
+        setSelected(new Set());
+    };
 
     // Estimate gas across the batch and convert to USDC. Arc uses USDC as
     // its native gas token (6 decimals), so the raw `gas * gasPrice` value

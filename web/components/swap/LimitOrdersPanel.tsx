@@ -4,7 +4,7 @@ import { X } from "lucide-react";
 import { RefreshIcon } from "@/components/ui/MaskIcon";
 import { useEffect, useMemo, useState } from "react";
 import type { Address } from "viem";
-import { useReadContract, useReadContracts, useWriteContract } from "wagmi";
+import { usePublicClient, useReadContract, useReadContracts, useWriteContract } from "wagmi";
 import { ORBS_TWAP_ABI, decodeOrderStatus } from "@/lib/abis/orbsTwap";
 import { ADDRESSES, USDC_DECIMALS } from "@/lib/constants";
 import { useV2Tokens } from "@/lib/hooks/useV2Tokens";
@@ -133,6 +133,7 @@ export function LimitOrdersPanel({ account, variant = "card", className }: Props
     }, [v2Tokens, v3Tokens]);
 
     const { writeContractAsync, isPending } = useWriteContract();
+    const publicClient = usePublicClient();
 
     const onCancelAll = async () => {
         if (openOrders.length === 0) return;
@@ -141,16 +142,34 @@ export function LimitOrdersPanel({ account, variant = "card", className }: Props
             title: `Cancelling ${openOrders.length} order${openOrders.length === 1 ? "" : "s"}`,
             message: "Confirm each tx in your wallet.",
         });
-        let cancelled = 0;
+        // RACE-011: writeContractAsync resolves on WALLET CONFIRMATION,
+        // not on mining. If a keeper fills order N+1 while the user is
+        // signing the cancel for N, the next cancel will revert on-chain
+        // even though we already counted it as submitted. Two fixes:
+        //  - Wait for the receipt between iterations so a fill in-between
+        //    surfaces as a per-order error before we move on.
+        //  - Refetch the orders + ids list each loop so the final toast
+        //    reads the actual on-chain remaining count.
+        // Also re-word the final toast to "Submitted N cancel txs" - we
+        // can confirm the user pressed Approve, not that the cancels
+        // landed.
+        let submitted = 0;
         for (const o of openOrders) {
             try {
-                await writeContractAsync({
+                const hash = await writeContractAsync({
                     address: ADDRESSES.orbsTwap,
                     abi: ORBS_TWAP_ABI,
                     functionName: "cancel",
                     args: [o.id],
                 });
-                cancelled++;
+                submitted++;
+                // Wait for the receipt before submitting the next cancel
+                // so the order book reflects what's already cancelled. If
+                // the tx reverts (keeper filled in the meantime), the
+                // throw lands in catch and we surface it.
+                if (publicClient) {
+                    await publicClient.waitForTransactionReceipt({ hash });
+                }
             } catch (e) {
                 const msg = e instanceof Error ? e.message : "Cancel failed";
                 pushToast({
@@ -161,8 +180,11 @@ export function LimitOrdersPanel({ account, variant = "card", className }: Props
                 break;
             }
         }
-        if (cancelled > 0) {
-            pushToast({ kind: "info", title: `Cancelled ${cancelled} order${cancelled === 1 ? "" : "s"}` });
+        if (submitted > 0) {
+            pushToast({
+                kind: "info",
+                title: `Submitted ${submitted} cancel${submitted === 1 ? "" : "s"}`,
+            });
             ordersQ.refetch();
             idsQ.refetch();
         }
