@@ -57,18 +57,19 @@ export function TokenSelectModal({ open, onClose, tokens, onSelect, selectedAddr
     if (open) setQ("");
   }
 
-  // Wire the canonical ETH pin to whichever testnet ETH proxy is configured:
-  // prefer SeedETH (the mock ERC20 minted to the treasury so users actually
-  // have a balance to trade with), and fall back to WETH only when SeedETH
-  // isn't deployed. The Arc-canonical WETH address can be plugged in later
-  // when there's a faucet or bridge route that gives users a non-zero
-  // balance; until then SeedETH is the right "ETH" experience.
+  // Wire the canonical ETH pin to SeedETH (the testnet mock ERC20 with 1M
+  // supply pre-minted to the treasury) so the chip always lands the user
+  // on something they actually hold. The Arc-native WETH at the launchpad's
+  // immutable `weth` slot has 0 user balance and no liquidity, so wiring
+  // the chip there gave users a dead-end. WETH stays usable via "paste
+  // address" import for anyone who's bridged some in — it's just not
+  // pinned. When a faucet or bridge route makes WETH user-holdable on
+  // Arc, swap this back to weth.
   const pinnedTemplates: PinnedTemplate[] = useMemo(() => {
     return PINNED.map((p) => {
       if (p.symbol === "USDC") return { ...p, address: ADDRESSES.usdc };
-      if (p.symbol === "ETH") {
-        if (ADDRESSES.seedEth !== zeroAddress) return { ...p, address: ADDRESSES.seedEth };
-        if (ADDRESSES.weth !== zeroAddress) return { ...p, address: ADDRESSES.weth };
+      if (p.symbol === "ETH" && ADDRESSES.seedEth !== zeroAddress) {
+        return { ...p, address: ADDRESSES.seedEth };
       }
       return p;
     });
