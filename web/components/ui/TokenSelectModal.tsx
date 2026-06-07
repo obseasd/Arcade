@@ -37,8 +37,8 @@ interface Props {
 
 const PINNED: PinnedTemplate[] = [
   { symbol: "USDC", name: "USD Coin" },
-  { symbol: "WUSDC", name: "Wrapped USDC" },
   { symbol: "ETH", name: "Wrapped Ether" },
+  { symbol: "WUSDC", name: "Wrapped USDC" },
   { symbol: "USDT", name: "Tether" },
   { symbol: "BTC", name: "Wrapped BTC" },
 ];
@@ -57,15 +57,17 @@ export function TokenSelectModal({ open, onClose, tokens, onSelect, selectedAddr
     if (open) setQ("");
   }
 
-  // Wire the canonical ETH pin to the testnet SeedETH address when present,
-  // so users can pair USDC/ETH from the chip grid without having to paste
-  // 0xcA34… every time. On mainnet (where NEXT_PUBLIC_SEED_ETH_ADDRESS is
-  // unset) the pin falls back to its "Soon" placeholder.
+  // Wire the canonical ETH pin to whichever testnet ETH proxy is configured:
+  // prefer the actual WETH (set on gen 5+ deploys via NEXT_PUBLIC_WETH_ADDRESS)
+  // so a USDC/WETH pair becomes a first-class flow, and fall back to the
+  // legacy SeedETH placeholder for older deploys. Both are testnet ERC20s
+  // representing ETH; the pinned chip just routes the user to the right one.
   const pinnedTemplates: PinnedTemplate[] = useMemo(() => {
     return PINNED.map((p) => {
       if (p.symbol === "USDC") return { ...p, address: ADDRESSES.usdc };
-      if (p.symbol === "ETH" && ADDRESSES.seedEth !== zeroAddress) {
-        return { ...p, address: ADDRESSES.seedEth };
+      if (p.symbol === "ETH") {
+        if (ADDRESSES.weth !== zeroAddress) return { ...p, address: ADDRESSES.weth };
+        if (ADDRESSES.seedEth !== zeroAddress) return { ...p, address: ADDRESSES.seedEth };
       }
       return p;
     });
