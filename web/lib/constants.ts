@@ -97,6 +97,28 @@ export const LAUNCHPAD_TOKEN_DECIMALS = 18;
 export const LAUNCHPAD_TOTAL_SUPPLY = 1_000_000_000n; // 1B fixed supply
 export const CREATION_FEE_USDC = 3_000_000n; // 3 USDC (6 decimals)
 
+/**
+ * Bonding-curve protocol constants. Single source of truth for the
+ * frontend - mirrors contracts/v4src/libraries/ArcadeV4Curve.sol and
+ * contracts/src/launchpad/ArcadeLaunchpad.sol.
+ *
+ * Audit ARCH-002: these were previously hard-coded across 6+ files
+ * under 5 different local names (`CURVE_SUPPLY`, `ARC_HOOK_CURVE_SUPPLY`,
+ * `GRAD_USDC`, `ARC_HOOK_GRAD_USDC`, `V4_GRAD_USDC`,
+ * `MIGRATION_TARGET_FALLBACK`). Drift between files would show one
+ * progress bar at 80% on the same token another shows at 64%. Update
+ * here and every page picks it up.
+ *
+ * - `LAUNCHPAD_CURVE_SUPPLY`: tokens allocated to the bonding curve
+ *   itself (separate from the 200M-token migration-LP allocation).
+ *   Sold-out at 800M raised.
+ * - `LAUNCHPAD_GRADUATION_USDC`: USDC raised threshold that triggers
+ *   migration to V2 LP (V2/V3 launches) or to a single-sided V4
+ *   position (V4 hook launches).
+ */
+export const LAUNCHPAD_CURVE_SUPPLY = 800_000_000n * 10n ** BigInt(LAUNCHPAD_TOKEN_DECIMALS);
+export const LAUNCHPAD_GRADUATION_USDC = 20_000n * 10n ** BigInt(USDC_DECIMALS);
+
 /** Featured token addresses surfaced at the top of the launchpad list. Set via
  * `NEXT_PUBLIC_FEATURED_TOKENS` (comma-separated lowercase addresses). Empty by
  * default — admin-curated promotion only. */

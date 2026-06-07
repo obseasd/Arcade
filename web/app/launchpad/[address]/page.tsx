@@ -8,7 +8,7 @@ import { Address, erc20Abi, isAddress, parseAbiItem } from "viem";
 import { useReadContract } from "wagmi";
 import { LAUNCHPAD_ABI } from "@/lib/abis/launchpad";
 import { V3_POOL_ABI } from "@/lib/abis/v3";
-import { ADDRESSES, LAUNCHPAD_TOTAL_SUPPLY } from "@/lib/constants";
+import { ADDRESSES, LAUNCHPAD_CURVE_SUPPLY, LAUNCHPAD_GRADUATION_USDC, LAUNCHPAD_TOTAL_SUPPLY } from "@/lib/constants";
 import { useClankerMcap } from "@/lib/hooks/useClankerMcap";
 import { useLaunchpadVolume } from "@/lib/hooks/useLaunchpadVolume";
 import { useTokenImage, useTokenMetadata } from "@/lib/hooks/useTokenImage";
@@ -24,9 +24,6 @@ import { PendingClaimBanner } from "@/components/launchpad/PendingClaimBanner";
 import { TokenActivityPanel } from "@/components/launchpad/TokenActivityPanel";
 import { Comments } from "@/components/launchpad/Comments";
 import { Tooltip } from "@/components/ui/Tooltip";
-
-const CURVE_SUPPLY = 800_000_000n * 10n ** 18n;
-const MIGRATION_TARGET_FALLBACK = 20_000n * 10n ** 6n;
 
 const V3_SWAP_EVT = parseAbiItem(
   "event Swap(address indexed sender, address indexed recipient, int256 amount0, int256 amount1, uint160 sqrtPriceX96, uint128 liquidity, int24 tick)",
@@ -76,7 +73,7 @@ export default function TokenDetailPage() {
   // Curve naturally fills at 20k USDC of real reserves; the constant used to
   // be exposed by the contract but was removed in the audit fixes (dead state).
   // The frontend uses the hardcoded value, which matches the curve math.
-  const migrationTarget = MIGRATION_TARGET_FALLBACK;
+  const migrationTarget = LAUNCHPAD_GRADUATION_USDC;
 
   const state = tokenState.data as any;
   const symbol = (symbolQ.data as string | undefined) ?? "?";
@@ -156,8 +153,8 @@ export default function TokenDetailPage() {
     : mcap && mcap > 0n
       ? `$${formatUSDC(mcap, 6, 0)}`
       : "-";
-  const progress = !migrated && CURVE_SUPPLY > 0n
-    ? Number((tokensSold * 10_000n) / CURVE_SUPPLY) / 100
+  const progress = !migrated && LAUNCHPAD_CURVE_SUPPLY > 0n
+    ? Number((tokensSold * 10_000n) / LAUNCHPAD_CURVE_SUPPLY) / 100
     : migrated
       ? 100
       : 0;

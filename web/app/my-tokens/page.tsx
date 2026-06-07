@@ -41,7 +41,7 @@ import { TokenIcon } from "@/components/ui/TokenIcon";
 import { ReceiveModal } from "@/components/wallet/ReceiveModal";
 import { WalletIcon } from "@/components/wallet/WalletIcon";
 import { ARCADE_HOOK_STATUS } from "@/lib/abis/arcadeHook";
-import { LAUNCHPAD_TOKEN_DECIMALS, USDC_DECIMALS, V4_HOOK_ENABLED } from "@/lib/constants";
+import { LAUNCHPAD_CURVE_SUPPLY, LAUNCHPAD_GRADUATION_USDC, LAUNCHPAD_TOKEN_DECIMALS, USDC_DECIMALS, V4_HOOK_ENABLED } from "@/lib/constants";
 import { useArcadeHookTokens, type ArcadeHookTokenInfo } from "@/lib/hooks/useArcadeHookTokens";
 import { useLaunchpadTokens } from "@/lib/hooks/useLaunchpadTokens";
 import { useMyHoldings, type HoldingInfo } from "@/lib/hooks/useMyHoldings";
@@ -68,9 +68,6 @@ const CreatorEarningsCard = dynamic(
     ),
   },
 );
-
-const CURVE_SUPPLY = 800_000_000n * 10n ** 18n;
-const V4_GRAD_USDC = 20_000n * 10n ** 6n;
 
 /** V4 hook holding: token info + raw balance (18 dp). No USD value yet
  *  because the curve / pool price is not exposed as a single read; deferred
@@ -686,8 +683,8 @@ function ArcadeHookCreatorCard({ token }: { token: ArcadeHookTokenInfo }) {
     const { image } = useTokenImage(token.address);
     const isGraduated = token.status === ARCADE_HOOK_STATUS.GRADUATED;
     const raisedPct = useMemo(() => {
-        if (V4_GRAD_USDC === 0n) return 0;
-        const bps = (token.realUsdcReserve * 10_000n) / V4_GRAD_USDC;
+        if (LAUNCHPAD_GRADUATION_USDC === 0n) return 0;
+        const bps = (token.realUsdcReserve * 10_000n) / LAUNCHPAD_GRADUATION_USDC;
         return Math.min(100, Number(bps) / 100);
     }, [token.realUsdcReserve]);
 
@@ -758,8 +755,8 @@ function ArcadeHookHoldingCard({ holding }: { holding: ArcadeHookHolding }) {
     const { image } = useTokenImage(holding.token.address);
     const isGraduated = holding.token.status === ARCADE_HOOK_STATUS.GRADUATED;
     const raisedPct = useMemo(() => {
-        if (V4_GRAD_USDC === 0n) return 0;
-        const bps = (holding.token.realUsdcReserve * 10_000n) / V4_GRAD_USDC;
+        if (LAUNCHPAD_GRADUATION_USDC === 0n) return 0;
+        const bps = (holding.token.realUsdcReserve * 10_000n) / LAUNCHPAD_GRADUATION_USDC;
         return Math.min(100, Number(bps) / 100);
     }, [holding.token.realUsdcReserve]);
 
@@ -997,7 +994,7 @@ function CreatorTab({
                                     <TokenCard
                                         key={token.address}
                                         token={token}
-                                        curveSupply={CURVE_SUPPLY}
+                                        curveSupply={LAUNCHPAD_CURVE_SUPPLY}
                                     />
                                 ))}
                             </div>

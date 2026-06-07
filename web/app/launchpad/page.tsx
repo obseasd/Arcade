@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import { ArrowRight, Search, Sparkles, Rocket } from "lucide-react";
 import { PlusIcon } from "@/components/ui/MaskIcon";
-import { FEATURED_TOKENS, LAUNCHPAD_TOTAL_SUPPLY, V4_ENABLED, V4_HOOK_ENABLED } from "@/lib/constants";
+import { FEATURED_TOKENS, LAUNCHPAD_CURVE_SUPPLY, LAUNCHPAD_GRADUATION_USDC, LAUNCHPAD_TOTAL_SUPPLY, V4_ENABLED, V4_HOOK_ENABLED } from "@/lib/constants";
 import { ARCADE_HOOK_STATUS } from "@/lib/abis/arcadeHook";
 import { useLaunchpadTokens, LaunchpadTokenInfo } from "@/lib/hooks/useLaunchpadTokens";
 import { useV4LaunchpadTokens } from "@/lib/hooks/useV4LaunchpadTokens";
@@ -22,8 +22,6 @@ import { cn } from "@/lib/utils";
 // user needs to click "View all" to see the dedicated V4 list. Six fits in
 // one row on lg breakpoint, three on sm.
 const V4_PREVIEW_LIMIT = 6;
-
-const CURVE_SUPPLY = 800_000_000n * 10n ** 18n;
 
 type Filter = "all" | "new" | "trending" | "migrating" | "migrated";
 
@@ -62,7 +60,7 @@ export default function LaunchpadIndexPage() {
     } else if (filter === "trending") {
       list = list.filter((t) => !t.migrated && t.tokensSold > 0n).sort((a, b) => Number(b.realUsdcReserve - a.realUsdcReserve));
     } else if (filter === "migrating") {
-      list = list.filter((t) => !t.migrated && (t.tokensSold * 100n) / CURVE_SUPPLY > 80n);
+      list = list.filter((t) => !t.migrated && (t.tokensSold * 100n) / LAUNCHPAD_CURVE_SUPPLY > 80n);
     } else if (filter === "migrated") {
       list = list.filter((t) => t.migrated);
     }
@@ -253,7 +251,7 @@ export default function LaunchpadIndexPage() {
       {!isLoading && filtered.length > 0 && (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {filtered.map((t) => (
-            <TokenCard key={t.address} token={t} curveSupply={CURVE_SUPPLY} />
+            <TokenCard key={t.address} token={t} curveSupply={LAUNCHPAD_CURVE_SUPPLY} />
           ))}
         </div>
       )}
@@ -272,9 +270,6 @@ export default function LaunchpadIndexPage() {
 // ArcadeHook preview card (compact, used in the /launchpad strip)
 // -------------------------------------------------------------------
 
-const ARC_HOOK_GRAD_USDC = 20_000n * 10n ** 6n;
-const ARC_HOOK_CURVE_SUPPLY = 800_000_000n * 10n ** 18n;
-
 const ARC_HOOK_MODE_LABEL: Record<number, string> = {
   0: "PUMP",
   1: "CLANKER",
@@ -285,13 +280,13 @@ function ArcadeHookPreviewCard({ token }: { token: ArcadeHookTokenInfo }) {
   const { image } = useTokenImage(token.address);
 
   const raisedPct = useMemo(() => {
-    if (ARC_HOOK_GRAD_USDC === 0n) return 0;
-    const bps = (token.realUsdcReserve * 10_000n) / ARC_HOOK_GRAD_USDC;
+    if (LAUNCHPAD_GRADUATION_USDC === 0n) return 0;
+    const bps = (token.realUsdcReserve * 10_000n) / LAUNCHPAD_GRADUATION_USDC;
     return Math.min(100, Number(bps) / 100);
   }, [token.realUsdcReserve]);
 
   const tokensSoldPct = useMemo(() => {
-    const bps = (token.tokensSold * 10_000n) / ARC_HOOK_CURVE_SUPPLY;
+    const bps = (token.tokensSold * 10_000n) / LAUNCHPAD_CURVE_SUPPLY;
     return Math.min(100, Number(bps) / 100);
   }, [token.tokensSold]);
 

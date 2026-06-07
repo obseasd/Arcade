@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 
 import { ARCADE_HOOK_STATUS } from "@/lib/abis/arcadeHook";
-import { V4_HOOK_ENABLED } from "@/lib/constants";
+import { LAUNCHPAD_CURVE_SUPPLY, LAUNCHPAD_GRADUATION_USDC, V4_HOOK_ENABLED } from "@/lib/constants";
 import { useArcadeHookTokens, type ArcadeHookTokenInfo } from "@/lib/hooks/useArcadeHookTokens";
 import { useTokenImage } from "@/lib/hooks/useTokenImage";
 import { TokenIcon } from "@/components/ui/TokenIcon";
@@ -13,9 +13,6 @@ import { SkeletonCard } from "@/components/ui/Skeleton";
 import { cn } from "@/lib/utils";
 
 type Filter = "all" | "curving" | "graduated" | "snipe-active";
-
-const GRAD_USDC = 20_000n * 10n ** 6n;
-const CURVE_SUPPLY = 800_000_000n * 10n ** 18n;
 
 const MODE_LABEL: Record<number, string> = {
     0: "PUMP",
@@ -187,13 +184,13 @@ function ArcadeHookListCard({ token, nowSec }: { token: ArcadeHookTokenInfo; now
     const { image } = useTokenImage(token.address);
 
     const raisedPct = useMemo(() => {
-        if (GRAD_USDC === 0n) return 0;
-        const bps = (token.realUsdcReserve * 10_000n) / GRAD_USDC;
+        if (LAUNCHPAD_GRADUATION_USDC === 0n) return 0;
+        const bps = (token.realUsdcReserve * 10_000n) / LAUNCHPAD_GRADUATION_USDC;
         return Math.min(100, Number(bps) / 100);
     }, [token.realUsdcReserve]);
 
     const tokensSoldPct = useMemo(() => {
-        const bps = (token.tokensSold * 10_000n) / CURVE_SUPPLY;
+        const bps = (token.tokensSold * 10_000n) / LAUNCHPAD_CURVE_SUPPLY;
         return Math.min(100, Number(bps) / 100);
     }, [token.tokensSold]);
 

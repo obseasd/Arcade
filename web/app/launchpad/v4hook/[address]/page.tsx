@@ -12,21 +12,13 @@ import {
     ARCADE_HOOK_MODE,
     ARCADE_HOOK_STATUS,
 } from "@/lib/abis/arcadeHook";
-import {
-    ADDRESSES,
-    LAUNCHPAD_TOKEN_DECIMALS,
-    USDC_DECIMALS,
-    V4_HOOK_ENABLED,
-} from "@/lib/constants";
+import { ADDRESSES, LAUNCHPAD_CURVE_SUPPLY, LAUNCHPAD_GRADUATION_USDC, LAUNCHPAD_TOKEN_DECIMALS, USDC_DECIMALS, V4_HOOK_ENABLED } from "@/lib/constants";
 import { useApproveIfNeeded } from "@/lib/hooks/useApproveIfNeeded";
 import { useArcadeHookCurveState } from "@/lib/hooks/useArcadeHookTokens";
 import { useTokenImage, useTokenMetadata } from "@/lib/hooks/useTokenImage";
 import { pushToast } from "@/lib/toast";
 import { TokenIcon } from "@/components/ui/TokenIcon";
 import { formatAddress, formatToken, formatUSDC } from "@/lib/utils";
-
-const CURVE_SUPPLY = 800_000_000n * 10n ** 18n;
-const GRADUATION_USDC = 20_000n * 10n ** 6n;
 
 const MODE_LABEL: Record<number, string> = {
     [ARCADE_HOOK_MODE.PUMP]: "PUMP (50/50 split)",
@@ -299,14 +291,14 @@ function CurveProgressCard({
     description?: string;
 }) {
     const tokensSoldPct = useMemo(() => {
-        if (CURVE_SUPPLY === 0n) return 0;
-        const bps = (tokensSold * 10_000n) / CURVE_SUPPLY;
+        if (LAUNCHPAD_CURVE_SUPPLY === 0n) return 0;
+        const bps = (tokensSold * 10_000n) / LAUNCHPAD_CURVE_SUPPLY;
         return Math.min(100, Number(bps) / 100);
     }, [tokensSold]);
 
     const raisedPct = useMemo(() => {
-        if (GRADUATION_USDC === 0n) return 0;
-        const bps = (realUsdcReserve * 10_000n) / GRADUATION_USDC;
+        if (LAUNCHPAD_GRADUATION_USDC === 0n) return 0;
+        const bps = (realUsdcReserve * 10_000n) / LAUNCHPAD_GRADUATION_USDC;
         return Math.min(100, Number(bps) / 100);
     }, [realUsdcReserve]);
 
@@ -320,7 +312,7 @@ function CurveProgressCard({
                     {formatUSDC(realUsdcReserve, USDC_DECIMALS, 2)}
                 </div>
                 <div className="text-sm text-arc-text-muted">
-                    / {formatUSDC(GRADUATION_USDC, USDC_DECIMALS, 0)} USDC raised
+                    / {formatUSDC(LAUNCHPAD_GRADUATION_USDC, USDC_DECIMALS, 0)} USDC raised
                 </div>
             </div>
             <div className="mt-4">
@@ -345,7 +337,7 @@ function CurveProgressCard({
                 <Stat
                     label="Remaining on curve"
                     value={formatToken(
-                        CURVE_SUPPLY > tokensSold ? CURVE_SUPPLY - tokensSold : 0n,
+                        LAUNCHPAD_CURVE_SUPPLY > tokensSold ? LAUNCHPAD_CURVE_SUPPLY - tokensSold : 0n,
                         LAUNCHPAD_TOKEN_DECIMALS,
                         2,
                     )}
