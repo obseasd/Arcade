@@ -6,6 +6,7 @@ import {
     ChevronsLeft,
     ChevronsRight,
     Flame,
+    Info,
     Search,
     Sparkles,
 } from "lucide-react";
@@ -488,6 +489,27 @@ export default function ExplorePage() {
                     ))}
                 </div>
             </div>
+
+            {/* Incentivized filter CTA banner. Mirrors HyperSwap's
+                "Start a campaign" pattern: when the user filters to
+                incentivized pools we surface the creation flow inline so
+                the orphan /swap/incentivize route is reachable. */}
+            {filter === "incentivized" && (
+                <div className="mb-4 flex items-center gap-2 text-xs text-arc-text-muted">
+                    <Info className="h-3.5 w-3.5 shrink-0" />
+                    <span>
+                        Want to boost your pool's visibility? Create an incentive
+                        campaign to attract liquidity providers and increase
+                        trading volume.{" "}
+                        <Link
+                            href="/swap/incentivize"
+                            className="font-semibold text-arc-success underline-offset-2 hover:underline"
+                        >
+                            Start a campaign
+                        </Link>
+                    </span>
+                </div>
+            )}
             {/* Search + sort + view-mode toggle. Both icon buttons are perfect
                 squares (h-11 w-11), and the search bar matches that height so
                 the row reads as a uniform 44-px control strip. */}

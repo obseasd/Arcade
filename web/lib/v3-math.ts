@@ -41,7 +41,12 @@ export function defaultTickSpacingForFee(feePip: number): number {
  */
 function priceToTick(price: number): number {
     if (!isFinite(price) || price <= 0) return 0;
-    return Math.floor(Math.log(price) / Math.log(1.0001));
+    // MATH-008: Math.round (not floor) so symmetric +/- pct preset ranges land
+    // on the nearest tick to the requested price. floor introduces a 1-tick
+    // downward bias that nearestUsableTick absorbs for fee tier >= 500
+    // (spacing >= 10) but leaks through on fee 100 (spacing 1) as a 1-bp
+    // band shift, making the lower bound 1 bp tighter than the upper.
+    return Math.round(Math.log(price) / Math.log(1.0001));
 }
 
 function tickToPrice(tick: number): number {
@@ -61,7 +66,8 @@ export function priceToTickWithDecimals(
 ): number {
     if (!isFinite(price) || price <= 0) return 0;
     const adjusted = price * Math.pow(10, decimals1 - decimals0);
-    return Math.floor(Math.log(adjusted) / Math.log(1.0001));
+    // MATH-008 mirror: same Math.round fix as priceToTick.
+    return Math.round(Math.log(adjusted) / Math.log(1.0001));
 }
 
 export function tickToPriceWithDecimals(
