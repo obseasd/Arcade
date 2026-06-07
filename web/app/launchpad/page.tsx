@@ -2,7 +2,8 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { ArrowRight, Plus, Search, Sparkles, Rocket } from "lucide-react";
+import { ArrowRight, Search, Sparkles, Rocket } from "lucide-react";
+import { PlusIcon } from "@/components/ui/MaskIcon";
 import { FEATURED_TOKENS, LAUNCHPAD_TOTAL_SUPPLY, V4_ENABLED, V4_HOOK_ENABLED } from "@/lib/constants";
 import { ARCADE_HOOK_STATUS } from "@/lib/abis/arcadeHook";
 import { useLaunchpadTokens, LaunchpadTokenInfo } from "@/lib/hooks/useLaunchpadTokens";
@@ -110,7 +111,7 @@ export default function LaunchpadIndexPage() {
         >
           <span className="pointer-events-none absolute inset-0 bg-gradient-to-r from-black/55 via-black/30 to-black/55" aria-hidden />
           <span className="relative flex items-center gap-2 font-semibold drop-shadow-[0_1px_2px_rgba(0,0,0,0.85)]">
-            <Plus className="h-4 w-4" /> Launch a token
+            <PlusIcon size={16} className="bg-white" /> Launch a token
           </span>
         </button>
       </div>
@@ -171,7 +172,7 @@ export default function LaunchpadIndexPage() {
                 className="flex items-center gap-1 text-xs text-arc-text-muted hover:text-arc-text"
               >
                 New launch
-                <Plus className="h-3 w-3" />
+                <PlusIcon size={12} />
               </Link>
             </div>
           </div>
@@ -199,10 +200,15 @@ export default function LaunchpadIndexPage() {
               key={f}
               onClick={() => setFilter(f)}
               className={cn(
-                "rounded-lg px-3 py-1.5 text-sm font-medium transition-colors",
+                // Glass chips, same palette as the Explore filter row but
+                // keeping the rounded-lg shape (Explore uses rounded-full
+                // pills). Selected chip gets a brighter white-tinted fill
+                // + inset highlight to read as the active state without a
+                // coloured accent ring.
+                "rounded-lg border px-3 py-1.5 text-sm font-medium backdrop-blur-xl transition-all",
                 filter === f
-                  ? "bg-arc-primary text-white"
-                  : "text-arc-text-muted hover:bg-arc-surface hover:text-arc-text",
+                  ? "border-white/30 bg-white/15 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.15)]"
+                  : "border-white/10 bg-white/[0.04] text-arc-text hover:border-white/20 hover:bg-white/[0.08]",
               )}
             >
               {f === "all"

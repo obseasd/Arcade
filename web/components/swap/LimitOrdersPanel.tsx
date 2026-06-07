@@ -1,6 +1,7 @@
 "use client";
 
-import { RefreshCw, X } from "lucide-react";
+import { X } from "lucide-react";
+import { RefreshIcon } from "@/components/ui/MaskIcon";
 import { useEffect, useMemo, useState } from "react";
 import type { Address } from "viem";
 import { useReadContract, useReadContracts, useWriteContract } from "wagmi";
@@ -232,13 +233,9 @@ export function LimitOrdersPanel({ account, variant = "card", className }: Props
                     {/* key=refreshTick forces a remount so the spin animation
                         restarts on every click, even if the previous spin is
                         still running. */}
-                    <RefreshCw
-                        key={refreshTick}
-                        className={cn(
-                            "h-3.5 w-3.5",
-                            isRefreshing && "animate-spin",
-                        )}
-                    />
+                    <span key={refreshTick}>
+                        <RefreshIcon size={14} spinning={isRefreshing} />
+                    </span>
                 </button>
             </div>
 

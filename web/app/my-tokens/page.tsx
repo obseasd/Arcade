@@ -32,6 +32,8 @@ import { Address, erc20Abi, formatUnits } from "viem";
 import { useAccount, useReadContracts } from "wagmi";
 import dynamic from "next/dynamic";
 import { TokenCard } from "@/components/launchpad/TokenCard";
+import { MyPositions } from "@/components/pool/MyPositions";
+import { V3Positions } from "@/components/pool/V3Positions";
 import { CreatorFeesPanel } from "@/components/pool/CreatorFeesPanel";
 import { PendingWithdrawalsCard } from "@/components/pool/PendingWithdrawalsCard";
 import { VaultClaimPanel } from "@/components/pool/VaultClaimPanel";
@@ -78,11 +80,12 @@ interface ArcadeHookHolding {
     balance: bigint;
 }
 
-type TabKey = "overview" | "tokens" | "creator" | "activity";
+type TabKey = "overview" | "tokens" | "positions" | "creator" | "activity";
 
 const TABS: { key: TabKey; label: string }[] = [
     { key: "overview", label: "Overview" },
     { key: "tokens", label: "Tokens" },
+    { key: "positions", label: "Positions" },
     { key: "creator", label: "Creator" },
     { key: "activity", label: "Activity" },
 ];
@@ -192,6 +195,8 @@ export default function MyTokensPage() {
                     loading={holdingsLoading}
                     v4Holdings={myV4Holdings}
                 />
+            ) : tab === "positions" ? (
+                <PositionsTab />
             ) : tab === "creator" ? (
                 <CreatorTab mine={mine} v4Mine={myV4Launches} loading={isLoading} />
             ) : (
@@ -893,6 +898,55 @@ function TokenRow({ holding }: { holding: HoldingInfo }) {
                 <span className="text-[10px]">(indexer)</span>
             </td>
         </tr>
+    );
+}
+
+// ============================ Positions tab ============================
+
+/**
+ * LP positions surface: stacks Standard AMM (V2) on top of Concentrated
+ * Liquidity (V3) so the user sees everything liquidity-side in one view.
+ * Both subcomponents render nothing when the user has zero positions of
+ * that kind, so the tab also self-hides each empty section.
+ *
+ * Burned positions (V2 LP burned by the protocol) are surfaced too - the
+ * /positions page exposes them under a tab; here they're inlined at the
+ * bottom because there's no tab affordance.
+ */
+function PositionsTab() {
+    return (
+        <div className="space-y-6">
+            <div>
+                <div className="mb-3 flex items-center justify-between">
+                    <h3 className="text-sm font-semibold text-arc-text">Standard AMM</h3>
+                    <Link
+                        href="/positions"
+                        className="text-xs text-arc-text-muted hover:text-arc-text"
+                    >
+                        Open positions page
+                    </Link>
+                </div>
+                <MyPositions
+                    emptyState={
+                        <div className="arc-card p-6 text-center text-sm text-arc-text-muted">
+                            No V2 LP positions yet.
+                        </div>
+                    }
+                />
+            </div>
+            <div>
+                <div className="mb-3 flex items-center justify-between">
+                    <h3 className="text-sm font-semibold text-arc-text">Concentrated Liquidity</h3>
+                </div>
+                <V3Positions
+                    emptyState={
+                        <div className="arc-card p-6 text-center text-sm text-arc-text-muted">
+                            No V3 positions yet.
+                        </div>
+                    }
+                />
+            </div>
+        </div>
     );
 }
 

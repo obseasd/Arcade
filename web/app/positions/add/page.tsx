@@ -31,6 +31,7 @@ import { ADDRESSES, USDC_DECIMALS } from "@/lib/constants";
 import { arcTestnet } from "@/lib/chains";
 import { useApproveIfNeeded } from "@/lib/hooks/useApproveIfNeeded";
 import { pushToast } from "@/lib/toast";
+import { addActivity } from "@/lib/activityFeed";
 import { TokenIcon } from "@/components/ui/TokenIcon";
 import { TransactionSettings } from "@/components/ui/TransactionSettings";
 import { V3AddLiquidity } from "@/components/pool/V3AddLiquidity";
@@ -361,6 +362,20 @@ function AddLiquidityInner() {
                     pair && pair !== zeroAddress ? `/pool/${pair}` : "/positions",
                 explorerUrl: `${arcTestnet.blockExplorers?.default.url}/tx/${hash}`,
             });
+            // Activity feed row so the user sees the LP add in the recent
+            // activity panel + the /my-tokens portfolio activity table.
+            if (account) {
+                addActivity({
+                    type: "add-liquidity",
+                    account,
+                    token: tokenB.address.toLowerCase() === ADDRESSES.usdc.toLowerCase()
+                        ? tokenA.address
+                        : tokenB.address,
+                    label: `Added LP ${tokenA.symbol}/${tokenB.symbol}`,
+                    value: `${amountA} ${tokenA.symbol} + ${amountB} ${tokenB.symbol}`,
+                    txHash: hash,
+                });
+            }
             // Drop the user on the pool detail page (or /positions when we still
             // need to refetch the pair address after a first-LP add).
             router.push(

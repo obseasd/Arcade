@@ -31,7 +31,8 @@ export type ActivityType =
     | "sell"
     | "swap"
     | "multiswap"
-    | "claim-fees";
+    | "claim-fees"
+    | "add-liquidity";
 
 export interface ActivityEntry {
     id: string;
@@ -119,6 +120,7 @@ export function iconForActivity(type: ActivityType): string {
     switch (type) {
         case "launch":
         case "claim-fees":
+        case "add-liquidity":
             return "/contract.png";
         case "swap":
         case "multiswap":

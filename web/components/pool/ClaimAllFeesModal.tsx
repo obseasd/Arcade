@@ -18,6 +18,7 @@ import { arcTestnet } from "@/lib/chains";
 import { Modal } from "@/components/ui/Modal";
 import { TokenIcon } from "@/components/ui/TokenIcon";
 import { pushToast } from "@/lib/toast";
+import { addActivity } from "@/lib/activityFeed";
 import { cn } from "@/lib/utils";
 
 const USDC_LOWER = ADDRESSES.usdc.toLowerCase();
@@ -347,11 +348,36 @@ export function ClaimAllFeesModal({ open, onClose, onSuccess }: Props) {
                 });
                 await publicClient.waitForTransactionReceipt({ hash });
             }
-            pushToast({
-                kind: "info",
-                title: "Fees claimed",
-                message: `Collected fees on ${ids.length} position${ids.length === 1 ? "" : "s"} in one tx.`,
-            });
+            // Per-position breakdown: one toast + one activity entry per
+            // position so the user sees exactly what they pocketed. The
+            // tokensOwed* readings are pre-claim snapshots; on-chain
+            // semantics guarantee these are exactly the amounts transferred
+            // (collect() sweeps everything the position is owed).
+            const claimedPositions = positions.filter((p) =>
+                selected.has(p.tokenId.toString()),
+            );
+            for (const p of claimedPositions) {
+                const t0Meta = symbolOf[p.token0.toLowerCase()] ?? { symbol: "TKN", decimals: 18 };
+                const t1Meta = symbolOf[p.token1.toLowerCase()] ?? { symbol: "TKN", decimals: 18 };
+                const a0 = formatUnits(p.tokensOwed0, t0Meta.decimals);
+                const a1 = formatUnits(p.tokensOwed1, t1Meta.decimals);
+                const parts: string[] = [];
+                if (p.tokensOwed0 > 0n) parts.push(`${trimFee(a0)} ${t0Meta.symbol}`);
+                if (p.tokensOwed1 > 0n) parts.push(`${trimFee(a1)} ${t1Meta.symbol}`);
+                const summary = parts.join(" + ") || "0 fees";
+                pushToast({
+                    kind: "info",
+                    title: `Position #${p.tokenId.toString()}`,
+                    message: `Claimed ${summary}`,
+                });
+                addActivity({
+                    type: "claim-fees",
+                    account,
+                    token: p.token0.toLowerCase() === USDC_LOWER ? p.token1 : p.token0,
+                    label: `Claimed fees on #${p.tokenId.toString()}`,
+                    value: summary,
+                });
+            }
             void arcTestnet;
             onSuccess?.();
         } catch (e: unknown) {
@@ -577,4 +603,15 @@ function fmtGasUsdc(weiTotal: bigint): string {
     return `$${usd.toLocaleString(undefined, { maximumFractionDigits: 4 })}`;
 }
 void USDC_DECIMALS;
+
+/** Trim a formatUnits() string to at most 4 significant decimals, drop
+ *  trailing zeros, and add a sub-cent floor so the per-position toast
+ *  doesn't show "0.0000003 USDC" but stays informative ("<0.0001 USDC"). */
+function trimFee(raw: string): string {
+    const n = Number(raw);
+    if (!isFinite(n) || n === 0) return "0";
+    if (n < 0.0001) return "<0.0001";
+    if (n < 1) return n.toFixed(4).replace(/\.?0+$/, "");
+    return n.toLocaleString(undefined, { maximumFractionDigits: 4 });
+}
 
