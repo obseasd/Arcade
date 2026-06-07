@@ -289,6 +289,46 @@ What can each privileged role do at most?
 
 ---
 
+## Known structural limit — V2 post-migration royalty bypass (CSEC-003)
+
+Post-migration on PUMP / CLANKER modes the launch lives on a fork of Uniswap V2.
+The 60 bps creator royalty is collected in `ArcadeMultiSwap.swapMigratedRoute`,
+which is the contract our frontend routes every trade through. **The royalty
+is NOT enforced at the V2 pair level** because V2 has no per-pool fee tier —
+it's a single 30 bps fee baked into `(x - fee) * y = k` and that's all the pair
+contract knows about. So:
+
+- Calls to `IArcadeV2Router.swapExactTokensForTokens([USDC, TOKEN], ...)` go
+  through the canonical V2 router with **0 bps royalty**.
+- A future listing on a third-party aggregator (1inch, Odos, etc.) will route
+  through that V2 router for the best price, also paying **0 bps royalty**.
+- Direct `pair.swap(...)` flash-style calls bypass both router and MultiSwap.
+
+We accept this because:
+- Today >95% of volume passes through the Arcade UI, which always routes via
+  MultiSwap. Revenue leak in the current state is operational, not material.
+- The structural fix is to migrate post-curve to **V3 with a custom 60 bps fee
+  tier** (which is what CLANKER_V3 already does), not to add fee logic to the
+  V2 pair. That refactor is tracked separately as a long-term item.
+- The V4 launch path (`ArcadeHook.afterSwap`) collects the royalty at the
+  hook level regardless of the caller. New launches will move to V4 once Arc
+  enables the Cancun hardfork features the hook depends on.
+
+Operational mitigations:
+- Before listing on any external aggregator, raise the bypass with their
+  routing team and confirm they'll integrate via MultiSwap rather than the
+  raw V2 router. None of the major aggregators auto-discover MultiSwap; this
+  is a B2B integration step.
+- The V2 router is open and immutable; we cannot blacklist callers without
+  a router redeploy.
+- If revenue leak materialises before V4 is live, the contingency is a
+  fee-on-transfer modification to `ArcadeV2Pair.swap` that prélèves the 60
+  bps automatically. That breaks Uniswap V2 event ABI compatibility for any
+  external indexer though, so we'd want to be sure before doing it.
+
+This is a known limitation, not an unfixed finding. CSEC-003 in the
+2026-06-08 audit report references this section.
+
 ## Limitations
 
 - **This is NOT a substitute for external audit.** Findings are from manual review by an AI agent ensemble. Subtle classes of bugs (cross-protocol MEV, economic flash-loan paths, specific Solidity compiler quirks) may be missed.
