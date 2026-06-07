@@ -137,7 +137,13 @@ export function BridgeCard() {
   // priority if they're already in the middle of a fresh bridge.
   useEffect(() => {
     if (step.kind !== "idle") return;
-    const saved = loadPendingBridge();
+    // BRIDGE-INJ-PENDING-MINT-GRIEF: only resume the entry that belongs to
+    // the currently connected wallet. Without this gate, an attacker who
+    // can write a forged entry to localStorage (same-origin XSS, shared
+    // computer) would have the next wallet that signs in pay gas to mint
+    // USDC into the attacker-chosen recipient.
+    if (!account) return;
+    const saved = loadPendingBridge(account);
     if (!saved) return;
     setSrcChainId(saved.srcChainId);
     setDstChainId(saved.dstId);
@@ -149,8 +155,10 @@ export function BridgeCard() {
       dstId: saved.dstId,
     });
     setResumedFromStorage(true);
+    // Run on first mount with a connected account, and also when the
+    // wallet switches so the new wallet's own pending entry surfaces.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [account]);
 
   // RACE-010: reset the recipient override + transient form state when
   // the connected wallet changes. Without this, user A picks a custom
@@ -307,6 +315,7 @@ export function BridgeCard() {
         dstId: dstChain.id,
         amountRaw6: amountRaw.toString(),
         recipient: (recipientOverride ?? account) as string,
+        account: account as string,
         createdAt: Date.now(),
       });
       // Record in long-lived history so it shows up in the "Recent bridges"
@@ -420,7 +429,7 @@ export function BridgeCard() {
       await dstClient.waitForTransactionReceipt({ hash });
       const dstChainCfg = getCctpChain(step.dstId)!;
       // Funds delivered - drop the persisted claim entry.
-      clearPendingBridge();
+      clearPendingBridge(account);
       // Patch the history entry: pending → minted, store the mint tx.
       // Prefer historyId when we still have it (same session); fall back to
       // burnTxHash lookup so a refresh-then-mint flow still flips the entry
@@ -452,7 +461,7 @@ export function BridgeCard() {
    * stop watching an old burn (e.g. they already claimed from another tab,
    * or the burn is stale). Does NOT touch on-chain state. */
   const discardPendingClaim = () => {
-    clearPendingBridge();
+    clearPendingBridge(account);
     setStep({ kind: "idle" });
   };
 

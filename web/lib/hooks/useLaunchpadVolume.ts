@@ -41,7 +41,11 @@ export function useLaunchpadVolume(args: {
   pool?: Address | undefined;
   refreshKey?: number;
 }): VolumeState {
-  const { token, mode, pool, refreshKey } = args;
+  const { token, mode, pool } = args;
+  // refreshKey deliberately ignored: live trades arrive via WS to the trade
+  // panel which already calls queryClient.setQueryData, so bumping
+  // refreshKey here would force a full 200k-block re-scan per trade.
+  void args.refreshKey;
   const publicClient = usePublicClient();
 
   const { data, isLoading, isFetching } = useQuery<VolumeData>({
@@ -51,7 +55,6 @@ export function useLaunchpadVolume(args: {
       token?.toLowerCase() ?? null,
       mode ?? null,
       pool?.toLowerCase() ?? null,
-      refreshKey ?? 0,
     ],
     enabled: !!publicClient && !!token && mode !== undefined,
     staleTime: STALE_MS,
@@ -66,22 +69,45 @@ export function useLaunchpadVolume(args: {
           if (!pool || pool === "0x0000000000000000000000000000000000000000") {
             return { volume: 0n, volumeToken: undefined };
           }
-          const t0Raw = await publicClient.readContract({
-            address: pool,
-            abi: [
-              {
-                type: "function",
-                name: "token0",
-                stateMutability: "view",
-                inputs: [],
-                outputs: [{ type: "address" }],
-              },
-            ] as const,
-            functionName: "token0",
-          });
+          const [t0Raw, t1Raw] = await Promise.all([
+            publicClient.readContract({
+              address: pool,
+              abi: [
+                {
+                  type: "function",
+                  name: "token0",
+                  stateMutability: "view",
+                  inputs: [],
+                  outputs: [{ type: "address" }],
+                },
+              ] as const,
+              functionName: "token0",
+            }),
+            publicClient.readContract({
+              address: pool,
+              abi: [
+                {
+                  type: "function",
+                  name: "token1",
+                  stateMutability: "view",
+                  inputs: [],
+                  outputs: [{ type: "address" }],
+                },
+              ] as const,
+              functionName: "token1",
+            }),
+          ]);
           const t0 = (t0Raw as Address).toLowerCase();
+          const t1 = (t1Raw as Address).toLowerCase();
           const usdcLc = ADDRESSES.usdc.toLowerCase();
           const usdcIsToken0 = t0 === usdcLc;
+          const usdcIsToken1 = t1 === usdcLc;
+          if (!usdcIsToken0 && !usdcIsToken1) {
+            // WETH-paired (or other non-USDC) pool. We don't price the
+            // non-USDC side here; surface volume as undefined so the row
+            // shows "-" instead of misreporting WETH amount as USDC.
+            return { volume: undefined, volumeToken: undefined };
+          }
           const swaps = await scanLogsChunked(
             publicClient,
             { address: pool, event: V3_SWAP_EVT },

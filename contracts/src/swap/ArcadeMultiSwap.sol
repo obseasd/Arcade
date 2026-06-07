@@ -384,7 +384,13 @@ contract ArcadeMultiSwap is ReentrancyGuard {
         if (tokenIn == address(USDC) || tokenOut == address(USDC)) {
             amountOut = v3Router.exactInputSingle(tokenIn, tokenOut, V3_FEE, address(this), amountIn, 0, deadline);
         } else {
-            amountOut = v3Router.exactInputThroughUsdc(tokenIn, tokenOut, V3_FEE, address(this), amountIn, 0, deadline);
+            // MEV-001 fix: pass usdcMidMin = 0 here (mirrors the existing
+            // amountOutMinimum = 0 on this call site; MultiSwap relies on
+            // its OWN minOut at the outer Input level for slippage protection).
+            // The interface previously only had 7 args; calling the deployed
+            // 8-arg router via a 7-arg interface selector ALWAYS reverted, so
+            // V3 two-hop swaps via MultiSwap were silently broken in prod.
+            amountOut = v3Router.exactInputThroughUsdc(tokenIn, tokenOut, V3_FEE, address(this), amountIn, 0, 0, deadline);
         }
         IERC20(tokenIn).forceApprove(address(v3Router), 0);
     }

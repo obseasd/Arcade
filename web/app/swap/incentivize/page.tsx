@@ -379,13 +379,16 @@ export default function IncentivizePage() {
                         distribution depends on the selected duration.
                     </p>
                     <p className="mt-2 text-xs text-arc-text-muted">
-                        Looking to get your token added here?{" "}
+                        Looking to get your token added here? Reach out on our{" "}
                         <a
-                            href="mailto:zilioliantoine@gmail.com?subject=Arcade%20incentivize%20token%20request"
+                            href="https://x.com/arcade_dex"
+                            target="_blank"
+                            rel="noopener noreferrer"
                             className="text-arc-cta-hover underline-offset-2 hover:underline"
                         >
-                            Get in touch with us.
+                            X (Twitter)
                         </a>
+                        {" "}with the token address and we'll follow up.
                     </p>
                 </section>
 

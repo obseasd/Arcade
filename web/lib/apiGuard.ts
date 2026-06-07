@@ -42,6 +42,29 @@ interface Bucket {
 }
 
 const buckets = new Map<string, Bucket>();
+/** Hard cap on the in-memory map. Once reached we prune buckets older than
+ *  `windowMs` lazily on the next write. Without this the map grows
+ *  unbounded under a sustained spoofed-IP attack and exhausts the Vercel
+ *  function memory. */
+const BUCKET_HARD_CAP = 5000;
+
+/** Derive the client IP. On Vercel we prefer `x-vercel-forwarded-for`
+ *  which is set by the edge and cannot be spoofed by the client (the
+ *  edge strips any client-supplied value before injecting its own).
+ *  `x-real-ip` is the next-best on Vercel; raw `x-forwarded-for` is
+ *  trusted last because clients can prepend arbitrary values to its
+ *  comma list and the leftmost entry is the client-controlled one. */
+function clientIp(req: NextRequest): string {
+  return (
+    req.headers.get("x-vercel-forwarded-for")?.split(",")[0].trim() ||
+    req.headers.get("x-real-ip") ||
+    // Fallback to x-forwarded-for ONLY for local/dev environments where the
+    // platform headers aren't present. In production this last fallback is
+    // moot because Vercel always sets x-vercel-forwarded-for.
+    req.headers.get("x-forwarded-for")?.split(",")[0].trim() ||
+    "unknown"
+  );
+}
 
 /** Token-bucket-ish per-IP rate limit. `maxPerWindow` requests per
  *  `windowMs` window. Returns a 429 NextResponse when the limit is
@@ -52,12 +75,16 @@ export function rateLimit(
   maxPerWindow: number,
   windowMs: number,
 ): NextResponse | null {
-  const ip =
-    req.headers.get("x-forwarded-for")?.split(",")[0].trim() ||
-    req.headers.get("x-real-ip") ||
-    "unknown";
+  const ip = clientIp(req);
   const bucketKey = `${key}:${ip}`;
   const now = Date.now();
+  // Lazy prune when the map grows large. Walking the map is O(n) but only
+  // fires on cap-hit, not per-request, so amortised cost is fine.
+  if (buckets.size >= BUCKET_HARD_CAP) {
+    for (const [k, b] of buckets) {
+      if (now - b.windowStart > windowMs) buckets.delete(k);
+    }
+  }
   const bucket = buckets.get(bucketKey);
   if (!bucket || now - bucket.windowStart > windowMs) {
     buckets.set(bucketKey, { count: 1, windowStart: now });

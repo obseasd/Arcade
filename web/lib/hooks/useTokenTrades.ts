@@ -3,7 +3,7 @@
 import { useCallback, useMemo } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Address } from "viem";
-import { usePublicClient } from "wagmi";
+import { usePublicClient, useReadContract } from "wagmi";
 import { ADDRESSES } from "@/lib/constants";
 import { BUY_EVT, SELL_EVT, V3_SWAP_EVT } from "@/lib/eventSignatures";
 import { CHUNK_SMALL } from "@/lib/eventScan";
@@ -65,6 +65,28 @@ export function useTokenTrades(args: {
   const queryClient = useQueryClient();
 
   const isV3 = mode === 2;
+
+  // Read V3 pool token0 outside the queryFn so the WS push path can use the
+  // correct USDC orientation. Previously the live push hard-coded
+  // usdcIsToken0=true which inverted price+volume on token0!=USDC pools.
+  const t0Query = useReadContract({
+    address: isV3 && pool ? pool : undefined,
+    abi: [
+      {
+        type: "function",
+        name: "token0",
+        stateMutability: "view",
+        inputs: [],
+        outputs: [{ type: "address" }],
+      },
+    ] as const,
+    functionName: "token0",
+    query: { enabled: isV3 && !!pool, staleTime: Infinity },
+  });
+  const usdcIsToken0V3 = useMemo<boolean | null>(() => {
+    if (!isV3 || !t0Query.data) return null;
+    return (t0Query.data as string).toLowerCase() === ADDRESSES.usdc.toLowerCase();
+  }, [isV3, t0Query.data]);
 
   const queryKey = useMemo(
     () => [
@@ -163,7 +185,16 @@ export function useTokenTrades(args: {
       const sorted = collected
         .toSorted((a, b) => Number(b.blockNumber - a.blockNumber))
         .slice(0, MAX_TRADES);
-      return { trades: sorted, latestBlock: latest };
+      // Merge with any trades the WS push wrote between query-start and now;
+      // dedupe by txHash so the live trades aren't dropped on scan completion.
+      const prior = queryClient.getQueryData<ScanResult | undefined>(queryKey);
+      const priorFresh = (prior?.trades ?? []).filter(
+        (p) => !sorted.some((s) => s.txHash === p.txHash),
+      );
+      const merged = [...priorFresh, ...sorted]
+        .sort((a, b) => Number(b.blockNumber - a.blockNumber))
+        .slice(0, MAX_TRADES);
+      return { trades: merged, latestBlock: latest };
     },
   });
 
@@ -202,28 +233,35 @@ export function useTokenTrades(args: {
   );
   const onSwap = useCallback(
     (logs: readonly unknown[]) => {
+      // Skip until the token0 lookup lands; an inverted price/volume pushed
+      // to the cache and then cleared on next refetch is worse than a 1-2
+      // dropped log at startup.
+      if (usdcIsToken0V3 === null) return;
       mergeIntoCache(logs, (log) =>
         swapLogToTrade(
           log as Parameters<typeof swapLogToTrade>[0],
           latestBlock,
-          true,
+          usdcIsToken0V3,
         ),
       );
     },
-    [mergeIntoCache, latestBlock],
+    [mergeIntoCache, latestBlock, usdcIsToken0V3],
   );
 
+  // Stable args object so useWatchEvent's deps don't churn every render and
+  // tear down/re-subscribe the WebSocket each tick.
+  const tokenArgs = useMemo(() => (token ? { token } : undefined), [token]);
   useWatchEvent({
     address: !isV3 ? ADDRESSES.launchpad : undefined,
     event: BUY_EVT,
-    args: token ? { token } : undefined,
+    args: tokenArgs,
     enabled: !isV3 && !!token,
     onLogs: onBuy,
   });
   useWatchEvent({
     address: !isV3 ? ADDRESSES.launchpad : undefined,
     event: SELL_EVT,
-    args: token ? { token } : undefined,
+    args: tokenArgs,
     enabled: !isV3 && !!token,
     onLogs: onSell,
   });

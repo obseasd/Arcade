@@ -50,6 +50,7 @@ interface IArcadeV3Router {
         address recipient,
         uint256 amountIn,
         uint256 amountOutMinimum,
+        uint256 usdcMidMin,
         uint256 deadline
     ) external returns (uint256 amountOut);
 }

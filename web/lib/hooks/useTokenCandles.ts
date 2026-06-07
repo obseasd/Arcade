@@ -67,7 +67,12 @@ export function useTokenCandles(args: {
   timeframe: Timeframe;
   refreshKey?: number;
 }): { candles: Candle[]; isLoading: boolean } {
-  const { token, mode, pool, timeframe, refreshKey } = args;
+  const { token, mode, pool, timeframe } = args;
+  // refreshKey deliberately ignored: the WS push path already invalidates the
+  // cache via setQueryData on every live trade, so re-running the 100k-block
+  // scan on each push (the previous behaviour when refreshKey was in the
+  // query key) was redundant and burned RPC quota.
+  void args.refreshKey;
   const publicClient = usePublicClient();
   const queryClient = useQueryClient();
 
@@ -78,9 +83,8 @@ export function useTokenCandles(args: {
       token?.toLowerCase() ?? null,
       mode ?? null,
       pool?.toLowerCase() ?? null,
-      refreshKey ?? 0,
     ],
-    [token, mode, pool, refreshKey],
+    [token, mode, pool],
   );
 
   const { data, isLoading, isFetching } = useQuery<FetchResult>({
@@ -90,7 +94,21 @@ export function useTokenCandles(args: {
     gcTime: SCAN_STALE_MS * 5,
     queryFn: async () => {
       if (!publicClient || !token || mode === undefined) return { trades: [] };
-      return fetchTrades(publicClient, token, mode, pool);
+      const result = await fetchTrades(publicClient, token, mode, pool);
+      // Merge in any WS pushes that landed in the cache while the chunked
+      // scan was running. Dedup by (time, price, volume) like appendTrades.
+      const prior = queryClient.getQueryData<FetchResult | undefined>(tradesKey);
+      const priorTrades = prior?.trades ?? [];
+      if (priorTrades.length === 0) return result;
+      const merged = [...result.trades, ...priorTrades]
+        .filter(
+          (t, i, arr) =>
+            arr.findIndex(
+              (x) => x.time === t.time && x.price === t.price && x.volumeUsdc === t.volumeUsdc,
+            ) === i,
+        )
+        .sort((a, b) => a.time - b.time);
+      return { ...result, trades: merged };
     },
   });
 
@@ -149,17 +167,19 @@ export function useTokenCandles(args: {
       if (newTrades.length === 0) return;
       queryClient.setQueryData<FetchResult | undefined>(tradesKey, (prev) => {
         const base = prev ?? { trades: [] };
-        const merged = [...base.trades, ...newTrades]
-          .filter(
-            (t, i, arr) =>
-              arr.findIndex(
-                (x) =>
-                  x.time === t.time &&
-                  x.price === t.price &&
-                  x.volumeUsdc === t.volumeUsdc,
-              ) === i,
-          )
-          .sort((a, b) => a.time - b.time);
+        // O(N) dedup via Set. Previously a nested findIndex+filter ran in
+        // O(N^2) which made every WS push more expensive than the previous
+        // one once the cached array grew past ~500 entries (the early-exit
+        // cap of the chunked scan).
+        const seen = new Set<string>();
+        const merged: Trade[] = [];
+        for (const t of [...base.trades, ...newTrades]) {
+          const k = `${t.time}|${t.price}|${t.volumeUsdc}`;
+          if (seen.has(k)) continue;
+          seen.add(k);
+          merged.push(t);
+        }
+        merged.sort((a, b) => a.time - b.time);
         return { ...base, trades: merged };
       });
     },
@@ -228,17 +248,20 @@ export function useTokenCandles(args: {
     enabled: mode === 2 && !!pool,
     onLogs: onSwapLog,
   });
+  // Stable args reference so useWatchEvent doesn't tear down + resubscribe
+  // every render.
+  const tokenArgs = useMemo(() => (token ? { token } : undefined), [token]);
   useWatchEvent({
     address: mode !== undefined && mode !== 2 ? ADDRESSES.launchpad : undefined,
     event: BUY_EVT,
-    args: token ? { token } : undefined,
+    args: tokenArgs,
     enabled: mode !== undefined && mode !== 2 && !!token,
     onLogs: onCurveLog,
   });
   useWatchEvent({
     address: mode !== undefined && mode !== 2 ? ADDRESSES.launchpad : undefined,
     event: SELL_EVT,
-    args: token ? { token } : undefined,
+    args: tokenArgs,
     enabled: mode !== undefined && mode !== 2 && !!token,
     onLogs: onCurveLog,
   });
