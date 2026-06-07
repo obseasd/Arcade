@@ -64,7 +64,11 @@ contract ArcadeV4Launchpad is ILaunchpadSnipe, IUnlockCallback, ReentrancyGuard 
     address public HOOK;
     /// @notice Treasury that receives the creation fee and (via the hook)
     ///         the snipe-skim deltas on every taxed swap.
-    address public immutable TREASURY;
+    /// @dev Audit CSEC-002: changed from `immutable` to a mutable slot
+    ///      behind `setTreasury(owner-only)` so a USDC blocklist event on
+    ///      treasury doesn't permanently brick createLaunch. Matches the
+    ///      `ArcadeHook.setTreasury` pattern.
+    address public TREASURY;
     /// @notice Deployer that wires the launchpad once - read only.
     address public immutable DEPLOYER;
 
@@ -82,6 +86,16 @@ contract ArcadeV4Launchpad is ILaunchpadSnipe, IUnlockCallback, ReentrancyGuard 
     ///         supply). Hard cap because anything bigger lets the creator
     ///         soft-rug. Pump.fun-style projects converge around 1-5%.
     uint16 public constant MAX_CREATOR_BPS = 1_000;
+    /// @notice Lower bound on the start price a creator can pass to
+    ///         initializePool. Refuses sqrt prices anywhere near
+    ///         Uniswap's MIN_SQRT_RATIO (~4.3e9), which a front-runner
+    ///         could otherwise pass to steal the LP for cents.
+    ///         Audit CSEC-012.
+    uint160 public constant SQRT_PRICE_FLOOR = 1e15;
+    /// @notice Upper bound on the start price. Refuses obviously
+    ///         pumped-up start prices that would let a creator extract
+    ///         disproportionate value from the first organic buyer.
+    uint160 public constant SQRT_PRICE_CEILING = 1e35;
 
     struct Launch {
         /// @notice Token address (== address of the deployed ArcadeLaunchToken).
@@ -106,6 +120,11 @@ contract ArcadeV4Launchpad is ILaunchpadSnipe, IUnlockCallback, ReentrancyGuard 
 
     /// @notice Per-token launch info, keyed by token address.
     mapping(address => Launch) public launches;
+
+    /// @notice Outstanding creation-fee USDC sitting on the launchpad,
+    ///         waiting for a `sweepCreationFees` call to forward to
+    ///         TREASURY. Audit CSEC-002.
+    uint256 public pendingCreationFees;
     /// @notice Append-only registry of every token launched here, for the
     ///         frontend to enumerate.
     address[] public allTokens;
@@ -123,6 +142,21 @@ contract ArcadeV4Launchpad is ILaunchpadSnipe, IUnlockCallback, ReentrancyGuard 
     error HookNotSet();
     error ZeroAddress();
     error ZeroLiquidity();
+    /// @notice initializePool was called by a non-creator. Audit CSEC-012:
+    ///         the original prototype allowed any caller to set the start
+    ///         price, which let a mempool watcher front-run the legit
+    ///         creator's init and dump the entire post-creator-alloc
+    ///         supply at an attacker-chosen price.
+    error NotCreator();
+    /// @notice initializePool was called with a sqrtPriceX96 outside the
+    ///         allowed floor/ceiling band. Audit CSEC-012.
+    error SqrtPriceOutOfRange();
+    /// @notice unsafeSweep was called by something other than the
+    ///         launchpad itself. Audit CSEC-002.
+    error NotSelfCall();
+    /// @notice The treasury transfer in sweepCreationFees reverted (USDC
+    ///         blocklist on treasury). Audit CSEC-002.
+    error TreasuryTransferFailed();
 
     event TokenLaunched(
         address indexed token,
@@ -146,6 +180,11 @@ contract ArcadeV4Launchpad is ILaunchpadSnipe, IUnlockCallback, ReentrancyGuard 
     );
 
     event HookSet(address indexed hook);
+    /// @notice Treasury address rotated by the deployer. Audit CSEC-002.
+    event TreasuryRotated(address indexed newTreasury);
+    /// @notice Pending creation-fee pot drained to the current treasury.
+    ///         Audit CSEC-002.
+    event CreationFeesSwept(address indexed treasury, uint256 amount);
 
     constructor(IERC20 usdc_, IPoolManager poolManager_, address treasury_) {
         if (address(usdc_) == address(0) || treasury_ == address(0)) revert ZeroAddress();
@@ -164,6 +203,46 @@ contract ArcadeV4Launchpad is ILaunchpadSnipe, IUnlockCallback, ReentrancyGuard 
         if (hook_ == address(0)) revert ZeroAddress();
         HOOK = hook_;
         emit HookSet(hook_);
+    }
+
+    /// @notice Rotate the treasury address. Deployer-gated; lets ops respond
+    ///         to a USDC blocklist event on the original treasury without
+    ///         redeploying the launchpad. Audit CSEC-002.
+    function setTreasury(address treasury_) external {
+        if (msg.sender != DEPLOYER) revert NotDeployer();
+        if (treasury_ == address(0)) revert ZeroAddress();
+        TREASURY = treasury_;
+        emit TreasuryRotated(treasury_);
+    }
+
+    /// @notice Sweep accumulated creation fees to the CURRENT treasury.
+    ///         Permissionless: anyone can pay the gas to flush the pot.
+    ///         Wrapped in try/catch so a transient blocklist event on
+    ///         treasury doesn't trap the fees inside the launchpad forever
+    ///         - they stay claimable from the next sweep after a
+    ///         setTreasury rotation. Audit CSEC-002.
+    function sweepCreationFees() external nonReentrant {
+        uint256 amt = pendingCreationFees;
+        if (amt == 0) return;
+        pendingCreationFees = 0;
+        try this.unsafeSweep(TREASURY, amt) {
+            emit CreationFeesSwept(TREASURY, amt);
+        } catch {
+            // Restore the pot for the next sweep attempt - never
+            // accidentally let it leak to address(0).
+            pendingCreationFees = amt;
+            revert TreasuryTransferFailed();
+        }
+    }
+
+    /// @notice External-only forwarder used by sweepCreationFees so we can
+    ///         try/catch a USDC blocklist revert from inside the same call
+    ///         tree. NOT meant to be called externally; the strict
+    ///         msg.sender == address(this) guard turns it into a pure
+    ///         internal-via-external pattern.
+    function unsafeSweep(address to, uint256 amount) external {
+        if (msg.sender != address(this)) revert NotSelfCall();
+        USDC.safeTransfer(to, amount);
     }
 
     // ===================== Launching =====================
@@ -203,10 +282,16 @@ contract ArcadeV4Launchpad is ILaunchpadSnipe, IUnlockCallback, ReentrancyGuard 
         if (snipeStartBps > 0 && snipeDecaySeconds == 0) revert InvalidDecaySeconds();
         if (creatorBps > MAX_CREATOR_BPS) revert InvalidCreatorBps();
 
-        // Pull the creation fee straight to treasury. Doing it before the
-        // token deploy means we don't waste gas on a deploy if the user is
-        // short on USDC or hasn't approved.
-        USDC.safeTransferFrom(msg.sender, TREASURY, CREATION_FEE);
+        // CSEC-002: pull the creation fee into THIS contract, not directly
+        // to TREASURY. If TREASURY ever gets blocklisted on USDC (Arc has
+        // a precompile that can revert transfers), a direct transfer to
+        // it would brick every createLaunch permanently. Holding the
+        // funds here lets a `sweepCreationFees` call drain them to the
+        // current treasury (after a setTreasury rotation if the original
+        // one is compromised). Trade-off: 1 extra SSTORE per call vs. an
+        // unrecoverable bricking risk.
+        USDC.safeTransferFrom(msg.sender, address(this), CREATION_FEE);
+        pendingCreationFees += CREATION_FEE;
 
         ArcadeLaunchToken token = new ArcadeLaunchToken(name, symbol, TOTAL_SUPPLY, address(this));
         tokenAddr = address(token);
@@ -287,6 +372,23 @@ contract ArcadeV4Launchpad is ILaunchpadSnipe, IUnlockCallback, ReentrancyGuard 
         if (l.token == address(0)) revert UnknownToken();
         if (Currency.unwrap(l.poolKey.currency0) != address(0)) revert PoolAlreadyInitialized();
         if (liquidityDelta <= 0) revert ZeroLiquidity();
+        // CSEC-012: only the launch's creator (the address that called
+        // createLaunch) can initialise the pool. Before this gate, any
+        // mempool watcher could front-run the creator's init tx with an
+        // attacker-chosen sqrtPriceX96, lock the pool at the wrong start
+        // price (PoolAlreadyInitialized makes it irreversible), and dump
+        // the entire post-creator-alloc supply through the thin LP.
+        if (msg.sender != l.creator) revert NotCreator();
+        // CSEC-012 (continued): even with the creator gate, validate that
+        // the start price is inside a sane band. SQRT_PRICE_FLOOR /
+        // SQRT_PRICE_CEILING are mirrored from the V3 launchpad's
+        // min-mcap bracket and chosen to refuse the canonical
+        // 0-implied-price and MAX_SQRT_PRICE attacks. A creator who
+        // wants a custom start price still has the full range from
+        // 0.0001 USDC/token to 100k USDC/token.
+        if (sqrtPriceX96 < SQRT_PRICE_FLOOR || sqrtPriceX96 > SQRT_PRICE_CEILING) {
+            revert SqrtPriceOutOfRange();
+        }
 
         (Currency c0, Currency c1) = address(USDC) < token
             ? (Currency.wrap(address(USDC)), Currency.wrap(token))

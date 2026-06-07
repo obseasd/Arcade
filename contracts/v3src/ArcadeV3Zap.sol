@@ -59,6 +59,22 @@ contract ArcadeV3Zap is IUniswapV3SwapCallback {
     // factory.getPool on every callback.
     address private _authorisedPool;
 
+    // CSEC-004: cheap re-entrancy lock for zapIn / zapInMaxRange / zapOut.
+    // The contract sweeps balances at the end of each call so no current
+    // drain path is reachable, but the missing guard is a defense-in-depth
+    // gap vs. the V3Locker pattern (which already does this). 0.7.6 has
+    // no transient storage, so we use a one-slot pattern: 0 = unlocked,
+    // 1 = locked. Wrapping the three public entry points only - the
+    // callbacks (uniswapV3SwapCallback) stay open because their msg.sender
+    // gate already prevents arbitrary entry.
+    uint256 private _entered;
+    modifier nonReentrant() {
+        require(_entered == 0, "REENTRANT");
+        _entered = 1;
+        _;
+        _entered = 0;
+    }
+
     struct ZapParams {
         // tokenIn: the leg the user pays in (approved to this contract).
         address tokenIn;
@@ -121,6 +137,7 @@ contract ArcadeV3Zap is IUniswapV3SwapCallback {
      */
     function zapInMaxRange(ZapParams calldata p)
         external
+        nonReentrant
         returns (uint256 tokenId, uint128 liquidity)
     {
         (int24 tl, int24 tu) = _maxRangeTicks(p.fee);
@@ -140,7 +157,7 @@ contract ArcadeV3Zap is IUniswapV3SwapCallback {
         ZapParams calldata p,
         int24 tickLower,
         int24 tickUpper
-    ) external returns (uint256 tokenId, uint128 liquidity) {
+    ) external nonReentrant returns (uint256 tokenId, uint128 liquidity) {
         return _zapIn(p, tickLower, tickUpper);
     }
 
@@ -331,7 +348,7 @@ contract ArcadeV3Zap is IUniswapV3SwapCallback {
      *         setApprovalForAll, NPM is an ERC-721).
      */
     function zapOut(ZapOutParams calldata p)
-        external returns (uint256 amountOut)
+        external nonReentrant returns (uint256 amountOut)
     {
         require(block.timestamp <= p.deadline, "EXPIRED");
         require(p.liquidity > 0, "ZERO_LIQ");
