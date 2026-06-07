@@ -381,7 +381,7 @@ export default function IncentivizePage() {
                     <p className="mt-2 text-xs text-arc-text-muted">
                         Looking to get your token added here? Reach out on our{" "}
                         <a
-                            href="https://x.com/arcade_dex"
+                            href="https://x.com/ArcadeSwap"
                             target="_blank"
                             rel="noopener noreferrer"
                             className="text-arc-cta-hover underline-offset-2 hover:underline"

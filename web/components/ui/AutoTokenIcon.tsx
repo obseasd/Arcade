@@ -24,5 +24,18 @@ interface Props {
 
 export function AutoTokenIcon({ address, symbol, size = 32, className }: Props) {
   const { image } = useTokenImage(address);
-  return <TokenIcon symbol={symbol} image={image} size={size} className={className} />;
+  // key={address} forces TokenIcon to remount on address change so any
+  // <Image>-cached prior src is dropped from the DOM. Without this, when
+  // the consumer's token switches A -> B and B has no image, the rendered
+  // <img> can briefly keep A's src in memory until React reconciles a new
+  // tree (visible as the "logo inherited from previously chosen token" bug).
+  return (
+    <TokenIcon
+      key={address?.toLowerCase() ?? "none"}
+      symbol={symbol}
+      image={image}
+      size={size}
+      className={className}
+    />
+  );
 }

@@ -25,6 +25,10 @@ interface Props {
   inputUsd?: number;
   /** Estimated USD value of the output leg. */
   outputUsd?: number;
+  /** Display label for the route's protocol (eg "Arcade V2", "Arcade V3",
+   *  "Arcade V3 → V2"). Mirrors the badge under the swap card. Defaults
+   *  to "Arcade V2" for the legacy code paths that don't pass it. */
+  protocolLabel?: string;
 }
 
 export function SwapConfirmModal({
@@ -41,6 +45,7 @@ export function SwapConfirmModal({
   tx,
   inputUsd,
   outputUsd,
+  protocolLabel = "Arcade V2",
 }: Props) {
   const busy = tx.status === "pending";
 
@@ -124,7 +129,7 @@ export function SwapConfirmModal({
         <div className="space-y-1 rounded-xl border border-arc-border bg-arc-bg p-4 text-sm">
           <Row label="Price" value={rateLabel} />
           <Row label={guardKey} value={guardLabel} />
-          <Row label="Protocol" value="Arcade V2" />
+          <Row label="Protocol" value={protocolLabel} />
         </div>
 
         <button type="button"

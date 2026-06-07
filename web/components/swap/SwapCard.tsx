@@ -672,6 +672,7 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
           tx={tx}
           inputUsd={inUsd.usd}
           outputUsd={outUsd.usd}
+          protocolLabel={isV3Swap ? "Arcade V3" : "Arcade V2"}
         />
       )}
 
