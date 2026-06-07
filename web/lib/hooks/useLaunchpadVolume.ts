@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Address } from "viem";
 import { usePublicClient } from "wagmi";
 import { ADDRESSES } from "@/lib/constants";
@@ -12,9 +12,12 @@ import { CHUNK_SMALL, MAX_BACK_TRADES, scanLogsChunked } from "@/lib/eventScan";
  *
  * - PUMP / Arcade (curve): sums `Buy.usdcIn` + `Sell.usdcOut` from the launchpad.
  * - Clanker V3 (USDC-paired): sums |amountX| where X is the USDC side of the pool's Swap events.
- * - Clanker V3 (WETH-paired): returns `undefined` — we don't price WETH in USDC here.
+ * - Clanker V3 (WETH-paired): returns `undefined`; we don't price WETH in USDC here.
  *
  * Bump `refreshKey` to repoll (the inline trade panel does this after a swap).
+ *
+ * React-Query-backed: dedupes the chunked scan across consumers that render
+ * the same token/mode/pool tuple (audit ARCH-007).
  */
 export interface VolumeState {
   /** USDC volume in raw 6-dec units, or undefined while loading / unsupported. */
@@ -25,6 +28,13 @@ export interface VolumeState {
   isLoading: boolean;
 }
 
+interface VolumeData {
+  volume: bigint | undefined;
+  volumeToken: bigint | undefined;
+}
+
+const STALE_MS = 60_000;
+
 export function useLaunchpadVolume(args: {
   token: Address | undefined;
   mode: number | undefined;
@@ -33,26 +43,28 @@ export function useLaunchpadVolume(args: {
 }): VolumeState {
   const { token, mode, pool, refreshKey } = args;
   const publicClient = usePublicClient();
-  const [vol, setVol] = useState<bigint | undefined>(undefined);
-  const [volTok, setVolTok] = useState<bigint | undefined>(undefined);
-  const [isLoading, setIsLoading] = useState(false);
 
-  useEffect(() => {
-    if (!publicClient || !token || mode === undefined) {
-      setVol(undefined);
-      setVolTok(undefined);
-      setIsLoading(false);
-      return;
-    }
-    let cancelled = false;
-    setIsLoading(true);
-    (async () => {
+  const { data, isLoading, isFetching } = useQuery<VolumeData>({
+    queryKey: [
+      "arcade",
+      "launchpad-volume",
+      token?.toLowerCase() ?? null,
+      mode ?? null,
+      pool?.toLowerCase() ?? null,
+      refreshKey ?? 0,
+    ],
+    enabled: !!publicClient && !!token && mode !== undefined,
+    staleTime: STALE_MS,
+    gcTime: STALE_MS * 5,
+    queryFn: async () => {
+      if (!publicClient || !token || mode === undefined) {
+        return { volume: undefined, volumeToken: undefined };
+      }
       try {
         const latest = await publicClient.getBlockNumber();
         if (mode === 2) {
           if (!pool || pool === "0x0000000000000000000000000000000000000000") {
-            if (!cancelled) setVol(0n);
-            return;
+            return { volume: 0n, volumeToken: undefined };
           }
           const t0Raw = await publicClient.readContract({
             address: pool,
@@ -86,57 +98,47 @@ export function useLaunchpadVolume(args: {
             sumUsdc += usdcRaw < 0n ? -usdcRaw : usdcRaw;
             sumTok += tokRaw < 0n ? -tokRaw : tokRaw;
           }
-          if (!cancelled) {
-            setVol(sumUsdc);
-            setVolTok(sumTok);
-          }
-        } else {
-          // PUMP / Arcade. Use indexed-arg filter so the RPC returns only this
-          // token's events (smaller payload, less likely to time out).
-          const [buys, sells] = await Promise.all([
-            scanLogsChunked(
-              publicClient,
-              { address: ADDRESSES.launchpad, event: BUY_EVT, args: { token } },
-              latest,
-              { chunk: CHUNK_SMALL, maxBack: MAX_BACK_TRADES, label: "lp.Buy" },
-            ),
-            scanLogsChunked(
-              publicClient,
-              { address: ADDRESSES.launchpad, event: SELL_EVT, args: { token } },
-              latest,
-              { chunk: CHUNK_SMALL, maxBack: MAX_BACK_TRADES, label: "lp.Sell" },
-            ),
-          ]);
-          let sumUsdc = 0n;
-          let sumTok = 0n;
-          for (const log of buys) {
-            sumUsdc += log.args.usdcIn as bigint;
-            sumTok += log.args.tokensOut as bigint;
-          }
-          for (const log of sells) {
-            sumUsdc += log.args.usdcOut as bigint;
-            sumTok += log.args.tokensIn as bigint;
-          }
-          if (!cancelled) {
-            setVol(sumUsdc);
-            setVolTok(sumTok);
-          }
+          return { volume: sumUsdc, volumeToken: sumTok };
         }
+        // PUMP / Arcade. Use indexed-arg filter so the RPC returns only this
+        // token's events.
+        const [buys, sells] = await Promise.all([
+          scanLogsChunked(
+            publicClient,
+            { address: ADDRESSES.launchpad, event: BUY_EVT, args: { token } },
+            latest,
+            { chunk: CHUNK_SMALL, maxBack: MAX_BACK_TRADES, label: "lp.Buy" },
+          ),
+          scanLogsChunked(
+            publicClient,
+            { address: ADDRESSES.launchpad, event: SELL_EVT, args: { token } },
+            latest,
+            { chunk: CHUNK_SMALL, maxBack: MAX_BACK_TRADES, label: "lp.Sell" },
+          ),
+        ]);
+        let sumUsdc = 0n;
+        let sumTok = 0n;
+        for (const log of buys) {
+          sumUsdc += log.args.usdcIn as bigint;
+          sumTok += log.args.tokensOut as bigint;
+        }
+        for (const log of sells) {
+          sumUsdc += log.args.usdcOut as bigint;
+          sumTok += log.args.tokensIn as bigint;
+        }
+        return { volume: sumUsdc, volumeToken: sumTok };
       } catch (err) {
         // eslint-disable-next-line no-console
         console.warn("[volume] top-level error:", err);
-        if (!cancelled) {
-          setVol(undefined);
-          setVolTok(undefined);
-        }
-      } finally {
-        if (!cancelled) setIsLoading(false);
+        return { volume: undefined, volumeToken: undefined };
       }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [publicClient, token, mode, pool, refreshKey]);
+    },
+  });
 
-  return { volume: vol, volumeToken: volTok, isLoading };
+  return {
+    volume: data?.volume,
+    volumeToken: data?.volumeToken,
+    isLoading:
+      !!token && mode !== undefined && (isLoading || isFetching),
+  };
 }

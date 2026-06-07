@@ -62,11 +62,29 @@ export interface LiquidityRemovedToastPayload {
   explorerUrl?: string;
 }
 
+export interface ClaimFeesToastPayload {
+  kind: "claim-fees";
+  /** Position id (display label like "#1234"). */
+  positionLabel: string;
+  /** Tokens paired in the position (stacked icons). */
+  token0: { address: Address; symbol?: string };
+  token1: { address: Address; symbol?: string };
+  /** Pre-formatted amount0 actually claimed; null when zero. */
+  amount0Formatted?: string | null;
+  /** Pre-formatted amount1 actually claimed; null when zero. */
+  amount1Formatted?: string | null;
+  /** Optional position detail link. */
+  positionHref?: string;
+  /** Optional block-explorer URL for the collect tx. */
+  explorerUrl?: string;
+}
+
 export type ToastPayload =
     | SwapToastPayload
     | InfoToastPayload
     | LiquidityToastPayload
-    | LiquidityRemovedToastPayload;
+    | LiquidityRemovedToastPayload
+    | ClaimFeesToastPayload;
 
 const EVENT_NAME = "arc-toast";
 

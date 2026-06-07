@@ -199,6 +199,14 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
     /// @notice Append-only registry for indexer enumeration.
     address[] public allTokens;
 
+    /// @notice (token, recipient) => credited amount the recipient can pull via
+    ///         `claimPendingToken`. Populated whenever an inline payout (curve
+    ///         fee, migration fee, post-grad royalty) reverts because the
+    ///         recipient is USDC-blocked (or any other transfer-rejecting
+    ///         condition). CSEC-001: prevents one blocked address from DOSing
+    ///         every swap on a graduated pool.
+    mapping(address => mapping(address => uint256)) public pendingTokenWithdrawals;
+
     // -------------------------------------------------------------------
     // Errors (frozen per V4_HOOK_SPEC.md Section 13)
     // -------------------------------------------------------------------
@@ -220,6 +228,7 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
     error InvalidSnipeBps();
     error InvalidDecaySeconds();
     error AlreadyLaunched();
+    error NothingToWithdraw();
 
     // -------------------------------------------------------------------
     // Events (frozen per V4_HOOK_SPEC.md Section 14)
@@ -237,6 +246,8 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
     event TreasuryUpdated(address indexed oldTreasury, address indexed newTreasury);
     event TwitterEscrowUpdated(address indexed oldEscrow, address indexed newEscrow);
     event SnipeConfigured(address indexed token, uint16 startBps, uint32 decaySeconds);
+    event TokenCredited(address indexed token, address indexed recipient, uint256 amount);
+    event TokenPendingClaimed(address indexed token, address indexed recipient, uint256 amount);
     event TokenLaunched(
         address indexed token,
         address indexed creator,
@@ -442,6 +453,22 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         // Zero address is intentional: clears the escrow target entirely.
         emit TwitterEscrowUpdated(twitterEscrow, newEscrow);
         twitterEscrow = newEscrow;
+    }
+
+    // -------------------------------------------------------------------
+    // Pull-payment escape hatch (CSEC-001)
+    // -------------------------------------------------------------------
+
+    /// @notice Withdraw any token credited to `msg.sender` from a failed inline
+    ///         payout. Permissionless; always pays back to the original
+    ///         recipient. The recipient must be unblocked on the underlying
+    ///         token before calling.
+    function claimPendingToken(address token) external nonReentrant returns (uint256 amount) {
+        amount = pendingTokenWithdrawals[token][msg.sender];
+        if (amount == 0) revert NothingToWithdraw();
+        pendingTokenWithdrawals[token][msg.sender] = 0;
+        IERC20(token).safeTransfer(msg.sender, amount);
+        emit TokenPendingClaimed(token, msg.sender, amount);
     }
 
     // -------------------------------------------------------------------
@@ -762,7 +789,7 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
             if (bps > 0) {
                 snipeSkim = (amount * bps) / 10_000;
                 if (snipeSkim > 0) {
-                    POOL_MANAGER.take(feeCurrency, TREASURY, snipeSkim);
+                    _safeTake(feeCurrency, TREASURY, snipeSkim);
                     emit AntiSnipeApplied(poolId, msg.sender, snipeSkim, uint16(bps));
                 }
             }
@@ -786,7 +813,7 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
             ) {
                 uint256 creator2Cut = (creatorCut * fo.creator2Bps) / 10_000;
                 if (creator2Cut > 0) {
-                    POOL_MANAGER.take(feeCurrency, fo.creator2, creator2Cut);
+                    _safeTake(feeCurrency, fo.creator2, creator2Cut);
                     creatorCut -= creator2Cut;
                 }
             }
@@ -795,7 +822,9 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
             // slot, try to credit the slot. If the escrow is paused, missing,
             // or reverts for any reason, fall back to a direct take to the
             // creator and emit EscrowCreditFailed so an indexer can surface
-            // it. Escrow downtime MUST NOT block swaps.
+            // it. Escrow downtime MUST NOT block swaps. Every take goes
+            // through _safeTake so a blocked recipient credits a pending
+            // pull instead of reverting the swap (CSEC-001).
             if (creatorCut > 0) {
                 if (fo.twitterEscrow != address(0)) {
                     address feeTokenAddr = Currency.unwrap(feeCurrency);
@@ -803,16 +832,16 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
                     try IArcadeTwitterEscrowV3Min(fo.twitterEscrow).creditSlot(
                         positionId, fo.slotIndex, feeTokenAddr, creatorCut
                     ) {
-                        POOL_MANAGER.take(feeCurrency, fo.twitterEscrow, creatorCut);
+                        _safeTake(feeCurrency, fo.twitterEscrow, creatorCut);
                     } catch {
-                        POOL_MANAGER.take(feeCurrency, fo.creator, creatorCut);
+                        _safeTake(feeCurrency, fo.creator, creatorCut);
                         emit EscrowCreditFailed(positionId, fo.slotIndex, creatorCut);
                     }
                 } else {
-                    POOL_MANAGER.take(feeCurrency, fo.creator, creatorCut);
+                    _safeTake(feeCurrency, fo.creator, creatorCut);
                 }
             }
-            if (treasuryCut > 0) POOL_MANAGER.take(feeCurrency, TREASURY, treasuryCut);
+            if (treasuryCut > 0) _safeTake(feeCurrency, TREASURY, treasuryCut);
 
             emit RoyaltyPaid(poolId, fo.creator, creatorCut, treasuryCut);
         }
@@ -932,8 +961,10 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         if (lpUsdc == 0) revert ZeroAmount();
         uint256 lpTokens = ArcadeV4Curve.MIGRATION_LP_TOKENS;
 
-        // Migration fee off the top -> treasury.
-        IERC20(Currency.unwrap(USDC)).safeTransfer(TREASURY, ArcadeV4Curve.MIGRATION_FEE);
+        // Migration fee off the top -> treasury. Via pull-payment escape so
+        // a USDC-blocked treasury can't DoS graduation; the value still
+        // lands, just sits in pendingTokenWithdrawals until pulled.
+        _safePayUsdc(TREASURY, ArcadeV4Curve.MIGRATION_FEE);
 
         PoolKey memory key = _buildPoolKey(token);
         bool usdcIsCurrency0 = Currency.unwrap(key.currency0) == Currency.unwrap(USDC);
@@ -1054,12 +1085,13 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
     ///      CLANKER_V3 = n/a (no curve, swap reverts earlier).
     ///      Transfers happen synchronously in USDC out of the hook's own
     ///      balance, NOT via pm.take, because curve fees are bookkept in the
-    ///      hook's accumulating realUsdcReserve balance.
+    ///      hook's accumulating realUsdcReserve balance. Each payout goes
+    ///      through `_safePayUsdc` so a USDC-blocked recipient credits a
+    ///      pending balance instead of reverting the whole curve trade.
     function _distributeCurveFee(uint8 mode, uint256 fee, address creator, address creator2, uint16 creator2Bps)
         internal
     {
         if (fee == 0) return;
-        IERC20 usdc = IERC20(Currency.unwrap(USDC));
 
         uint256 platformBps = mode == uint8(LaunchMode.CLANKER) ? 7_000 : 5_000;
         uint256 platformCut = (fee * platformBps) / 10_000;
@@ -1068,13 +1100,48 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         if (creator2 != address(0) && creator2Bps > 0 && mode == uint8(LaunchMode.CLANKER)) {
             uint256 c2Cut = (creatorCut * creator2Bps) / 10_000;
             if (c2Cut > 0) {
-                usdc.safeTransfer(creator2, c2Cut);
+                _safePayUsdc(creator2, c2Cut);
                 creatorCut -= c2Cut;
             }
         }
 
-        if (platformCut > 0) usdc.safeTransfer(TREASURY, platformCut);
-        if (creatorCut > 0) usdc.safeTransfer(creator, creatorCut);
+        if (platformCut > 0) _safePayUsdc(TREASURY, platformCut);
+        if (creatorCut > 0) _safePayUsdc(creator, creatorCut);
+    }
+
+    /// @dev Best-effort USDC payout from the hook's own balance. If the
+    ///      transfer reverts or returns false (USDC blocklist, receiver
+    ///      rejects, etc.) the amount is credited to
+    ///      `pendingTokenWithdrawals[USDC][to]` instead. CSEC-001: keeps a
+    ///      single blocked recipient from DOSing every curve trade or
+    ///      graduation. The recipient pulls later via `claimPendingToken`.
+    function _safePayUsdc(address to, uint256 amount) internal {
+        if (amount == 0 || to == address(0)) return;
+        address usdcAddr = Currency.unwrap(USDC);
+        try IERC20(usdcAddr).transfer(to, amount) returns (bool ok) {
+            if (ok) return;
+        } catch {
+            // fall through to credit
+        }
+        pendingTokenWithdrawals[usdcAddr][to] += amount;
+        emit TokenCredited(usdcAddr, to, amount);
+    }
+
+    /// @dev Best-effort PoolManager.take. If the recipient rejects the
+    ///      transfer (USDC blocklist, contract receive hook revert, etc.)
+    ///      the funds are taken to the hook instead and credited as a
+    ///      pending pull-payment. CSEC-001 applied to the V4 royalty path.
+    function _safeTake(Currency currency, address to, uint256 amount) internal {
+        if (amount == 0 || to == address(0)) return;
+        try POOL_MANAGER.take(currency, to, amount) {
+            return;
+        } catch {
+            // Fall through: take to the hook, credit the recipient.
+        }
+        POOL_MANAGER.take(currency, address(this), amount);
+        address tokenAddr = Currency.unwrap(currency);
+        pendingTokenWithdrawals[tokenAddr][to] += amount;
+        emit TokenCredited(tokenAddr, to, amount);
     }
 
 }

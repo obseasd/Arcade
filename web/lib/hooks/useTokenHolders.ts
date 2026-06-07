@@ -1,11 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Address, parseAbiItem } from "viem";
 import { usePublicClient } from "wagmi";
 import { CHUNK_MEDIUM } from "@/lib/eventScan";
 
-// Generic ERC20 Transfer - not in eventSignatures since it's wagmi/erc20Abi
+// Generic ERC20 Transfer; not in eventSignatures since it's wagmi/erc20Abi
 // territory and would clutter the launchpad-specific export list.
 const TRANSFER_EVT = parseAbiItem(
   "event Transfer(address indexed from, address indexed to, uint256 value)",
@@ -20,80 +20,59 @@ export interface Holder {
   pctOfSupply: number;
 }
 
-interface CacheEntry {
-  ts: number;
-  holders: Holder[];
-}
-
-/** 90-second cache per token. Once a token's holders have been computed by
- *  the adaptive scan, subsequent loads within the TTL render instantly. */
-const cache = new Map<string, CacheEntry>();
-const TTL_MS = 90_000;
-
-/** Two-phase adaptive scan: a small fast window for the immediate render, then
- *  a longer background window that fills in older history. Tuned for Arc's 1s
- *  block time. */
 const CHUNK = CHUNK_MEDIUM;
-const FAST_LOOKBACK = 5_000n; // ~1.4h on Arc, renders in ~1s
-const FULL_LOOKBACK = 100_000n; // ~28h, completes silently in the background
+/** Single-phase scan window (~28h at 1s block time on Arc). The previous
+ *  fast+full phased pattern fragmented React Query semantics; this single
+ *  scan caches for 90s so the second visit is instant anyway. */
+const SCAN_LOOKBACK = 100_000n;
 
-/** Holders with less than one whole token are treated as dust and dropped from
- *  the list. The launchpad swept-rounding leftover after `lockSingleSided` lands
- *  here (typically a few wei) and would otherwise show as a confusing "0" row. */
+const SCAN_STALE_MS = 90_000;
+
+/** Holders with less than one whole token are treated as dust and dropped
+ *  from the list. The launchpad's swept-rounding leftover after
+ *  `lockSingleSided` lands here (a few wei) and would show as a confusing
+ *  "0" row otherwise. */
 const DUST_THRESHOLD_WEI = 10n ** 18n;
 
 /**
- * Builds the holder list for an ERC20 token by replaying Transfer events. For
- * each transfer, we mutate a balance Map; we filter out the zero address and
- * any addresses with a final balance below DUST_THRESHOLD_WEI. Sort by balance
- * desc.
+ * Builds the holder list for an ERC20 token by replaying Transfer events.
+ * For each transfer, mutates a balance Map; filters out the zero address and
+ * any addresses with a final balance below DUST_THRESHOLD_WEI. Sorts by
+ * balance desc.
  *
- * Adaptive scan strategy (see CHUNK / FAST_LOOKBACK / FULL_LOOKBACK):
- *   1. Scan the most recent ~1.4h of blocks → first render (~1s on Arc RPC)
- *   2. Continue scanning back to ~28h in the background, updating the list
- *      when the extended scan completes. Cached for 90s.
- *
- * Trade-off: for tokens with transfers older than 28h that have stayed put,
- * those holders will still be missed. That's the same limitation as before but
- * with 6x the coverage, and the indexer roadmap (post-mainnet) replaces this
- * entirely.
+ * React-Query-backed: dedupes the chunked scan across consumers and caches
+ * the result for 90s (audit ARCH-007). Trade-off vs the prior two-phase
+ * pattern: first paint now waits for the full window, but cached visits and
+ * cross-component dedupe make every subsequent render free.
  */
 export function useTokenHolders(
   token: Address | undefined,
   totalSupply: bigint,
 ): { holders: Holder[]; totalHolders: number; isLoading: boolean } {
   const publicClient = usePublicClient();
-  const cached = token ? cache.get(token.toLowerCase()) : undefined;
-  const [holders, setHolders] = useState<Holder[]>(cached?.holders ?? []);
-  const [isLoading, setIsLoading] = useState(false);
 
-  useEffect(() => {
-    if (!publicClient || !token) {
-      setHolders([]);
-      return;
-    }
-    const key = token.toLowerCase();
-    const hit = cache.get(key);
-    if (hit && Date.now() - hit.ts < TTL_MS) {
-      setHolders(hit.holders);
-      return;
-    }
-    let cancelled = false;
-    setIsLoading(true);
-
-    (async () => {
+  const { data, isLoading, isFetching } = useQuery<Holder[]>({
+    queryKey: [
+      "arcade",
+      "token-holders",
+      token?.toLowerCase() ?? null,
+      totalSupply.toString(),
+    ],
+    enabled: !!publicClient && !!token,
+    staleTime: SCAN_STALE_MS,
+    gcTime: SCAN_STALE_MS * 5,
+    queryFn: async () => {
+      if (!publicClient || !token) return [];
+      const balances = new Map<string, bigint>();
       try {
         const latest = await publicClient.getBlockNumber();
-        const balances = new Map<string, bigint>();
-        const fastTarget = latest > FAST_LOOKBACK ? latest - FAST_LOOKBACK : 0n;
-        const fullTarget = latest > FULL_LOOKBACK ? latest - FULL_LOOKBACK : 0n;
+        const target = latest > SCAN_LOOKBACK ? latest - SCAN_LOOKBACK : 0n;
 
-        // -------- Phase 1: fast window for immediate render -----------------
         let end = latest;
         let errors = 0;
-        while (end > fastTarget) {
+        while (end > target) {
           const start = end > CHUNK - 1n ? end - (CHUNK - 1n) : 0n;
-          const from = start > fastTarget ? start : fastTarget;
+          const from = start > target ? start : target;
           try {
             const logs = await publicClient.getLogs({
               address: token,
@@ -109,53 +88,19 @@ export function useTokenHolders(
           if (from === 0n) break;
           end = from - 1n;
         }
-
-        if (!cancelled) {
-          setHolders(mapToHolders(balances, totalSupply));
-          setIsLoading(false);
-        }
-
-        // -------- Phase 2: extend in background ------------------------------
-        // Already at the end of available history if `end <= fullTarget`, skip.
-        let extendedErrors = 0;
-        while (end > fullTarget && !cancelled) {
-          const start = end > CHUNK - 1n ? end - (CHUNK - 1n) : 0n;
-          const from = start > fullTarget ? start : fullTarget;
-          try {
-            const logs = await publicClient.getLogs({
-              address: token,
-              event: TRANSFER_EVT,
-              fromBlock: from,
-              toBlock: end,
-            });
-            applyLogs(logs, balances);
-          } catch {
-            extendedErrors += 1;
-            if (extendedErrors > 3) break;
-          }
-          if (from === 0n) break;
-          end = from - 1n;
-        }
-
-        if (!cancelled) {
-          const final = mapToHolders(balances, totalSupply);
-          // Cache the full extended result so subsequent loads stay snappy.
-          cache.set(key, { ts: Date.now(), holders: final });
-          setHolders(final);
-        }
       } catch {
-        if (!cancelled) {
-          setHolders([]);
-          setIsLoading(false);
-        }
+        // fall through with whatever partial balances we got
       }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [publicClient, token, totalSupply]);
+      return mapToHolders(balances, totalSupply);
+    },
+  });
 
-  return { holders, totalHolders: holders.length, isLoading };
+  const holders = data ?? [];
+  return {
+    holders,
+    totalHolders: holders.length,
+    isLoading: !!token && (isLoading || isFetching),
+  };
 }
 
 function applyLogs(logs: any[], balances: Map<string, bigint>) {

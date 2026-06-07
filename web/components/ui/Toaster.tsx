@@ -46,6 +46,66 @@ export function Toaster() {
 }
 
 function ToastCard({ payload, onClose }: { payload: ToastPayload; onClose: () => void }) {
+  if (payload.kind === "claim-fees") {
+    const symA = payload.token0.symbol ?? "?";
+    const symB = payload.token1.symbol ?? "?";
+    const hasA = !!payload.amount0Formatted;
+    const hasB = !!payload.amount1Formatted;
+    return (
+      <div className="pointer-events-auto flex w-80 items-center gap-3 rounded-2xl border border-arc-success/40 bg-black/65 p-3 shadow-arc-card backdrop-blur-xl animate-in slide-in-from-right">
+        <div className="flex -space-x-2">
+          <AutoTokenIcon address={payload.token0.address} symbol={symA} size={32} />
+          <AutoTokenIcon address={payload.token1.address} symbol={symB} size={32} />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1.5 text-xs text-arc-text-muted">
+            <CheckCircle2 className="h-3.5 w-3.5 text-arc-success" />
+            <span>Fees claimed - Position {payload.positionLabel}</span>
+          </div>
+          {hasA && (
+            <div className="mt-0.5 truncate text-sm font-semibold tabular-nums text-arc-text">
+              +{payload.amount0Formatted} {symA}
+            </div>
+          )}
+          {hasB && (
+            <div className="truncate text-sm font-semibold tabular-nums text-arc-text">
+              +{payload.amount1Formatted} {symB}
+            </div>
+          )}
+          {!hasA && !hasB && (
+            <div className="mt-0.5 truncate text-sm font-semibold tabular-nums text-arc-text-muted">
+              0 fees
+            </div>
+          )}
+          <div className="mt-0.5 flex items-center gap-2 text-[11px]">
+            {payload.positionHref && (
+              <Link
+                href={payload.positionHref}
+                onClick={onClose}
+                className="inline-flex items-center gap-1 text-sky-400 hover:text-sky-300 hover:underline"
+              >
+                View position <ArrowRight className="h-2.5 w-2.5" />
+              </Link>
+            )}
+            {payload.explorerUrl && (
+              <a
+                href={payload.explorerUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 text-arc-text-faint hover:text-arc-text"
+              >
+                Tx <ExternalLink className="h-2.5 w-2.5" />
+              </a>
+            )}
+          </div>
+        </div>
+        <button type="button" onClick={onClose} className="text-arc-text-faint hover:text-arc-text">
+          <X className="h-3.5 w-3.5" />
+        </button>
+      </div>
+    );
+  }
+
   if (payload.kind === "liquidity-removed") {
     const symA = payload.token0.symbol ?? "?";
     const symB = payload.token1.symbol ?? "?";

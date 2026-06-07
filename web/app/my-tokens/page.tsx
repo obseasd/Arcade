@@ -918,7 +918,7 @@ function PositionsTab() {
                     <h3 className="text-sm font-semibold text-arc-text">Standard AMM</h3>
                     <Link
                         href="/positions"
-                        className="text-xs text-arc-text-muted hover:text-arc-text"
+                        className="rounded-lg bg-arc-cta px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-arc-cta-hover"
                     >
                         Open positions page
                     </Link>

@@ -379,9 +379,13 @@ export function ClaimAllFeesModal({ open, onClose, onSuccess }: Props) {
                 if (p.tokensOwed1 > 0n) parts.push(`${trimFee(a1)} ${t1Meta.symbol}`);
                 const summary = parts.join(" + ") || "0 fees";
                 pushToast({
-                    kind: "info",
-                    title: `Position #${p.tokenId.toString()}`,
-                    message: `Claimed ${summary}`,
+                    kind: "claim-fees",
+                    positionLabel: `#${p.tokenId.toString()}`,
+                    token0: { address: p.token0, symbol: t0Meta.symbol },
+                    token1: { address: p.token1, symbol: t1Meta.symbol },
+                    amount0Formatted: p.tokensOwed0 > 0n ? trimFee(a0) : null,
+                    amount1Formatted: p.tokensOwed1 > 0n ? trimFee(a1) : null,
+                    positionHref: "/positions",
                 });
                 addActivity({
                     type: "claim-fees",

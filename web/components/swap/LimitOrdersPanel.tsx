@@ -250,7 +250,7 @@ export function LimitOrdersPanel({ account, variant = "card", className }: Props
                 <button type="button"
                     onClick={onRefreshClick}
                     title="Refresh"
-                    className="ml-auto rounded-lg border border-arc-border bg-arc-bg-elevated p-1.5 text-arc-text-muted transition-colors hover:bg-white/5 hover:text-arc-text active:scale-95"
+                    className="ml-auto flex h-8 w-8 items-center justify-center rounded-md border border-arc-border bg-arc-bg-elevated text-arc-text-muted transition-colors hover:bg-white/5 hover:text-arc-text active:scale-95"
                 >
                     {/* key=refreshTick forces a remount so the spin animation
                         restarts on every click, even if the previous spin is

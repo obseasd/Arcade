@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { useMemo } from "react";
 import { Address } from "viem";
 import { useAccount, usePublicClient, useReadContracts } from "wagmi";
 import { V3_LOCKER_ABI } from "@/lib/abis/v3";
@@ -10,29 +11,18 @@ import { CHUNK_LARGE } from "@/lib/eventScan";
 import { useV3Tokens } from "./useV3Tokens";
 
 const CHUNK = CHUNK_LARGE;
-/** Phase 1 lookback (~14h on Arc 1s blocks). Fast initial render. */
-const FAST_LOOKBACK = 50_000n;
 /**
- * Phase 2 lookback (~5.8 days on Arc 1s blocks). Today on Arc testnet this
- * covers the entire launchpad history because the latest deploy is only
- * hours old. Once mainnet has months of activity we'll need an indexer
- * (subgraph or ponder.sh) since walking millions of blocks per page load is
- * not viable. Noted in MEMORY as a post-mainnet task.
+ * Single-phase scan window (~5.8 days at 1s block time). Until we have an
+ * indexer, walking more than this per page load is not viable. Captures the
+ * relevant window for any active creator on testnet today.
  */
-const FULL_LOOKBACK = 500_000n;
+const SCAN_LOOKBACK = 500_000n;
 const DAY_SECONDS = 86_400;
 /** Max days the sparkline ever displays even if there's older data. */
 const MAX_CHART_DAYS = 30;
 
-/** Module-level cache so flipping pages or wagmi refetches don't restart the
- *  whole event scan. Keyed by `${account}|${stable mine set}`. */
-interface ScanCacheEntry {
-  byToken: Map<string, TokenEarnings>;
-  byDay: Map<number, number>;
-  ts: number;
-}
-const scanCache = new Map<string, ScanCacheEntry>();
-const CACHE_TTL_MS = 5 * 60_000; // 5 minutes
+const SCAN_STALE_MS = 5 * 60_000;
+const PREVIEW_REFETCH_MS = 30_000;
 
 /** Per-token aggregated earnings. */
 export interface TokenEarnings {
@@ -64,7 +54,7 @@ export interface CreatorEarningsResult {
   perToken: TokenEarnings[];
   /** One bucket per day in the window. */
   daily: DailyEarnings[];
-  /** Whether the phase 2 extended scan has finished. */
+  /** Whether the historical scan has completed. */
   fullyLoaded: boolean;
   isLoading: boolean;
 }
@@ -75,24 +65,19 @@ interface CreatorPosition {
   symbol?: string;
 }
 
+interface ScanAggregate {
+  byToken: Map<string, TokenEarnings>;
+  byDay: Map<number, number>;
+}
+
 /**
  * Aggregates V3 locker LP fee claims paid to the connected wallet over the
  * recent past, plus pending (unclaimed) preview amounts.
  *
- * Strategy:
- *   1. Walk every Clanker V3 launch to find positions where the wallet is a
- *      recipient (or its slot's admin). Re-uses the same logic as
- *      CreatorFeesPanel - the slots are the same; this hook just adds the
- *      historical aggregation on top.
- *   2. For each such position, scan `RecipientPaid` events (indexed by
- *      positionId) over a fast window first, then extend in the background.
- *      Filter by `recipient == account` (non-indexed, done client-side).
- *   3. For pending: read previewFees(positionId) and apply the recipient's
- *      bps share. Same pattern as CreatorFeesPanel.
- *
- * Trade-off: 7 days is the full scan window. Older claims aren't visible
- * yet. Indexer (post-mainnet) makes this trivial; for now 7 days covers the
- * relevant window for any active creator.
+ * React-Query-backed: dedupes the chunked RecipientPaid scan across renders
+ * and caches it for 5 minutes (audit ARCH-007). Per-position previewFees runs
+ * on a 30s polling interval and is also RQ-managed via wagmi's
+ * useReadContracts.
  */
 export function useCreatorEarnings(): CreatorEarningsResult {
   const { address: account } = useAccount();
@@ -113,7 +98,7 @@ export function useCreatorEarnings(): CreatorEarningsResult {
     c.status === "success" ? (c.result as bigint) : 0n,
   );
 
-  // 2) Recipients per position - filter to ones where the wallet is involved.
+  // 2) Recipients per position; filter to ones where the wallet is involved.
   const recCalls = useReadContracts({
     contracts: positionIds.map((id) => ({
       address: ADDRESSES.v3Locker,
@@ -136,7 +121,11 @@ export function useCreatorEarnings(): CreatorEarningsResult {
         (x) => x.recipient.toLowerCase() === acc || x.admin.toLowerCase() === acc,
       );
       if (isMine) {
-        out.push({ token: v3Tokens[i].address, positionId: positionIds[i], symbol: v3Tokens[i].symbol });
+        out.push({
+          token: v3Tokens[i].address,
+          positionId: positionIds[i],
+          symbol: v3Tokens[i].symbol,
+        });
       }
     }
     return out;
@@ -150,7 +139,7 @@ export function useCreatorEarnings(): CreatorEarningsResult {
       functionName: "previewFees" as const,
       args: [p.positionId] as const,
     })),
-    query: { enabled: mine.length > 0, refetchInterval: 30_000 },
+    query: { enabled: mine.length > 0, refetchInterval: PREVIEW_REFETCH_MS },
   });
 
   const pendingUsd = useMemo(() => {
@@ -164,11 +153,9 @@ export function useCreatorEarnings(): CreatorEarningsResult {
     return Number(sum) / 10 ** USDC_DECIMALS;
   }, [previewCalls.data]);
 
-  // 4) Historical claims: scan RecipientPaid for each position.
-  // Stable key for the set of positions we need to scan. Without this, every
-  // wagmi refetch (eg the previewCalls 30s interval) would change object
-  // references in `mine` even when the actual position set is identical and
-  // re-trigger the scan, causing the card to flicker through scanning state.
+  // 4) Historical claims via RQ-cached chunked scan. Stable key for the set
+  // of positions we scan; without this, wagmi refetches would flip object
+  // identities in `mine` and invalidate the query every 30s.
   const mineKey = useMemo(
     () =>
       mine
@@ -178,150 +165,100 @@ export function useCreatorEarnings(): CreatorEarningsResult {
     [mine],
   );
 
-  const [byToken, setByToken] = useState<Map<string, TokenEarnings>>(new Map());
-  const [byDay, setByDay] = useState<Map<number, number>>(new Map());
-  const [fullyLoaded, setFullyLoaded] = useState(false);
-  const [scanning, setScanning] = useState(false);
-
-  useEffect(() => {
-    if (!publicClient || !account || mine.length === 0) {
-      setByToken(new Map());
-      setByDay(new Map());
-      setFullyLoaded(false);
-      return;
-    }
-    // Cache hit: use the cached aggregates immediately and skip the scan.
-    const cacheKey = `${account.toLowerCase()}|${mineKey}`;
-    const hit = scanCache.get(cacheKey);
-    if (hit && Date.now() - hit.ts < CACHE_TTL_MS) {
-      setByToken(hit.byToken);
-      setByDay(hit.byDay);
-      setFullyLoaded(true);
-      setScanning(false);
-      return;
-    }
-    let cancelled = false;
-    setScanning(true);
-    setFullyLoaded(false);
-
-    (async () => {
+  const scanQuery = useQuery<ScanAggregate>({
+    queryKey: [
+      "arcade",
+      "creator-earnings-scan",
+      account?.toLowerCase() ?? null,
+      mineKey,
+    ],
+    enabled: !!publicClient && !!account && mine.length > 0,
+    staleTime: SCAN_STALE_MS,
+    gcTime: SCAN_STALE_MS * 5,
+    queryFn: async () => {
+      const tokensMap = new Map<string, TokenEarnings>();
+      const daysMap = new Map<number, number>();
+      if (!publicClient || !account || mine.length === 0) {
+        return { byToken: tokensMap, byDay: daysMap };
+      }
       try {
         const latest = await publicClient.getBlock();
         const latestN = latest.number as bigint;
         const latestTs = Number(latest.timestamp);
         const acc = account.toLowerCase();
-        const tokensMap = new Map<string, TokenEarnings>();
-        const daysMap = new Map<number, number>();
+        const target = latestN > SCAN_LOOKBACK ? latestN - SCAN_LOOKBACK : 0n;
 
-        /** Scan a window per position, in parallel across all positions. */
-        const scanWindow = async (end: bigint, target: bigint) => {
-          const perPositionWalks = mine.map(async (p) => {
-            let cursor = end;
-            let errors = 0;
-            while (cursor > target) {
-              const start = cursor > CHUNK - 1n ? cursor - (CHUNK - 1n) : 0n;
-              const from = start > target ? start : target;
-              try {
-                const logs = await publicClient.getLogs({
-                  address: ADDRESSES.v3Locker,
-                  event: RECIPIENT_PAID_EVT,
-                  args: { positionId: p.positionId },
-                  fromBlock: from,
-                  toBlock: cursor,
-                });
-                for (const log of logs) {
-                  const recipient = (log.args.recipient as Address)?.toLowerCase();
-                  if (recipient !== acc) continue;
-                  const tokenAddr = (log.args.token as Address).toLowerCase();
-                  const amount = log.args.amount as bigint;
-                  const isUsdc = tokenAddr === ADDRESSES.usdc.toLowerCase();
-                  const decimals = isUsdc ? USDC_DECIMALS : 18;
-                  const ts = latestTs - Number(latestN - (log.blockNumber as bigint));
+        const perPositionWalks = mine.map(async (p) => {
+          let cursor = latestN;
+          let errors = 0;
+          while (cursor > target) {
+            const start = cursor > CHUNK - 1n ? cursor - (CHUNK - 1n) : 0n;
+            const from = start > target ? start : target;
+            try {
+              const logs = await publicClient.getLogs({
+                address: ADDRESSES.v3Locker,
+                event: RECIPIENT_PAID_EVT,
+                args: { positionId: p.positionId },
+                fromBlock: from,
+                toBlock: cursor,
+              });
+              for (const log of logs) {
+                const recipient = (log.args.recipient as Address)?.toLowerCase();
+                if (recipient !== acc) continue;
+                const tokenAddr = (log.args.token as Address).toLowerCase();
+                const amount = log.args.amount as bigint;
+                const isUsdc = tokenAddr === ADDRESSES.usdc.toLowerCase();
+                const decimals = isUsdc ? USDC_DECIMALS : 18;
+                const ts =
+                  latestTs - Number(latestN - (log.blockNumber as bigint));
 
-                  const prev = tokensMap.get(tokenAddr);
-                  const amountUsd = isUsdc ? Number(amount) / 10 ** USDC_DECIMALS : 0;
-                  if (prev) {
-                    prev.amountRaw += amount;
-                    prev.amountUsd += amountUsd;
-                    prev.payouts += 1;
-                  } else {
-                    tokensMap.set(tokenAddr, {
-                      token: tokenAddr as Address,
-                      symbol: isUsdc ? "USDC" : p.symbol,
-                      amountRaw: amount,
-                      amountUsd,
-                      decimals,
-                      payouts: 1,
-                    });
-                  }
-                  // Day bucket (UTC midnight as anchor; USDC-only USD tally for the chart).
-                  const day = Math.floor(ts / DAY_SECONDS) * DAY_SECONDS;
-                  daysMap.set(day, (daysMap.get(day) ?? 0) + amountUsd);
+                const prev = tokensMap.get(tokenAddr);
+                const amountUsd = isUsdc
+                  ? Number(amount) / 10 ** USDC_DECIMALS
+                  : 0;
+                if (prev) {
+                  prev.amountRaw += amount;
+                  prev.amountUsd += amountUsd;
+                  prev.payouts += 1;
+                } else {
+                  tokensMap.set(tokenAddr, {
+                    token: tokenAddr as Address,
+                    symbol: isUsdc ? "USDC" : p.symbol,
+                    amountRaw: amount,
+                    amountUsd,
+                    decimals,
+                    payouts: 1,
+                  });
                 }
-              } catch {
-                errors += 1;
-                if (errors > 3) break;
+                const day = Math.floor(ts / DAY_SECONDS) * DAY_SECONDS;
+                daysMap.set(day, (daysMap.get(day) ?? 0) + amountUsd);
               }
-              if (from === 0n) return;
-              cursor = from - 1n;
+            } catch {
+              errors += 1;
+              if (errors > 3) break;
             }
-          });
-          await Promise.all(perPositionWalks);
-        };
-
-        const fastTarget = latestN > FAST_LOOKBACK ? latestN - FAST_LOOKBACK : 0n;
-        const fullTarget = latestN > FULL_LOOKBACK ? latestN - FULL_LOOKBACK : 0n;
-
-        // Phase 1: fast window
-        await scanWindow(latestN, fastTarget);
-        if (!cancelled) {
-          setByToken(new Map(tokensMap));
-          setByDay(new Map(daysMap));
-          setScanning(false);
-        }
-
-        // Phase 2: extend in background
-        if (fastTarget > fullTarget && !cancelled) {
-          await scanWindow(fastTarget > 0n ? fastTarget - 1n : 0n, fullTarget);
-          if (!cancelled) {
-            setByToken(new Map(tokensMap));
-            setByDay(new Map(daysMap));
+            if (from === 0n) return;
+            cursor = from - 1n;
           }
-        }
-        if (!cancelled) {
-          setFullyLoaded(true);
-          // Cache the final aggregates so the next render (or 30s preview
-          // refetch) doesn't restart the scan from scratch.
-          scanCache.set(cacheKey, {
-            byToken: new Map(tokensMap),
-            byDay: new Map(daysMap),
-            ts: Date.now(),
-          });
-        }
+        });
+        await Promise.all(perPositionWalks);
       } catch {
-        if (!cancelled) {
-          setByToken(new Map());
-          setByDay(new Map());
-          setScanning(false);
-        }
+        // swallow; return whatever partial data was aggregated
       }
-    })();
-    return () => {
-      cancelled = true;
-    };
-    // mineKey reflects the actual position set; `mine` itself has unstable
-    // identity due to upstream wagmi refetches. eslint-disable to skip the
-    // mine warning - the key is the load-bearing input.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [publicClient, account, mineKey]);
+      return { byToken: tokensMap, byDay: daysMap };
+    },
+  });
 
-  const result = useMemo<CreatorEarningsResult>(() => {
-    const perToken = Array.from(byToken.values()).sort((a, b) => b.amountUsd - a.amountUsd);
+  const byToken = scanQuery.data?.byToken ?? new Map<string, TokenEarnings>();
+  const byDay = scanQuery.data?.byDay ?? new Map<number, number>();
+  const scanning = scanQuery.isLoading || scanQuery.isFetching;
+  const fullyLoaded = scanQuery.isSuccess && !scanning;
+
+  return useMemo<CreatorEarningsResult>(() => {
+    const perToken = Array.from(byToken.values()).sort(
+      (a, b) => b.amountUsd - a.amountUsd,
+    );
     const claimedUsd = perToken.reduce((acc, t) => acc + t.amountUsd, 0);
-    // Build daily series filling gaps with 0 so the sparkline is continuous.
-    // Window spans from the oldest day we saw data through today, capped to
-    // MAX_CHART_DAYS so old tokens with months of history don't make the
-    // sparkline unreadable.
     const now = Math.floor(Date.now() / 1000);
     const today = Math.floor(now / DAY_SECONDS) * DAY_SECONDS;
     let oldestDay = today;
@@ -330,8 +267,10 @@ export function useCreatorEarnings(): CreatorEarningsResult {
     }
     const earliestAllowed = today - (MAX_CHART_DAYS - 1) * DAY_SECONDS;
     if (oldestDay < earliestAllowed) oldestDay = earliestAllowed;
-    const windowDays =
-      Math.max(1, Math.floor((today - oldestDay) / DAY_SECONDS) + 1);
+    const windowDays = Math.max(
+      1,
+      Math.floor((today - oldestDay) / DAY_SECONDS) + 1,
+    );
     const daily: DailyEarnings[] = [];
     for (let i = windowDays - 1; i >= 0; i--) {
       const day = today - i * DAY_SECONDS;
@@ -345,7 +284,13 @@ export function useCreatorEarnings(): CreatorEarningsResult {
       fullyLoaded,
       isLoading: tokensLoading || scanning || previewCalls.isLoading,
     };
-  }, [byToken, byDay, pendingUsd, fullyLoaded, tokensLoading, scanning, previewCalls.isLoading]);
-
-  return result;
+  }, [
+    byToken,
+    byDay,
+    pendingUsd,
+    fullyLoaded,
+    tokensLoading,
+    scanning,
+    previewCalls.isLoading,
+  ]);
 }

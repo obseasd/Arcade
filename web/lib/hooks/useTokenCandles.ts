@@ -1,8 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useCallback, useMemo } from "react";
 import { Address } from "viem";
-import { usePublicClient } from "wagmi";
+import { usePublicClient, useReadContract } from "wagmi";
 import { ADDRESSES } from "@/lib/constants";
 import { BUY_EVT, SELL_EVT, V3_SWAP_EVT } from "@/lib/eventSignatures";
 import { CHUNK_LARGE, MAX_BACK_CANDLES, scanLogsChunked } from "@/lib/eventScan";
@@ -45,9 +46,7 @@ interface FetchResult {
   initialPrice?: number;
 }
 
-/** Module-level cache so flipping between timeframes reuses the trade scan. */
-const tradesCache = new Map<string, { result: FetchResult; cachedAt: number }>();
-const CACHE_TTL_MS = 30_000; // 30s
+const SCAN_STALE_MS = 30_000;
 
 /**
  * Reads on-chain trade events for a token, computes the implied USDC-per-token
@@ -56,6 +55,10 @@ const CACHE_TTL_MS = 30_000; // 30s
  * - PUMP / Arcade: reads launchpad Buy + Sell events, uses `newPriceQ64` as price
  * - Clanker V3 (USDC-paired): reads pool Swap events, derives price from `sqrtPriceX96`
  * - Clanker V3 (WETH-paired): returns empty (no USDC price reference)
+ *
+ * React-Query-backed. Live WS pushes mutate the cached trade array directly
+ * via setQueryData; flipping timeframes only re-buckets in useMemo without
+ * re-running the chunked scan (audit ARCH-007).
  */
 export function useTokenCandles(args: {
   token: Address | undefined;
@@ -66,125 +69,116 @@ export function useTokenCandles(args: {
 }): { candles: Candle[]; isLoading: boolean } {
   const { token, mode, pool, timeframe, refreshKey } = args;
   const publicClient = usePublicClient();
-  const [candles, setCandles] = useState<Candle[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
-  // Invalidates the cache + retriggers the effect on new on-chain trades.
-  const [liveTick, setLiveTick] = useState(0);
+  const queryClient = useQueryClient();
 
-  useEffect(() => {
-    if (!publicClient || !token || mode === undefined) {
-      setCandles([]);
-      return;
-    }
-    let cancelled = false;
-    const cacheKey = `${token.toLowerCase()}|${mode}|${(pool ?? "").toLowerCase()}`;
-    const cached = tradesCache.get(cacheKey);
-    // A `liveTick` bump means a new on-chain trade fired; refetch.
-    const isFresh = cached && Date.now() - cached.cachedAt < CACHE_TTL_MS && liveTick === 0;
-    if (isFresh) {
-      setCandles(bucketize(cached!.result.trades, BUCKET_SIZE[timeframe], cached!.result.initialPrice));
-      setIsLoading(false);
-      return;
-    }
-    setIsLoading(true);
-    (async () => {
+  const tradesKey = useMemo(
+    () => [
+      "arcade",
+      "token-trades-candles",
+      token?.toLowerCase() ?? null,
+      mode ?? null,
+      pool?.toLowerCase() ?? null,
+      refreshKey ?? 0,
+    ],
+    [token, mode, pool, refreshKey],
+  );
+
+  const { data, isLoading, isFetching } = useQuery<FetchResult>({
+    queryKey: tradesKey,
+    enabled: !!publicClient && !!token && mode !== undefined,
+    staleTime: SCAN_STALE_MS,
+    gcTime: SCAN_STALE_MS * 5,
+    queryFn: async () => {
+      if (!publicClient || !token || mode === undefined) return { trades: [] };
+      return fetchTrades(publicClient, token, mode, pool);
+    },
+  });
+
+  // Block anchor for WS event timestamping. One-shot read at mount, refreshed
+  // every 5 minutes. Cheap; useReadContract would be overkill so we use a
+  // plain useQuery on getBlock.
+  const { data: tsAnchor } = useQuery<{ ts: number; n: bigint } | null>({
+    queryKey: ["arcade", "block-anchor"],
+    enabled: !!publicClient,
+    staleTime: 5 * 60_000,
+    gcTime: 10 * 60_000,
+    queryFn: async () => {
+      if (!publicClient) return null;
       try {
-        const result = await fetchTrades(publicClient, token, mode, pool);
-        if (cancelled) return;
-        tradesCache.set(cacheKey, { result, cachedAt: Date.now() });
-        const buckets = bucketize(result.trades, BUCKET_SIZE[timeframe], result.initialPrice);
-        setCandles(buckets);
+        const b: any = await publicClient.getBlock();
+        return { ts: Number(b.timestamp), n: b.number as bigint };
       } catch {
-        if (!cancelled) setCandles([]);
-      } finally {
-        if (!cancelled) setIsLoading(false);
+        return null;
       }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [publicClient, token, mode, pool, timeframe, refreshKey, liveTick]);
+    },
+  });
 
-  // Live trade subscription. Two paths share `useV3Usdc0Hint` and a common
-  // log->trade parser:
-  //
-  //   1. Append the parsed trade directly to the cache and re-bucketize. This
-  //      avoids the brief RPC indexer lag where a getLogs scan immediately
-  //      after the WS push can still miss the new event (which was the visible
-  //      symptom: first buy on a fresh token left the chart empty until a
-  //      timeframe switch forced re-bucketize).
-  //   2. Bump liveTick anyway so the effect re-runs on the next tick. The
-  //      backup full-fetch reconciles anything the WS missed.
+  // V3 pool token0 lookup. The hook used to do this in a useEffect that wrote
+  // local state; useReadContract gives us the same answer via wagmi's RQ
+  // backing and stays cached across components reading the same pool.
+  const t0Query = useReadContract({
+    address: pool && pool !== "0x0000000000000000000000000000000000000000"
+      ? pool
+      : undefined,
+    abi: [
+      {
+        type: "function",
+        name: "token0",
+        stateMutability: "view",
+        inputs: [],
+        outputs: [{ type: "address" }],
+      },
+    ] as const,
+    functionName: "token0",
+    query: {
+      enabled:
+        mode === 2 && !!pool && pool !== "0x0000000000000000000000000000000000000000",
+      staleTime: Infinity,
+    },
+  });
+  const usdcIsToken0 =
+    mode === 2 && t0Query.data
+      ? (t0Query.data as string).toLowerCase() === ADDRESSES.usdc.toLowerCase()
+      : null;
+
+  // Helper: append fresh trades to the cached scan result. Used by all three
+  // WS subscriptions. The merge dedupes by (time, price, volume) so an
+  // overlapping backup fetch doesn't double-count.
   const appendTrades = useCallback(
     (newTrades: Trade[]) => {
       if (newTrades.length === 0) return;
-      const cacheKey = `${(token ?? "").toLowerCase()}|${mode ?? 0}|${(pool ?? "").toLowerCase()}`;
-      const prior = tradesCache.get(cacheKey)?.result.trades ?? [];
-      // Dedupe by (time, price) so a backup refetch right after doesn't
-      // double-count anything we already appended from the WS path.
-      const merged = [...prior, ...newTrades]
-        .filter(
-          (t, i, arr) =>
-            arr.findIndex((x) => x.time === t.time && x.price === t.price && x.volumeUsdc === t.volumeUsdc) === i,
-        )
-        .sort((a, b) => a.time - b.time);
-      tradesCache.set(cacheKey, {
-        result: { trades: merged, initialPrice: tradesCache.get(cacheKey)?.result.initialPrice },
-        cachedAt: Date.now(),
+      queryClient.setQueryData<FetchResult | undefined>(tradesKey, (prev) => {
+        const base = prev ?? { trades: [] };
+        const merged = [...base.trades, ...newTrades]
+          .filter(
+            (t, i, arr) =>
+              arr.findIndex(
+                (x) =>
+                  x.time === t.time &&
+                  x.price === t.price &&
+                  x.volumeUsdc === t.volumeUsdc,
+              ) === i,
+          )
+          .sort((a, b) => a.time - b.time);
+        return { ...base, trades: merged };
       });
-      setCandles(bucketize(merged, BUCKET_SIZE[timeframe]));
-      setLiveTick((t) => t + 1);
     },
-    [token, mode, pool, timeframe],
+    [queryClient, tradesKey],
   );
 
-  // Estimate "now" from `latestBlock.timestamp` once at mount, so the WS-pushed
-  // log's `blockNumber` can be turned into seconds-since-epoch without an RPC
-  // round-trip per event. ~1s/block on Arc → close enough for charting.
-  const [tsAnchor, setTsAnchor] = useState<{ ts: number; n: bigint } | null>(null);
-  useEffect(() => {
-    if (!publicClient) return;
-    publicClient
-      .getBlock()
-      .then((b: any) => setTsAnchor({ ts: Number(b.timestamp), n: b.number as bigint }))
-      .catch(() => {});
-  }, [publicClient]);
-
-  // Audit medium [15]: cache the V3 pool's actual token0 once instead of
-  // re-deriving it from `USDC_ADDRESS < POOL_ADDRESS` on every swap event.
-  // Pools are CREATE2 deployments whose address has no meaningful sort
-  // relationship with the underlying token0 — the previous lexical compare
-  // returned the right answer ~half the time, inverting price and volume
-  // for the other half until the next backup fetch reconciled.
-  const [usdcIsToken0, setUsdcIsToken0] = useState<boolean | null>(null);
-  useEffect(() => {
-    if (!publicClient || mode !== 2 || !pool || pool === "0x0000000000000000000000000000000000000000") {
-      setUsdcIsToken0(null);
-      return;
-    }
-    publicClient
-      .readContract({
-        address: pool as Address,
-        abi: [
-          { type: "function", name: "token0", stateMutability: "view", inputs: [], outputs: [{ type: "address" }] },
-        ],
-        functionName: "token0",
-      })
-      .then((t0: any) => {
-        setUsdcIsToken0((t0 as string).toLowerCase() === ADDRESSES.usdc.toLowerCase());
-      })
-      .catch(() => setUsdcIsToken0(null));
-  }, [publicClient, mode, pool]);
   const tsForBlock = useCallback(
-    (bn: bigint) => (tsAnchor ? tsAnchor.ts - Number(tsAnchor.n - bn) : Math.floor(Date.now() / 1000)),
+    (bn: bigint) =>
+      tsAnchor
+        ? tsAnchor.ts - Number(tsAnchor.n - bn)
+        : Math.floor(Date.now() / 1000),
     [tsAnchor],
   );
 
   const onSwapLog = useCallback(
     (logs: any[]) => {
       // Wait for the cached token0 lookup to land before we trust ANY
-      // direction-derived value. Skipping a few logs at startup is way
-      // better than pushing inverted prices that whiplash the chart.
+      // direction-derived value. Skipping a few logs at startup beats
+      // pushing inverted prices that whiplash the chart.
       if (mode !== 2 || !pool || usdcIsToken0 === null) return;
       const parsed: Trade[] = [];
       for (const log of logs) {
@@ -215,8 +209,13 @@ export function useTokenCandles(args: {
         const priceE24 = (priceQ64 * 10n ** 24n) >> 64n;
         const price = Number(priceE24) / 1e24;
         const isBuy = "usdcIn" in (log.args as any);
-        const volumeUsdc = Number(isBuy ? log.args.usdcIn : log.args.usdcOut) / 1e6;
-        parsed.push({ time: tsForBlock(log.blockNumber as bigint), price, volumeUsdc });
+        const volumeUsdc =
+          Number(isBuy ? log.args.usdcIn : log.args.usdcOut) / 1e6;
+        parsed.push({
+          time: tsForBlock(log.blockNumber as bigint),
+          price,
+          volumeUsdc,
+        });
       }
       appendTrades(parsed);
     },
@@ -244,7 +243,16 @@ export function useTokenCandles(args: {
     onLogs: onCurveLog,
   });
 
-  return { candles, isLoading };
+  const candles = useMemo<Candle[]>(() => {
+    if (!data) return [];
+    return bucketize(data.trades, BUCKET_SIZE[timeframe], data.initialPrice);
+  }, [data, timeframe]);
+
+  return {
+    candles,
+    isLoading:
+      !!token && mode !== undefined && (isLoading || isFetching),
+  };
 }
 
 function priceFromSqrtX96(sqrtPriceX96: bigint, usdcIsToken0: boolean): number {
@@ -264,9 +272,9 @@ async function fetchTrades(
   mode: number,
   pool?: Address,
 ): Promise<FetchResult> {
-  // Skip per-block getBlock calls: that would be O(N events) round trips and
-  // is the dominant cost. Arc averages ~1s blocks, so we estimate timestamp
-  // from latest block: t ≈ latestTs - (latestBlock - blockNumber).
+  // Skip per-block getBlock calls: O(N events) round trips otherwise. Arc
+  // averages ~1s blocks; we estimate timestamp from latest block:
+  // t ≈ latestTs - (latestBlock - blockNumber).
   const latestBlock = await publicClient.getBlock();
   const latestTs = Number(latestBlock.timestamp);
   const latestN = latestBlock.number as bigint;
@@ -280,7 +288,13 @@ async function fetchTrades(
     const t0 = (await publicClient.readContract({
       address: pool,
       abi: [
-        { type: "function", name: "token0", stateMutability: "view", inputs: [], outputs: [{ type: "address" }] },
+        {
+          type: "function",
+          name: "token0",
+          stateMutability: "view",
+          inputs: [],
+          outputs: [{ type: "address" }],
+        },
       ],
       functionName: "token0",
     })) as Address;
@@ -290,13 +304,11 @@ async function fetchTrades(
     }
     // We intentionally do NOT use the pool's Initialize event sqrtPriceX96 as
     // the first candle's open. Clanker V3 pools are initialized at the FDV
-    // mcap price ($0.000035 for Standard), but no liquidity actually sits at
-    // that tick — all 3 single-sided positions are offset by at least
-    // tickSpacing above. So the first real swap "teleports" from the init
-    // tick to the first liquid tick, which would render as a huge artificial
-    // candle body (often 2-5%). Instead, we leave the first candle as a doji
-    // (open == close == first trade post-price) and let subsequent candles
-    // chain properly. See workflow w9g2a2408 for the full reasoning.
+    // mcap price, but no liquidity actually sits at that tick - all 3
+    // single-sided positions are offset by at least tickSpacing above. So
+    // the first real swap "teleports" from the init tick to the first liquid
+    // tick, which would render as a huge artificial candle body. Leave the
+    // first candle as a doji and let subsequent candles chain properly.
     const initialPrice: number | undefined = undefined;
     const swaps = await scanLogsChunked(
       publicClient,
@@ -340,8 +352,6 @@ async function fetchTrades(
   for (const log of allLogs) {
     const priceQ64 = log.args.newPriceQ64 as bigint | undefined;
     if (!priceQ64) continue;
-    // price = priceQ64 / 2^64, computed with extra bigint precision (10^24 so
-    // sub-cent moves on micro-caps survive integer truncation).
     const priceE24 = (priceQ64 * 10n ** 24n) >> 64n;
     const price = Number(priceE24) / 1e24;
     const isBuy = "usdcIn" in (log.args as any);
