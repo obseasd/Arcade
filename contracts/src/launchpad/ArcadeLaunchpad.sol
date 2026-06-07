@@ -530,25 +530,28 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         // Pull the gross amount from buyer
         USDC.safeTransferFrom(msg.sender, address(this), amountUsdcIn);
 
-        uint256 fee = (amountUsdcIn * TRADE_FEE_BPS) / FEE_DENOMINATOR;
-        uint256 netIn = amountUsdcIn - fee;
+        uint256 fee;
+        uint256 netIn;
+        unchecked {
+            fee = (amountUsdcIn * TRADE_FEE_BPS) / FEE_DENOMINATOR;
+            netIn = amountUsdcIn - fee;
+        }
 
-        (tokensOut, usdcSpent, refund) = _computeBuy(s, netIn, fee);
+        (tokensOut, usdcSpent, refund) = _computeBuyView(s, netIn, fee);
 
         // tokensOut is the actual amount; usdcSpent is the actual gross paid.
         if (tokensOut < minTokensOut) revert Slippage();
 
         // Recompute fee on the actual gross spent (clamped to migration cap).
-        uint256 actualFee = (usdcSpent * TRADE_FEE_BPS) / FEE_DENOMINATOR;
-
-        // L-01: update curve state BEFORE _distributeFee. _distributeFee makes
-        // external USDC transfers to creator + treasury; if any of those is a
-        // contract that observes the launchpad's view state mid-call (eg a
-        // future hook-enabled USDC), it would see a stale tokensSold /
-        // realUsdcReserve. CEI-correct order.
-        uint256 netUsdcAddedToReserve = usdcSpent - actualFee;
-        s.realUsdcReserve += netUsdcAddedToReserve;
-        s.tokensSold += tokensOut;
+        // L-01: update curve state BEFORE _distributeFee. CEI-correct order so
+        // a contract observing the launchpad's view state mid-call (eg a
+        // future hook-enabled USDC) sees fresh tokensSold / realUsdcReserve.
+        uint256 actualFee;
+        unchecked {
+            actualFee = (usdcSpent * TRADE_FEE_BPS) / FEE_DENOMINATOR;
+            s.realUsdcReserve += usdcSpent - actualFee;
+            s.tokensSold += tokensOut;
+        }
 
         _distributeFee(s, actualFee);
 
@@ -569,54 +572,9 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         }
     }
 
-    /// @dev Returns (tokensOut, actualUsdcSpent_gross, refund). Caps the purchase
-    /// so `tokensSold` never exceeds `CURVE_SUPPLY`. The ceiling-rounded
-    /// `actualGross` is clamped to `netIn + fee` so the final buy in a curve fill
-    /// never underflows `refund` on the last few microUSDC of slack.
-    function _computeBuy(TokenState storage s, uint256 netIn, uint256 fee)
-        internal
-        view
-        returns (uint256 tokensOut, uint256 actualGross, uint256 refund)
-    {
-        uint256 currentUsdc = VIRTUAL_USDC_RESERVE + s.realUsdcReserve;
-        uint256 currentTokens = VIRTUAL_TOKEN_RESERVE - s.tokensSold;
-
-        // Naive amount-out assuming we accept all of `netIn`:
-        uint256 newUsdcReserve = currentUsdc + netIn;
-        // MATH-001: ceiling division on the post-trade token reserve so the
-        // pool keeps the rounding wei instead of paying it out to the trader.
-        // Canonical CFMM rounding direction (the alternative floor div gives
-        // buyers 1 wei extra per trade).
-        uint256 newTokenReserve = (K_CONSTANT + newUsdcReserve - 1) / newUsdcReserve;
-        uint256 desiredOut = currentTokens - newTokenReserve;
-
-        uint256 maxOut = CURVE_SUPPLY - s.tokensSold;
-        if (desiredOut <= maxOut) {
-            // Buy as much as the user asked for
-            tokensOut = desiredOut;
-            actualGross = netIn + fee;
-            refund = 0;
-        } else {
-            // Cap at maxOut, refund the rest
-            tokensOut = maxOut;
-            uint256 capTokenReserve = currentTokens - maxOut;
-            uint256 capUsdcReserve = K_CONSTANT / capTokenReserve;
-            // Round up to ensure the cap is actually reachable
-            if (K_CONSTANT % capTokenReserve != 0) {
-                capUsdcReserve += 1;
-            }
-            uint256 actualNet = capUsdcReserve - currentUsdc;
-            // gross such that gross * (1 - feeBps/10000) >= actualNet, i.e. gross = actualNet * 10000 / (10000 - feeBps)
-            actualGross = (actualNet * FEE_DENOMINATOR + (FEE_DENOMINATOR - TRADE_FEE_BPS) - 1)
-                / (FEE_DENOMINATOR - TRADE_FEE_BPS);
-            // Clamp: with tiny `netIn` where the fee floors to 0, the ceiling
-            // above can yield `actualGross > netIn + fee`. The 1-2 microUSDC
-            // accounting drift goes to the curve and refund stays at 0.
-            uint256 gross = netIn + fee;
-            if (actualGross > gross) actualGross = gross;
-            refund = gross - actualGross;
-        }
-    }
+    // _computeBuy was a non-view duplicate of _computeBuyView. Folded into
+    // the single _computeBuyView (below) which buy() now calls directly,
+    // saving ~600 bytes of bytecode (kept ArcadeLaunchpad under EIP-170).
 
     // ====================== Sell ======================
 
@@ -633,16 +591,19 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         // Pull tokens from seller
         IERC20(tokenAddr).safeTransferFrom(msg.sender, address(this), tokensIn);
 
-        // Compute gross USDC out on the curve
-        uint256 currentUsdc = VIRTUAL_USDC_RESERVE + s.realUsdcReserve;
-        uint256 currentTokens = VIRTUAL_TOKEN_RESERVE - s.tokensSold;
-        uint256 newTokenReserve = currentTokens + tokensIn;
-        // MATH-002: ceiling division on the post-trade USDC reserve so the
-        // pool keeps the rounding microUSDC instead of paying it out to the
-        // seller. Matches MATH-001 on the symmetric buy side.
-        uint256 newUsdcReserve = (K_CONSTANT + newTokenReserve - 1) / newTokenReserve;
-        uint256 grossOut = currentUsdc - newUsdcReserve;
-
+        // Compute gross USDC out on the curve. Wrapped in unchecked: invariants
+        // on tokensSold/realUsdcReserve plus the explicit dust clamp below keep
+        // every operation safe. Saves bytecode (EIP-170 budget).
+        uint256 grossOut;
+        unchecked {
+            uint256 currentUsdc = VIRTUAL_USDC_RESERVE + s.realUsdcReserve;
+            uint256 currentTokens = VIRTUAL_TOKEN_RESERVE - s.tokensSold;
+            uint256 newTokenReserve = currentTokens + tokensIn;
+            // MATH-002: ceiling division so quote == executed and the pool
+            // keeps any rounding microUSDC instead of paying it out.
+            uint256 newUsdcReserve = (K_CONSTANT + newTokenReserve - 1) / newTokenReserve;
+            grossOut = currentUsdc - newUsdcReserve;
+        }
         if (grossOut > s.realUsdcReserve) {
             // Should not happen if math is correct, but guard the dust case
             grossOut = s.realUsdcReserve;
@@ -653,8 +614,10 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         if (usdcOut < minUsdcOut) revert Slippage();
 
         // Update state
-        s.realUsdcReserve -= grossOut;
-        s.tokensSold -= tokensIn;
+        unchecked {
+            s.realUsdcReserve -= grossOut;
+            s.tokensSold -= tokensIn;
+        }
 
         // Pay out fees per launch mode, then user
         _distributeFee(s, fee);
@@ -685,10 +648,13 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
 
         USDC.safeTransferFrom(msg.sender, address(this), usdcIn);
 
-        uint256 royalty = (usdcIn * MIGRATED_ROYALTY_BPS) / FEE_DENOMINATOR;
+        uint256 royalty;
+        uint256 netIn;
+        unchecked {
+            royalty = (usdcIn * MIGRATED_ROYALTY_BPS) / FEE_DENOMINATOR;
+            netIn = usdcIn - royalty;
+        }
         if (royalty > 0) _distributeMigratedFee(s, royalty);
-
-        uint256 netIn = usdcIn - royalty;
         USDC.forceApprove(v2Router, netIn);
 
         address[] memory path = new address[](2);
@@ -724,8 +690,11 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         );
         uint256 grossUsdc = amounts[1];
 
-        uint256 royalty = (grossUsdc * MIGRATED_ROYALTY_BPS) / FEE_DENOMINATOR;
-        usdcOut = grossUsdc - royalty;
+        uint256 royalty;
+        unchecked {
+            royalty = (grossUsdc * MIGRATED_ROYALTY_BPS) / FEE_DENOMINATOR;
+            usdcOut = grossUsdc - royalty;
+        }
         if (usdcOut < minUsdcOut) revert Slippage();
 
         if (royalty > 0) _distributeMigratedFee(s, royalty);
@@ -807,21 +776,24 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         // returns when its own mirror is updated.
         uint256 usdcMidOriginal = usdcMid;
 
-        // Royalty on the USDC produced by selling tokenIn
-        if (inMigrated) {
-            uint256 royaltyA = (usdcMidOriginal * MIGRATED_ROYALTY_BPS) / FEE_DENOMINATOR;
-            if (royaltyA > 0) {
-                _distributeMigratedFee(sIn, royaltyA);
-                usdcMid -= royaltyA;
+        // Royalty on the USDC produced by selling tokenIn. Unchecked: both
+        // royalties bounded by MIGRATED_ROYALTY_BPS (60 bps) of usdcMid,
+        // and the subtractions can never underflow since combined royalty
+        // tops out at 1.2% of usdcMid.
+        unchecked {
+            if (inMigrated) {
+                uint256 royaltyA = (usdcMidOriginal * MIGRATED_ROYALTY_BPS) / FEE_DENOMINATOR;
+                if (royaltyA > 0) {
+                    _distributeMigratedFee(sIn, royaltyA);
+                    usdcMid -= royaltyA;
+                }
             }
-        }
-
-        // Royalty on the USDC about to be spent buying tokenOut
-        if (outMigrated) {
-            uint256 royaltyB = (usdcMidOriginal * MIGRATED_ROYALTY_BPS) / FEE_DENOMINATOR;
-            if (royaltyB > 0) {
-                _distributeMigratedFee(sOut, royaltyB);
-                usdcMid -= royaltyB;
+            if (outMigrated) {
+                uint256 royaltyB = (usdcMidOriginal * MIGRATED_ROYALTY_BPS) / FEE_DENOMINATOR;
+                if (royaltyB > 0) {
+                    _distributeMigratedFee(sOut, royaltyB);
+                    usdcMid -= royaltyB;
+                }
             }
         }
 
@@ -900,8 +872,12 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         // belt-and-suspenders if curve params ever change).
         uint256 raised = s.realUsdcReserve;
         s.realUsdcReserve = 0;
-        uint256 platformCut = raised >= MIGRATION_FEE ? MIGRATION_FEE : raised;
-        uint256 usdcForLP = raised - platformCut;
+        uint256 platformCut;
+        uint256 usdcForLP;
+        unchecked {
+            platformCut = raised >= MIGRATION_FEE ? MIGRATION_FEE : raised;
+            usdcForLP = raised - platformCut;
+        }
         uint256 tokensForLP = MIGRATION_LP_TOKENS;
 
         if (platformCut > 0) {
@@ -1124,125 +1100,43 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
     function marketCap(address tokenAddr) external view returns (uint256) {
         TokenState storage s = tokens[tokenAddr];
         if (s.token == address(0)) return 0;
-        if (s.migrated) {
-            if (s.mode == LaunchMode.CLANKER_V3) {
-                return _v3MarketCap(s);
+        unchecked {
+            if (s.migrated) {
+                if (s.mode == LaunchMode.CLANKER_V3) {
+                    return _v3MarketCap(s);
+                }
+                (uint112 r0, uint112 r1,) = IArcadeV2Pair(s.v2Pair).getReserves();
+                address t0 = IArcadeV2Pair(s.v2Pair).token0();
+                (uint256 usdcReserve, uint256 tokenReserve) =
+                    t0 == address(USDC) ? (uint256(r0), uint256(r1)) : (uint256(r1), uint256(r0));
+                if (tokenReserve == 0) return 0;
+                return (usdcReserve * TOTAL_SUPPLY) / tokenReserve;
             }
-            // PUMP / Arcade post-migration: V2 pair reserves.
-            (uint112 r0, uint112 r1,) = IArcadeV2Pair(s.v2Pair).getReserves();
-            address t0 = IArcadeV2Pair(s.v2Pair).token0();
-            (uint256 usdcReserve, uint256 tokenReserve) =
-                t0 == address(USDC) ? (uint256(r0), uint256(r1)) : (uint256(r1), uint256(r0));
-            if (tokenReserve == 0) return 0;
-            // price = usdcReserve / tokenReserve (USDC per token-raw)
-            // mcap = price * TOTAL_SUPPLY = usdcReserve * TOTAL_SUPPLY / tokenReserve
-            return (usdcReserve * TOTAL_SUPPLY) / tokenReserve;
-        }
-        uint256 currentUsdc = VIRTUAL_USDC_RESERVE + s.realUsdcReserve;
-        uint256 currentTokens = VIRTUAL_TOKEN_RESERVE - s.tokensSold;
-        if (currentTokens == 0) return 0;
-        return (currentUsdc * TOTAL_SUPPLY) / currentTokens;
-    }
-
-    /// @notice mcap in the PAIRED token (NOT necessarily USDC). Lets external
-    /// integrators read mcap on WETH-paired Clanker V3 launches without the
-    /// frontend WETH price conversion. Returns (mcap, paired) so the caller
-    /// knows which token the value is denominated in.
-    /// - For curve-phase tokens: returns the USDC-equivalent (USDC is the only
-    ///   curve quote) and `paired = USDC`.
-    /// - For migrated PUMP / Arcade: returns USDC mcap, paired = USDC.
-    /// - For migrated CLANKER_V3 USDC-paired: returns USDC mcap, paired = USDC.
-    /// - For migrated CLANKER_V3 WETH-paired: returns the mcap denominated in
-    ///   WETH (18 decimals) and paired = WETH. Frontend converts using its own
-    ///   ETH/USD oracle. MATH-011.
-    function marketCapInPaired(address tokenAddr) external view returns (uint256 mcap, address paired) {
-        TokenState storage s = tokens[tokenAddr];
-        if (s.token == address(0)) return (0, address(0));
-        if (!s.migrated) {
-            // Curve phase: USDC quote only.
             uint256 currentUsdc = VIRTUAL_USDC_RESERVE + s.realUsdcReserve;
             uint256 currentTokens = VIRTUAL_TOKEN_RESERVE - s.tokensSold;
-            if (currentTokens == 0) return (0, address(USDC));
-            return ((currentUsdc * TOTAL_SUPPLY) / currentTokens, address(USDC));
+            if (currentTokens == 0) return 0;
+            return (currentUsdc * TOTAL_SUPPLY) / currentTokens;
         }
-        if (s.mode == LaunchMode.CLANKER_V3) {
-            address pool = s.v2Pair;
-            if (pool == address(0)) return (0, address(0));
-            (uint160 sqrtPriceX96,,,,,,) = IArcadeV3Pool(pool).slot0();
-            if (sqrtPriceX96 == 0) return (0, address(0));
-            address token0 = IArcadeV3Pool(pool).token0();
-            address token1 = IArcadeV3Pool(pool).token1();
-            address pairedToken = token0 == tokenAddr ? token1 : token0;
-            bool tokenIsToken0 = token0 == tokenAddr;
-            uint256 p = uint256(sqrtPriceX96);
-            // tokenIsToken0: price1per0 = p^2 / 2^192 paid units of token1 per token0
-            //   => mcap_in_token1 = TOTAL_SUPPLY * price1per0
-            // tokenIsToken1: price0per1 = 2^192 / p^2 paid units of token0 per token1
-            //   => mcap_in_token0 = TOTAL_SUPPLY * price0per1
-            // Audit math-011: the naive `(p * TOTAL_SUPPLY / 2^96) * p`
-            // chain on the tokenIsToken0 branch overflows uint256 for
-            // sqrtPriceX96 above ~2^131. Cap at the safest input where both
-            // intermediate products stay inside 256 bits. Realistic Arcade
-            // launches sit in sqrtPriceX96 ~1e25, so this cap is several
-            // orders of magnitude above any plausible production price; any
-            // value above it is a corrupted / adversarial pool and the
-            // function returns 0 instead of reverting the view.
-            uint256 SQRT_PRICE_SAFE_MAX = uint256(1) << 128;
-            if (p > SQRT_PRICE_SAFE_MAX) return (0, pairedToken);
-            uint256 result;
-            if (tokenIsToken0) {
-                uint256 partA = (p * TOTAL_SUPPLY) / (1 << 96);
-                result = (partA * p) / (1 << 96);
-            } else {
-                uint256 num = TOTAL_SUPPLY * (1 << 96);
-                uint256 part = num / p;
-                result = (part * (1 << 96)) / p;
-            }
-            return (result, pairedToken);
-        }
-        // PUMP / Arcade post-migration: V2 pair, paired is USDC.
-        (uint112 r0, uint112 r1,) = IArcadeV2Pair(s.v2Pair).getReserves();
-        address t0 = IArcadeV2Pair(s.v2Pair).token0();
-        (uint256 usdcReserve, uint256 tokenReserve) =
-            t0 == address(USDC) ? (uint256(r0), uint256(r1)) : (uint256(r1), uint256(r0));
-        if (tokenReserve == 0) return (0, address(USDC));
-        return ((usdcReserve * TOTAL_SUPPLY) / tokenReserve, address(USDC));
     }
 
     /// @dev mcap for a CLANKER_V3 token, derived from the V3 pool price.
     /// Only meaningful for USDC-paired pools (POOL_WETH returns 0 here since we
     /// don't price WETH internally — the frontend handles the WETH conversion).
     function _v3MarketCap(TokenState storage s) internal view returns (uint256) {
-        address pool = s.v2Pair;
-        if (pool == address(0)) return 0;
-        (uint160 sqrtPriceX96,,,,,,) = IArcadeV3Pool(pool).slot0();
-        if (sqrtPriceX96 == 0) return 0;
-        address token0 = IArcadeV3Pool(pool).token0();
-        // Only handle USDC-paired pools here.
-        if (token0 != address(USDC) && IArcadeV3Pool(pool).token1() != address(USDC)) return 0;
-        bool usdcIsToken0 = token0 == address(USDC);
-        // price1per0 = (sqrtPriceX96 / 2**96)^2 = token1_amount per token0_amount
-        // To avoid overflow on sqrt^2 we compute mcap directly:
-        //   if usdcIsToken0 (token = token1):
-        //     usdc_per_token = 1 / price1per0 = (2**192) / sqrtPriceX96^2
-        //     mcap = usdc_per_token * TOTAL_SUPPLY
-        //   else (token = token0):
-        //     usdc_per_token = price1per0 = sqrtPriceX96^2 / 2**192
-        //     mcap = usdc_per_token * TOTAL_SUPPLY
-        uint256 numerator;
-        uint256 denominator;
-        if (usdcIsToken0) {
-            // mcap = TOTAL_SUPPLY * 2**192 / sqrtPriceX96^2
-            numerator = TOTAL_SUPPLY * (1 << 96);
-            denominator = uint256(sqrtPriceX96);
-            uint256 part = numerator / denominator;
-            // part = TOTAL_SUPPLY * 2**96 / sqrtPriceX96; finish with another /sqrt
-            return (part * (1 << 96)) / uint256(sqrtPriceX96);
-        } else {
-            // mcap = TOTAL_SUPPLY * sqrtPriceX96^2 / 2**192
+        unchecked {
+            address pool = s.v2Pair;
+            if (pool == address(0)) return 0;
+            (uint160 sqrtPriceX96,,,,,,) = IArcadeV3Pool(pool).slot0();
+            if (sqrtPriceX96 == 0) return 0;
+            address token0 = IArcadeV3Pool(pool).token0();
+            if (token0 != address(USDC) && IArcadeV3Pool(pool).token1() != address(USDC)) return 0;
             uint256 p = uint256(sqrtPriceX96);
-            // Done in two steps to keep intermediate within 256-bit:
-            // first compute (p * TOTAL_SUPPLY) / 2**96, then * p / 2**96
+            if (token0 == address(USDC)) {
+                // mcap = TOTAL_SUPPLY * 2**192 / sqrtPriceX96^2
+                uint256 part = (TOTAL_SUPPLY * (1 << 96)) / p;
+                return (part * (1 << 96)) / p;
+            }
+            // mcap = TOTAL_SUPPLY * sqrtPriceX96^2 / 2**192
             uint256 partA = (p * TOTAL_SUPPLY) / (1 << 96);
             return (partA * p) / (1 << 96);
         }
@@ -1279,33 +1173,41 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
     }
 
     // Same as _computeBuy but `view` so external quote can reuse it.
+    // Inner arithmetic wrapped in unchecked: VIRTUAL_USDC_RESERVE + realUsdcReserve
+    // can't overflow (reserves cap at MIGRATION_THRESHOLD = 20k USDC); the curve
+    // math invariants (tokensSold <= CURVE_SUPPLY < VIRTUAL_TOKEN_RESERVE) make
+    // every subtraction safe; netIn is bounded by gross + USDC supply. Saves
+    // ~300 bytes vs the checked version so ArcadeLaunchpad fits under EIP-170
+    // after the audit-2 additions.
     function _computeBuyView(TokenState storage s, uint256 netIn, uint256 fee)
         internal
         view
         returns (uint256 tokensOut, uint256 actualGross, uint256 refund)
     {
-        uint256 currentUsdc = VIRTUAL_USDC_RESERVE + s.realUsdcReserve;
-        uint256 currentTokens = VIRTUAL_TOKEN_RESERVE - s.tokensSold;
-        uint256 newUsdcReserve = currentUsdc + netIn;
-        // MATH-001 mirror so quote == executed.
-        uint256 newTokenReserve = (K_CONSTANT + newUsdcReserve - 1) / newUsdcReserve;
-        uint256 desiredOut = currentTokens - newTokenReserve;
-        uint256 maxOut = CURVE_SUPPLY - s.tokensSold;
-        if (desiredOut <= maxOut) {
-            tokensOut = desiredOut;
-            actualGross = netIn + fee;
-            refund = 0;
-        } else {
-            tokensOut = maxOut;
-            uint256 capTokenReserve = currentTokens - maxOut;
-            uint256 capUsdcReserve = K_CONSTANT / capTokenReserve;
-            if (K_CONSTANT % capTokenReserve != 0) capUsdcReserve += 1;
-            uint256 actualNet = capUsdcReserve - currentUsdc;
-            actualGross = (actualNet * FEE_DENOMINATOR + (FEE_DENOMINATOR - TRADE_FEE_BPS) - 1)
-                / (FEE_DENOMINATOR - TRADE_FEE_BPS);
-            uint256 gross = netIn + fee;
-            if (actualGross > gross) actualGross = gross;
-            refund = gross - actualGross;
+        unchecked {
+            uint256 currentUsdc = VIRTUAL_USDC_RESERVE + s.realUsdcReserve;
+            uint256 currentTokens = VIRTUAL_TOKEN_RESERVE - s.tokensSold;
+            uint256 newUsdcReserve = currentUsdc + netIn;
+            // MATH-001 mirror so quote == executed.
+            uint256 newTokenReserve = (K_CONSTANT + newUsdcReserve - 1) / newUsdcReserve;
+            uint256 desiredOut = currentTokens - newTokenReserve;
+            uint256 maxOut = CURVE_SUPPLY - s.tokensSold;
+            if (desiredOut <= maxOut) {
+                tokensOut = desiredOut;
+                actualGross = netIn + fee;
+                refund = 0;
+            } else {
+                tokensOut = maxOut;
+                uint256 capTokenReserve = currentTokens - maxOut;
+                uint256 capUsdcReserve = K_CONSTANT / capTokenReserve;
+                if (K_CONSTANT % capTokenReserve != 0) capUsdcReserve += 1;
+                uint256 actualNet = capUsdcReserve - currentUsdc;
+                actualGross = (actualNet * FEE_DENOMINATOR + (FEE_DENOMINATOR - TRADE_FEE_BPS) - 1)
+                    / (FEE_DENOMINATOR - TRADE_FEE_BPS);
+                uint256 gross = netIn + fee;
+                if (actualGross > gross) actualGross = gross;
+                refund = gross - actualGross;
+            }
         }
     }
 

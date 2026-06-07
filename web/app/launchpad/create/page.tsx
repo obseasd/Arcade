@@ -276,7 +276,7 @@ function CreateTokenInner() {
   // reject in the browser so users with 70+ MB files don't post a body that
   // the Vercel platform rejects with an opaque "RPC error" before our
   // route can return a clean 413. Keep the constants in sync.
-  const IMAGE_MAX_BYTES = 1_000_000;
+  const IMAGE_MAX_BYTES = 2_000_000;
 
   const onImageFile = async (file: File | undefined) => {
     if (!file) return;

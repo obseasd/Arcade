@@ -13,7 +13,7 @@ import { rateLimit, rejectCrossOrigin } from "@/lib/apiGuard";
  * anything larger is excess and would chew through the Pinata free tier
  * faster than necessary.
  */
-const MAX_BYTES = 1_000_000;
+const MAX_BYTES = 2_000_000;
 
 export const runtime = "nodejs";
 

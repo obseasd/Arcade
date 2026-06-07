@@ -6,8 +6,21 @@ libs = ["lib"]
 # 0.8.24 contracts and the Uniswap V3 fork (=0.7.6) compile side by side.
 auto_detect_solc = true
 optimizer = true
-optimizer_runs = 200
+# Bumped DOWN from 200 to 1 to keep ArcadeLaunchpad below EIP-170's
+# 24,576-byte bytecode limit after the audit-2 additions (CSEC-018,
+# MATH-001/002, CSEC-013 fee field, creator-buy slippage, slot0 verify,
+# swap-migrated guard). optimizer_runs=1 favours deployment size at the
+# cost of slightly more expensive runtime; for a launchpad called a few
+# hundred times per token, the runtime overhead is negligible compared
+# to a redeploy block. Revisit if/when the contract is restructured into
+# a router + delegate libraries pattern.
+optimizer_runs = 1
 via_ir = true
+# Strip the metadata trailer so the bytecode is the bare minimum needed
+# to deploy. Saves ~52-100 bytes per contract; matters for ArcadeLaunchpad
+# which sits within ~30 bytes of EIP-170's 24,576 limit.
+bytecode_hash = "none"
+cbor_metadata = false
 remappings = [
     "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/",
     "forge-std/=lib/forge-std/src/",

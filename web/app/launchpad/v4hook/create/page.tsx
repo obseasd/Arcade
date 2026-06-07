@@ -135,7 +135,7 @@ function Inner() {
     // Hard cap mirroring /api/pin/file MAX_BYTES. Catching it client-side
     // avoids a multi-MB upload that the Vercel platform rejects with an
     // opaque "RPC error" before our route can return a clean 413.
-    const IMAGE_MAX_BYTES = 1_000_000;
+    const IMAGE_MAX_BYTES = 2_000_000;
 
     const onImageFile = async (file: File | undefined) => {
         if (!file) return;
