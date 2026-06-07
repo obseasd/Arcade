@@ -98,22 +98,35 @@ export async function GET(req: NextRequest) {
     return redirectBackWithError(origin, "server_misconfigured");
   }
 
+  // no-abort-controller-on-twitter-token-and-me-fetches: 5s timeouts on
+  // both Twitter API calls so a slow / dead Twitter endpoint doesn't
+  // pin the Vercel serverless function up to its default 10s budget.
+  const tokenCtrl = new AbortController();
+  const tokenT = setTimeout(() => tokenCtrl.abort(), 5_000);
   // 1) Exchange code for access_token (PKCE confidential client).
   const callbackUrl = `${origin}/api/twitter-callback`;
   const basicAuth = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
-  const tokenRes = await fetch(TWITTER_TOKEN_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-      Authorization: `Basic ${basicAuth}`,
-    },
-    body: new URLSearchParams({
-      code,
-      grant_type: "authorization_code",
-      redirect_uri: callbackUrl,
-      code_verifier: verifier,
-    }).toString(),
-  });
+  let tokenRes: Response;
+  try {
+    tokenRes = await fetch(TWITTER_TOKEN_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Authorization: `Basic ${basicAuth}`,
+      },
+      body: new URLSearchParams({
+        code,
+        grant_type: "authorization_code",
+        redirect_uri: callbackUrl,
+        code_verifier: verifier,
+      }).toString(),
+      signal: tokenCtrl.signal,
+    });
+  } catch {
+    return redirectBackWithError(origin, "token_exchange_failed");
+  } finally {
+    clearTimeout(tokenT);
+  }
   if (!tokenRes.ok) {
     return redirectBackWithError(origin, "token_exchange_failed");
   }
@@ -122,9 +135,19 @@ export async function GET(req: NextRequest) {
   if (!accessToken) return redirectBackWithError(origin, "no_access_token");
 
   // 2) Fetch the user's @handle.
-  const meRes = await fetch(TWITTER_ME_URL, {
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
+  const meCtrl = new AbortController();
+  const meT = setTimeout(() => meCtrl.abort(), 5_000);
+  let meRes: Response;
+  try {
+    meRes = await fetch(TWITTER_ME_URL, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      signal: meCtrl.signal,
+    });
+  } catch {
+    return redirectBackWithError(origin, "me_failed");
+  } finally {
+    clearTimeout(meT);
+  }
   if (!meRes.ok) return redirectBackWithError(origin, "me_failed");
   const meJson = (await meRes.json()) as { data?: { username?: string } };
   const oauthHandle = meJson.data?.username?.toLowerCase();

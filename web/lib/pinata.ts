@@ -51,12 +51,18 @@ export async function pinFile(
     bytes instanceof Uint8Array ? bytes.slice().buffer : bytes;
   const blob = new Blob([data]);
   const form = new FormData();
-  form.append("file", blob, filename);
-  // Pin metadata: a small label so the user can find the upload in the Pinata
-  // dashboard later. Optional.
+  // pin-filename-untrusted-to-pinata: sanitise the user-supplied filename
+  // before passing it to Pinata. Drops control chars, path traversal,
+  // HTML brackets, quotes, and caps length. The original filename came
+  // from the multipart upload, so it's attacker-controlled (XSS via the
+  // Pinata dashboard's untrusted render path).
+  const safeName = filename
+    .replace(/[<>"'`\\/\x00-\x1f]/g, "_")
+    .slice(0, 64) || "image";
+  form.append("file", blob, safeName);
   form.append(
     "pinataMetadata",
-    JSON.stringify({ name: filename, keyvalues: { source: "arcade-launch" } }),
+    JSON.stringify({ name: safeName, keyvalues: { source: "arcade-launch" } }),
   );
   const res = await fetch(`${PINATA_BASE}/pinning/pinFileToIPFS`, {
     method: "POST",

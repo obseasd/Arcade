@@ -135,6 +135,33 @@ export function BridgeCard() {
   // If the user refreshed mid-bridge, restore the burn so they can still
   // claim. We only restore once per mount, and the in-memory step takes
   // priority if they're already in the middle of a fresh bridge.
+  // BRIDGE-MULTITAB-DOUBLE-MINT-REVERT: listen for sibling-tab mint
+  // broadcasts so two tabs both holding the same pending burn don't both
+  // sign a `receiveMessage` and revert one of the two.
+  useEffect(() => {
+    if (typeof BroadcastChannel === "undefined") return;
+    const channel = new BroadcastChannel("arcade-bridge-mint");
+    const onMsg = (e: MessageEvent) => {
+      const data = e.data as { burnTxHash?: string; account?: string };
+      if (!data?.burnTxHash) return;
+      if (data.account?.toLowerCase() !== account?.toLowerCase()) return;
+      if (step.kind === "attesting" || step.kind === "minting") {
+        if (step.burnTxHash?.toLowerCase() === data.burnTxHash.toLowerCase()) {
+          // Another tab is minting this burn; drop our local step and
+          // clear the pending entry so the user doesn't see a stale
+          // Claim banner here.
+          if (account) clearPendingBridge(account);
+          setStep({ kind: "idle" });
+        }
+      }
+    };
+    channel.addEventListener("message", onMsg);
+    return () => {
+      channel.removeEventListener("message", onMsg);
+      channel.close();
+    };
+  }, [account, step]);
+
   useEffect(() => {
     if (step.kind !== "idle") return;
     // BRIDGE-INJ-PENDING-MINT-GRIEF: only resume the entry that belongs to
@@ -421,6 +448,18 @@ export function BridgeCard() {
 
   const doMint = async () => {
     if (step.kind !== "minting" || !account) return;
+    // BRIDGE-MULTITAB-DOUBLE-MINT-REVERT: broadcast the burn we're about
+    // to mint to any other tab on the same origin. The other tabs listen
+    // on the same BroadcastChannel and reset their step machine to "idle"
+    // if they see this burn, so the user can't click Claim twice and
+    // waste gas on a second tx that's guaranteed to revert.
+    try {
+      const channel = new BroadcastChannel("arcade-bridge-mint");
+      channel.postMessage({ burnTxHash: step.burnTxHash, account });
+      channel.close();
+    } catch {
+      /* old browser - the worst case is the original UX */
+    }
     try {
       if (chainId !== step.dstId) {
         await switchChainAsync({ chainId: step.dstId });

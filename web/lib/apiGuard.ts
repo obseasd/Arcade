@@ -76,7 +76,15 @@ export function rateLimit(
   windowMs: number,
 ): NextResponse | null {
   const ip = clientIp(req);
-  const bucketKey = `${key}:${ip}`;
+  // rate-limit-per-ip-shared-NAT-collision: blend in a stable hash of
+  // the User-Agent so two devices behind the same CGNAT / corporate
+  // proxy aren't sharing the same token bucket. Doesn't defeat an
+  // attacker (they control the header), but pulls the false-positive
+  // rate for legitimate shared NAT users way down.
+  const ua = req.headers.get("user-agent") ?? "";
+  let uaHash = 0;
+  for (let i = 0; i < ua.length; i++) uaHash = ((uaHash << 5) - uaHash + ua.charCodeAt(i)) | 0;
+  const bucketKey = `${key}:${ip}:${uaHash}`;
   const now = Date.now();
   // Lazy prune when the map grows large. Walking the map is O(n) but only
   // fires on cap-hit, not per-request, so amortised cost is fine.

@@ -1,8 +1,8 @@
 "use client";
 
-import { X, Wallet } from "lucide-react";
+import { X, Wallet, AlertTriangle } from "lucide-react";
 import { useState } from "react";
-import { Address, isAddress } from "viem";
+import { Address, getAddress, isAddress } from "viem";
 import { Modal } from "@/components/ui/Modal";
 import { cn } from "@/lib/utils";
 
@@ -60,9 +60,27 @@ export function RecipientEditModal({
       setError("Invalid Ethereum address");
       return;
     }
-    onSave(trimmed as Address);
+    // Always normalise to EIP-55 checksum on save so an all-lowercase
+    // paste from a foreign UI doesn't propagate downstream where some
+    // tooling rejects un-checksummed addresses.
+    onSave(getAddress(trimmed) as Address);
     onClose();
   };
+
+  // BRIDGE-RECIPIENT-OVERRIDE-NO-CHECKSUM-WARN: surface a soft warning
+  // when the input is a valid address but its case doesn't match the
+  // EIP-55 checksum. Common XSS / phishing payloads use all-lowercase
+  // addresses; the warning gives the user a chance to double-check
+  // before signing.
+  const checksumMismatch = (() => {
+    const trimmed = value.trim();
+    if (!trimmed || !isAddress(trimmed)) return false;
+    try {
+      return getAddress(trimmed) !== trimmed;
+    } catch {
+      return false;
+    }
+  })();
 
   const useOwnWallet = () => {
     onSave(null);
@@ -103,6 +121,12 @@ export function RecipientEditModal({
             )}
           />
           {error && <span className="mt-1 block text-xs text-arc-danger">{error}</span>}
+          {!error && checksumMismatch && (
+            <span className="mt-1 flex items-center gap-1 text-xs text-arc-warn">
+              <AlertTriangle className="h-3 w-3 shrink-0" />
+              Address case doesn't match its EIP-55 checksum. Double-check the source you copied it from.
+            </span>
+          )}
         </label>
 
         {!isCurrentlyOwn && ownAccount && (

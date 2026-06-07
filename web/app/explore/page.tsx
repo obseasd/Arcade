@@ -495,19 +495,19 @@ export default function ExplorePage() {
                 incentivized pools we surface the creation flow inline so
                 the orphan /swap/incentivize route is reachable. */}
             {filter === "incentivized" && (
-                <div className="mb-4 flex items-center gap-2 text-xs text-arc-text-muted">
-                    <Info className="h-3.5 w-3.5 shrink-0" />
-                    <span>
+                <div className="mb-4 flex items-center gap-2 text-xs text-arc-text">
+                    <Info className="h-3.5 w-3.5 shrink-0 text-arc-text-muted" />
+                    <span className="text-arc-text-muted">
                         Want to boost your pool's visibility? Create an incentive
                         campaign to attract liquidity providers and increase
                         trading volume.{" "}
-                        <Link
-                            href="/swap/incentivize"
-                            className="font-semibold text-arc-cta-hover underline-offset-2 hover:underline"
-                        >
-                            Start a campaign
-                        </Link>
                     </span>
+                    <Link
+                        href="/swap/incentivize"
+                        className="font-semibold text-white underline underline-offset-2 hover:text-arc-cta-hover focus:outline-none focus:ring-2 focus:ring-arc-cta-hover focus:ring-offset-2 focus:ring-offset-arc-bg"
+                    >
+                        Start a campaign
+                    </Link>
                 </div>
             )}
             {/* Search + sort + view-mode toggle. Both icon buttons are perfect

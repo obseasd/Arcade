@@ -305,7 +305,7 @@ async function fetchTrades(
 
   if (mode === 2) {
     // Clanker V3
-    if (!pool || pool === "0x0000000000000000000000000000000000000000") {
+    if (!pool || pool.toLowerCase() === "0x0000000000000000000000000000000000000000") {
       return { trades: [] };
     }
     const t0 = (await publicClient.readContract({

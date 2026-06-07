@@ -364,8 +364,15 @@ export function ClaimAllFeesModal({ open, onClose, onSuccess }: Props) {
             // Per-position breakdown: one toast + one activity entry per
             // position so the user sees exactly what they pocketed. The
             // tokensOwed* readings are pre-claim snapshots; on-chain
-            // semantics guarantee these are exactly the amounts transferred
-            // (collect() sweeps everything the position is owed).
+            // semantics guarantee these are AT LEAST what's transferred
+            // (collect() sweeps everything the position is owed at the
+            // moment the tx lands, which can be slightly MORE than the
+            // last positionsQ snapshot if fees accrued in the intervening
+            // block). The toast is intentionally a snapshot lower bound;
+            // the on-chain transfer is authoritative. REACT-002 logged
+            // this trade-off — adding a fresh refetch after the receipt
+            // would be more accurate but adds two RPC round trips per
+            // position for sub-1% precision gain.
             const claimedPositions = positions.filter((p) =>
                 selected.has(p.tokenId.toString()),
             );

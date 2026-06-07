@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
 import { isAddress } from "viem";
+import { rateLimit } from "@/lib/apiGuard";
 
 export const dynamic = "force-dynamic";
 
@@ -43,6 +44,15 @@ export async function GET(req: NextRequest) {
     );
   }
 
+  // twitter-login-state-cookie-spam-self-dos: rate-limit state-cookie
+  // allocation. Without this, a same-origin XSS (or a buggy retry loop)
+  // could spam tw_state_<state> cookies past the browser's per-origin
+  // cookie quota and lock the user out of their own session. Same
+  // bucket size as the callback endpoint (10/min) so honest retries
+  // through the OAuth dance succeed.
+  const rl = rateLimit(req, "twitter-login", 10, 60_000);
+  if (rl) return rl;
+
   const { searchParams } = req.nextUrl;
   const token = searchParams.get("token");
   const slotIndex = searchParams.get("slotIndex");
@@ -51,7 +61,11 @@ export async function GET(req: NextRequest) {
   if (!token || !isAddress(token)) {
     return NextResponse.json({ error: "Missing or invalid token" }, { status: 400 });
   }
-  if (!slotIndex || isNaN(parseInt(slotIndex, 10))) {
+  // slotindex-loose-parse: strict integer regex + 0..3 bound (escrow
+  // currently exposes 4 slots; reject anything outside that band so a
+  // malformed query never propagates as a negative / hex / scientific
+  // value into the signed Claim payload).
+  if (!slotIndex || !/^[0-3]$/.test(slotIndex)) {
     return NextResponse.json({ error: "Missing or invalid slotIndex" }, { status: 400 });
   }
   if (!recipient || !isAddress(recipient)) {

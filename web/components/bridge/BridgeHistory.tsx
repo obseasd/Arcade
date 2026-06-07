@@ -57,6 +57,13 @@ export function BridgeHistory() {
     if (entries.length === 0) return;
     let cancelled = false;
     const poll = async () => {
+      // BRIDGE-HISTORY-IRIS-FANOUT: skip when the tab is in the background.
+      // Without this gate the setInterval keeps firing every 60s on a
+      // hidden tab, fanning out up to MAX_ENTRIES=20 parallel Iris GETs
+      // from a user who has the tab pinned but isn't looking at it. Pause
+      // until visibility returns; visibilitychange below kicks off a fresh
+      // poll immediately when the tab comes back.
+      if (typeof document !== "undefined" && document.hidden) return;
       const candidates = entries.filter(
         (e) =>
           e.status === "pending" &&
@@ -64,12 +71,13 @@ export function BridgeHistory() {
           !!e.burnTxHash &&
           getCctpChain(e.srcChainId)?.cctpDomain !== undefined,
       );
-      // Fire attestation polls in parallel - each is an independent
-      // Circle Iris API GET keyed on (domain, burnTxHash), with no
-      // shared cursor or rate-limit semantics. Wall time drops from
-      // N * latency to max(latency).
+      // Cap the fanout. Even with the Visibility gate, a user with the
+      // tab focused but many historical pendings would still issue 20
+      // parallel requests every 60s; the cap of 5 keeps the load
+      // predictable while still draining the queue across rounds.
+      const slice = candidates.slice(0, 5);
       await Promise.all(
-        candidates.map(async (entry) => {
+        slice.map(async (entry) => {
           if (cancelled) return;
           const cfg = getCctpChain(entry.srcChainId);
           if (!cfg) return;
@@ -87,9 +95,18 @@ export function BridgeHistory() {
     };
     poll();
     const id = setInterval(poll, 60_000);
+    const onVisible = () => {
+      if (!document.hidden && !cancelled) poll();
+    };
+    if (typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", onVisible);
+    }
     return () => {
       cancelled = true;
       clearInterval(id);
+      if (typeof document !== "undefined") {
+        document.removeEventListener("visibilitychange", onVisible);
+      }
     };
   }, [entries, account]);
 

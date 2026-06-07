@@ -52,12 +52,11 @@ export function useTokenHolders(
   const publicClient = usePublicClient();
 
   const { data, isLoading, isFetching } = useQuery<Holder[]>({
-    queryKey: [
-      "arcade",
-      "token-holders",
-      token?.toLowerCase() ?? null,
-      totalSupply.toString(),
-    ],
+    // thouders-no-totalSupply-reactivity: totalSupply lives in the
+    // RETURNED data (for pct calc), not in the queryKey, so the chunked
+    // 100k-block Transfer scan doesn't restart whenever a caller's
+    // useReadContract for totalSupply transitions from undefined -> N.
+    queryKey: ["arcade", "token-holders", token?.toLowerCase() ?? null],
     enabled: !!publicClient && !!token,
     staleTime: SCAN_STALE_MS,
     gcTime: SCAN_STALE_MS * 5,
@@ -124,6 +123,15 @@ function mapToHolders(balances: Map<string, bigint>, totalSupply: bigint): Holde
     const pct = totalSupply > 0n ? Number((bal * 10_000n) / totalSupply) / 100 : 0;
     out.push({ address: addr as Address, balanceRaw: bal, pctOfSupply: pct });
   }
-  out.sort((a, b) => Number(b.balanceRaw - a.balanceRaw));
+  // thouders-bigint-sort-overflow: compare bigints directly. The previous
+  // `Number(b - a)` collapsed any pairwise diff above ~2^53 (~9e15) into
+  // 0/Infinity, which on launchpad tokens (18 dp, 1B supply -> single
+  // balance up to 1e27 wei) silently broke the whale ordering. Return
+  // -1 / 0 / 1 so the JS sort sees a stable comparator.
+  out.sort((a, b) => {
+    if (b.balanceRaw > a.balanceRaw) return 1;
+    if (b.balanceRaw < a.balanceRaw) return -1;
+    return 0;
+  });
   return out;
 }

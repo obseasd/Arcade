@@ -242,8 +242,15 @@ export function useCreatorEarnings(): CreatorEarningsResult {
           }
         });
         await Promise.all(perPositionWalks);
-      } catch {
-        // swallow; return whatever partial data was aggregated
+      } catch (err) {
+        // creator-earnings-swallowed-errors-hide-rpc-failure: surface
+        // to the dev console + rethrow so React Query flips into error
+        // state. The previous bare-swallow let an RPC outage masquerade
+        // as "fullyLoaded with $0 earned", which silently lied to the
+        // user.
+        // eslint-disable-next-line no-console
+        console.warn("[useCreatorEarnings] scan error:", err);
+        throw err;
       }
       return { byToken: tokensMap, byDay: daysMap };
     },

@@ -66,7 +66,7 @@ export function useLaunchpadVolume(args: {
       try {
         const latest = await publicClient.getBlockNumber();
         if (mode === 2) {
-          if (!pool || pool === "0x0000000000000000000000000000000000000000") {
+          if (!pool || pool.toLowerCase() === "0x0000000000000000000000000000000000000000") {
             return { volume: 0n, volumeToken: undefined };
           }
           const [t0Raw, t1Raw] = await Promise.all([
