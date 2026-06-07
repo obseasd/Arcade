@@ -503,7 +503,7 @@ export default function ExplorePage() {
                         trading volume.{" "}
                         <Link
                             href="/swap/incentivize"
-                            className="font-semibold text-arc-success underline-offset-2 hover:underline"
+                            className="font-semibold text-arc-cta-hover underline-offset-2 hover:underline"
                         >
                             Start a campaign
                         </Link>

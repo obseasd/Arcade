@@ -132,21 +132,66 @@ function Inner() {
      * usable on environments without Pinata configured. Mirrors the V2
      * launchpad's onImageFile handler.
      */
+    // Hard cap mirroring /api/pin/file MAX_BYTES. Catching it client-side
+    // avoids a multi-MB upload that the Vercel platform rejects with an
+    // opaque "RPC error" before our route can return a clean 413.
+    const IMAGE_MAX_BYTES = 1_000_000;
+
     const onImageFile = async (file: File | undefined) => {
         if (!file) return;
+
+        if (file.size > IMAGE_MAX_BYTES) {
+            pushToast({
+                kind: "error",
+                title: "Image too large",
+                message: `Max ${Math.round(IMAGE_MAX_BYTES / 1000)} KB. Picked file is ${(file.size / 1_000_000).toFixed(1)} MB.`,
+            });
+            return;
+        }
+        if (!/^image\/(png|jpeg|jpg|webp|gif)$/i.test(file.type)) {
+            pushToast({
+                kind: "error",
+                title: "Unsupported image type",
+                message: "Pick a PNG, JPG, GIF, or WEBP file.",
+            });
+            return;
+        }
+
         setImagePreview(URL.createObjectURL(file));
         setImageUploading(true);
         try {
             const form = new FormData();
             form.append("file", file);
             const res = await fetch("/api/pin/file", { method: "POST", body: form });
-            if (!res.ok) throw new Error(`pin/file ${res.status}`);
+            if (!res.ok) {
+                let serverMsg: string | undefined;
+                try {
+                    const body = (await res.json()) as { error?: string };
+                    serverMsg = body?.error;
+                } catch {
+                    /* non-JSON platform error */
+                }
+                throw new Error(serverMsg ?? `pin/file ${res.status}`);
+            }
             const { uri } = (await res.json()) as { uri: string };
             setImage(uri);
-        } catch {
-            // Pinata unavailable - fallback to inline data URL.
-            const inline = await encodeInlineImage(file);
-            setImage(inline);
+        } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            pushToast({
+                kind: "info",
+                title: "Inline fallback",
+                message: `Upload failed (${msg.slice(0, 120)}); embedding image inline instead.`,
+            });
+            try {
+                const inline = await encodeInlineImage(file);
+                setImage(inline);
+            } catch {
+                pushToast({
+                    kind: "error",
+                    title: "Image rejected",
+                    message: "Could not process this file. Pick a different image.",
+                });
+            }
         } finally {
             setImageUploading(false);
         }

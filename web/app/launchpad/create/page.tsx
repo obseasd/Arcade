@@ -272,8 +272,35 @@ function CreateTokenInner() {
    *      the create flow usable on environments where PINATA_JWT isn't set,
    *      at the cost of bigger on-chain calldata for that launch.
    */
+  // Hard cap that mirrors the server-side MAX_BYTES in /api/pin/file. We
+  // reject in the browser so users with 70+ MB files don't post a body that
+  // the Vercel platform rejects with an opaque "RPC error" before our
+  // route can return a clean 413. Keep the constants in sync.
+  const IMAGE_MAX_BYTES = 1_000_000;
+
   const onImageFile = async (file: File | undefined) => {
     if (!file) return;
+
+    // Client-side size + MIME guard. The server enforces these too, but
+    // catching them locally avoids a 70 MB upload that the platform
+    // rejects outside our control.
+    if (file.size > IMAGE_MAX_BYTES) {
+      pushToast({
+        kind: "error",
+        title: "Image too large",
+        message: `Max ${Math.round(IMAGE_MAX_BYTES / 1000)} KB. Picked file is ${(file.size / 1_000_000).toFixed(1)} MB.`,
+      });
+      return;
+    }
+    if (!/^image\/(png|jpeg|jpg|webp|gif)$/i.test(file.type)) {
+      pushToast({
+        kind: "error",
+        title: "Unsupported image type",
+        message: "Pick a PNG, JPG, GIF, or WEBP file.",
+      });
+      return;
+    }
+
     // Instant preview via objectURL.
     const previewURL = URL.createObjectURL(file);
     setImagePreview(previewURL);
@@ -283,14 +310,41 @@ function CreateTokenInner() {
       const form = new FormData();
       form.append("file", file);
       const res = await fetch("/api/pin/file", { method: "POST", body: form });
-      if (!res.ok) throw new Error(`pin/file ${res.status}`);
+      if (!res.ok) {
+        // Try to surface the server's JSON error so the user sees what
+        // failed (eg "File content does not match an allowed image
+        // format" from the magic-byte sniff).
+        let serverMsg: string | undefined;
+        try {
+          const body = (await res.json()) as { error?: string };
+          serverMsg = body?.error;
+        } catch {
+          /* non-JSON response (eg platform-level 413 HTML) */
+        }
+        throw new Error(serverMsg ?? `pin/file ${res.status}`);
+      }
       const { uri } = (await res.json()) as { uri: string };
       setImage(uri); // `ipfs://CID`
-    } catch {
-      // Pinata not available — fall back to the inline data-URL path, with
-      // the same downscale logic as before so the calldata stays under the
-      // Arc per-tx gas ceiling.
-      await encodeInlineDataUrl(file).then((dataUrl) => setImage(dataUrl));
+    } catch (e) {
+      // Pinata not available OR image rejected; fall back to the inline
+      // data-URL path with downscale, same as before. Surface a toast so
+      // the user knows we shifted to fallback (and what went wrong).
+      const msg = e instanceof Error ? e.message : String(e);
+      pushToast({
+        kind: "info",
+        title: "Inline fallback",
+        message: `Upload failed (${msg.slice(0, 120)}); embedding image inline instead.`,
+      });
+      try {
+        const dataUrl = await encodeInlineDataUrl(file);
+        setImage(dataUrl);
+      } catch {
+        pushToast({
+          kind: "error",
+          title: "Image rejected",
+          message: "Could not process this file. Pick a different image.",
+        });
+      }
     } finally {
       setImageUploading(false);
     }

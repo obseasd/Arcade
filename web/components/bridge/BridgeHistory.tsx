@@ -2,6 +2,7 @@
 
 import { ExternalLink, ChevronDown, History, X } from "lucide-react";
 import { useEffect, useState } from "react";
+import { useAccount } from "wagmi";
 import {
   BRIDGE_HISTORY_CHANGE_EVENT,
   loadBridgeHistory,
@@ -17,8 +18,14 @@ import { formatAgo, formatUSDC, cn } from "@/lib/utils";
  * Recent bridges list below the main BridgeCard. Reads from localStorage so
  * each user sees only their own history. Self-collapses if there's nothing
  * yet so the main card stays the visual centerpiece for first-time users.
+ *
+ * Audit BRIDGE-NO-ACCOUNT-BINDING-LOCALSTORAGE: the history is scoped to
+ * the currently connected wallet, so switching wallets on the same browser
+ * hides the previous wallet's bridges. When no wallet is connected we
+ * intentionally render nothing.
  */
 export function BridgeHistory() {
+  const { address: account } = useAccount();
   const [entries, setEntries] = useState<HistoryEntry[]>([]);
   // Default to expanded so the user sees their most recent bridges
   // immediately. Closing the panel hides every row (closed = empty,
@@ -26,18 +33,18 @@ export function BridgeHistory() {
   const [expanded, setExpanded] = useState(true);
 
   useEffect(() => {
-    setEntries(loadBridgeHistory());
+    setEntries(loadBridgeHistory(account));
+    const refresh = () => setEntries(loadBridgeHistory(account));
     const onStorage = (e: StorageEvent) => {
-      if (e.key === "arcade_bridge_history_v1") setEntries(loadBridgeHistory());
+      if (e.key && e.key.startsWith("arcade_bridge_history_v1")) refresh();
     };
-    const onChange = () => setEntries(loadBridgeHistory());
     window.addEventListener("storage", onStorage);
-    window.addEventListener(BRIDGE_HISTORY_CHANGE_EVENT, onChange);
+    window.addEventListener(BRIDGE_HISTORY_CHANGE_EVENT, refresh);
     return () => {
       window.removeEventListener("storage", onStorage);
-      window.removeEventListener(BRIDGE_HISTORY_CHANGE_EVENT, onChange);
+      window.removeEventListener(BRIDGE_HISTORY_CHANGE_EVENT, refresh);
     };
-  }, []);
+  }, [account]);
 
   // Audit low [29]: rehydrate the "To claim" badge for orphaned pending
   // entries. The BridgeCard only flips attestationReady while the user
@@ -68,9 +75,9 @@ export function BridgeHistory() {
           if (!cfg) return;
           try {
             const att = await fetchAttestation(cfg.cctpDomain, entry.burnTxHash);
-            if (att && att.status === "complete" && !cancelled) {
-              updateBridge(entry.id, { attestationReady: true });
-              setEntries(loadBridgeHistory());
+            if (att && att.status === "complete" && !cancelled && account) {
+              updateBridge(account, entry.id, { attestationReady: true });
+              setEntries(loadBridgeHistory(account));
             }
           } catch {
             /* network blip - try again next interval */
@@ -84,11 +91,12 @@ export function BridgeHistory() {
       cancelled = true;
       clearInterval(id);
     };
-  }, [entries]);
+  }, [entries, account]);
 
   const dismiss = (id: string) => {
-    removeBridge(id);
-    setEntries(loadBridgeHistory());
+    if (!account) return;
+    removeBridge(account, id);
+    setEntries(loadBridgeHistory(account));
   };
 
   if (entries.length === 0) return null;

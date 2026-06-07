@@ -353,23 +353,44 @@ contract ArcadeMultiSwap is ReentrancyGuard {
         returns (uint256 amountOut)
     {
         IERC20(tokenIn).forceApprove(address(v2Router), amountIn);
-        address[] memory path;
-        if (viaUsdc) {
-            path = new address[](3);
-            path[0] = tokenIn;
-            path[1] = address(USDC);
-            path[2] = tokenOut;
-        } else {
-            path = new address[](2);
+        if (!viaUsdc) {
+            address[] memory path = new address[](2);
             path[0] = tokenIn;
             path[1] = tokenOut;
+            uint256[] memory amounts = v2Router.swapExactTokensForTokens(
+                amountIn, 0, path, address(this), deadline
+            );
+            amountOut = amounts[1];
+            IERC20(tokenIn).forceApprove(address(v2Router), 0);
+            return amountOut;
         }
-        uint256[] memory amounts = v2Router.swapExactTokensForTokens(
-            amountIn, 0, path, address(this), deadline
+
+        // MEV-007: a single 3-hop swapExactTokensForTokens(amountIn, 0, [in,
+        // USDC, out], ...) only enforces a slippage bound on the FINAL leg.
+        // A sandwicher who controls only the tokenIn/USDC pair can drive
+        // usdcMid arbitrarily low, then the USDC/out leg's smoothing can
+        // still scrape past the outer minOut. Split into two single hops
+        // with an independent usdcMid sanity floor (1 wei) so a complete
+        // mid-leg collapse reverts here instead of selling through it.
+        // The outer Input.minOut still bounds the final tokenOut amount.
+        address[] memory path1 = new address[](2);
+        path1[0] = tokenIn;
+        path1[1] = address(USDC);
+        uint256[] memory leg1 = v2Router.swapExactTokensForTokens(
+            amountIn, 1, path1, address(this), deadline
         );
-        amountOut = amounts[path.length - 1];
-        // M-08 / L-05: reset allowance after the swap.
+        uint256 usdcMid = leg1[1];
         IERC20(tokenIn).forceApprove(address(v2Router), 0);
+
+        USDC.forceApprove(address(v2Router), usdcMid);
+        address[] memory path2 = new address[](2);
+        path2[0] = address(USDC);
+        path2[1] = tokenOut;
+        uint256[] memory leg2 = v2Router.swapExactTokensForTokens(
+            usdcMid, 0, path2, address(this), deadline
+        );
+        amountOut = leg2[1];
+        USDC.forceApprove(address(v2Router), 0);
     }
 
     /// @dev Route a leg through the V3 router. Single hop if the other side is

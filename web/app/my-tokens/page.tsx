@@ -1325,7 +1325,7 @@ function ActivityRowFull({ item }: { item: UnifiedActivityItem }) {
 // the three localStorage feeds. Once Ponder is wired this collapses to a
 // single GraphQL query and these adapters can be deleted.
 function buildActivity(account: Address): UnifiedActivityItem[] {
-    const bridges = loadBridgeHistory();
+    const bridges = loadBridgeHistory(account);
     const claims = listPendingClaims(account);
     const app = loadActivity(account);
 

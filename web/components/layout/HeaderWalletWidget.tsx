@@ -361,7 +361,7 @@ function ActivityFeed({ address, onLinkClick }: { address: Address; onLinkClick:
 
     useEffect(() => {
         const refresh = () => {
-            setBridges(loadBridgeHistory());
+            setBridges(loadBridgeHistory(address));
             setClaims(listPendingClaims(address));
             setAppActivity(loadActivity(address));
         };

@@ -320,7 +320,7 @@ export function BridgeCard() {
       });
       // Record in long-lived history so it shows up in the "Recent bridges"
       // list below the card.
-      const id = recordBridge({
+      const id = recordBridge(account as string, {
         srcChainId: srcChain.id,
         dstChainId: dstChain.id,
         amountRaw6: amountRaw.toString(),
@@ -369,8 +369,10 @@ export function BridgeCard() {
         // so the user sees there's an action waiting on them. The mint
         // handler later flips status -> "minted" which supersedes this.
         const patch = { attestationReady: true } as const;
-        if (historyId) updateBridge(historyId, patch);
-        else updateBridgeByBurnTx(step.burnTxHash, patch);
+        if (account) {
+          if (historyId) updateBridge(account, historyId, patch);
+          else updateBridgeByBurnTx(account, step.burnTxHash, patch);
+        }
         setStep({
           kind: "minting",
           burnTxHash: step.burnTxHash,
@@ -435,10 +437,12 @@ export function BridgeCard() {
       // burnTxHash lookup so a refresh-then-mint flow still flips the entry
       // out of "pending" instead of leaving a stale row.
       const patch = { status: "minted" as const, mintTxHash: hash, mintedAt: Date.now() };
-      if (historyId) {
-        updateBridge(historyId, patch);
-      } else if (step.kind === "minting" && step.burnTxHash) {
-        updateBridgeByBurnTx(step.burnTxHash, patch);
+      if (account) {
+        if (historyId) {
+          updateBridge(account, historyId, patch);
+        } else if (step.kind === "minting" && step.burnTxHash) {
+          updateBridgeByBurnTx(account, step.burnTxHash, patch);
+        }
       }
       setStep({ kind: "done", mintTxHash: hash, dstId: step.dstId });
       pushToast({

@@ -334,10 +334,18 @@ contract ArcadeTwitterEscrowV3 is Ownable2Step, Pausable, ReentrancyGuard {
                 && balances[positionId][slotIndex][clankerToken] == 0
         ) revert NothingToClaim();
 
-        // F-10: same-token aliasing trap. If both tokens point at the same
-        // address, the two safeTransfers in _settle would double-pull from the
-        // single balance line. Refuse this shape unless at least one is zero.
-        if (pairedToken == clankerToken && pairedAmount > 0 && clankerAmount > 0) revert InvalidTokens();
+        // F-10 + audit (escrow-same-token-aliasing-credit-corruption):
+        // refuse ANY authorize where pairedToken == clankerToken, not just
+        // the case where both amounts are non-zero. The previous gate let
+        // through a single-side auth (eg pairedAmount=100, clankerAmount=0)
+        // where the SAME token is on both sides. At claim time, both
+        // actualPaired and actualClanker read from the SAME balance line,
+        // and the effects block then debits creditedTotal[token] TWICE for
+        // the same physical balance. The transfer side has its own
+        // `pairedToken != clankerToken` guard so funds aren't double-sent,
+        // but creditedTotal underflows / under-counts, breaking rescue()
+        // accounting and letting the owner sweep more than intended.
+        if (pairedToken == clankerToken) revert InvalidTokens();
 
         uint256 executeAfter = block.timestamp + claimTimelock;
         pendingClaims[nonce] = PendingClaim({

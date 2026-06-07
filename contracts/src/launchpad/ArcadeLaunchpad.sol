@@ -778,6 +778,14 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         bool inMigrated = sIn.token != address(0) && sIn.migrated;
         bool outMigrated = sOut.token != address(0) && sOut.migrated;
 
+        // Audit fix (swap-migrated-route-frees-arbitrary-pairs): refuse to
+        // route a pair where neither side is a registered launchpad token.
+        // Without this guard, the function happily multi-hops any two V2
+        // tokens through USDC for zero royalty, making it a free general-
+        // purpose router for anyone willing to forceApprove. Royalty is
+        // only charged when at least one side is a migrated launch.
+        if (!inMigrated && !outMigrated) revert InvalidRoute();
+
         // --- Leg 1: tokenIn -> USDC ---
         IERC20(tokenIn).safeTransferFrom(msg.sender, address(this), tokensIn);
         IERC20(tokenIn).forceApprove(v2Router, tokensIn);
@@ -848,6 +856,9 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
 
         bool inMigrated = tokens[tokenIn].token != address(0) && tokens[tokenIn].migrated;
         bool outMigrated = tokens[tokenOut].token != address(0) && tokens[tokenOut].migrated;
+        // Quote mirror of the swapMigratedRoute guard so the UI knows the
+        // route is invalid before the user signs.
+        if (!inMigrated && !outMigrated) return (0, 0);
 
         address[] memory path1 = new address[](2);
         path1[0] = tokenIn;
@@ -1001,6 +1012,21 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
             /* pool already initialised */
         }
 
+        // Audit v3-launch-pool-preinit-mint-dos: CSEC-013 only checks the
+        // pool ADDRESS matches factory.getPool. Defense in depth: assert
+        // the pool's STATE also matches what we intended. The try/catch
+        // above silently accepts whatever sqrtPriceX96 a mempool griefer
+        // pre-set; without this check the launchpad would then mint single-
+        // sided LP at the attacker's chosen price, leaving them positioned
+        // to drain the first buys. Uniswap V3 stores sqrtPriceX96 exactly
+        // as passed to initialize(), so a strict equality is correct: our
+        // own initialize wrote the intended value, any other value means
+        // a pre-init happened.
+        {
+            (uint160 actualSqrtPriceX96,,,,,,) = IArcadeV3Pool(pool).slot0();
+            if (actualSqrtPriceX96 != sqrtPriceX96) revert InvalidRoute();
+        }
+
         // L-02: flip migrated state BEFORE the external locker call so that
         // any view of `isMigrated(token)` invoked during the locker's
         // pool.mint -> uniswapV3MintCallback chain sees a consistent state.
@@ -1027,12 +1053,25 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
 
         emit Migrated(tokenAddr, pool, 0, lpSupply);
 
-        // Optional creator buy (USDC pools only; the router pivots through USDC).
-        if (creatorBuyUsdc > 0) {
+        // Optional creator buy. Restricted to USDC-paired pools because the
+        // amountOutMinimum derivation below assumes paired == USDC. If we
+        // ever extend creator buys to WETH-paired pools the math + paired
+        // approval need a parallel branch.
+        if (creatorBuyUsdc > 0 && paired == address(USDC)) {
             USDC.safeTransferFrom(s.creator, address(this), creatorBuyUsdc);
             USDC.forceApprove(v3Router, creatorBuyUsdc);
+            // Audit launchpad-creator-buy-no-slippage: derive a hard minOut
+            // from the intended-mcap price (NOT slot0, which can be set by a
+            // mempool pre-init attacker). At the FDV-based intended price,
+            // expectedOut = creatorBuyUsdc * TOTAL_SUPPLY / mcap. We accept
+            // up to 5% slippage off that ideal, which leaves enough room
+            // for the single-sided position's natural tick walk on a fresh
+            // pool while rejecting a corrupted pre-init that would deliver
+            // an order of magnitude fewer tokens for the same USDC.
+            uint256 expectedOut = (creatorBuyUsdc * TOTAL_SUPPLY) / mcap;
+            uint256 minOut = (expectedOut * 9500) / 10000;
             IArcadeV3Router(v3Router).exactInputSingle(
-                address(USDC), tokenAddr, fee, s.creator, creatorBuyUsdc, 0, block.timestamp + 600
+                address(USDC), tokenAddr, fee, s.creator, creatorBuyUsdc, minOut, block.timestamp + 600
             );
         }
     }
@@ -1140,6 +1179,16 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
             //   => mcap_in_token1 = TOTAL_SUPPLY * price1per0
             // tokenIsToken1: price0per1 = 2^192 / p^2 paid units of token0 per token1
             //   => mcap_in_token0 = TOTAL_SUPPLY * price0per1
+            // Audit math-011: the naive `(p * TOTAL_SUPPLY / 2^96) * p`
+            // chain on the tokenIsToken0 branch overflows uint256 for
+            // sqrtPriceX96 above ~2^131. Cap at the safest input where both
+            // intermediate products stay inside 256 bits. Realistic Arcade
+            // launches sit in sqrtPriceX96 ~1e25, so this cap is several
+            // orders of magnitude above any plausible production price; any
+            // value above it is a corrupted / adversarial pool and the
+            // function returns 0 instead of reverting the view.
+            uint256 SQRT_PRICE_SAFE_MAX = uint256(1) << 128;
+            if (p > SQRT_PRICE_SAFE_MAX) return (0, pairedToken);
             uint256 result;
             if (tokenIsToken0) {
                 uint256 partA = (p * TOTAL_SUPPLY) / (1 << 96);
