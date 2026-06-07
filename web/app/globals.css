@@ -121,6 +121,19 @@
   animation: arc-bridge-pulse 1.8s ease-in-out infinite;
 }
 
+/* Quick scale-bounce for the Copy -> Check icon swap in ReceiveModal. The
+   check pops in at 80% scale, overshoots to 110%, then settles at 100%
+   to feel like a satisfying "tick" rather than a static replacement. */
+@keyframes arc-copy-pop {
+  0% { transform: scale(0.8); opacity: 0; }
+  50% { transform: scale(1.1); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+.animate-copy-pop {
+  animation: arc-copy-pop 240ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
 /* LP Boost flowing border: a 2px blue rim around the card with a bright
    highlight that orbits the perimeter, like a fluid running through a
    pipe. Replaces the prior green breathing pulse - now in the Arc blue

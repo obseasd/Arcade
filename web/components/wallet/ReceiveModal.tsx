@@ -1,9 +1,11 @@
 "use client";
 
-import { Copy, X } from "lucide-react";
+import { Check, Copy, X } from "lucide-react";
+import { useState } from "react";
 import { Address } from "viem";
 import { Modal } from "@/components/ui/Modal";
 import { pushToast } from "@/lib/toast";
+import { cn } from "@/lib/utils";
 
 /**
  * Minimal "Receive" modal: shows the connected wallet's full address with
@@ -21,10 +23,16 @@ interface Props {
 }
 
 export function ReceiveModal({ address, onClose }: Props) {
+    // Brief "copied" affordance on the button itself: icon swaps Copy ->
+    // Check + label flips to "Copied!" for 1.4s. Complements the toast so
+    // the user gets feedback at the click target as well as in the corner.
+    const [justCopied, setJustCopied] = useState(false);
     const onCopy = async () => {
         try {
             await navigator.clipboard.writeText(address);
             pushToast({ kind: "info", title: "Address copied" });
+            setJustCopied(true);
+            window.setTimeout(() => setJustCopied(false), 1400);
         } catch {
             pushToast({ kind: "error", title: "Couldn't copy" });
         }
@@ -58,10 +66,24 @@ export function ReceiveModal({ address, onClose }: Props) {
                 <button
                     type="button"
                     onClick={onCopy}
-                    className="arc-button-primary mt-4 flex w-full items-center justify-center gap-2 py-2.5 text-sm"
+                    className={cn(
+                        "mt-4 flex w-full items-center justify-center gap-2 rounded-xl px-3 py-2.5 text-sm font-semibold transition-all",
+                        justCopied
+                            ? "bg-arc-success text-white"
+                            : "arc-button-primary",
+                    )}
                 >
-                    <Copy className="h-4 w-4" />
-                    Copy address
+                    {justCopied ? (
+                        <>
+                            <Check className="h-4 w-4 animate-copy-pop" />
+                            Copied!
+                        </>
+                    ) : (
+                        <>
+                            <Copy className="h-4 w-4" />
+                            Copy address
+                        </>
+                    )}
                 </button>
                 <p className="mt-3 text-[11px] text-arc-text-faint">
                     Always verify you&apos;re on Arc testnet (chainId 5042002) before the sender

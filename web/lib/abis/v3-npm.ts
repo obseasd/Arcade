@@ -222,6 +222,27 @@ export const V3_POOL_ABI = [
         inputs: [],
         outputs: [{ type: "address" }],
     },
+    // Inherited from base/Multicall.sol on Uniswap V3 NPM (and the
+    // ArcadeV3PositionManager fork). Lets us bundle N collect() / N
+    // decreaseLiquidity() calls into ONE transaction, so the user signs
+    // once instead of once-per-position when claiming fees on multiple
+    // positions simultaneously.
+    {
+        type: "function",
+        name: "multicall",
+        // The on-chain Multicall is `payable`, but we never send ETH with
+        // it - declaring nonpayable lets wagmi's writeContract pick it up
+        // as a writable function (it filters out `payable` ones from the
+        // writable union when the args shape doesn't include a `value`).
+        stateMutability: "nonpayable",
+        inputs: [{ name: "data", type: "bytes[]" }],
+        // The on-chain multicall returns `bytes[] results`, but we never
+        // decode them client-side (we only care that the tx confirmed).
+        // Declaring outputs as [] keeps wagmi's writeContract type
+        // narrowing happy - it otherwise excludes any function with
+        // non-empty outputs from the writable union.
+        outputs: [],
+    },
 ] as const;
 
 export const V3_FACTORY_ABI = [

@@ -2,7 +2,7 @@
 
 import { CheckCircle2, Info, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { Address, erc20Abi, formatUnits, zeroAddress } from "viem";
+import { Address, encodeFunctionData, erc20Abi, formatUnits, zeroAddress } from "viem";
 import {
     useAccount,
     usePublicClient,
@@ -271,20 +271,20 @@ export function ClaimAllFeesModal({ open, onClose, onSuccess }: Props) {
             const ids = positions
                 .filter((p) => selected.has(p.tokenId.toString()))
                 .map((p) => p.tokenId);
-            const deadline = Math.floor(Date.now() / 1000) + 600;
-            void deadline;
-            // collect() per id. Each fires its own tx so the user signs
-            // them sequentially in the wallet popup. Batching via
-            // multicall would require a separate contract; queued for the
-            // ArcLens drop where we wire a generic multicall.
-            for (const id of ids) {
+            // Bundle every collect() into a single multicall tx. The user
+            // signs once instead of once-per-position, gas is paid once,
+            // and either the whole batch lands or none of it does (atomic
+            // semantics). Falls back to a per-position loop if only one
+            // position is selected - no need to wrap one call in a
+            // multicall overhead-shim.
+            if (ids.length === 1) {
                 const hash = await writeContractAsync({
                     address: ADDRESSES.v3PositionManager,
                     abi: V3_NPM_ABI,
                     functionName: "collect",
                     args: [
                         {
-                            tokenId: id,
+                            tokenId: ids[0],
                             recipient: account,
                             amount0Max: MAX_UINT128,
                             amount1Max: MAX_UINT128,
@@ -292,11 +292,42 @@ export function ClaimAllFeesModal({ open, onClose, onSuccess }: Props) {
                     ],
                 });
                 await publicClient.waitForTransactionReceipt({ hash });
+            } else {
+                // Encode one calldata blob per position, then hand them
+                // all to NPM.multicall(bytes[]). The NPM is a Multicall
+                // inheritor (verified against contracts/lib/v3-periphery/
+                // contracts/NonfungiblePositionManager.sol:25).
+                const callData = ids.map((id) =>
+                    encodeFunctionData({
+                        abi: V3_NPM_ABI,
+                        functionName: "collect",
+                        args: [
+                            {
+                                tokenId: id,
+                                recipient: account,
+                                amount0Max: MAX_UINT128,
+                                amount1Max: MAX_UINT128,
+                            },
+                        ],
+                    }),
+                );
+                // wagmi v2's writeContract type narrowing doesn't surface
+                // `multicall` cleanly when the ABI declares its outputs,
+                // even after we trimmed them. Cast through unknown so we
+                // can keep the typed ABI everywhere else; the runtime call
+                // is identical.
+                const hash = await writeContractAsync({
+                    address: ADDRESSES.v3PositionManager,
+                    abi: V3_NPM_ABI,
+                    functionName: "multicall",
+                    args: [callData],
+                } as unknown as Parameters<typeof writeContractAsync>[0]);
+                await publicClient.waitForTransactionReceipt({ hash });
             }
             pushToast({
                 kind: "info",
                 title: "Fees claimed",
-                message: `Collected fees on ${ids.length} position${ids.length === 1 ? "" : "s"}.`,
+                message: `Collected fees on ${ids.length} position${ids.length === 1 ? "" : "s"} in one tx.`,
             });
             void arcTestnet;
             onSuccess?.();

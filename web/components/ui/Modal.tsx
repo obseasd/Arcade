@@ -117,6 +117,11 @@ export function Modal({
         "my-4 mx-auto sm:m-auto",
         "max-h-[calc(100dvh-2rem)] sm:max-h-[calc(100dvh-4rem)] overflow-y-auto",
         "w-[calc(100vw-2rem)] bg-transparent p-0 outline-none",
+        // Native <dialog> defaults `color` to `CanvasText` (system black)
+        // and resets the inherited text color from <html>/<body>. Restore
+        // the app's text colour explicitly so headings ("Select a token",
+        // "Confirm swap", etc.) render in arc-text instead of black.
+        "text-arc-text",
         widthClassName,
         backdropClassName ?? "backdrop:bg-black/75 backdrop:backdrop-blur-md",
       )}

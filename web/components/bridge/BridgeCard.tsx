@@ -836,7 +836,7 @@ function ChainBox({
                 }
               >
                 <span>to {recipientLabel}</span>
-                <Pencil className="h-3 w-3 opacity-60 group-hover:opacity-100" />
+                <Pencil className="h-3 w-3 text-white opacity-60 group-hover:opacity-100" />
               </button>
             ) : (
               <span className="text-arc-text-faint">to {recipientLabel}</span>
