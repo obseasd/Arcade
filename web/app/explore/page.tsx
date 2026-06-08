@@ -69,7 +69,7 @@ const FILTERS: { value: Filter; label: string; icon?: React.ReactNode }[] = [
         label: "Points Program",
         icon: (
             <Image
-                src="/arcdlogo.png"
+                src="/arcdlogo22.png"
                 alt=""
                 width={16}
                 height={16}
@@ -490,13 +490,13 @@ export default function ExplorePage() {
                 "on" without a coloured border ring. Icons stay tinted (orange
                 Flame, sky Sparkles, etc) so the row still reads visually. */}
             <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <div className="flex flex-wrap items-center gap-2">
+                <div className="flex flex-wrap items-center gap-1.5">
                     {FILTERS.map((f) => (
                         <button type="button"
                             key={f.value}
                             onClick={() => setFilter(f.value)}
                             className={cn(
-                                "inline-flex items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-xs font-medium backdrop-blur-xl transition-all",
+                                "inline-flex items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-[13px] font-medium backdrop-blur-xl transition-all",
                                 filter === f.value
                                     ? "border-white/30 bg-white/15 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.15)]"
                                     : "border-white/10 bg-white/[0.04] text-arc-text hover:border-white/20 hover:bg-white/[0.08]",
