@@ -510,7 +510,7 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
           account && balInRaw > 0n
             ? () => {
                 setLastEdited("in");
-                setAmountInStr(formatUnits(balInRaw / 2n, decimalsIn));
+                setAmountInStr(toOneDecimal(balInRaw / 2n, decimalsIn));
               }
             : undefined
         }
@@ -518,7 +518,7 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
           account && balInRaw > 0n
             ? () => {
                 setLastEdited("in");
-                setAmountInStr(formatUnits(balInRaw, decimalsIn));
+                setAmountInStr(toOneDecimal(balInRaw, decimalsIn));
               }
             : undefined
         }
@@ -834,4 +834,20 @@ function TokenBox({
 function formatTokenAmount(raw: bigint, decimals: number, fraction: number = 6): string {
   if (decimals === USDC_DECIMALS) return formatUSDC(raw, decimals, fraction);
   return formatToken(raw, decimals, fraction);
+}
+
+/**
+ * Round a raw token amount down to 1 decimal place for the HALF / MAX
+ * shortcuts. Per user spec: a balance of 30.616254 USDC becomes "30.6"
+ * so the input field reads cleanly. Floor (not round) so the resulting
+ * amount can never exceed the actual on-chain balance.
+ */
+function toOneDecimal(raw: bigint, decimals: number): string {
+  const asFloat = Number(formatUnits(raw, decimals));
+  if (!isFinite(asFloat) || asFloat <= 0) return "0";
+  const floored = Math.floor(asFloat * 10) / 10;
+  // Sub-decimal balances (eg 0.05) would floor to 0 and break the swap.
+  // Fall back to a tighter 4-decimal floor for these edge cases.
+  if (floored === 0) return (Math.floor(asFloat * 10_000) / 10_000).toString();
+  return floored.toString();
 }

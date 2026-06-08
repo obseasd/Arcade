@@ -98,9 +98,6 @@ export default function LaunchpadIndexPage() {
       <div className="mb-8 flex flex-col items-start justify-between gap-4 sm:flex-row sm:items-center">
         <div>
           <h1 className="text-3xl font-semibold">Launchpad</h1>
-          <p className="mt-1 text-sm text-arc-text-muted">
-            Launch and trade tokens on Arc&apos;s bonding-curve launchpad. USDC-quoted.
-          </p>
         </div>
         <button type="button"
           onClick={() => setLaunchOpen(true)}
@@ -221,14 +218,14 @@ export default function LaunchpadIndexPage() {
             </button>
           ))}
         </div>
-        <div className="flex items-center gap-2 rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2 sm:w-72">
+        <div className="flex h-11 items-center gap-2 rounded-xl border border-arc-border bg-black/15 px-3 backdrop-blur-xl sm:w-72">
           <Search className="h-4 w-4 text-arc-text-faint" />
           <input
             aria-label="Search launches"
             value={q}
             onChange={(e) => setQ(e.target.value)}
             placeholder="Search name, symbol, address"
-            className="arc-input text-sm"
+            className="arc-input w-full bg-transparent text-sm"
           />
         </div>
       </div>

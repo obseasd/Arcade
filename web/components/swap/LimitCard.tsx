@@ -47,6 +47,13 @@ const EXPIRY_PRESETS = [
     { id: "custom", label: "Custom", seconds: 0 },
 ] as const;
 
+/** Hard ceiling on the order's deadline. Orbs Twap accepts arbitrary
+ *  deadlines, but a 90-day cap keeps stale orders from cluttering the UI
+ *  list forever and matches the limit-order conventions on other DEXes
+ *  (Uniswap, 1inch, Hyperswap). Custom-expiry input is clamped to this
+ *  value before submit. */
+const MAX_EXPIRY_SECONDS = 90 * 24 * 60 * 60;
+
 type ExpiryId = (typeof EXPIRY_PRESETS)[number]["id"];
 
 // Per TWAP.sol require at L114: ask.bidDelay >= MIN_BID_DELAY_SECONDS (30).
@@ -158,9 +165,22 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
             const d = Math.max(0, parseInt(customDays || "0", 10));
             const h = Math.max(0, parseInt(customHours || "0", 10));
             const m = Math.max(0, parseInt(customMinutes || "0", 10));
-            return d * 86400 + h * 3600 + m * 60;
+            const total = d * 86400 + h * 3600 + m * 60;
+            // Clamp to MAX_EXPIRY_SECONDS (90 days). Above that we just
+            // pin to the ceiling silently; the validation message below
+            // surfaces it.
+            return Math.min(total, MAX_EXPIRY_SECONDS);
         }
         return EXPIRY_PRESETS.find((p) => p.id === expiryId)?.seconds ?? 0;
+    }, [expiryId, customDays, customHours, customMinutes]);
+
+    /** Raw (un-clamped) custom duration for the over-90-days warning. */
+    const customRequestedSeconds = useMemo(() => {
+        if (expiryId !== "custom") return 0;
+        const d = Math.max(0, parseInt(customDays || "0", 10));
+        const h = Math.max(0, parseInt(customHours || "0", 10));
+        const m = Math.max(0, parseInt(customMinutes || "0", 10));
+        return d * 86400 + h * 3600 + m * 60;
     }, [expiryId, customDays, customHours, customMinutes]);
 
     // TokenOption decimals is optional in the picker's type. Default to 18 for
@@ -639,11 +659,18 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
                         ))}
                     </div>
                     {expiryId === "custom" && (
-                        <div className="mt-3 grid grid-cols-3 gap-2">
-                            <CustomNumInput label="Days" value={customDays} onChange={setCustomDays} />
-                            <CustomNumInput label="Hours" value={customHours} onChange={setCustomHours} />
-                            <CustomNumInput label="Minutes" value={customMinutes} onChange={setCustomMinutes} />
-                        </div>
+                        <>
+                            <div className="mt-3 grid grid-cols-3 gap-2">
+                                <CustomNumInput label="Days" value={customDays} onChange={setCustomDays} />
+                                <CustomNumInput label="Hours" value={customHours} onChange={setCustomHours} />
+                                <CustomNumInput label="Minutes" value={customMinutes} onChange={setCustomMinutes} />
+                            </div>
+                            {customRequestedSeconds > MAX_EXPIRY_SECONDS && (
+                                <div className="mt-2 text-[11px] text-arc-warn">
+                                    Max expiry is 90 days. Your input will be clamped.
+                                </div>
+                            )}
+                        </>
                     )}
                 </div>
 
