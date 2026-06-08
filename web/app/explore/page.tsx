@@ -1219,26 +1219,38 @@ function PoolPairGridCard({
                 </div>
             )}
 
-            <div className="mt-auto grid grid-cols-2 gap-3 pt-1 text-center">
-                <div>
-                    <div className="text-[10px] uppercase tracking-wider text-arc-text-faint">APR</div>
-                    <div className="mt-0.5 text-sm font-semibold tabular-nums text-arc-text-faint">—</div>
-                </div>
-                <div>
-                    <div className="text-[10px] uppercase tracking-wider text-arc-text-faint">TVL</div>
-                    <div className="mt-0.5 text-sm font-semibold tabular-nums">{tvlLabel}</div>
-                </div>
-                <div>
-                    <div className="text-[10px] uppercase tracking-wider text-arc-text-faint">
-                        1D Volume
+            {/* Metrics split into 2 rows wrapped by flex-1 + justify-between
+                so row 1 (APR, TVL) hugs the top of the available space (just
+                under the pills) and row 2 (1D Volume, Daily Fees) drops to
+                the bottom of that space (just above the action buttons).
+                Cards with no Incentivized + Hot APR row therefore get a
+                larger vertical gap between the two metric rows rather than
+                a block of empty space at the top, keeping the eye on the
+                data instead of on whitespace. */}
+            <div className="flex flex-1 flex-col justify-between gap-3 pt-1">
+                <div className="grid grid-cols-2 gap-3">
+                    <div>
+                        <div className="text-[10px] uppercase tracking-wider text-arc-text-faint">APR</div>
+                        <div className="mt-0.5 text-sm font-semibold tabular-nums text-arc-text-faint">—</div>
                     </div>
-                    <div className="mt-0.5 text-sm font-semibold tabular-nums text-arc-text-faint">—</div>
-                </div>
-                <div>
-                    <div className="text-[10px] uppercase tracking-wider text-arc-text-faint">
-                        Daily Fees
+                    <div>
+                        <div className="text-[10px] uppercase tracking-wider text-arc-text-faint">TVL</div>
+                        <div className="mt-0.5 text-sm font-semibold tabular-nums">{tvlLabel}</div>
                     </div>
-                    <div className="mt-0.5 text-sm font-semibold tabular-nums text-arc-text-faint">—</div>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                    <div>
+                        <div className="text-[10px] uppercase tracking-wider text-arc-text-faint">
+                            1D Volume
+                        </div>
+                        <div className="mt-0.5 text-sm font-semibold tabular-nums text-arc-text-faint">—</div>
+                    </div>
+                    <div>
+                        <div className="text-[10px] uppercase tracking-wider text-arc-text-faint">
+                            Daily Fees
+                        </div>
+                        <div className="mt-0.5 text-sm font-semibold tabular-nums text-arc-text-faint">—</div>
+                    </div>
                 </div>
             </div>
 
