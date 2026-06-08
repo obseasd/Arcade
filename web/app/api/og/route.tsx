@@ -58,7 +58,7 @@ export async function GET(req: NextRequest) {
             : "";
 
     const origin = originFromReq(req);
-    const brandLogo = `${origin}/arcade.png`;
+    const brandLogo = `${origin}/arcdlogo.png`;
 
     return new ImageResponse(
         (

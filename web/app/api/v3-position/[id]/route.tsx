@@ -22,7 +22,7 @@ export async function GET(
 
     const url = new URL(req.url);
     const origin = `${url.protocol}//${url.host}`;
-    const image = `${origin}/arcade.png`;
+    const image = `${origin}/arcdlogo.png`;
 
     const metadata = {
         name: `Arcade V3 Position #${tokenId}`,

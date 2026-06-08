@@ -46,7 +46,7 @@ function originFromReq(req: NextRequest): string {
 
 export async function GET(req: NextRequest) {
     const origin = originFromReq(req);
-    const logo = `${origin}/arcade.png`;
+    const logo = `${origin}/arcdlogo.png`;
 
     // Pull Space Grotesk for the wordmark; fall back to the embedded default
     // sans if Google blocks the edge fetch. The two font fetches are
