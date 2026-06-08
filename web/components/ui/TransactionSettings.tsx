@@ -130,7 +130,7 @@ export function TransactionSettings({
                         </div>
                     </div>
                     {slippageBps > 500 && (
-                        <div className="mt-3 rounded-lg border border-arc-warn/30 bg-arc-warn/10 p-2 text-[11px] text-arc-warn">
+                        <div className="mt-2 px-1 text-[11px] text-arc-warn">
                             High slippage - your trade may be front-run.
                         </div>
                     )}

@@ -444,7 +444,7 @@ function AddLiquidityInner() {
                             >
                                 {poolType === "v3" ? "v3" : "v2"}
                             </span>
-                            <span className="rounded-md border border-arc-success/40 bg-arc-success/10 px-1.5 py-0.5 text-[10px] font-semibold text-arc-success">
+                            <span className="rounded-md border border-sky-400/40 bg-sky-400/10 px-1.5 py-0.5 text-[10px] font-semibold text-sky-400">
                                 {(feeBps / 100).toFixed(2)}%
                             </span>
                         </div>

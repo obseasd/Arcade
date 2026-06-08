@@ -181,7 +181,7 @@ export function CreatePoolModal({
                                             {selectedTier.label}
                                         </span>
                                         {selectedTier.highlight && (
-                                            <span className="rounded-md bg-arc-success/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-arc-success">
+                                            <span className="rounded-md bg-sky-400/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-sky-400">
                                                 Highest 1D Volume
                                             </span>
                                         )}
@@ -208,12 +208,12 @@ export function CreatePoolModal({
                                             className={cn(
                                                 "relative rounded-xl border bg-white/[0.015] p-3 text-left transition-colors",
                                                 feeBps === tier.bps
-                                                    ? "border-arc-success/80 shadow-[0_0_18px_-4px_rgba(16,185,129,0.45)]"
+                                                    ? "border-sky-400/80 shadow-[0_0_18px_-4px_rgba(56,189,248,0.45)]"
                                                     : "border-arc-border hover:border-arc-cta-hover/40",
                                             )}
                                         >
                                             {feeBps === tier.bps && (
-                                                <span className="absolute right-2 top-2 inline-flex h-5 w-5 items-center justify-center rounded-full bg-arc-success text-black">
+                                                <span className="absolute right-2 top-2 inline-flex h-5 w-5 items-center justify-center rounded-full bg-sky-400 text-black">
                                                     <Check className="h-3 w-3" strokeWidth={3} />
                                                 </span>
                                             )}
