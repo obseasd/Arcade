@@ -130,6 +130,28 @@ export function V3AddLiquidity({
         query: { enabled: hasPool },
     });
     const poolLiquidity = (poolLiquidityQ.data as bigint | undefined) ?? 0n;
+
+    // Verify the picked fee tier is enabled on the factory. The Arc V3
+    // factory (DeploySecurityV3.s.sol) only enables 1% / 2% / 3% — picking
+    // 0.30% reverts at createPool with a generic message. Detect early and
+    // surface a clear banner.
+    const factoryTickSpacingQ = useReadContract({
+        address: ADDRESSES.v3Factory,
+        abi: [
+            {
+                type: "function",
+                name: "feeAmountTickSpacing",
+                stateMutability: "view",
+                inputs: [{ name: "fee", type: "uint24" }],
+                outputs: [{ name: "", type: "int24" }],
+            },
+        ] as const,
+        functionName: "feeAmountTickSpacing",
+        args: [feePip],
+        query: { enabled: ADDRESSES.v3Factory !== zeroAddress },
+    });
+    const feeTierEnabled =
+        (factoryTickSpacingQ.data as number | undefined ?? 0) > 0;
     /** True when there's no live LP on this pool — either the pool doesn't
      *  exist yet, or it exists but has zero liquidity. Same slippage rules
      *  apply in both cases. */
@@ -441,6 +463,7 @@ export function V3AddLiquidity({
         mode === "dual"
             ? !!account &&
               npmEnabled &&
+              feeTierEnabled &&
               !submitting &&
               !poolAddrQ.isLoading &&
               validRange &&
@@ -448,6 +471,7 @@ export function V3AddLiquidity({
               enoughBalance
             : !!account &&
               zapEnabled &&
+              feeTierEnabled &&
               hasPool &&
               !submitting &&
               preset === "max" &&
@@ -989,14 +1013,22 @@ export function V3AddLiquidity({
                     )}
                 </div>
             )}
-            {!hasPool && (
+            {!feeTierEnabled && !factoryTickSpacingQ.isLoading && (
+                <div className="rounded-xl border border-arc-danger/40 bg-arc-danger/10 p-3 text-xs text-arc-danger">
+                    Fee tier {(feePip / 10_000).toFixed(2)}% is not enabled on
+                    this V3 factory. The deployed factory accepts 1%, 2%, and
+                    3% only. Use the URL <code>?fee=100</code> (1%),{" "}
+                    <code>?fee=200</code> (2%), or <code>?fee=300</code> (3%).
+                </div>
+            )}
+            {feeTierEnabled && !hasPool && (
                 <div className="rounded-xl border border-arc-warn/30 bg-arc-warn/10 p-3 text-xs text-arc-warn">
                     Pool doesn&apos;t exist yet. Submitting will create it via
                     createAndInitializePoolIfNecessary with the midpoint of
                     your range as the seed price.
                 </div>
             )}
-            {hasPool && isFirstLP && (
+            {feeTierEnabled && hasPool && isFirstLP && (
                 <div className="rounded-xl border border-arc-cta-hover/30 bg-arc-cta-hover/10 p-3 text-xs text-arc-text-muted">
                     Pool exists but has 0 liquidity — you&apos;ll be the first
                     LP. The Current price shown above is the seed price set
