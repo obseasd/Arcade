@@ -67,7 +67,16 @@ const FILTERS: { value: Filter; label: string; icon?: React.ReactNode }[] = [
     {
         value: "points",
         label: "Points Program",
-        icon: <Sparkles className="h-3.5 w-3.5 text-arc-cta-hover" />,
+        icon: (
+            <Image
+                src="/arcdlogo.png"
+                alt=""
+                width={16}
+                height={16}
+                className="h-4 w-4"
+                unoptimized
+            />
+        ),
     },
     {
         value: "incentivized",
@@ -979,7 +988,7 @@ function PoolPairRowCard({
                         labels off the row background so they read as a header
                         strip (Hyperswap pattern). 3-column grid matches the
                         outer row spec so column centers line up exactly. */}
-                    <div className="hidden grid-cols-[16rem_1fr_14.5rem] gap-4 rounded-xl border border-arc-border bg-arc-bg-elevated/60 px-4 py-2.5 text-[10px] uppercase tracking-wider text-arc-text-muted sm:grid sm:mx-4 sm:mt-3">
+                    <div className="hidden grid-cols-[16rem_1fr_14.5rem] gap-4 bg-arc-bg-elevated/60 px-4 py-2.5 text-[10px] uppercase tracking-wider text-arc-text-muted sm:grid">
                         <span className="text-sm font-semibold text-arc-text">
                             Pools ({subCount})
                         </span>
@@ -1192,19 +1201,19 @@ function PoolPairGridCard({
                         <span className="rounded-md bg-[#171718] px-1.5 py-0.5 text-[12px] text-sky-400">
                             {sub.feeBps / 100}%
                         </span>
-                        {row.isIncentivized && isV3 && (
-                            <>
-                                <span className="inc-badge inc-badge-sm inc-sweep-5 rounded-md px-1.5 py-0.5 text-[12px] tracking-wider">
-                                    Incentivized
-                                    <Info className="inc-info" />
-                                </span>
-                                <span className="inc-badge hot-apr-rim rounded-md px-1.5 py-0.5 text-[12px] tracking-wider">
-                                    <HotFlameIcon className="h-3.5 w-3.5" />
-                                    Hot APR
-                                </span>
-                            </>
-                        )}
                     </div>
+                    {row.isIncentivized && isV3 && (
+                        <div className="mt-1.5 flex flex-wrap items-center justify-start gap-1.5">
+                            <span className="inc-badge inc-badge-sm inc-sweep-5 rounded-md px-1.5 py-0.5 text-[12px] tracking-wider">
+                                Incentivized
+                                <Info className="inc-info" />
+                            </span>
+                            <span className="inc-badge hot-apr-rim rounded-md px-1.5 py-0.5 text-[12px] tracking-wider">
+                                <HotFlameIcon className="h-3.5 w-3.5" />
+                                Hot APR
+                            </span>
+                        </div>
+                    )}
                 </div>
             </div>
 
