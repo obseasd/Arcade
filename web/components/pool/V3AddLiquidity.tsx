@@ -136,17 +136,49 @@ export function V3AddLiquidity({
     const [tickLower, setTickLower] = useState<number>(MIN_TICK);
     const [tickUpper, setTickUpper] = useState<number>(MAX_TICK);
 
+    const [amount0, setAmount0] = useState("");
+    const [amount1, setAmount1] = useState("");
+
+    // Fresh-pool implicit tick: when there's no pool yet, the user is
+    // SEEDING the price via their typed amounts. The displayed MIN/MAX
+    // (and the position the contract mints) should be centered on
+    // THAT price, not on currentTick=0 which is just the default for an
+    // uninitialised pool. Recompute from amount ratio whenever either
+    // side changes; falls back to currentTick (0) before both are typed.
+    const freshImplicitTick = useMemo<number | null>(() => {
+        if (hasPool) return null;
+        try {
+            if (!amount0 || !amount1) return null;
+            const a0Raw = parseUnits(amount0, t0.decimals);
+            const a1Raw = parseUnits(amount1, t1.decimals);
+            if (a0Raw <= 0n || a1Raw <= 0n) return null;
+            // Use Number division (sufficient precision since these are
+            // raw uints under 2^53 for typical deposits).
+            const rawPrice = Number(a1Raw) / Number(a0Raw);
+            if (!isFinite(rawPrice) || rawPrice <= 0) return null;
+            const t = Math.floor(Math.log(rawPrice) / Math.log(1.0001));
+            return isFinite(t) ? t : null;
+        } catch {
+            return null;
+        }
+    }, [hasPool, amount0, amount1, t0.decimals, t1.decimals]);
+
     // Recompute ticks whenever the preset, current tick, or spacing changes.
     useEffect(() => {
         if (preset === "custom") return; // Custom = user controls min/max via the inputs below.
+        // Fresh pool with amounts typed -> center on the implicit price.
+        // Fresh pool without amounts -> stay on the default (currentTick=0)
+        // until the user provides a ratio to derive from. Existing pool ->
+        // use the live currentTick from slot0.
+        const center = freshImplicitTick !== null ? freshImplicitTick : currentTick;
         const { tickLower: tl, tickUpper: tu } = presetTickRange(
             preset,
-            currentTick,
+            center,
             tickSpacing || 60,
         );
         setTickLower(tl);
         setTickUpper(tu);
-    }, [preset, currentTick, tickSpacing]);
+    }, [preset, currentTick, tickSpacing, freshImplicitTick]);
 
     const minPrice = useMemo(
         () => tickToPriceWithDecimals(tickLower, t0.decimals, t1.decimals),
@@ -160,9 +192,6 @@ export function V3AddLiquidity({
         () => tickToPriceWithDecimals(currentTick, t0.decimals, t1.decimals),
         [currentTick, t0.decimals, t1.decimals],
     );
-
-    const [amount0, setAmount0] = useState("");
-    const [amount1, setAmount1] = useState("");
     // Which side did the user last type into. The auto-quote effect uses
     // this to pick which derivation runs (token0 → token1 or the other
     // way around) without the two effects clobbering each other.
@@ -496,7 +525,17 @@ export function V3AddLiquidity({
 
             const a0Raw = amount0 ? parseUnits(amount0, t0.decimals) : 0n;
             const a1Raw = amount1 ? parseUnits(amount1, t1.decimals) : 0n;
-            const slipDen = 10_000n - BigInt(slippageBps);
+            // Fresh pool path: we set the seed price ourselves and mint
+            // atomically in the same flow, so there's no front-runnable
+            // slippage window to defend against — the slot0 verification
+            // below already detects a pre-init grief at a different price.
+            // The user-configurable `slippageBps` is meant for swaps against
+            // a live pool, so on fresh-mint we force a much looser 5% floor
+            // to absorb the V3 tick-quantisation rounding (typically <1 wei
+            // on each side) without false-reverting on a position the user
+            // is literally creating.
+            const effectiveSlippageBps = hasPool ? slippageBps : Math.max(slippageBps, 500);
+            const slipDen = 10_000n - BigInt(effectiveSlippageBps);
 
             let actualTickLower = tickLower;
             let actualTickUpper = tickUpper;
