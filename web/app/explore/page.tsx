@@ -15,6 +15,7 @@ import {
     PlusIcon,
     UpArrowIcon,
 } from "@/components/ui/MaskIcon";
+import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CreatePoolModal } from "@/components/pool/CreatePoolModal";
@@ -71,7 +72,16 @@ const FILTERS: { value: Filter; label: string; icon?: React.ReactNode }[] = [
     {
         value: "incentivized",
         label: "Incentivized & Liquidity Mining",
-        icon: <MinecraftPickaxeIcon className="h-4 w-4" />,
+        icon: (
+            <Image
+                src="/pickaxe.svg"
+                alt=""
+                width={16}
+                height={16}
+                className="h-4 w-4"
+                unoptimized
+            />
+        ),
     },
     { value: "standard-amm", label: "Standard AMM" },
     { value: "concentrated", label: "Concentrated Liquidity" },
