@@ -882,9 +882,14 @@ function PoolPairRowCard({
                 glow mirrors HyperSwap's badge, adapted to Arcade's palette
                 via arc-success (emerald). */}
             {row.isIncentivized && (
-                <div className="absolute -top-2.5 left-4 z-10 inline-flex items-center gap-1 rounded-md border border-arc-primary-hover bg-arc-bg-elevated px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-sky-300">
-                    <Sparkles className="h-2.5 w-2.5" />
-                    LP Boost
+                <div className="absolute -top-3 left-4 z-10 flex flex-wrap items-center gap-1.5">
+                    {(["inc-v1", "inc-v2", "inc-v3", "inc-v4", "inc-v5"] as const).map((variant, i) => (
+                        <span key={variant} className={cn("inc-badge", variant)}>
+                            Incentivized
+                            <Info className="inc-info" />
+                            <span className="ml-0.5 text-[9px] font-normal opacity-70">v{i + 1}</span>
+                        </span>
+                    ))}
                 </div>
             )}
             <div
@@ -897,7 +902,7 @@ function PoolPairRowCard({
                     // Border-color override + outer glow live in the same
                     // class, so we don't pre-apply a border colour here that
                     // the animation would have to fight.
-                    row.isIncentivized && "animate-lp-boost",
+                    row.isIncentivized && "animate-lp-boost-rainbow",
                 )}
             >
             {/* Row header. p-[1.331rem] is 1.21rem * 1.1 = +10% height vs the
