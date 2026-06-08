@@ -32,14 +32,14 @@ export function Navbar() {
         {/* Left: logo */}
         <Link href="/" className="flex items-center gap-3">
           <Image
-            src="/arcdlogo.png"
+            src="/ard2logo.png"
             alt="Arcade"
             width={48}
             height={48}
             className="h-12 w-12 object-contain"
             priority
           />
-          <span className="font-display text-2xl font-semibold tracking-tight">Arcade</span>
+          <span className="font-display text-2xl font-semibold tracking-tight" style={{ color: "#15508F" }}>Arcade</span>
         </Link>
 
         {/* Center: nav with active highlight (desktop only) */}
