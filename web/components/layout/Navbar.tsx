@@ -39,7 +39,7 @@ export function Navbar() {
             className="h-12 w-12 object-contain"
             priority
           />
-          <span className="font-display text-2xl font-semibold tracking-tight" style={{ color: "#15508F" }}>Arcade</span>
+          <span className="font-display text-2xl font-semibold tracking-tight text-white">Arcade</span>
         </Link>
 
         {/* Center: nav with active highlight (desktop only) */}
