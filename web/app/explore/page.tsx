@@ -1227,7 +1227,7 @@ function PoolPairGridCard({
                 </div>
             )}
 
-            <div className="grid grid-cols-2 gap-3 pt-1">
+            <div className="mt-auto grid grid-cols-2 gap-3 pt-1">
                 <div>
                     <div className="text-[10px] uppercase tracking-wider text-arc-text-faint">APR</div>
                     <div className="mt-0.5 text-sm font-semibold tabular-nums text-arc-text-faint">—</div>
@@ -1250,7 +1250,7 @@ function PoolPairGridCard({
                 </div>
             </div>
 
-            <div className="mt-2 grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-2 gap-2">
                 <Link
                     href={addLiqHref}
                     className={cn(
