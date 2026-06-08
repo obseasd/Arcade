@@ -633,9 +633,9 @@ export function BridgeCard() {
         <button type="button"
           onClick={flipChains}
           disabled={isProcessing}
-          className="rounded-xl border border-arc-border bg-arc-surface-2/40 p-2 backdrop-blur-md transition-all hover:bg-arc-surface-3/60 active:scale-95 disabled:opacity-50"
+          className="flex h-9 w-9 items-center justify-center rounded-xl border border-arc-border bg-arc-surface-2/40 backdrop-blur-md transition-all hover:bg-arc-surface-3/60 active:scale-95 disabled:opacity-50"
         >
-          <SwitchIcon size={16} />
+          <SwitchIcon size={20} />
         </button>
       </div>
 

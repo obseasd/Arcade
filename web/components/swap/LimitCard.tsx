@@ -537,9 +537,9 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
                 <div className="relative z-10 -my-2 flex justify-center">
                     <button type="button"
                         onClick={swapDirection}
-                        className="rounded-xl border border-arc-border bg-arc-surface-2/40 p-2 backdrop-blur-md transition-all hover:bg-arc-surface-3/60 active:scale-95"
+                        className="flex h-9 w-9 items-center justify-center rounded-xl border border-arc-border bg-arc-surface-2/40 backdrop-blur-md transition-all hover:bg-arc-surface-3/60 active:scale-95"
                     >
-                        <SwitchIcon size={16} />
+                        <SwitchIcon size={20} />
                     </button>
                 </div>
 

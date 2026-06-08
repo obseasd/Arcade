@@ -544,9 +544,9 @@ function AddLiquidityInner() {
                                 setAmountB("");
                             }}
                             title="Flip zap direction"
-                            className="-my-2 rounded-xl border border-arc-border bg-arc-bg-elevated p-2 transition-colors hover:bg-white/5"
+                            className="-my-2 flex h-9 w-9 items-center justify-center rounded-xl border border-arc-border bg-arc-bg-elevated transition-colors hover:bg-white/5"
                         >
-                            <SwitchIcon size={16} />
+                            <SwitchIcon size={20} />
                         </button>
                     ) : (
                         <div className="-my-2 rounded-xl border border-arc-border bg-arc-bg-elevated p-2">

@@ -80,7 +80,11 @@ export function DownArrowIcon({ size = 14, className }: IconProps) {
 }
 
 /** Full-colour PNG icon rendered directly (NOT as a CSS mask). Use for
- *  icons that already ship with their final colour baked in. */
+ *  icons that already ship with their final colour baked in.
+ *  - Forces a square box at `size` x `size` so a non-square source PNG
+ *    doesn't make the parent layout stretch into a rectangle.
+ *  - `object-contain` keeps the icon centred in the box with its
+ *    aspect ratio preserved (uniform downscale, never cropped). */
 function FullColourIcon({
     src,
     alt,
@@ -93,30 +97,37 @@ function FullColourIcon({
     className?: string;
 }) {
     return (
-        <Image
-            src={src}
-            alt={alt}
-            width={size}
-            height={size}
+        <span
             style={{ width: size, height: size }}
-            className={cn("inline-block shrink-0", className)}
-            unoptimized
-        />
+            className={cn(
+                "inline-flex shrink-0 items-center justify-center",
+                className,
+            )}
+            aria-hidden={alt === "" ? true : undefined}
+        >
+            <Image
+                src={src}
+                alt={alt}
+                width={size}
+                height={size}
+                style={{ width: size, height: size, objectFit: "contain" }}
+                unoptimized
+            />
+        </span>
     );
 }
 
-/** Bigger down arrow used in MultiSwapCard between rows. PNG already
- *  ships with its final colour so we render via <Image>, not as a mask. */
-export function DownArrowBigIcon({ size = 18, className }: IconProps) {
+/** Bigger down arrow used in MultiSwapCard between rows. */
+export function DownArrowBigIcon({ size = 22, className }: IconProps) {
     return <FullColourIcon src="/downarrowbig.png" alt="" size={size} className={className} />;
 }
 
-/** Swap-flip glyph (vertical double-arrow). Replaces lucide ArrowDownUp. */
-export function SwitchIcon({ size = 16, className }: IconProps) {
+/** Swap-flip glyph. Replaces lucide ArrowDownUp. */
+export function SwitchIcon({ size = 20, className }: IconProps) {
     return <FullColourIcon src="/switch.png" alt="" size={size} className={className} />;
 }
 
 /** Close glyph used in modals. Replaces lucide X. */
-export function CrossIcon({ size = 16, className }: IconProps) {
+export function CrossIcon({ size = 18, className }: IconProps) {
     return <FullColourIcon src="/cross.png" alt="" size={size} className={className} />;
 }

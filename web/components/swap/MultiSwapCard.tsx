@@ -426,8 +426,8 @@ export function MultiSwapCard({ tab, onTabChange }: MultiSwapCardProps) {
             <Plus className="h-4 w-4" />
           </button>
         )}
-        <span className="rounded-xl border border-arc-border bg-arc-surface-2/40 p-2 backdrop-blur-md">
-          <DownArrowBigIcon size={18} />
+        <span className="flex h-9 w-9 items-center justify-center rounded-xl border border-arc-border bg-arc-surface-2/40 backdrop-blur-md">
+          <DownArrowBigIcon size={22} />
         </span>
       </div>
 
