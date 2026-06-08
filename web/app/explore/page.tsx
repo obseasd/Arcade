@@ -71,7 +71,7 @@ const FILTERS: { value: Filter; label: string; icon?: React.ReactNode }[] = [
     {
         value: "incentivized",
         label: "Incentivized & Liquidity Mining",
-        icon: <span className="text-xs">🚀</span>,
+        icon: <MinecraftPickaxeIcon className="h-4 w-4" />,
     },
     { value: "standard-amm", label: "Standard AMM" },
     { value: "concentrated", label: "Concentrated Liquidity" },
@@ -1434,6 +1434,53 @@ function Metric({
                 {value}
             </div>
         </div>
+    );
+}
+
+/**
+ * Custom Minecraft-style pickaxe icon. Built from two stacked paths
+ * (cyan diamond head + brown wooden handle) so it reads as the
+ * blocky game item at chip sizes. Replaces the rocket emoji on the
+ * "Incentivized & Liquidity Mining" filter chip; "mining" → pickaxe
+ * is the more direct semantic link.
+ *
+ * Stroke colours are darker shades of the fill (Minecraft-style
+ * cell-shading outline) so the silhouette stays crisp at 14px.
+ */
+function MinecraftPickaxeIcon({ className }: { className?: string }) {
+    return (
+        <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            className={className}
+            aria-hidden="true"
+        >
+            {/* Wooden handle (brown stick from head down to bottom-left) */}
+            <path
+                d="M12.2 10.6 L3 19.8 L4.2 21 L13.4 11.8 Z"
+                fill="#7C2D12"
+                stroke="#3D1B0E"
+                strokeWidth="0.7"
+                strokeLinejoin="round"
+            />
+            {/* Diamond pickaxe head: two-prong V shape with a flat socket */}
+            <path
+                d="M3 5 L7.5 3.5 L12 8 L16.5 3.5 L21 5 L20 8.5 L16 11.5 L12 8 L8 11.5 L4 8.5 Z"
+                fill="#38BDF8"
+                stroke="#075985"
+                strokeWidth="0.7"
+                strokeLinejoin="round"
+            />
+            {/* Lighter highlight on the upper edge of the head (diamond shine) */}
+            <path
+                d="M7 5 L12 8.5 L17 5"
+                fill="none"
+                stroke="#BAE6FD"
+                strokeWidth="0.7"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+            />
+        </svg>
     );
 }
 
