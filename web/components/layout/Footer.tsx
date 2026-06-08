@@ -12,7 +12,7 @@ export function Footer() {
         {/* Left: logo + version */}
         <div className="flex items-center gap-2.5">
           <Image
-            src="/Arc2logo.png"
+            src="/arcv2.png"
             alt="Arcade"
             width={24}
             height={24}

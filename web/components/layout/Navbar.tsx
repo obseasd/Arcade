@@ -32,7 +32,7 @@ export function Navbar() {
         {/* Left: logo */}
         <Link href="/" className="flex items-center gap-3">
           <Image
-            src="/Arc2logo.png"
+            src="/arcv2.png"
             alt="Arcade"
             width={48}
             height={48}

@@ -22,8 +22,8 @@ export const metadata: Metadata = {
   description:
     "USDC-native AMM and fair-launch tokenization on Arc, Circle's EVM L1. Capital formation primitive for stablecoin-native markets: bonding-curve token issuance, AMM trading, locked-LP fee distribution.",
   icons: {
-    icon: "/Arc2logo.png",
-    apple: "/Arc2logo.png",
+    icon: "/arcv2.png",
+    apple: "/arcv2.png",
   },
   openGraph: {
     title: "Arcade",
