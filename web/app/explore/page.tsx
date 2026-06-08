@@ -607,7 +607,6 @@ export default function ExplorePage() {
                                 key={`${row.key}-${sub.poolAddress}`}
                                 row={row}
                                 sub={sub}
-                                whiteCta={filter !== "all"}
                             />
                         )),
                     )}
@@ -1152,16 +1151,9 @@ function PoolSubRowCard({
 function PoolPairGridCard({
     row,
     sub,
-    whiteCta = false,
 }: {
     row: PoolPairRow;
     sub: PoolSubRow;
-    /** When the user filters the grid to anything other than "All" (Hyped,
-     *  Points, Incentivized, Standard AMM, Concentrated), the action
-     *  buttons shift to the same white/glass palette as the selected
-     *  filter chip. Visually anchors "you filtered this in" so the card
-     *  CTAs read in the same language as the filter row above. */
-    whiteCta?: boolean;
 }) {
     const { image: image0 } = useTokenImage(row.token0.address);
     const { image: image1 } = useTokenImage(row.token1.address);
@@ -1227,7 +1219,7 @@ function PoolPairGridCard({
                 </div>
             )}
 
-            <div className="mt-auto grid grid-cols-2 gap-3 pt-1">
+            <div className="mt-auto grid grid-cols-2 gap-3 pt-1 text-center">
                 <div>
                     <div className="text-[10px] uppercase tracking-wider text-arc-text-faint">APR</div>
                     <div className="mt-0.5 text-sm font-semibold tabular-nums text-arc-text-faint">—</div>
@@ -1253,24 +1245,14 @@ function PoolPairGridCard({
             <div className="grid grid-cols-2 gap-2">
                 <Link
                     href={addLiqHref}
-                    className={cn(
-                        "inline-flex items-center justify-center gap-1.5 rounded-xl px-3 py-[0.575rem] text-xs font-semibold transition-colors",
-                        whiteCta
-                            ? "border border-white/25 bg-white/15 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.18)] hover:bg-white/20"
-                            : "bg-arc-cta text-white hover:bg-arc-cta-hover",
-                    )}
+                    className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-arc-cta px-3 py-[0.575rem] text-xs font-semibold text-white transition-colors hover:bg-arc-cta-hover"
                 >
                     <PlusIcon size={14} className="bg-white" />
                     Add Liquidity
                 </Link>
                 <Link
                     href="/swap"
-                    className={cn(
-                        "inline-flex items-center justify-center gap-1.5 rounded-xl px-3 py-[0.575rem] text-xs font-semibold text-white transition-colors",
-                        whiteCta
-                            ? "border border-white/15 bg-white/[0.06] hover:bg-white/[0.12]"
-                            : "bg-arc-cta hover:bg-arc-cta-hover",
-                    )}
+                    className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-arc-cta px-3 py-[0.575rem] text-xs font-semibold text-white transition-colors hover:bg-arc-cta-hover"
                 >
                     <SwapIcon tone="white" />
                     Swap
