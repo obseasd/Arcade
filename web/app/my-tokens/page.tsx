@@ -1177,7 +1177,7 @@ function ActivityTab({ account }: { account: Address }) {
                         value={search}
                         onChange={(e) => setSearch(e.target.value)}
                         placeholder="Search activity"
-                        className="w-full rounded-xl border border-arc-border bg-arc-bg-elevated py-2 pl-9 pr-3 text-xs text-arc-text placeholder:text-arc-text-faint focus:border-arc-cta-hover/50 focus:outline-none"
+                        className="w-full rounded-xl border border-arc-border bg-black/15 py-2 pl-9 pr-3 text-xs text-arc-text backdrop-blur-xl placeholder:text-arc-text-faint focus:border-arc-cta-hover/50 focus:outline-none"
                         aria-label="Search activity"
                     />
                 </div>

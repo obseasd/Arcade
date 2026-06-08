@@ -1219,15 +1219,12 @@ function PoolPairGridCard({
                 </div>
             )}
 
-            {/* Metrics split into 2 rows wrapped by flex-1 + justify-between
-                so row 1 (APR, TVL) hugs the top of the available space (just
-                under the pills) and row 2 (1D Volume, Daily Fees) drops to
-                the bottom of that space (just above the action buttons).
-                Cards with no Incentivized + Hot APR row therefore get a
-                larger vertical gap between the two metric rows rather than
-                a block of empty space at the top, keeping the eye on the
-                data instead of on whitespace. */}
-            <div className="flex flex-1 flex-col justify-between gap-3 pt-1">
+            {/* Two metric rows stacked with a fixed gap (gap-4 = 16px) so the
+                spacing between APR/TVL and 1D Volume/Daily Fees stays
+                compact regardless of card height. The buttons row gets
+                mt-auto below to absorb any remaining vertical space and
+                pin the CTAs to the bottom. */}
+            <div className="flex flex-col gap-4 pt-1">
                 <div className="grid grid-cols-2 gap-3">
                     <div>
                         <div className="text-[10px] uppercase tracking-wider text-arc-text-faint">APR</div>
@@ -1254,7 +1251,7 @@ function PoolPairGridCard({
                 </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-2">
+            <div className="mt-auto grid grid-cols-2 gap-2">
                 <Link
                     href={addLiqHref}
                     className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-arc-cta px-3 py-[0.575rem] text-xs font-semibold text-white transition-colors hover:bg-arc-cta-hover"
