@@ -882,14 +882,9 @@ function PoolPairRowCard({
                 glow mirrors HyperSwap's badge, adapted to Arcade's palette
                 via arc-success (emerald). */}
             {row.isIncentivized && (
-                <div className="absolute -top-3 left-4 z-10 flex flex-wrap items-center gap-1.5">
-                    {(["inc-v1", "inc-v2", "inc-v3", "inc-v4", "inc-v5"] as const).map((variant, i) => (
-                        <span key={variant} className={cn("inc-badge", variant)}>
-                            Incentivized
-                            <Info className="inc-info" />
-                            <span className="ml-0.5 text-[9px] font-normal opacity-70">v{i + 1}</span>
-                        </span>
-                    ))}
+                <div className="absolute -top-2.5 left-4 z-10 inline-flex items-center gap-1 rounded-md border border-arc-primary-hover bg-arc-bg-elevated px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-sky-300">
+                    <Sparkles className="h-2.5 w-2.5" />
+                    LP Boost
                 </div>
             )}
             <div
@@ -902,7 +897,7 @@ function PoolPairRowCard({
                     // Border-color override + outer glow live in the same
                     // class, so we don't pre-apply a border colour here that
                     // the animation would have to fight.
-                    row.isIncentivized && "animate-lp-boost-rainbow",
+                    row.isIncentivized && "animate-lp-boost",
                 )}
             >
             {/* Row header. p-[1.331rem] is 1.21rem * 1.1 = +10% height vs the
@@ -1004,6 +999,7 @@ function PoolPairRowCard({
                                 image0={image0}
                                 image1={image1}
                                 isBestTvl={isBestTvl}
+                                isIncentivized={row.isIncentivized}
                             />
                         );
                     })}
@@ -1021,6 +1017,7 @@ function PoolSubRowCard({
     image0,
     image1,
     isBestTvl,
+    isIncentivized,
 }: {
     sub: PoolSubRow;
     token0: { address: Address; symbol: string };
@@ -1031,6 +1028,10 @@ function PoolSubRowCard({
      *  other sub-rows. Surfaces a small "Best TVL" chip below the
      *  version/fee row, mirroring Hyperswap's superlative labels. */
     isBestTvl?: boolean;
+    /** True when the parent row is in the curated incentivized set
+     *  (USDC/ETH, USDC/WETH, etc). Surfaces an animated rainbow
+     *  "Incentivized" pill among the version/fee/TVL chips. */
+    isIncentivized?: boolean;
 }) {
     const feeLabel = `${sub.feeBps / 100}%`;
     const tvlLabel = formatUsd(sub.tvlUsdc);
@@ -1084,6 +1085,16 @@ function PoolSubRowCard({
                                 Best TVL
                             </span>
                         )}
+                        {isIncentivized &&
+                            (["inc-sweep-1", "inc-sweep-2", "inc-sweep-3", "inc-sweep-4", "inc-sweep-5"] as const).map(
+                                (palette, i) => (
+                                    <span key={palette} className={cn("inc-badge inc-badge-sm", palette)}>
+                                        Incentivized
+                                        <Info className="inc-info" />
+                                        <span className="ml-0.5 text-[8px] font-normal opacity-70">p{i + 1}</span>
+                                    </span>
+                                ),
+                            )}
                     </div>
                 </div>
             </div>
