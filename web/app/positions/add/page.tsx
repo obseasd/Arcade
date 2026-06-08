@@ -79,12 +79,11 @@ function AddLiquidityInner() {
     const t1Param = sp.get("t1");
     const t0Addr = t0Param && isAddress(t0Param) ? (t0Param as Address) : ADDRESSES.usdc;
     const t1Addr = t1Param && isAddress(t1Param) ? (t1Param as Address) : zeroAddress;
-    // V3 fee default = 100 bps (1%). The deployed V3 factory only has
-    // 1% / 2% / 3% enabled via DeploySecurityV3.s.sol; 0.30% (the legacy
-    // default mirroring Uniswap V3) would revert at createPool because
-    // its tick spacing isn't whitelisted. Honour the URL ?fee= override
-    // for power users picking 200 or 300 explicitly.
-    const feeBps = Number(sp.get("fee")) || 100;
+    // V3 fee default = 30 bps (0.30%). Matches the Uniswap V3 standard
+    // most-volume tier. The deployed V3 factory enables 0.05% / 0.30%
+    // / 1% / 2% / 3% (0.01% is the only one that's off). Honour the URL
+    // ?fee= override for power users.
+    const feeBps = Number(sp.get("fee")) || 30;
 
     const tokenAResolved = useResolvedToken(t0Addr);
     const tokenB = useResolvedToken(t1Addr === zeroAddress ? undefined : t1Addr);

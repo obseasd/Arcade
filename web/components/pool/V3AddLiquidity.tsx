@@ -746,10 +746,18 @@ export function V3AddLiquidity({
                 /* fall back to user's raw amounts */
             }
 
-            // AUDIT CRITICAL [2]/[22]: slippage still applies — but now on
-            // the EXACT consumed amounts so a tight slip can't false-revert.
-            const amount0Min = (exactA0 * slipDen) / 10_000n;
-            const amount1Min = (exactA1 * slipDen) / 10_000n;
+            // AUDIT CRITICAL [2]/[22]: slippage applies on the EXACT
+            // consumed amounts so a tight slip can't false-revert.
+            // First-LP exception: when no other LP exists in the pool, the
+            // price can't drift between simulate and execute (we're setting
+            // it ourselves), and the tick-quantisation rounding can wipe a
+            // few wei off each leg in ways that even 5% slippage doesn't
+            // always absorb (binding leg can collapse to ~0 against a
+            // microscopic liquidity). Set minimums to 0 in this regime so
+            // the slot0-verify above is the only on-chain guard; legitimate
+            // first-LP can't be false-reverted.
+            const amount0Min = isFirstLP ? 0n : (exactA0 * slipDen) / 10_000n;
+            const amount1Min = isFirstLP ? 0n : (exactA1 * slipDen) / 10_000n;
 
             const mintArgs = [
                 {
