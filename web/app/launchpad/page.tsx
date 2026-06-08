@@ -189,21 +189,21 @@ export default function LaunchpadIndexPage() {
       )}
 
       <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex flex-wrap items-center gap-1 rounded-xl border border-arc-border bg-arc-bg-elevated p-1">
+        <div className="flex flex-wrap items-center gap-2">
           {(["all", "new", "trending", "migrating", "migrated"] as Filter[]).map((f) => (
             <button type="button"
               key={f}
               onClick={() => setFilter(f)}
               className={cn(
-                // Glass chips, same palette as the Explore filter row but
-                // keeping the rounded-lg shape (Explore uses rounded-full
-                // pills). Selected chip gets a brighter white-tinted fill
-                // + inset highlight to read as the active state without a
-                // coloured accent ring.
-                "rounded-lg border px-3 py-1.5 text-sm font-medium backdrop-blur-xl transition-all",
+                // Same palette as the /positions TabButton (Standard AMM /
+                // Concentrated Liquidity / Burned): rounded-xl pill, deep
+                // arc-cta-hover blue + white text when active, muted grey
+                // surface when not. Replaces the glass white-tinted chip
+                // style so the two filter rows read in the same language.
+                "rounded-xl border px-4 py-1.5 text-sm font-medium transition-colors",
                 filter === f
-                  ? "border-white/30 bg-white/15 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.15)]"
-                  : "border-white/10 bg-white/[0.04] text-arc-text hover:border-white/20 hover:bg-white/[0.08]",
+                  ? "border-arc-gray bg-arc-cta-hover text-white"
+                  : "border-arc-border bg-arc-surface text-arc-text-muted hover:bg-arc-surface-2 hover:text-arc-text",
               )}
             >
               {f === "all"

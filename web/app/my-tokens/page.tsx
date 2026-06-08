@@ -1170,14 +1170,14 @@ function ActivityTab({ account }: { account: Address }) {
                     value={timeFilter}
                     onChange={(v) => setTimeFilter(v as ActivityTimeFilter)}
                 />
-                <div className="relative ml-auto w-full sm:w-72">
-                    <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-arc-text-faint" />
+                <div className="ml-auto flex h-9 w-full items-center gap-2 rounded-xl border border-arc-border bg-black/15 px-3 backdrop-blur-xl sm:w-72">
+                    <Search className="h-3.5 w-3.5 shrink-0 text-arc-text-faint" />
                     <input
                         type="search"
                         value={search}
                         onChange={(e) => setSearch(e.target.value)}
                         placeholder="Search activity"
-                        className="w-full rounded-xl border border-arc-border bg-black/15 py-2 pl-9 pr-3 text-xs text-arc-text backdrop-blur-xl placeholder:text-arc-text-faint focus:border-arc-cta-hover/50 focus:outline-none"
+                        className="w-full bg-transparent text-xs text-arc-text placeholder:text-arc-text-faint focus:outline-none"
                         aria-label="Search activity"
                     />
                 </div>
