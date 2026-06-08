@@ -1071,7 +1071,7 @@ function PoolSubRowCard({
                         >
                             {sub.version}
                         </span>
-                        <span className="rounded-md bg-[#171718] px-1 py-0.5 text-[10px] text-arc-cta">
+                        <span className="rounded-md bg-[#171718] px-1 py-0.5 text-[10px] text-sky-400">
                             {feeLabel}
                         </span>
                         {isBestTvl && (
@@ -1161,7 +1161,7 @@ function PoolPairGridCard({
                         >
                             {sub.version}
                         </span>
-                        <span className="rounded-md bg-[#171718] px-1.5 py-0.5 text-[10px] text-arc-cta">
+                        <span className="rounded-md bg-[#171718] px-1.5 py-0.5 text-[10px] text-sky-400">
                             {sub.feeBps / 100}%
                         </span>
                     </div>
