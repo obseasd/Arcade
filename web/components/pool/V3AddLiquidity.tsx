@@ -116,6 +116,24 @@ export function V3AddLiquidity({
         functionName: "tickSpacing",
         query: { enabled: hasPool },
     });
+    // Pool's currently-active liquidity. 0n means the pool was initialised
+    // (so hasPool is true and slot0 returns a price) but no LP has been
+    // minted yet — the user adding liquidity now is the FIRST LP, which
+    // is the same operational regime as a fresh pool for slippage / UX
+    // purposes. Happens when a prior createAndInitializePoolIfNecessary
+    // succeeded but the follow-up mint reverted: the init persists,
+    // leaving the pool partially set up.
+    const poolLiquidityQ = useReadContract({
+        address: pool,
+        abi: V3_POOL_ABI,
+        functionName: "liquidity",
+        query: { enabled: hasPool },
+    });
+    const poolLiquidity = (poolLiquidityQ.data as bigint | undefined) ?? 0n;
+    /** True when there's no live LP on this pool — either the pool doesn't
+     *  exist yet, or it exists but has zero liquidity. Same slippage rules
+     *  apply in both cases. */
+    const isFirstLP = !hasPool || poolLiquidity === 0n;
     const currentTick =
         slot0Q.data !== undefined
             ? Number(
@@ -525,16 +543,17 @@ export function V3AddLiquidity({
 
             const a0Raw = amount0 ? parseUnits(amount0, t0.decimals) : 0n;
             const a1Raw = amount1 ? parseUnits(amount1, t1.decimals) : 0n;
-            // Fresh pool path: we set the seed price ourselves and mint
-            // atomically in the same flow, so there's no front-runnable
-            // slippage window to defend against — the slot0 verification
-            // below already detects a pre-init grief at a different price.
-            // The user-configurable `slippageBps` is meant for swaps against
-            // a live pool, so on fresh-mint we force a much looser 5% floor
-            // to absorb the V3 tick-quantisation rounding (typically <1 wei
-            // on each side) without false-reverting on a position the user
-            // is literally creating.
-            const effectiveSlippageBps = hasPool ? slippageBps : Math.max(slippageBps, 500);
+            // First-LP path: covers both (a) the pool doesn't exist yet and
+            // we're seeding it AND (b) the pool exists from a previous
+            // failed mint but liquidity is still 0. In both cases we're
+            // setting the effective seed of the pool's first position, so
+            // there's no front-runnable price to slip against — the
+            // slot0 verification below detects pre-init grief, and the
+            // tick-quantisation rounding is the only realistic source of
+            // amount drift. Force a 5% floor so 0.5% defaults don't false-
+            // revert. Existing pools with liquidity keep the user's chosen
+            // slippage where it actually matters.
+            const effectiveSlippageBps = isFirstLP ? Math.max(slippageBps, 500) : slippageBps;
             const slipDen = 10_000n - BigInt(effectiveSlippageBps);
 
             let actualTickLower = tickLower;
@@ -975,6 +994,14 @@ export function V3AddLiquidity({
                     Pool doesn&apos;t exist yet. Submitting will create it via
                     createAndInitializePoolIfNecessary with the midpoint of
                     your range as the seed price.
+                </div>
+            )}
+            {hasPool && isFirstLP && (
+                <div className="rounded-xl border border-arc-cta-hover/30 bg-arc-cta-hover/10 p-3 text-xs text-arc-text-muted">
+                    Pool exists but has 0 liquidity — you&apos;ll be the first
+                    LP. The Current price shown above is the seed price set
+                    when the pool was initialised; your deposit must match
+                    that ratio (or be partially consumed by the binding leg).
                 </div>
             )}
 
