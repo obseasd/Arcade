@@ -1071,11 +1071,11 @@ function PoolSubRowCard({
                         >
                             {sub.version}
                         </span>
-                        <span className="rounded-md bg-arc-cta-hover px-1 py-0.5 text-[9px] text-sky-400">
+                        <span className="rounded-md bg-arc-cta px-1 py-0.5 text-[9px] text-sky-400">
                             {feeLabel}
                         </span>
                         {isBestTvl && (
-                            <span className="rounded-md border border-purple-400/40 bg-purple-400/10 px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-purple-300">
+                            <span className="rounded-md bg-purple-400/10 px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-purple-300">
                                 Best TVL
                             </span>
                         )}
@@ -1161,7 +1161,7 @@ function PoolPairGridCard({
                         >
                             {sub.version}
                         </span>
-                        <span className="rounded-md bg-arc-cta-hover px-1.5 py-0.5 text-[9px] text-sky-400">
+                        <span className="rounded-md bg-arc-cta px-1.5 py-0.5 text-[9px] text-sky-400">
                             {sub.feeBps / 100}%
                         </span>
                     </div>
