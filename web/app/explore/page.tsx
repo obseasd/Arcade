@@ -1063,7 +1063,7 @@ function PoolSubRowCard({
                     <div className="mt-0.5 flex flex-wrap items-center gap-1">
                         <span
                             className={cn(
-                                "rounded-md px-1 py-0.5 text-[9px] tracking-wider",
+                                "rounded-md px-1 py-0.5 text-[10px] tracking-wider",
                                 sub.version === "v2"
                                     ? "bg-arc-cta text-white"
                                     : "bg-sky-400 text-black",
@@ -1071,11 +1071,11 @@ function PoolSubRowCard({
                         >
                             {sub.version}
                         </span>
-                        <span className="rounded-md bg-arc-cta px-1 py-0.5 text-[9px] text-sky-400">
+                        <span className="rounded-md bg-[#171718] px-1 py-0.5 text-[10px] text-arc-cta">
                             {feeLabel}
                         </span>
                         {isBestTvl && (
-                            <span className="rounded-md bg-purple-400/10 px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-purple-300">
+                            <span className="rounded-md bg-purple-400/10 px-1 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-purple-300">
                                 Best TVL
                             </span>
                         )}
@@ -1153,7 +1153,7 @@ function PoolPairGridCard({
                     <div className="mt-1 flex flex-wrap items-center gap-1">
                         <span
                             className={cn(
-                                "rounded-md px-1.5 py-0.5 text-[9px] tracking-wider",
+                                "rounded-md px-1.5 py-0.5 text-[10px] tracking-wider",
                                 isV3
                                     ? "bg-sky-400 text-black"
                                     : "bg-arc-cta text-white",
@@ -1161,7 +1161,7 @@ function PoolPairGridCard({
                         >
                             {sub.version}
                         </span>
-                        <span className="rounded-md bg-arc-cta px-1.5 py-0.5 text-[9px] text-sky-400">
+                        <span className="rounded-md bg-[#171718] px-1.5 py-0.5 text-[10px] text-arc-cta">
                             {sub.feeBps / 100}%
                         </span>
                     </div>
