@@ -1,13 +1,13 @@
 "use client";
 
 import {
+    ArrowDownUp,
     ArrowLeft,
     ChevronDown,
     Info,
     Lock,
     Plus,
 } from "lucide-react";
-import { SwitchIcon } from "@/components/ui/MaskIcon";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useState } from "react";
@@ -544,9 +544,9 @@ function AddLiquidityInner() {
                                 setAmountB("");
                             }}
                             title="Flip zap direction"
-                            className="-my-2 flex h-9 w-9 items-center justify-center rounded-xl border border-arc-border bg-arc-bg-elevated transition-colors hover:bg-white/5"
+                            className="-my-2 rounded-xl border border-arc-border bg-arc-bg-elevated p-2 transition-colors hover:bg-white/5"
                         >
-                            <SwitchIcon size={20} />
+                            <ArrowDownUp className="h-4 w-4 text-arc-text" />
                         </button>
                     ) : (
                         <div className="-my-2 rounded-xl border border-arc-border bg-arc-bg-elevated p-2">

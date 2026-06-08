@@ -1,7 +1,6 @@
 "use client";
 
-import { Settings2 } from "lucide-react";
-import { SwitchIcon } from "@/components/ui/MaskIcon";
+import { ArrowDownUp, Settings2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import {
     Address,
@@ -298,10 +297,10 @@ export function V4SwapPanel({ token, symbol }: Props) {
                         setAmountIn("");
                         setQuote(undefined);
                     }}
-                    className="flex h-9 w-9 items-center justify-center rounded-lg border border-arc-border bg-arc-surface hover:border-arc-primary/40"
+                    className="rounded-lg border border-arc-border bg-arc-surface p-2 hover:border-arc-primary/40"
                     aria-label="Flip direction"
                 >
-                    <SwitchIcon size={20} />
+                    <ArrowDownUp className="h-4 w-4" />
                 </button>
             </div>
 

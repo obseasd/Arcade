@@ -132,10 +132,10 @@ export function CreatePoolModal({
                     <h3 className="text-lg font-semibold">Create a new pool</h3>
                     <button type="button"
                         onClick={onClose}
-                        className="rounded-full border border-arc-border bg-black/30 p-1.5 text-arc-text-muted transition-colors hover:bg-white/5 hover:text-arc-text"
+                        className="flex h-8 w-8 items-center justify-center rounded-full border border-arc-border bg-black/30 text-arc-text-muted transition-colors hover:bg-white/5 hover:text-arc-text"
                         aria-label="Close"
                     >
-                        <CrossIcon size={16} />
+                        <CrossIcon size={14} />
                     </button>
                 </div>
 

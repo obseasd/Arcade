@@ -1,7 +1,7 @@
 "use client";
 
-import { ChevronDown, Plus } from "lucide-react";
-import { CrossIcon, DownArrowBigIcon } from "@/components/ui/MaskIcon";
+import { ArrowDown, ChevronDown, Plus } from "lucide-react";
+import { CrossIcon } from "@/components/ui/MaskIcon";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Address, erc20Abi, formatUnits, maxUint256, parseUnits } from "viem";
 import {
@@ -426,8 +426,8 @@ export function MultiSwapCard({ tab, onTabChange }: MultiSwapCardProps) {
             <Plus className="h-4 w-4" />
           </button>
         )}
-        <span className="flex h-9 w-9 items-center justify-center rounded-xl border border-arc-border bg-arc-surface-2/40 backdrop-blur-md">
-          <DownArrowBigIcon size={22} />
+        <span className="rounded-xl border border-arc-border bg-arc-surface-2/40 p-2 backdrop-blur-md">
+          <ArrowDown className="h-4 w-4 text-white" />
         </span>
       </div>
 
