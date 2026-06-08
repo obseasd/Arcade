@@ -1065,13 +1065,13 @@ function PoolSubRowCard({
                             className={cn(
                                 "rounded-md px-1 py-0.5 text-[9px] tracking-wider",
                                 sub.version === "v2"
-                                    ? "bg-black text-white"
-                                    : "bg-sky-400/15 text-sky-400",
+                                    ? "bg-arc-cta text-white"
+                                    : "bg-sky-400 text-black",
                             )}
                         >
                             {sub.version}
                         </span>
-                        <span className="rounded-md px-1 py-0.5 text-[9px] text-sky-400">
+                        <span className="rounded-md bg-arc-cta-hover px-1 py-0.5 text-[9px] text-sky-400">
                             {feeLabel}
                         </span>
                         {isBestTvl && (
@@ -1155,13 +1155,13 @@ function PoolPairGridCard({
                             className={cn(
                                 "rounded-md px-1.5 py-0.5 text-[9px] tracking-wider",
                                 isV3
-                                    ? "bg-sky-400/15 text-sky-400"
-                                    : "bg-black text-white",
+                                    ? "bg-sky-400 text-black"
+                                    : "bg-arc-cta text-white",
                             )}
                         >
                             {sub.version}
                         </span>
-                        <span className="rounded-md border border-arc-border bg-arc-bg-elevated px-1.5 py-0.5 text-[9px] text-arc-text-muted">
+                        <span className="rounded-md bg-arc-cta-hover px-1.5 py-0.5 text-[9px] text-sky-400">
                             {sub.feeBps / 100}%
                         </span>
                     </div>
