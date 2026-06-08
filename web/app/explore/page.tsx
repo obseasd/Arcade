@@ -1086,10 +1086,16 @@ function PoolSubRowCard({
                             </span>
                         )}
                         {isIncentivized && sub.version === "v3" && (
-                            <span className="inc-badge inc-badge-sm inc-sweep-5">
-                                Incentivized
-                                <Info className="inc-info" />
-                            </span>
+                            <>
+                                <span className="inc-badge inc-badge-sm inc-sweep-5 rounded-md px-1.5 py-0.5 text-[12px] tracking-wider">
+                                    Incentivized
+                                    <Info className="inc-info" />
+                                </span>
+                                <span className="inc-badge hot-apr-rim rounded-md px-1.5 py-0.5 text-[12px] tracking-wider">
+                                    <Flame className="h-3 w-3 text-arc-warn" />
+                                    Hot APR
+                                </span>
+                            </>
                         )}
                     </div>
                 </div>
@@ -1177,10 +1183,16 @@ function PoolPairGridCard({
                             {sub.feeBps / 100}%
                         </span>
                         {row.isIncentivized && isV3 && (
-                            <span className="inc-badge inc-badge-sm inc-sweep-5">
-                                Incentivized
-                                <Info className="inc-info" />
-                            </span>
+                            <>
+                                <span className="inc-badge inc-badge-sm inc-sweep-5 rounded-md px-1.5 py-0.5 text-[12px] tracking-wider">
+                                    Incentivized
+                                    <Info className="inc-info" />
+                                </span>
+                                <span className="inc-badge hot-apr-rim rounded-md px-1.5 py-0.5 text-[12px] tracking-wider">
+                                    <Flame className="h-3 w-3 text-arc-warn" />
+                                    Hot APR
+                                </span>
+                            </>
                         )}
                     </div>
                 </div>

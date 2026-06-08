@@ -255,24 +255,22 @@
   100% { background-position: 300% 50%; }
 }
 
+/* inc-badge gives only the positioning + isolation needed for the
+   ::before rim trick + the dark fill. Padding / font-size / radius
+   come from Tailwind on the span so the pill matches the sibling
+   v3/0.3% chips at the byte level. */
 .inc-badge {
   position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 0.35rem;
-  padding: 4px 9px;
-  border-radius: 9999px;
+  gap: 0.3rem;
   background: #0d0d10;
   color: #f5f7fa;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  line-height: 1;
   isolation: isolate;
 }
 .inc-badge > .inc-info {
-  width: 12px;
-  height: 12px;
+  width: 11px;
+  height: 11px;
   opacity: 0.85;
 }
 
@@ -324,6 +322,33 @@
   animation: inc-spin 4s linear infinite;
 }
 
+/* Hot APR rim — warm conic (red→orange→yellow→amber→red) rotating
+   around the perimeter. Reuses --inc-angle + inc-spin so it shares
+   the same animation engine as the Incentivized variants. Reads as
+   "burning" / "high fees" without the rainbow's full hue swing. */
+.hot-apr-rim::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1.5px;
+  background: conic-gradient(
+    from var(--inc-angle),
+    #ff3b30, #ff5e1a, #ff9500, #ffb800, #ffcc00, #ff9500, #ff5e1a, #ff3b30
+  );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+  z-index: -1;
+  animation: inc-spin 4s linear infinite;
+}
+
 /* ----------------------------------------------------------------------
    Sub-row Incentivized pill — 5 palette variants on the v2 sweep anim.
    User picked the horizontal marquee (v2) over the conic and cycle
@@ -332,14 +357,11 @@
    inc-badge-sm tightens padding+font for the per-sub-row context.
    ---------------------------------------------------------------------- */
 
+/* Padding/font now come from Tailwind on the span (px-1.5 py-0.5 text-[12px])
+   so inc-badge-sm is only the height-matching nudge. Empty selector kept
+   as a hook for future per-size adjustments. */
 .inc-badge-sm {
-  padding: 2px 7px;
-  font-size: 12px;
-  gap: 0.3rem;
-}
-.inc-badge-sm > .inc-info {
-  width: 12px;
-  height: 12px;
+  gap: 0.25rem;
 }
 
 /* Aurora cool palette — mint+cyan+lavender+kiss of pink, on the v2
