@@ -1092,7 +1092,7 @@ function PoolSubRowCard({
                                     <Info className="inc-info" />
                                 </span>
                                 <span className="inc-badge hot-apr-rim rounded-md px-1.5 py-0.5 text-[12px] tracking-wider">
-                                    <Flame className="h-3 w-3 text-arc-warn" />
+                                    <HotFlameIcon className="h-3.5 w-3.5" />
                                     Hot APR
                                 </span>
                             </>
@@ -1189,7 +1189,7 @@ function PoolPairGridCard({
                                     <Info className="inc-info" />
                                 </span>
                                 <span className="inc-badge hot-apr-rim rounded-md px-1.5 py-0.5 text-[12px] tracking-wider">
-                                    <Flame className="h-3 w-3 text-arc-warn" />
+                                    <HotFlameIcon className="h-3.5 w-3.5" />
                                     Hot APR
                                 </span>
                             </>
@@ -1434,6 +1434,51 @@ function Metric({
                 {value}
             </div>
         </div>
+    );
+}
+
+/**
+ * Custom flame icon styled to read like a colour emoji 🔥. Uses the
+ * Lucide flame path with a vertical 3-stop gradient (red root → orange
+ * body → yellow tip) plus an inner highlight gradient so the icon
+ * carries depth at small sizes. Gradient IDs are fixed - SVG defs are
+ * shared per-document so even when the page mounts the icon twice
+ * (row view + grid view both rendered), both instances reference the
+ * same gradient definitions without conflicting.
+ */
+function HotFlameIcon({ className }: { className?: string }) {
+    return (
+        <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            className={className}
+            aria-hidden="true"
+        >
+            <defs>
+                <linearGradient id="arc-hot-flame-outer" x1="0" y1="1" x2="0" y2="0">
+                    <stop offset="0%" stopColor="#b91c1c" />
+                    <stop offset="35%" stopColor="#ef4444" />
+                    <stop offset="65%" stopColor="#f97316" />
+                    <stop offset="100%" stopColor="#fde047" />
+                </linearGradient>
+                <linearGradient id="arc-hot-flame-core" x1="0" y1="1" x2="0" y2="0">
+                    <stop offset="0%" stopColor="#fb923c" />
+                    <stop offset="60%" stopColor="#fcd34d" />
+                    <stop offset="100%" stopColor="#fef9c3" />
+                </linearGradient>
+            </defs>
+            <path
+                d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"
+                fill="url(#arc-hot-flame-outer)"
+                stroke="#7f1d1d"
+                strokeWidth="0.6"
+                strokeLinejoin="round"
+            />
+            <path
+                d="M11.5 18a2.7 2.7 0 0 0 2.7-2.7c0-.9-.4-1.5-.9-2.1-.5-.6-1-1.3-1.3-2.2-.4 1-1 1.7-1.5 2.4-.5.7-.8 1.3-.8 2 0 1.5 1 2.6 1.8 2.6z"
+                fill="url(#arc-hot-flame-core)"
+            />
+        </svg>
     );
 }
 
