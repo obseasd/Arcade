@@ -254,16 +254,6 @@
   0% { background-position: 0% 50%; }
   100% { background-position: 300% 50%; }
 }
-@keyframes inc-hue { to { filter: hue-rotate(360deg); } }
-@keyframes inc-cycle {
-  0%   { border-color: #ff3b30; box-shadow: 0 0 10px rgba(255,59,48,0.55); }
-  16%  { border-color: #ff9500; box-shadow: 0 0 10px rgba(255,149,0,0.55); }
-  33%  { border-color: #ffcc00; box-shadow: 0 0 10px rgba(255,204,0,0.55); }
-  50%  { border-color: #34c759; box-shadow: 0 0 10px rgba(52,199,89,0.55); }
-  66%  { border-color: #00c7be; box-shadow: 0 0 10px rgba(0,199,190,0.55); }
-  83%  { border-color: #0a84ff; box-shadow: 0 0 10px rgba(10,132,255,0.55); }
-  100% { border-color: #ff3b30; box-shadow: 0 0 10px rgba(255,59,48,0.55); }
-}
 
 .inc-badge {
   position: relative;
@@ -286,8 +276,10 @@
   opacity: 0.85;
 }
 
-/* Variants 1-4 share the ::before padding-rim trick. */
-.inc-v1::before,
+/* V2 and V4 kept in CSS as reference animations the user wants to be
+   able to swap back to without re-deriving the gradient masks. V2 is
+   the horizontal sweep (currently used by inc-sweep-5 with the Aurora
+   palette). V4 is the rainbow-comet-head orbiting a dim base. */
 .inc-v2::before,
 .inc-v4::before {
   content: "";
@@ -307,18 +299,6 @@
   z-index: -1;
 }
 
-/* V1 — full-spectrum conic, slow rotation. Reads as a continuous
-   rainbow loop around the pill, no clear head/tail. */
-.inc-v1::before {
-  background: conic-gradient(
-    from var(--inc-angle),
-    #ff3b30, #ff9500, #ffcc00, #34c759, #00c7be, #0a84ff, #af52de, #ff2d55, #ff3b30
-  );
-  animation: inc-spin 5s linear infinite;
-}
-
-/* V2 — horizontal rainbow sweep. A wide rainbow strip translates
-   left→right under the masked rim, like a marquee. */
 .inc-v2::before {
   background: linear-gradient(
     90deg,
@@ -329,20 +309,6 @@
   animation: inc-sweep 3.5s linear infinite;
 }
 
-/* V3 — static rainbow rim + hue rotation. The colors don't move,
-   but their hue cycles globally. Softer, more "iridescent" read.
-   Uses an actual border (no ::before) so hue-rotate is straightforward. */
-.inc-v3 {
-  border: 2px solid transparent;
-  background:
-    linear-gradient(#0d0d10, #0d0d10) padding-box,
-    linear-gradient(90deg, #ff3b30, #ff9500, #ffcc00, #34c759, #00c7be, #0a84ff, #af52de, #ff3b30) border-box;
-  animation: inc-hue 5s linear infinite;
-}
-
-/* V4 — rainbow comet head (LP-boost style, but full spectrum).
-   A bright rainbow segment orbits the perimeter over a dim base, so
-   only one section of the rim is lit at a time. */
 .inc-v4::before {
   background: conic-gradient(
     from var(--inc-angle),
@@ -358,15 +324,6 @@
   animation: inc-spin 4s linear infinite;
 }
 
-/* V5 — single-color border that cycles through the rainbow. The
-   pill border stays a solid hue at any given moment but the hue
-   ticks through R→O→Y→G→C→B→V every 6s. Outer glow tracks the
-   border color. Calmest of the five. */
-.inc-v5 {
-  border: 1.5px solid #ff3b30;
-  animation: inc-cycle 6s linear infinite;
-}
-
 /* ----------------------------------------------------------------------
    Sub-row Incentivized pill — 5 palette variants on the v2 sweep anim.
    User picked the horizontal marquee (v2) over the conic and cycle
@@ -376,25 +333,29 @@
    ---------------------------------------------------------------------- */
 
 .inc-badge-sm {
-  padding: 2px 6px;
-  font-size: 10px;
-  gap: 0.25rem;
+  padding: 2px 7px;
+  font-size: 12px;
+  gap: 0.3rem;
 }
 .inc-badge-sm > .inc-info {
-  width: 10px;
-  height: 10px;
+  width: 12px;
+  height: 12px;
 }
 
-.inc-sweep-1::before,
-.inc-sweep-2::before,
-.inc-sweep-3::before,
-.inc-sweep-4::before,
+/* Aurora cool palette — mint+cyan+lavender+kiss of pink, on the v2
+   sweep animation. Selected over the warmer / pastel / neon palettes
+   because it slots tonally next to the blue LP-Boost rim instead of
+   clashing with it. */
 .inc-sweep-5::before {
   content: "";
   position: absolute;
   inset: 0;
   border-radius: inherit;
   padding: 1.5px;
+  background-image: linear-gradient(
+    90deg,
+    #00d4ff, #00ffe1, #80ffea, #b9ffaf, #e8ff7d, #b8a0ff, #ff61d8, #00d4ff
+  );
   background-size: 300% 100%;
   background-position: 0% 50%;
   -webkit-mask:
@@ -408,56 +369,6 @@
   pointer-events: none;
   z-index: -1;
   animation: inc-sweep 3.5s linear infinite;
-}
-
-/* P1 — Classic iOS spectrum. Saturated R-O-Y-G-C-B-V, bright,
-   high-contrast against the #0d0d10 fill. Reads as the textbook
-   rainbow people expect when they see the word. */
-.inc-sweep-1::before {
-  background-image: linear-gradient(
-    90deg,
-    #ff3b30, #ff9500, #ffcc00, #34c759, #00c7be, #0a84ff, #af52de, #ff3b30
-  );
-}
-
-/* P2 — Pastel candy. Muted, washed-out tones. Reads as "soft" /
-   "playful", lower visual weight than P1. Best when the page has
-   a lot of brand-blue elements competing for attention. */
-.inc-sweep-2::before {
-  background-image: linear-gradient(
-    90deg,
-    #ffafa6, #ffd29a, #fff0a6, #b6e3b9, #a8dde0, #b0caf0, #d4b9eb, #ffafa6
-  );
-}
-
-/* P3 — Cyberpunk neon. Punchy hot-pink + electric cyan + acid yellow.
-   Highest energy of the five — verges on garish but undeniably "look at
-   me", which is what an incentivized pool wants to be. */
-.inc-sweep-3::before {
-  background-image: linear-gradient(
-    90deg,
-    #ff006e, #fb5607, #ffbe0b, #00f5d4, #00bbf9, #9b5de5, #f15bb5, #ff006e
-  );
-}
-
-/* P4 — Sunset / warm only. Drops the cool half of the spectrum so
-   the badge stays in coral/peach/gold/magenta. Pairs with USDC pink
-   token icons + arc-warn yellow without color clashing. */
-.inc-sweep-4::before {
-  background-image: linear-gradient(
-    90deg,
-    #ff006e, #ff5d8f, #ff7b3a, #ffb86b, #ffdb6a, #ffac81, #c879ff, #ff006e
-  );
-}
-
-/* P5 — Aurora / cool only. Mint+cyan+lavender+a kiss of pink. Reads
-   as "tech / fluid" rather than "carnival". Closest cousin to the
-   existing blue LP-Boost rim so it slots in tonally without fighting. */
-.inc-sweep-5::before {
-  background-image: linear-gradient(
-    90deg,
-    #00d4ff, #00ffe1, #80ffea, #b9ffaf, #e8ff7d, #b8a0ff, #ff61d8, #00d4ff
-  );
 }
 
 /* MaskIcon helper: bundles the 6 static mask-* properties needed to render
