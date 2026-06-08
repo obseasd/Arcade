@@ -1029,6 +1029,13 @@ function PoolSubRowCard({
 }) {
     const feeLabel = `${sub.feeBps / 100}%`;
     const tvlLabel = formatUsd(sub.tvlUsdc);
+    // The "paired" token is the non-USDC side of the pair; that's the
+    // contract the user actually wants to grab for explorer / share /
+    // trading-bot input. Falls back to token1 if neither side is USDC.
+    const pairedAddress =
+        token0.address.toLowerCase() === ADDRESSES.usdc.toLowerCase()
+            ? token1.address
+            : token0.address;
     // Skip the prior /pool/<address> transitional page - the sub-row CTA
     // now jumps straight into /positions/add with the pair (+ fee tier for
     // V3) pre-filled. Same query shape as PoolPairGridCard so both views
@@ -1049,6 +1056,9 @@ function PoolSubRowCard({
                         <span className="truncate text-xs font-medium">
                             {token0.symbol} / {token1.symbol}
                         </span>
+                        {isBestTvl && (
+                            <CopyAddressButton address={pairedAddress} />
+                        )}
                     </div>
                     <div className="mt-0.5 flex flex-wrap items-center gap-1">
                         <span
@@ -1061,7 +1071,7 @@ function PoolSubRowCard({
                         >
                             {sub.version}
                         </span>
-                        <span className="rounded-md border border-arc-border bg-arc-bg-elevated px-1 py-0.5 text-[9px] text-arc-text-muted">
+                        <span className="rounded-md px-1 py-0.5 text-[9px] text-sky-400">
                             {feeLabel}
                         </span>
                         {isBestTvl && (
