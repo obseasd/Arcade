@@ -1202,20 +1202,21 @@ function PoolPairGridCard({
                             {sub.feeBps / 100}%
                         </span>
                     </div>
-                    {row.isIncentivized && isV3 && (
-                        <div className="mt-1.5 flex flex-wrap items-center justify-start gap-1.5">
-                            <span className="inc-badge inc-badge-sm inc-sweep-5 rounded-md px-1.5 py-0.5 text-[12px] tracking-wider">
-                                Incentivized
-                                <Info className="inc-info" />
-                            </span>
-                            <span className="inc-badge hot-apr-rim rounded-md px-1.5 py-0.5 text-[12px] tracking-wider">
-                                <HotFlameIcon className="h-3.5 w-3.5" />
-                                Hot APR
-                            </span>
-                        </div>
-                    )}
                 </div>
             </div>
+
+            {row.isIncentivized && isV3 && (
+                <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="inc-badge inc-badge-sm inc-sweep-5 rounded-md px-1.5 py-0.5 text-[12px] tracking-wider">
+                        Incentivized
+                        <Info className="inc-info" />
+                    </span>
+                    <span className="inc-badge hot-apr-rim rounded-md px-1.5 py-0.5 text-[12px] tracking-wider">
+                        <HotFlameIcon className="h-3.5 w-3.5" />
+                        Hot APR
+                    </span>
+                </div>
+            )}
 
             {row.aprPct !== undefined && row.aprPct > 100 && (
                 <div className="flex flex-wrap items-center gap-1.5">
