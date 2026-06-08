@@ -1,6 +1,7 @@
 "use client";
 
-import { ChevronDown, ChevronUp, Check, X } from "lucide-react";
+import { ChevronDown, ChevronUp, Check } from "lucide-react";
+import { CrossIcon } from "@/components/ui/MaskIcon";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { Address } from "viem";
@@ -134,7 +135,7 @@ export function CreatePoolModal({
                         className="rounded-full border border-arc-border bg-black/30 p-1.5 text-arc-text-muted transition-colors hover:bg-white/5 hover:text-arc-text"
                         aria-label="Close"
                     >
-                        <X className="h-4 w-4" />
+                        <CrossIcon size={16} />
                     </button>
                 </div>
 

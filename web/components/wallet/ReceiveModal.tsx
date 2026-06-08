@@ -1,6 +1,7 @@
 "use client";
 
-import { Check, Copy, X } from "lucide-react";
+import { Check, Copy } from "lucide-react";
+import { CrossIcon } from "@/components/ui/MaskIcon";
 import { useState } from "react";
 import { Address } from "viem";
 import { Modal } from "@/components/ui/Modal";
@@ -54,7 +55,7 @@ export function ReceiveModal({ address, onClose }: Props) {
                         className="text-arc-text-faint hover:text-arc-text"
                         aria-label="Close receive modal"
                     >
-                        <X className="h-4 w-4" />
+                        <CrossIcon size={16} />
                     </button>
                 </div>
                 <p className="mt-1 text-xs text-arc-text-muted">

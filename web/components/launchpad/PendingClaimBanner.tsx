@@ -1,6 +1,7 @@
 "use client";
 
-import { CheckCircle2, Clock, Twitter, X } from "lucide-react";
+import { CheckCircle2, Clock, Twitter } from "lucide-react";
+import { CrossIcon } from "@/components/ui/MaskIcon";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { Address } from "viem";
@@ -129,7 +130,7 @@ export function PendingClaimBanner({ token, slotIndex }: Props) {
                 aria-label="Dismiss"
                 className="text-arc-text-faint transition-colors hover:text-arc-text"
             >
-                <X className="h-4 w-4" />
+                <CrossIcon size={16} />
             </button>
         </div>
     );

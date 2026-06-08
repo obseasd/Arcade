@@ -1,6 +1,7 @@
 "use client";
 
-import { X, Wallet, AlertTriangle } from "lucide-react";
+import { Wallet, AlertTriangle } from "lucide-react";
+import { CrossIcon } from "@/components/ui/MaskIcon";
 import { useState } from "react";
 import { Address, getAddress, isAddress } from "viem";
 import { Modal } from "@/components/ui/Modal";
@@ -100,7 +101,7 @@ export function RecipientEditModal({
       <div className="flex items-center justify-between border-b border-arc-border px-5 py-4">
         <h3 className="text-base font-semibold">{title}</h3>
         <button type="button" onClick={onClose} className="text-arc-text-muted hover:text-arc-text">
-          <X className="h-5 w-5" />
+          <CrossIcon size={20} />
         </button>
       </div>
       <div className="space-y-4 p-5">

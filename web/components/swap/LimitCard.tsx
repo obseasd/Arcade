@@ -1,6 +1,7 @@
 "use client";
 
-import { ArrowDownUp, ChevronDown } from "lucide-react";
+import { ChevronDown } from "lucide-react";
+import { SwitchIcon } from "@/components/ui/MaskIcon";
 import Image from "next/image";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { erc20Abi, formatUnits, parseUnits, zeroAddress, type Address } from "viem";
@@ -538,7 +539,7 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
                         onClick={swapDirection}
                         className="rounded-xl border border-arc-border bg-arc-surface-2/40 p-2 backdrop-blur-md transition-all hover:bg-arc-surface-3/60 active:scale-95"
                     >
-                        <ArrowDownUp className="h-4 w-4 text-arc-text" />
+                        <SwitchIcon size={16} />
                     </button>
                 </div>
 

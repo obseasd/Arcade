@@ -1,6 +1,7 @@
 "use client";
 
-import { ArrowRight, CheckCircle2, ExternalLink, X, XCircle } from "lucide-react";
+import { ArrowRight, CheckCircle2, ExternalLink, XCircle } from "lucide-react";
+import { CrossIcon } from "./MaskIcon";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
@@ -100,7 +101,7 @@ function ToastCard({ payload, onClose }: { payload: ToastPayload; onClose: () =>
           </div>
         </div>
         <button type="button" onClick={onClose} aria-label="Dismiss notification" className="text-arc-text-faint hover:text-arc-text">
-          <X className="h-3.5 w-3.5" />
+          <CrossIcon size={14} />
         </button>
       </div>
     );
@@ -149,7 +150,7 @@ function ToastCard({ payload, onClose }: { payload: ToastPayload; onClose: () =>
           </div>
         </div>
         <button type="button" onClick={onClose} aria-label="Dismiss notification" className="text-arc-text-faint hover:text-arc-text">
-          <X className="h-3.5 w-3.5" />
+          <CrossIcon size={14} />
         </button>
       </div>
     );
@@ -210,7 +211,7 @@ function ToastCard({ payload, onClose }: { payload: ToastPayload; onClose: () =>
           </div>
         </div>
         <button type="button" onClick={onClose} aria-label="Dismiss notification" className="text-arc-text-faint hover:text-arc-text">
-          <X className="h-3.5 w-3.5" />
+          <CrossIcon size={14} />
         </button>
       </div>
     );
@@ -246,7 +247,7 @@ function ToastCard({ payload, onClose }: { payload: ToastPayload; onClose: () =>
           )}
         </div>
         <button type="button" onClick={onClose} aria-label="Dismiss notification" className="text-arc-text-faint hover:text-arc-text">
-          <X className="h-3.5 w-3.5" />
+          <CrossIcon size={14} />
         </button>
       </div>
     );
@@ -273,7 +274,7 @@ function ToastCard({ payload, onClose }: { payload: ToastPayload; onClose: () =>
         {payload.message && <div className="mt-0.5 text-xs text-arc-text-muted">{payload.message}</div>}
       </div>
       <button type="button" onClick={onClose} aria-label="Dismiss notification" className="text-arc-text-faint hover:text-arc-text">
-        <X className="h-3.5 w-3.5" />
+        <CrossIcon size={14} />
       </button>
     </div>
   );

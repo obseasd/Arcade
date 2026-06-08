@@ -77,3 +77,18 @@ export function UpArrowIcon({ size = 14, className }: IconProps) {
 export function DownArrowIcon({ size = 14, className }: IconProps) {
     return <MaskIcon src="/downarrow.png" size={size} className={className} />;
 }
+
+/** Bigger down arrow used in MultiSwapCard between rows. */
+export function DownArrowBigIcon({ size = 18, className }: IconProps) {
+    return <MaskIcon src="/downarrowbig.png" size={size} className={className} />;
+}
+
+/** Swap-flip glyph (vertical double-arrow). Replaces lucide ArrowDownUp. */
+export function SwitchIcon({ size = 16, className }: IconProps) {
+    return <MaskIcon src="/switch.png" size={size} className={className} />;
+}
+
+/** Close glyph used in modals. Replaces lucide X. */
+export function CrossIcon({ size = 16, className }: IconProps) {
+    return <MaskIcon src="/cross.png" size={size} className={className} />;
+}

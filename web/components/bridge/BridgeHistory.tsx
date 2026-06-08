@@ -1,6 +1,7 @@
 "use client";
 
-import { ExternalLink, ChevronDown, History, X } from "lucide-react";
+import { ExternalLink, ChevronDown, History } from "lucide-react";
+import { CrossIcon } from "@/components/ui/MaskIcon";
 import { useEffect, useState } from "react";
 import { useAccount } from "wagmi";
 import {
@@ -200,7 +201,7 @@ function Row({ entry, onDismiss }: { entry: HistoryEntry; onDismiss: () => void 
         aria-label="Dismiss"
         className="text-arc-text-faint hover:text-arc-danger"
       >
-        <X className="h-3 w-3" />
+        <CrossIcon size={12} />
       </button>
     </div>
   );

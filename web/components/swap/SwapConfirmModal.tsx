@@ -1,6 +1,7 @@
 "use client";
 
-import { X, Loader2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
+import { CrossIcon } from "@/components/ui/MaskIcon";
 import Image from "next/image";
 import { Modal } from "@/components/ui/Modal";
 import { TokenIcon } from "@/components/ui/TokenIcon";
@@ -86,7 +87,7 @@ export function SwapConfirmModal({
           disabled={busy}
           className="text-arc-text-muted hover:text-arc-text disabled:opacity-50"
         >
-          <X className="h-5 w-5" />
+          <CrossIcon size={20} />
         </button>
       </div>
 

@@ -1,6 +1,7 @@
 "use client";
 
-import { Rocket, X } from "lucide-react";
+import { Rocket } from "lucide-react";
+import { CrossIcon } from "@/components/ui/MaskIcon";
 import { useRouter } from "next/navigation";
 import { Modal } from "@/components/ui/Modal";
 import { LaunchMode, V4_ENABLED, V4_HOOK_ENABLED } from "@/lib/constants";
@@ -49,7 +50,7 @@ export function LaunchModeModal({ open, onClose }: Props) {
       <div className="flex items-center justify-between border-b border-arc-border px-6 py-4">
         <h3 className="text-lg font-semibold">Launch mode</h3>
         <button type="button" onClick={onClose} className="text-arc-text-muted hover:text-arc-text">
-          <X className="h-5 w-5" />
+          <CrossIcon size={20} />
         </button>
       </div>
       <div

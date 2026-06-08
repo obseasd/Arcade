@@ -1,6 +1,7 @@
 "use client";
 
-import { ArrowDownUp, ChevronDown } from "lucide-react";
+import { ChevronDown } from "lucide-react";
+import { SwitchIcon } from "@/components/ui/MaskIcon";
 import Image from "next/image";
 import { useRef } from "react";
 import { useEffect, useMemo, useState } from "react";
@@ -530,7 +531,7 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
           onClick={flipTokens}
           className="rounded-xl border border-arc-border bg-arc-surface-2/40 p-2 backdrop-blur-md transition-all hover:bg-arc-surface-3/60 active:scale-95"
         >
-          <ArrowDownUp className="h-4 w-4 text-arc-text" />
+          <SwitchIcon size={16} />
         </button>
       </div>
 

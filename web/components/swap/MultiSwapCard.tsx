@@ -1,6 +1,7 @@
 "use client";
 
-import { ArrowDown, ChevronDown, Plus, X as XIcon } from "lucide-react";
+import { ChevronDown, Plus } from "lucide-react";
+import { CrossIcon, DownArrowBigIcon } from "@/components/ui/MaskIcon";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Address, erc20Abi, formatUnits, maxUint256, parseUnits } from "viem";
 import {
@@ -426,7 +427,7 @@ export function MultiSwapCard({ tab, onTabChange }: MultiSwapCardProps) {
           </button>
         )}
         <span className="rounded-xl border border-arc-border bg-arc-surface-2/40 p-2 backdrop-blur-md">
-          <ArrowDown className="h-4 w-4 text-white" />
+          <DownArrowBigIcon size={18} className="bg-white" />
         </span>
       </div>
 
@@ -585,7 +586,7 @@ function InputBox({
             className="flex h-8 w-8 items-center justify-center rounded-full bg-arc-surface-2/60 text-arc-text-muted opacity-70 transition-all hover:bg-arc-danger/20 hover:text-arc-danger hover:opacity-100 sm:h-6 sm:w-6"
             title="Remove this token"
           >
-            <XIcon className="h-3 w-3" />
+            <CrossIcon size={12} />
           </button>
         </div>
       </div>

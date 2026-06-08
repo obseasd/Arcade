@@ -1,6 +1,7 @@
 "use client";
 
-import { CheckCircle2, Info, X } from "lucide-react";
+import { CheckCircle2, Info } from "lucide-react";
+import { CrossIcon } from "@/components/ui/MaskIcon";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Address, encodeFunctionData, erc20Abi, formatUnits, zeroAddress } from "viem";
 import {
@@ -440,7 +441,7 @@ export function ClaimAllFeesModal({ open, onClose, onSuccess }: Props) {
                     onClick={onClose}
                     className="rounded-full border border-arc-border bg-black/30 p-1.5 text-arc-text-muted hover:text-arc-text"
                 >
-                    <X className="h-4 w-4" />
+                    <CrossIcon size={16} />
                 </button>
             </div>
             <div className="space-y-3 p-5">

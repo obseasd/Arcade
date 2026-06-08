@@ -1,6 +1,7 @@
 "use client";
 
-import { Search, X, Check, Plus } from "lucide-react";
+import { Search, Check, Plus } from "lucide-react";
+import { CrossIcon } from "./MaskIcon";
 import { useState, useMemo, useCallback } from "react";
 import { Address, erc20Abi, isAddress, zeroAddress } from "viem";
 import { useReadContracts } from "wagmi";
@@ -184,7 +185,7 @@ export function MultiTokenSelectModal({
       <div className="flex items-center justify-between border-b border-arc-border px-6 py-4">
         <h3 className="text-base font-semibold">Select a token</h3>
         <button type="button" onClick={onClose} className="text-arc-text-muted hover:text-arc-text">
-          <X className="h-5 w-5" />
+          <CrossIcon size={20} />
         </button>
       </div>
 
