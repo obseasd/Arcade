@@ -1024,9 +1024,10 @@ export function V3AddLiquidity({
             {!feeTierEnabled && !factoryTickSpacingQ.isLoading && (
                 <div className="rounded-xl border border-arc-danger/40 bg-arc-danger/10 p-3 text-xs text-arc-danger">
                     Fee tier {(feePip / 10_000).toFixed(2)}% is not enabled on
-                    this V3 factory. The deployed factory accepts 1%, 2%, and
-                    3% only. Use the URL <code>?fee=100</code> (1%),{" "}
-                    <code>?fee=200</code> (2%), or <code>?fee=300</code> (3%).
+                    this V3 factory. Pick one of the active tiers: 0.05%, 0.30%,
+                    1%, 2%, or 3%. (URL overrides: <code>?fee=5</code>,{" "}
+                    <code>?fee=30</code>, <code>?fee=100</code>,{" "}
+                    <code>?fee=200</code>, <code>?fee=300</code>.)
                 </div>
             )}
             {feeTierEnabled && !hasPool && (

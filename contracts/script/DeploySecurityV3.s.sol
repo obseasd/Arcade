@@ -163,7 +163,10 @@ contract DeploySecurityV3 is Script {
         // 10) launchpad.setV3Infra (one-shot, deployer-gated).
         d.launchpad.setV3Infra(d.v3Locker, d.v3Router, address(d.tokenVault));
 
-        // 12) Enable 2% / 3% V3 fee tiers (1% is on by default).
+        // 12) Enable extra V3 fee tiers. The upstream factory ships with
+        //     0.05% / 0.30% / 1% by default; we add 0.01% (used by stable-
+        //     pair routes) plus 2% / 3% (used by CLANKER launchpad pools).
+        IArcadeV3Factory(d.v3Factory).enableFeeAmount(100, 1);
         IArcadeV3Factory(d.v3Factory).enableFeeAmount(20_000, 200);
         IArcadeV3Factory(d.v3Factory).enableFeeAmount(30_000, 200);
         // Route 1/6 of V2 LP fees to the treasury.
