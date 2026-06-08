@@ -1053,10 +1053,10 @@ function PoolSubRowCard({
                     <div className="mt-0.5 flex flex-wrap items-center gap-1">
                         <span
                             className={cn(
-                                "rounded-md border px-1 py-0.5 text-[9px] uppercase tracking-wider",
+                                "rounded-md px-1 py-0.5 text-[9px] tracking-wider",
                                 sub.version === "v2"
-                                    ? "border-cyan-400/40 bg-cyan-400/10 text-cyan-400"
-                                    : "border-arc-cta-hover/40 bg-arc-cta-hover/10 text-arc-cta-hover",
+                                    ? "bg-black text-white"
+                                    : "bg-sky-400/15 text-sky-400",
                             )}
                         >
                             {sub.version}
@@ -1143,10 +1143,10 @@ function PoolPairGridCard({
                     <div className="mt-1 flex flex-wrap items-center gap-1">
                         <span
                             className={cn(
-                                "rounded-md border px-1.5 py-0.5 text-[9px] uppercase tracking-wider",
+                                "rounded-md px-1.5 py-0.5 text-[9px] tracking-wider",
                                 isV3
-                                    ? "border-arc-cta-hover/40 bg-arc-cta-hover/10 text-arc-cta-hover"
-                                    : "border-cyan-400/40 bg-cyan-400/10 text-cyan-400",
+                                    ? "bg-sky-400/15 text-sky-400"
+                                    : "bg-black text-white",
                             )}
                         >
                             {sub.version}
