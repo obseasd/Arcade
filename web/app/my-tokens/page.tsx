@@ -1706,12 +1706,19 @@ function AddressPopover({
                     href={`https://testnet.arcscan.app/address/${address}`}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="flex h-5 w-5 shrink-0 items-center justify-center text-arc-text-faint transition-colors hover:text-arc-text"
+                    className="shrink-0 transition-opacity hover:opacity-80"
+                    style={{
+                        display: "inline-block",
+                        width: 20,
+                        height: 20,
+                        backgroundImage: "url('/arcscan.png')",
+                        backgroundSize: "contain",
+                        backgroundRepeat: "no-repeat",
+                        backgroundPosition: "center",
+                    }}
                     aria-label="View on Arcscan"
                     title="View on Arcscan"
-                >
-                    <ExternalLink className="h-4 w-4" />
-                </a>
+                />
             </div>
             <div className="my-3 border-t border-arc-border/40" />
             <div className="flex items-center justify-between text-sm">

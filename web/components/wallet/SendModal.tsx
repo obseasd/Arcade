@@ -11,6 +11,7 @@ import {
     parseUnits,
     zeroAddress,
 } from "viem";
+import { normalize } from "viem/ens";
 import { mainnet } from "wagmi/chains";
 import {
     useAccount,
@@ -176,12 +177,24 @@ export function SendModal({ open, onClose, defaultToken }: Props) {
 
     // ENS lookup on the recipient: resolve `name.eth` -> address, and
     // reverse-resolve the address to a primary name for the review screen.
+    // viem requires names to be passed through `normalize()` (UTS-46
+    // case-folding + IDNA mapping) before namehash; raw input strings
+    // bypass that step and silently resolve to undefined, which is what
+    // was causing "vitalik.eth" to read as not-a-valid-ENS.
     const looksLikeEns =
         recipientInput.endsWith(".eth") || recipientInput.endsWith(".xyz");
+    const normalizedEns = useMemo(() => {
+        if (!looksLikeEns) return undefined;
+        try {
+            return normalize(recipientInput);
+        } catch {
+            return undefined;
+        }
+    }, [looksLikeEns, recipientInput]);
     const ensQ = useEnsAddress({
-        name: looksLikeEns ? recipientInput : undefined,
+        name: normalizedEns,
         chainId: mainnet.id,
-        query: { enabled: looksLikeEns },
+        query: { enabled: !!normalizedEns },
     });
     const resolvedAddress: Address | undefined = useMemo(() => {
         if (isAddress(recipientInput)) return recipientInput as Address;
