@@ -12,17 +12,14 @@ import {
     parseUnits,
     zeroAddress,
 } from "viem";
-import { normalize } from "viem/ens";
-import { mainnet } from "wagmi/chains";
 import {
     useAccount,
     useBalance,
-    useEnsAddress,
-    useEnsName,
     usePublicClient,
     useSendTransaction,
     useWriteContract,
 } from "wagmi";
+import { useEnsForward, useEnsReverseVerified } from "@/lib/ens";
 import { Modal } from "@/components/ui/Modal";
 import { TokenSelectModal, type TokenOption } from "@/components/ui/TokenSelectModal";
 import { AutoTokenIcon } from "@/components/ui/AutoTokenIcon";
@@ -178,64 +175,18 @@ export function SendModal({ open, onClose, defaultToken }: Props) {
         ? Number(balanceFormatted)
         : undefined;
 
-    // ENS lookup on the recipient: try to normalize() whatever the user
-    // typed and let the result decide if it's an ENS shape. The previous
-    // looksLikeEns gate hard-coded `.eth`/`.xyz` and silently ignored
-    // `.box`, `.cb.id`, `.crypto`, etc. (audit UI-H-7). normalize() is
-    // strict enough that bare addresses + garbage throw and the catch
-    // disables the hook safely. Skip names without a dot to avoid a
-    // network roundtrip on every single keystroke for "v", "vi", "vit"...
-    // Debounce 250ms (audit UI-M-17) so each keystroke doesn't burn the
-    // RPC budget mid-typing.
-    const [debouncedRecipient, setDebouncedRecipient] = useState(recipientInput);
-    useEffect(() => {
-        const t = window.setTimeout(() => setDebouncedRecipient(recipientInput), 250);
-        return () => window.clearTimeout(t);
-    }, [recipientInput]);
-    const normalizedEns = useMemo(() => {
-        if (!debouncedRecipient.includes(".")) return undefined;
-        if (isAddress(debouncedRecipient)) return undefined;
-        try {
-            return normalize(debouncedRecipient);
-        } catch {
-            return undefined;
-        }
-    }, [debouncedRecipient]);
-    const looksLikeEns = !!normalizedEns;
-    const ensQ = useEnsAddress({
-        name: normalizedEns,
-        chainId: mainnet.id,
-        query: { enabled: !!normalizedEns },
-    });
+    // ENS lookup via the dedicated lib/ens module. It uses viem directly
+    // with a multi-RPC fallback list (env var first, then llamarpc,
+    // publicnode, ankr, cloudflare) so a single provider hiccup doesn't
+    // kill recipient resolution. Debounce + normalize are handled inside.
+    const ensForward = useEnsForward(recipientInput);
+    const looksLikeEns = recipientInput.includes(".") && !isAddress(recipientInput);
     const resolvedAddress: Address | undefined = useMemo(() => {
         if (isAddress(recipientInput)) return recipientInput as Address;
-        if (ensQ.data && isAddress(ensQ.data)) return ensQ.data as Address;
+        if (ensForward.address) return ensForward.address;
         return undefined;
-    }, [recipientInput, ensQ.data]);
-
-    const reverseEnsQ = useEnsName({
-        address: resolvedAddress,
-        chainId: mainnet.id,
-        query: { enabled: !!resolvedAddress },
-    });
-    // Verified reverse ENS: only trust the primary name if it
-    // forward-resolves back to the same address. Without this
-    // round-trip, an attacker can set their primary name to
-    // "vitalik.eth" (or a homoglyph) and impersonate the real owner
-    // on our review screen. Compares against `resolvedAddress`
-    // case-insensitively. Audit finding UI-C-2.
-    const reverseForwardQ = useEnsAddress({
-        name: reverseEnsQ.data ?? undefined,
-        chainId: mainnet.id,
-        query: { enabled: !!reverseEnsQ.data },
-    });
-    const verifiedReverseEns =
-        reverseEnsQ.data &&
-        reverseForwardQ.data &&
-        resolvedAddress &&
-        reverseForwardQ.data.toLowerCase() === resolvedAddress.toLowerCase()
-            ? reverseEnsQ.data
-            : null;
+    }, [recipientInput, ensForward.address]);
+    const verifiedReverseEns = useEnsReverseVerified(resolvedAddress ?? null);
 
     // Try to parse the amount. Empty / 0 / invalid -> undefined so the
     // Send button stays disabled and we don't compute "0" everywhere.
@@ -261,7 +212,7 @@ export function SendModal({ open, onClose, defaultToken }: Props) {
         if (overBalance) return "Insufficient balance";
         if (!recipientInput) return "Enter a recipient";
         if (!resolvedAddress)
-            return looksLikeEns && ensQ.isLoading ? "Resolving ENS…" : "Invalid address";
+            return looksLikeEns && ensForward.loading ? "Resolving ENS…" : "Invalid address";
         return "Send";
     })();
 
@@ -363,7 +314,7 @@ export function SendModal({ open, onClose, defaultToken }: Props) {
                             setRecipientInput={setRecipientInput}
                             resolvedAddress={resolvedAddress}
                             reverseEns={verifiedReverseEns}
-                            ensLoading={looksLikeEns && ensQ.isLoading}
+                            ensLoading={looksLikeEns && ensForward.loading}
                             onClose={onClose}
                             canContinue={canContinue}
                             cta={cta}
@@ -493,7 +444,7 @@ function FormView({
                 the big amount, USD value below it, and the token chip pinned
                 to the bottom. Matches the Uniswap reference where this card
                 takes ~60% of the modal height. */}
-            <div className="mt-4 rounded-2xl border border-arc-border bg-arc-surface px-4 py-5">
+            <div className="mt-4 rounded-2xl border border-arc-border bg-white/[0.015] px-4 py-5">
                 <div className="text-xs font-semibold text-arc-text">You&apos;re sending</div>
                 <div className="my-10 flex flex-col items-center">
                     {/* Auto-shrink the big amount once it overflows
@@ -581,7 +532,7 @@ function FormView({
                 the slot left). Matching the recipient slot to pl-7 (= 28)
                 lines the two avatars up at the byte level. Right padding
                 stays pr-3 so the X close button keeps its tight inset. */}
-            <div className="relative mt-3 flex items-center gap-2.5 rounded-2xl border border-arc-border bg-arc-surface py-3 pl-7 pr-3">
+            <div className="relative mt-3 flex items-center gap-2.5 rounded-2xl border border-arc-border bg-white/[0.015] py-3 pl-7 pr-3">
                 {resolvedAddress ? (
                     <>
                         <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-arc-cta-hover/30 text-[10px] font-bold uppercase text-arc-cta-hover">
