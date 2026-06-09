@@ -159,14 +159,17 @@ export function ReceiveModal({ address, onClose }: Props) {
                         </h2>
                     </div>
 
-                    {/* QR canvas. Light fg on dark bg (sky-400 ish so it tints
-                        on the brand) with the brand glyph in the centre. The
-                        SVG render is preferred over canvas so the QR scales
-                        cleanly on retina without re-rendering. */}
+                    {/* QR canvas. EIP-681 URI (ethereum:0xADDR@chainId)
+                        instead of the bare address so wallets that scan
+                        the QR know which chain it belongs to and don't
+                        default to mainnet. The bare address is shown
+                        below for users who copy-paste manually. Audit
+                        UI-M-14. Light fg on dark bg with the brand
+                        glyph in the centre. */}
                     <div className="mt-4 flex items-center justify-center">
                         <div className="rounded-2xl border border-arc-border bg-arc-bg-elevated p-4">
                             <QRCodeSVG
-                                value={address}
+                                value={`ethereum:${address}@5042002`}
                                 size={220}
                                 bgColor="#0d1424"
                                 fgColor="#38BDF8"
@@ -180,6 +183,9 @@ export function ReceiveModal({ address, onClose }: Props) {
                                 }}
                             />
                         </div>
+                    </div>
+                    <div className="mt-2 text-center text-[11px] font-medium uppercase tracking-wider text-arc-warn">
+                        Arc testnet only · chainId 5042002
                     </div>
 
                     {/* Address read-out: small label + the full hex address,

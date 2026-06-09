@@ -23,7 +23,7 @@ import {
 } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import {
     Area,
@@ -115,17 +115,21 @@ function MyTokensPageInner() {
     const [tab, setTab] = useState<TabKey>("overview");
 
     // Read ?tab=... so the header "View portfolio" link forces the user
-    // back to a specific tab even when they're already on /my-tokens on
-    // a different tab. useSearchParams is reactive to URL changes
-    // (client-side navigation via <Link>), so the tab swap happens
-    // without a full reload.
+    // back to a specific tab even when they're already on /my-tokens.
+    // After applying, replace the URL without ?tab= so re-clicking the
+    // same link (e.g. View portfolio while on /my-tokens?tab=overview
+    // viewing Tokens tab) re-adds the param and re-fires this effect.
+    // Audit UI-H-11.
     const searchParams = useSearchParams();
+    const router = useRouter();
+    const pathname = usePathname();
     const urlTab = searchParams.get("tab");
     useEffect(() => {
         if (urlTab === "overview" || urlTab === "tokens" || urlTab === "positions" || urlTab === "creator" || urlTab === "activity") {
             setTab(urlTab as TabKey);
+            router.replace(pathname, { scroll: false });
         }
-    }, [urlTab]);
+    }, [urlTab, router, pathname]);
 
     // connector.icon is the connector-supplied logo (data URI for Backpack,
     // MetaMask, etc.). Falls back to a gradient letter circle inside
@@ -1865,7 +1869,11 @@ function bridgeToUnified(b: HistoryEntry): UnifiedActivityItem[] {
               : "Bridge pending";
     const out: UnifiedActivityItem[] = [
         {
-            id: `bridge-${b.id}`,
+            // Prefix with burnTxHash (guaranteed unique per bridge) to
+            // defend against HistoryEntry.id collisions if the
+            // localStorage migration ever produces duplicates. Audit
+            // UI-H-5.
+            id: `bridge-${b.burnTxHash}-${b.id}`,
             kind: "bridge",
             ts: b.burnedAt,
             iconSrc: "/bridge.png",
@@ -1883,7 +1891,7 @@ function bridgeToUnified(b: HistoryEntry): UnifiedActivityItem[] {
     // glyph; ts = mintedAt so it sorts after the burn row in the timeline.
     if (b.status === "minted" && b.mintedAt) {
         out.push({
-            id: `bridge-${b.id}-claim`,
+            id: `bridge-${b.burnTxHash}-${b.id}-claim`,
             kind: "claim",
             ts: b.mintedAt,
             iconSrc: "/contract.png",

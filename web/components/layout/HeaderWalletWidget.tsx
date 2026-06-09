@@ -159,7 +159,7 @@ export function HeaderWalletWidget() {
 
                 const short = formatShortAddress(address);
                 const walletName = connector?.name ?? "Wallet";
-                const walletIcon = (connector as any)?.icon as string | undefined;
+                const walletIcon = (connector as { icon?: string } | undefined)?.icon;
 
                 return (
                     <div ref={menuRef} className="relative font-sans">

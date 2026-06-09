@@ -183,10 +183,12 @@ function PositionRow({ position }: { position: CreatorPosition }) {
           ? `Received ${parts.join(" + ")}`
           : `${position.symbol ?? "Token"} creator fees sent to your wallet`,
       });
-      previewQ.refetch();
-      // Force the all-time Creator Earnings card to re-scan now so the
-      // CLAIMED counter picks up the new RecipientPaid event without
-      // waiting 5 min for the staleTime to expire.
+      // Await previewQ.refetch() BEFORE invalidating the all-time
+      // earnings scan so the row's pending amounts update visibly
+      // before the scan reads (or the user sees a brief flicker of the
+      // pre-claim amounts when the in-flight refetch is evicted by the
+      // invalidation). Audit UI-L-21.
+      await previewQ.refetch();
       queryClient.invalidateQueries({
         queryKey: ["arcade", "creator-earnings-scan", account?.toLowerCase() ?? null],
       });

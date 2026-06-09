@@ -3,6 +3,32 @@
 import { useEffect, useRef, type MouseEvent, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
+// Module-level body-scroll lock counter. Stacked modals (e.g. the Send
+// modal opens a Token Select sub-modal) all share this state so the
+// overflow:hidden is only set on the 0 -> 1 transition and only
+// restored on the 1 -> 0 transition. Without this the inner modal
+// captures the outer modal's already-applied "hidden" as its
+// pre-state and, on close, restores "hidden", leaving the page locked
+// after every modal in the stack has unmounted. Audit UI-H-10.
+let modalCount = 0;
+let savedOverflow: string | undefined;
+function acquireBodyLock() {
+  if (typeof document === "undefined") return;
+  if (modalCount === 0) {
+    savedOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+  }
+  modalCount += 1;
+}
+function releaseBodyLock() {
+  if (typeof document === "undefined") return;
+  modalCount = Math.max(0, modalCount - 1);
+  if (modalCount === 0) {
+    document.body.style.overflow = savedOverflow ?? "";
+    savedOverflow = undefined;
+  }
+}
+
 interface ModalProps {
   open: boolean;
   onClose: () => void;
@@ -52,25 +78,26 @@ export function Modal({
   children,
 }: ModalProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
+  const mouseDownOnBackdropRef = useRef(false);
 
   // Drive open/close imperatively - the only way native <dialog> works.
   // showModal() puts it in the top layer; close() pulls it back out. The
-  // body-scroll lock and its cleanup live in the same effect so that
-  // backdrop-click / ESC closes (which fire onClose -> React rerenders
-  // with open=false -> this effect's cleanup runs) always restore the
-  // page scroll.
+  // body-scroll lock now uses a shared counter (modalCount) so stacked
+  // modals (e.g. SendModal -> TokenSelectModal) don't fight over the
+  // overflow value - the inner modal would otherwise capture the outer's
+  // already-applied "hidden" as `orig` and on close restore "hidden",
+  // leaving the page locked. Audit UI-H-10. Mousedown ref also reset on
+  // open so an ESC mid-press doesn't leak into the next session
+  // (UI-H-9).
   useEffect(() => {
     const dlg = dialogRef.current;
     if (!dlg) return;
     if (open && !dlg.open) {
       dlg.showModal();
-      const orig = document.body.style.overflow;
-      document.body.style.overflow = "hidden";
+      mouseDownOnBackdropRef.current = false;
+      acquireBodyLock();
       return () => {
-        document.body.style.overflow = orig;
-        // If the consumer toggled open=false BEFORE the cancel event
-        // fired, close() it ourselves. Idempotent: native dialog
-        // ignores close() on a not-open dialog.
+        releaseBodyLock();
         if (dlg.open) dlg.close();
       };
     }
@@ -98,7 +125,6 @@ export function Modal({
   // would otherwise dismiss the modal on release. Track whether the
   // press *started* on the backdrop and require both ends to land there
   // before closing - matches Uniswap / native dialog behaviour.
-  const mouseDownOnBackdropRef = useRef(false);
   const onMouseDown = (e: MouseEvent<HTMLDialogElement>) => {
     mouseDownOnBackdropRef.current = e.target === e.currentTarget;
   };

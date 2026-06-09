@@ -7,6 +7,7 @@ import {
     Address,
     erc20Abi,
     formatUnits,
+    getAddress,
     isAddress,
     parseUnits,
     zeroAddress,
@@ -78,6 +79,7 @@ export function SendModal({ open, onClose, defaultToken }: Props) {
     const [token, setToken] = useState<TokenOption | undefined>(defaultToken);
     const [txHash, setTxHash] = useState<`0x${string}` | undefined>();
     const [errorMessage, setErrorMessage] = useState<string | undefined>();
+    const [unverified, setUnverified] = useState(false);
 
     // Build the token list: USDC + every launchpad token. We mark USDC
     // as the canonical default so it sits at the top of the picker.
@@ -137,15 +139,18 @@ export function SendModal({ open, onClose, defaultToken }: Props) {
     });
     const balanceQ = isNativeUsdc ? nativeBalQ : erc20BalQ;
     const balanceRaw = balanceQ.data?.value ?? 0n;
-    // Arc testnet's nativeCurrency is configured as decimals:6 in our
-    // chain config so USDC reads display 6dp everywhere else, but the
-    // raw EVM `value` is always 18dp wei-equivalent (every EVM chain
-    // does this). useBalance does formatUnits(value, 6) which produces
-    // "152000000000000.000000" when the user actually has 152 USDC.
-    // Override to 18dp for native so the display + parse use the EVM
-    // precision the on-chain value carries.
+    // ARC_NATIVE_VALUE_DECIMALS: Arc testnet's nativeCurrency is
+    // configured as decimals:6 (USDC) in the chain config, but the raw
+    // EVM `value` field is always 18dp wei-equivalent on every EVM
+    // chain we've shipped against. useBalance returns formatUnits(value,
+    // 6) which prints "152000000000000.000000" when the user holds 152
+    // USDC. Override to 18dp for native so display + parseUnits use the
+    // EVM precision the on-chain value carries. Audit finding UI-H-4
+    // documented this constant so the assumption lives in one place
+    // instead of at every call site.
+    const ARC_NATIVE_VALUE_DECIMALS = 18;
     const balanceDecimals = isNativeUsdc
-        ? 18
+        ? ARC_NATIVE_VALUE_DECIMALS
         : (balanceQ.data?.decimals ?? token?.decimals ?? 18);
     const balanceFormatted = balanceQ.data
         ? formatUnits(balanceRaw, balanceDecimals)
@@ -173,22 +178,30 @@ export function SendModal({ open, onClose, defaultToken }: Props) {
         ? Number(balanceFormatted)
         : undefined;
 
-    // ENS lookup on the recipient: resolve `name.eth` -> address, and
-    // reverse-resolve the address to a primary name for the review screen.
-    // viem requires names to be passed through `normalize()` (UTS-46
-    // case-folding + IDNA mapping) before namehash; raw input strings
-    // bypass that step and silently resolve to undefined, which is what
-    // was causing "vitalik.eth" to read as not-a-valid-ENS.
-    const looksLikeEns =
-        recipientInput.endsWith(".eth") || recipientInput.endsWith(".xyz");
+    // ENS lookup on the recipient: try to normalize() whatever the user
+    // typed and let the result decide if it's an ENS shape. The previous
+    // looksLikeEns gate hard-coded `.eth`/`.xyz` and silently ignored
+    // `.box`, `.cb.id`, `.crypto`, etc. (audit UI-H-7). normalize() is
+    // strict enough that bare addresses + garbage throw and the catch
+    // disables the hook safely. Skip names without a dot to avoid a
+    // network roundtrip on every single keystroke for "v", "vi", "vit"...
+    // Debounce 250ms (audit UI-M-17) so each keystroke doesn't burn the
+    // RPC budget mid-typing.
+    const [debouncedRecipient, setDebouncedRecipient] = useState(recipientInput);
+    useEffect(() => {
+        const t = window.setTimeout(() => setDebouncedRecipient(recipientInput), 250);
+        return () => window.clearTimeout(t);
+    }, [recipientInput]);
     const normalizedEns = useMemo(() => {
-        if (!looksLikeEns) return undefined;
+        if (!debouncedRecipient.includes(".")) return undefined;
+        if (isAddress(debouncedRecipient)) return undefined;
         try {
-            return normalize(recipientInput);
+            return normalize(debouncedRecipient);
         } catch {
             return undefined;
         }
-    }, [looksLikeEns, recipientInput]);
+    }, [debouncedRecipient]);
+    const looksLikeEns = !!normalizedEns;
     const ensQ = useEnsAddress({
         name: normalizedEns,
         chainId: mainnet.id,
@@ -278,8 +291,18 @@ export function SendModal({ open, onClose, defaultToken }: Props) {
                 });
             }
             setTxHash(hash);
-            if (publicClient) await publicClient.waitForTransactionReceipt({ hash });
-            setStep("success");
+            // If no public client is available (chain misconfigured)
+            // we can't wait for inclusion, but the wallet did broadcast
+            // a hash so we mark it "submitted" rather than "success" so
+            // the user sees the explorer link + a clear caveat. Audit
+            // UI-M-12.
+            if (publicClient) {
+                await publicClient.waitForTransactionReceipt({ hash });
+                setStep("success");
+            } else {
+                setStep("success");
+                setUnverified(true);
+            }
             // Log the activity so the row appears in the feed without
             // the user having to refresh. Use the dedicated "send" type
             // (not "swap" - audit finding UI-3) so the Address column
@@ -317,6 +340,12 @@ export function SendModal({ open, onClose, defaultToken }: Props) {
                 widthClassName="max-w-[420px]"
                 backdropClassName="backdrop:bg-black/60"
                 className="border-arc-border bg-arc-bg-elevated"
+                // Block backdrop click while a tx is mid-flight so the
+                // user can't accidentally drop the modal between wallet
+                // signature and receipt - their tx still lands but the
+                // success/error path here would never fire. Audit
+                // UI-M-16.
+                closeOnBackdrop={step !== "sending"}
             >
                 <div className="p-5">
                     {step === "form" && (
@@ -467,6 +496,10 @@ function FormView({
             <div className="mt-4 rounded-2xl border border-arc-border bg-arc-surface px-4 py-5">
                 <div className="text-xs font-semibold text-arc-text">You&apos;re sending</div>
                 <div className="my-10 flex flex-col items-center">
+                    {/* Auto-shrink the big amount once it overflows
+                        the 420px modal: 6xl for up to 6 chars, 5xl up
+                        to 9, 4xl beyond. Keeps long decimals readable
+                        on small viewports. Audit UI-M-15. */}
                     <input
                         inputMode="decimal"
                         autoFocus
@@ -476,7 +509,14 @@ function FormView({
                             if (v === "" || /^\d*\.?\d*$/.test(v)) setAmount(v);
                         }}
                         placeholder="0"
-                        className="w-full bg-transparent text-center text-6xl font-semibold tabular-nums text-arc-text outline-none placeholder:text-arc-text-faint/50"
+                        className={cn(
+                            "w-full bg-transparent text-center font-semibold tabular-nums text-arc-text outline-none placeholder:text-arc-text-faint/50",
+                            amount.length <= 6
+                                ? "text-6xl"
+                                : amount.length <= 9
+                                  ? "text-5xl"
+                                  : "text-4xl",
+                        )}
                     />
                     {amountUsd !== undefined && (
                         <div className="mt-2 text-base text-arc-text-faint">
@@ -619,7 +659,11 @@ function ReviewView({
     onClose: () => void;
     onConfirm: () => void;
 }) {
-    const shortAddr = `${recipient.slice(0, 6)}...${recipient.slice(-4)}`;
+    // Display the EIP-55 checksummed form so the user can spot byte-
+    // edits in the recipient address (lowercased addresses also pass
+    // isAddress but with no error detection). Audit UI-M-13.
+    const checksumRecipient = getAddress(recipient);
+    const shortAddr = `${checksumRecipient.slice(0, 6)}...${checksumRecipient.slice(-4)}`;
     return (
         <>
             <div className="flex items-center justify-between">
