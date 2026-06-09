@@ -1287,7 +1287,7 @@ function ActivityTab({ account }: { account: Address }) {
                         <table className="w-full text-sm">
                             <thead className="border-b border-arc-border/60 text-[10px] uppercase tracking-wider text-arc-text-muted">
                                 <tr>
-                                    <th className="px-4 py-3 text-left font-medium">Time</th>
+                                    <th className="w-[210px] px-4 py-3 text-left font-medium">Time</th>
                                     <th className="px-4 py-3 text-left font-medium">Type</th>
                                     <th className="px-4 py-3 text-left font-medium">Amount</th>
                                     <th className="px-4 py-3 text-left font-medium">Address</th>
@@ -1387,19 +1387,18 @@ function formatActivityDay(ts: number): string {
 }
 function formatActivityFull(ts: number): string {
     const d = new Date(ts);
-    // weekday + month abbrev + day + year, then time as HH:MM (24h)
-    const date = d.toLocaleDateString("en-US", {
-        weekday: "short",
-        month: "short",
-        day: "numeric",
-        year: "numeric",
-    });
+    // Build manually so we can omit the comma between weekday and month
+    // (toLocaleDateString with weekday + month always prints "Mon, Jun 8"
+    // and the spec doesn't expose a knob to drop that separator).
+    const weekday = d.toLocaleDateString("en-US", { weekday: "short" });
+    const monthDay = d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+    const year = d.getFullYear();
     const time = d.toLocaleTimeString("en-US", {
         hour: "2-digit",
         minute: "2-digit",
         hour12: false,
     });
-    return `${date} ${time}`;
+    return `${weekday} ${monthDay}, ${year} ${time}`;
 }
 
 function ActivityRowFull({ item }: { item: UnifiedActivityItem }) {
@@ -1625,7 +1624,8 @@ function TransactionDetailsModal({
                         </div>
                     </div>
                 </div>
-                <div className="mt-4 space-y-2 text-sm">
+                <div className="my-4 border-t border-arc-border/60" />
+                <div className="space-y-2 text-sm">
                     <div className="flex items-center justify-between">
                         <span className="text-arc-text-faint">Network cost</span>
                         <span className="text-arc-text">—</span>
