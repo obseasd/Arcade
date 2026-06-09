@@ -39,7 +39,15 @@ export const wagmiConfig = getDefaultConfig({
     [arbitrumSepolia.id]: http(),
     [optimismSepolia.id]: http(),
     [avalancheFuji.id]: http(),
-    [mainnet.id]: http(),
+    // Explicit public RPC for mainnet ENS reads. Default http() for L1
+    // routes through cloudflare-eth.com which is unreliable for ENS
+    // hashed reads (intermittent 429s + DNS resolver edge cases). Pin
+    // to llamarpc which has higher rate limits + better uptime; env
+    // var override lets us swap to Infura/Alchemy if needed without a
+    // code change.
+    [mainnet.id]: http(
+      process.env.NEXT_PUBLIC_MAINNET_RPC || "https://eth.llamarpc.com",
+    ),
   },
   ssr: true,
 });
