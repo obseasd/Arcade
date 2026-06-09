@@ -1352,16 +1352,16 @@ function ActivityTab({ account }: { account: Address }) {
                 <div className="arc-card overflow-visible">
                     <div>
                         <table className="w-full text-sm">
-                            <thead className="border-b border-arc-border/60 text-[11px] uppercase tracking-wider text-arc-text-muted">
+                            <thead className="text-[11px] uppercase tracking-wider text-arc-text-muted">
                                 <tr>
-                                    <th className="w-[210px] px-4 py-3.5 text-left font-medium">Time</th>
-                                    <th className="w-[180px] px-3 py-3.5 text-left font-medium">Type</th>
-                                    <th className="w-[280px] px-3 py-3.5 text-left font-medium">Amount</th>
-                                    <th className="px-3 py-3.5 text-left font-medium">Address</th>
-                                    <th className="w-8 px-2 py-3.5" aria-label="Details" />
+                                    <th className="w-[210px] rounded-l-xl bg-white/[0.04] px-4 py-3.5 text-left font-medium">Time</th>
+                                    <th className="w-[180px] bg-white/[0.04] px-3 py-3.5 text-left font-medium">Type</th>
+                                    <th className="w-[280px] bg-white/[0.04] px-3 py-3.5 text-left font-medium">Amount</th>
+                                    <th className="bg-white/[0.04] px-3 py-3.5 text-left font-medium">Address</th>
+                                    <th className="w-8 rounded-r-xl bg-white/[0.04] px-2 py-3.5" aria-label="Details" />
                                 </tr>
                             </thead>
-                            <tbody className="divide-y divide-arc-border/40">
+                            <tbody className="divide-y divide-arc-border/25">
                                 {items.map((it) => (
                                     <ActivityRowFull key={it.id} item={it} />
                                 ))}
@@ -1512,8 +1512,7 @@ function ActivityRowFull({ item }: { item: UnifiedActivityItem }) {
                 </div>
             </td>
             <td className="px-3 py-3.5">
-                <div className="text-sm text-arc-text-faint">{item.label}</div>
-                <div className="text-base font-medium text-arc-text">{item.value}</div>
+                <AmountCell value={item.value} />
             </td>
             <td className="px-3 py-3.5">
                 {item.addressColumnKind === "transaction" && item.txHash ? (
@@ -1581,6 +1580,46 @@ function ActivityRowFull({ item }: { item: UnifiedActivityItem }) {
     );
 }
 
+/** Amount column rendering. Parses simple "amount ticker" strings (e.g.
+ *  "1.00 USDC", "246.789508 ETH") into a logo + two-line layout matching
+ *  the Uniswap reference: amount + ticker on top, USD value below.
+ *  Falls back to plain text when the value isn't a single-token amount
+ *  (e.g. add-liquidity "100 USDC + 25000 ETH", a ticker-only "$PUMP",
+ *  or an empty action). USD only resolves for USDC since that's the
+ *  only token we have a known 1:1 fiat peg for client-side; everything
+ *  else hides the USD line until the indexer ships prices. */
+function AmountCell({ value }: { value: string }) {
+    const match = value.match(/^([\d,]+(?:\.\d+)?)\s+([A-Za-z0-9$]+)$/);
+    if (!match) {
+        return <div className="text-base font-medium text-arc-text">{value}</div>;
+    }
+    const amountStr = match[1];
+    const ticker = match[2].replace(/^\$/, "");
+    const amountNum = Number(amountStr.replace(/,/g, ""));
+    const isUsdc = ticker.toUpperCase() === "USDC";
+    const usdValue = isUsdc && Number.isFinite(amountNum)
+        ? amountNum.toLocaleString("en-US", {
+              style: "currency",
+              currency: "USD",
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2,
+          })
+        : undefined;
+    return (
+        <div className="flex items-center gap-2.5">
+            <TokenIcon symbol={ticker} size={32} />
+            <div className="flex min-w-0 flex-col">
+                <span className="truncate text-base font-medium text-arc-text">
+                    {amountStr} {ticker}
+                </span>
+                {usdValue && (
+                    <span className="text-sm text-arc-text-faint">{usdValue}</span>
+                )}
+            </div>
+        </div>
+    );
+}
+
 /** Hover popover anchored under the counterparty address. Mirrors Uniswap's
  *  hover card: the address chip again (with copy + a chart-trend icon), then
  *  Balance and 1D change rows. Balance is a placeholder until the indexer
@@ -1635,7 +1674,7 @@ function AddressPopover({
                     title="View on Arcscan"
                 />
             </div>
-            <div className="my-3 border-t border-arc-border/60" />
+            <div className="my-3 border-t border-arc-border/40" />
             <div className="flex items-center justify-between text-sm">
                 <span className="text-arc-text-faint">Balance</span>
                 <span className="font-medium text-arc-text-muted">—</span>
@@ -1696,7 +1735,7 @@ function TransactionDetailsModal({
                         </div>
                     </div>
                 </div>
-                <div className="my-4 border-t border-arc-border/60" />
+                <div className="my-4 border-t border-arc-border/40" />
                 <div className="space-y-2 text-sm">
                     <div className="flex items-center justify-between">
                         <span className="text-arc-text-faint">Network cost</span>

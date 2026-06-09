@@ -643,7 +643,7 @@ function ReviewView({
                         <div className="text-[11px] text-arc-text-faint">{shortAddr}</div>
                     )}
                 </div>
-                <div className="mx-4 border-t border-arc-border" />
+                <div className="mx-4 border-t border-arc-border/40" />
                 <div className="flex items-center justify-between px-4 py-3.5 text-sm">
                     <span className="text-arc-text-faint">Network cost</span>
                     <div className="flex items-center gap-1.5">
