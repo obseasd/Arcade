@@ -1,7 +1,7 @@
 "use client";
 
 import { useSearchParams } from "next/navigation";
-import { Suspense, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useAccount } from "wagmi";
 import { LIMIT_ORDERS_ENABLED } from "@/lib/constants";
 import { SwapCard } from "./SwapCard";
@@ -21,6 +21,17 @@ function SwapContainerInner() {
   const modeParam = searchParams.get("mode");
   const initialTab: SwapTab = isValidTab(modeParam) ? modeParam : "swap";
   const [tab, setTab] = useState<SwapTab>(initialTab);
+  // Re-sync on URL change (e.g. user navigates from /swap to
+  // /swap?mode=limit via the portfolio More dropdown's <Link>): without
+  // this effect the initialTab is only read on mount so client-side
+  // navigation between modes is a no-op.
+  useEffect(() => {
+    if (isValidTab(modeParam) && modeParam !== tab) setTab(modeParam);
+    // intentionally NOT depending on `tab` - this is a one-way sync
+    // from URL to state; user clicks on the in-card tab strip should
+    // not be reverted by the URL.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modeParam]);
   const { address: account } = useAccount();
 
   // Each card renders its own copy of the tab strip in its header so the

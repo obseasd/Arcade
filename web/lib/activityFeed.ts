@@ -32,7 +32,8 @@ export type ActivityType =
     | "swap"
     | "multiswap"
     | "claim-fees"
-    | "add-liquidity";
+    | "add-liquidity"
+    | "send";
 
 export interface ActivityEntry {
     id: string;
@@ -126,6 +127,8 @@ export function iconForActivity(type: ActivityType): string {
         case "multiswap":
         case "buy":
         case "sell":
+            return "/swap.png";
+        case "send":
             return "/swap.png";
         default:
             return "/contract.png";

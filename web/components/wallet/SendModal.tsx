@@ -65,8 +65,6 @@ interface Props {
 
 type Step = "form" | "review" | "sending" | "success" | "error";
 
-const USDC_NATIVE_ADDR = "0x0000000000000000000000000000000000000000" as Address;
-
 export function SendModal({ open, onClose, defaultToken }: Props) {
     const { address: account } = useAccount();
     const publicClient = usePublicClient();
@@ -207,6 +205,24 @@ export function SendModal({ open, onClose, defaultToken }: Props) {
         chainId: mainnet.id,
         query: { enabled: !!resolvedAddress },
     });
+    // Verified reverse ENS: only trust the primary name if it
+    // forward-resolves back to the same address. Without this
+    // round-trip, an attacker can set their primary name to
+    // "vitalik.eth" (or a homoglyph) and impersonate the real owner
+    // on our review screen. Compares against `resolvedAddress`
+    // case-insensitively. Audit finding UI-C-2.
+    const reverseForwardQ = useEnsAddress({
+        name: reverseEnsQ.data ?? undefined,
+        chainId: mainnet.id,
+        query: { enabled: !!reverseEnsQ.data },
+    });
+    const verifiedReverseEns =
+        reverseEnsQ.data &&
+        reverseForwardQ.data &&
+        resolvedAddress &&
+        reverseForwardQ.data.toLowerCase() === resolvedAddress.toLowerCase()
+            ? reverseEnsQ.data
+            : null;
 
     // Try to parse the amount. Empty / 0 / invalid -> undefined so the
     // Send button stays disabled and we don't compute "0" everywhere.
@@ -265,11 +281,16 @@ export function SendModal({ open, onClose, defaultToken }: Props) {
             if (publicClient) await publicClient.waitForTransactionReceipt({ hash });
             setStep("success");
             // Log the activity so the row appears in the feed without
-            // the user having to refresh.
+            // the user having to refresh. Use the dedicated "send" type
+            // (not "swap" - audit finding UI-3) so the Address column
+            // renders TO + recipient instead of TRANSACTION + tx hash.
+            // We hijack `token` to carry the recipient address since
+            // ActivityEntry has no dedicated counterparty field.
             if (account) {
                 addActivity({
-                    type: "swap",
+                    type: "send",
                     account,
+                    token: resolvedAddress,
                     label: `Sent ${token.symbol ?? "TOKEN"}`,
                     value: `${amount} ${token.symbol ?? ""}`,
                     txHash: hash,
@@ -312,7 +333,7 @@ export function SendModal({ open, onClose, defaultToken }: Props) {
                             recipientInput={recipientInput}
                             setRecipientInput={setRecipientInput}
                             resolvedAddress={resolvedAddress}
-                            reverseEns={reverseEnsQ.data}
+                            reverseEns={verifiedReverseEns}
                             ensLoading={looksLikeEns && ensQ.isLoading}
                             onClose={onClose}
                             canContinue={canContinue}
@@ -326,7 +347,7 @@ export function SendModal({ open, onClose, defaultToken }: Props) {
                             amountUsd={amountUsd}
                             token={token}
                             recipient={resolvedAddress}
-                            reverseEns={reverseEnsQ.data}
+                            reverseEns={verifiedReverseEns}
                             onBack={() => setStep("form")}
                             onClose={onClose}
                             onConfirm={onSubmit}

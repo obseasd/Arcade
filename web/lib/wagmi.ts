@@ -44,12 +44,26 @@ export const wagmiConfig = getDefaultConfig({
     // hashed reads (intermittent 429s + DNS resolver edge cases). Pin
     // to llamarpc which has higher rate limits + better uptime; env
     // var override lets us swap to Infura/Alchemy if needed without a
-    // code change.
-    [mainnet.id]: http(
-      process.env.NEXT_PUBLIC_MAINNET_RPC || "https://eth.llamarpc.com",
-    ),
+    // code change. The env override is gated on https scheme so a
+    // mis-set / hostile vendor value (javascript:, http:, custom
+    // proto) can never silently leak the user's address to an
+    // attacker-controlled endpoint - audit finding UI-C-1.
+    [mainnet.id]: http(safeMainnetRpc()),
   },
   ssr: true,
 });
+
+function safeMainnetRpc(): string {
+  const fallback = "https://eth.llamarpc.com";
+  const raw = process.env.NEXT_PUBLIC_MAINNET_RPC;
+  if (!raw) return fallback;
+  try {
+    const u = new URL(raw);
+    if (u.protocol !== "https:") return fallback;
+    return raw;
+  } catch {
+    return fallback;
+  }
+}
 
 export { defaultChain };

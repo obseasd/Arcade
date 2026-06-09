@@ -1614,13 +1614,19 @@ function ActivityRowFull({ item }: { item: UnifiedActivityItem }) {
  *  only token we have a known 1:1 fiat peg for client-side; everything
  *  else hides the USD line until the indexer ships prices. */
 function AmountCell({ value }: { value: string }) {
-    // Try "amount ticker" first (Bridge 1.00 USDC, Swap 246.78 ETH).
-    const amountMatch = value.match(/^([\d,]+(?:\.\d+)?)\s+([A-Za-z0-9$]+)$/);
+    // Tighter "amount ticker" parse than the first cut: integer part
+    // either bare digits or comma-grouped thousand triplets, optional
+    // fractional part, optional leading minus for refunds, ticker is a
+    // pure alphanumeric word (no $ tail to avoid eating "USDC$ " into
+    // the ticker capture - audit finding UI-6).
+    const amountMatch = value.match(
+        /^(-?(?:\d{1,3}(?:,\d{3})*|\d+)(?:\.\d+)?)\s+\$?([A-Za-z][A-Za-z0-9]*)$/,
+    );
     // Then "$TICKER" only (Launch $PUMP, Launch $CA).
-    const tickerOnlyMatch = !amountMatch && value.match(/^\$([A-Za-z0-9]+)$/);
+    const tickerOnlyMatch = !amountMatch && value.match(/^\$([A-Za-z][A-Za-z0-9]*)$/);
 
     const ticker = amountMatch
-        ? amountMatch[2].replace(/^\$/, "")
+        ? amountMatch[2]
         : tickerOnlyMatch
           ? tickerOnlyMatch[1]
           : undefined;
@@ -1628,14 +1634,17 @@ function AmountCell({ value }: { value: string }) {
     const amountStr = amountMatch ? amountMatch[1] : undefined;
     const amountNum = amountStr ? Number(amountStr.replace(/,/g, "")) : undefined;
     const isUsdc = ticker?.toUpperCase() === "USDC";
-    const usdValue = isUsdc && amountNum !== undefined && Number.isFinite(amountNum)
-        ? amountNum.toLocaleString("en-US", {
-              style: "currency",
-              currency: "USD",
-              minimumFractionDigits: 2,
-              maximumFractionDigits: 2,
-          })
-        : undefined;
+    const usdValue =
+        isUsdc &&
+        amountNum !== undefined &&
+        Number.isFinite(amountNum)
+            ? amountNum.toLocaleString("en-US", {
+                  style: "currency",
+                  currency: "USD",
+                  minimumFractionDigits: 2,
+                  maximumFractionDigits: 2,
+              })
+            : undefined;
 
     // Always reserve the 32px logo column so rows without a parseable
     // single-token amount (e.g. Add-liquidity "100 USDC + 25000 ETH")
@@ -1909,17 +1918,19 @@ function claimToUnified(c: PendingTwitterClaim): UnifiedActivityItem {
 function appToUnified(a: ActivityEntry): UnifiedActivityItem {
     // Swaps don't have a meaningful counterparty (it's an AMM pool); show
     // the tx hash instead. Mints, claims, and fee claims are self-actions;
-    // drop the TO/FROM caption since it's noise. Everything else falls
-    // back to the standard counterparty rendering.
+    // drop the TO/FROM caption since it's noise. Sends always show the
+    // recipient address (counterparty) as TO. Everything else falls back
+    // to the standard counterparty rendering.
     const swapTypes = new Set(["swap", "buy", "sell", "multiswap"]);
     const selfActionTypes = new Set(["launch", "claim-fees", "add-liquidity"]);
-    const addressColumnKind: UnifiedActivityItem["addressColumnKind"] = swapTypes.has(
-        a.type,
-    )
-        ? "transaction"
-        : selfActionTypes.has(a.type)
-          ? "address-only"
-          : "to-from";
+    const addressColumnKind: UnifiedActivityItem["addressColumnKind"] =
+        a.type === "send"
+            ? "to-from"
+            : swapTypes.has(a.type)
+              ? "transaction"
+              : selfActionTypes.has(a.type)
+                ? "address-only"
+                : "to-from";
     return {
         id: `app-${a.id}`,
         kind: "app",
@@ -1929,6 +1940,11 @@ function appToUnified(a: ActivityEntry): UnifiedActivityItem {
         label: a.label,
         value: a.value,
         addressColumnKind,
+        // Send entries carry the recipient as the activity row's token
+        // address (we hijack the field since ActivityEntry doesn't have
+        // a dedicated counterparty). The Send modal sets a.token = recipient.
+        counterparty: a.type === "send" ? a.token : undefined,
+        counterpartyDirection: a.type === "send" ? "to" : undefined,
         txHash: a.txHash,
         explorerUrl: a.txHash ? `https://testnet.arcscan.app/tx/${a.txHash}` : undefined,
     };
@@ -1962,6 +1978,3 @@ function ActivityList({ account, limit }: { account: Address; limit: number }) {
 
 // formatAgo lives in @/lib/utils.
 
-// Suppress unused-import warnings for icons / utilities reserved for
-// follow-up sections (e.g. an upcoming filters panel on Activity).
-void Copy;
