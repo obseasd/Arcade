@@ -499,13 +499,15 @@ function FormView({
             </div>
 
             {/* Recipient field - identical outer dimensions empty vs filled.
-                Both branches render a 28px avatar at the same x position as
-                the USDC token icon above (gap-2.5, px-3) so the icons stack
-                visually. The right side is always a single-row text block
-                so the heights match: empty shows the placeholder, filled
-                shows the address. ENS subtitle (when present) is absolutely
-                positioned BELOW the row to avoid changing the row height. */}
-            <div className="relative mt-3 flex items-center gap-2.5 rounded-2xl border border-arc-border bg-arc-surface px-3 py-3">
+                Left padding is pl-7 (instead of px-3) so the 28px avatar
+                sits at the same x position as the USDC token icon inside
+                the "You're sending" surface (that one nests an
+                bg-arc-bg-elevated chip with px-3 inside the px-4 outer
+                surface, putting the icon at outer-edge + 16 + 12 = 28 from
+                the slot left). Matching the recipient slot to pl-7 (= 28)
+                lines the two avatars up at the byte level. Right padding
+                stays pr-3 so the X close button keeps its tight inset. */}
+            <div className="relative mt-3 flex items-center gap-2.5 rounded-2xl border border-arc-border bg-arc-surface py-3 pl-7 pr-3">
                 {resolvedAddress ? (
                     <>
                         <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-arc-cta-hover/30 text-[10px] font-bold uppercase text-arc-cta-hover">
@@ -537,7 +539,7 @@ function FormView({
                     </>
                 )}
                 {recipientInput && !resolvedAddress && (
-                    <div className="absolute left-3 right-3 top-full mt-1.5 text-[11px]">
+                    <div className="absolute left-7 right-3 top-full mt-1.5 text-[11px]">
                         {ensLoading ? (
                             <span className="text-arc-text-faint">Resolving ENS…</span>
                         ) : (

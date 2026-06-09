@@ -1668,8 +1668,16 @@ function AddressPopover({
                     href={`https://testnet.arcscan.app/address/${address}`}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="block h-5 w-5 shrink-0 bg-contain bg-center bg-no-repeat transition-opacity hover:opacity-80"
-                    style={{ backgroundImage: "url('/arcscan.png')" }}
+                    className="shrink-0 transition-opacity hover:opacity-80"
+                    style={{
+                        display: "inline-block",
+                        width: 20,
+                        height: 20,
+                        backgroundImage: "url('/arcscan.png')",
+                        backgroundSize: "contain",
+                        backgroundRepeat: "no-repeat",
+                        backgroundPosition: "center",
+                    }}
                     aria-label="View on Arcscan"
                     title="View on Arcscan"
                 />
