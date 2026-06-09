@@ -41,6 +41,8 @@ import { V3Positions } from "@/components/pool/V3Positions";
 import { CreatorFeesPanel } from "@/components/pool/CreatorFeesPanel";
 import { PendingWithdrawalsCard } from "@/components/pool/PendingWithdrawalsCard";
 import { VaultClaimPanel } from "@/components/pool/VaultClaimPanel";
+import { Modal } from "@/components/ui/Modal";
+import { CrossIcon } from "@/components/ui/MaskIcon";
 import { TokenIcon } from "@/components/ui/TokenIcon";
 import { ReceiveModal } from "@/components/wallet/ReceiveModal";
 import { WalletIcon } from "@/components/wallet/WalletIcon";
@@ -1127,6 +1129,14 @@ interface UnifiedActivityItem {
     label: string;
     value: string;
     explorerUrl?: string;
+    /** Counterparty address shown in the Address column. For sends/burns this
+     *  is the recipient; for claims/receives it's the source. Truncated for
+     *  display; hover reveals the per-wallet popover. */
+    counterparty?: string;
+    counterpartyDirection?: "to" | "from";
+    /** Tx hash for the transaction-details popover (Network cost +
+     *  Submitted on + explorer link). */
+    txHash?: string;
 }
 
 type ActivityTypeFilter =
@@ -1270,7 +1280,7 @@ function ActivityTab({ account }: { account: Address }) {
                     </p>
                 </div>
             ) : (
-                <div className="arc-card overflow-hidden">
+                <div className="arc-card overflow-visible">
                     <div className="overflow-x-auto">
                         <table className="w-full text-sm">
                             <thead className="border-b border-arc-border/60 text-[10px] uppercase tracking-wider text-arc-text-muted">
@@ -1278,7 +1288,8 @@ function ActivityTab({ account }: { account: Address }) {
                                     <th className="px-4 py-3 text-left font-medium">Time</th>
                                     <th className="px-4 py-3 text-left font-medium">Type</th>
                                     <th className="px-4 py-3 text-left font-medium">Amount</th>
-                                    <th className="px-4 py-3 text-left font-medium">Reference</th>
+                                    <th className="px-4 py-3 text-left font-medium">Address</th>
+                                    <th className="w-8 px-2 py-3" aria-label="Details" />
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-arc-border/40">
@@ -1365,14 +1376,72 @@ function FilterMenu({
     );
 }
 
+/** Map an epoch-ms timestamp to "Jun 1" / "Today" for the table cell, with
+ *  a full "Mon Jun 1, 2026 12:00" string for the title attribute (browser
+ *  tooltip on hover). Matches Uniswap's compact-day formatting. */
+function formatActivityDay(ts: number): string {
+    const d = new Date(ts);
+    return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+function formatActivityFull(ts: number): string {
+    const d = new Date(ts);
+    // weekday + month abbrev + day + year, then time as HH:MM (24h)
+    const date = d.toLocaleDateString("en-US", {
+        weekday: "short",
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+    });
+    const time = d.toLocaleTimeString("en-US", {
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+    });
+    return `${date} ${time}`;
+}
+
 function ActivityRowFull({ item }: { item: UnifiedActivityItem }) {
-    const date = new Date(item.ts).toLocaleString();
+    const [detailsOpen, setDetailsOpen] = useState(false);
+    const [addressOpen, setAddressOpen] = useState(false);
+    const addressWrapRef = useRef<HTMLDivElement | null>(null);
+
+    // Close the address popover when the user moves the mouse out of the
+    // address cell. delay so brief mouse jitter doesn't kill the popover
+    // mid-read.
+    const closeAddressTimer = useRef<number | null>(null);
+    const onAddressEnter = () => {
+        if (closeAddressTimer.current) {
+            window.clearTimeout(closeAddressTimer.current);
+            closeAddressTimer.current = null;
+        }
+        setAddressOpen(true);
+    };
+    const onAddressLeave = () => {
+        closeAddressTimer.current = window.setTimeout(() => setAddressOpen(false), 120);
+    };
+
+    const shortCounter = item.counterparty
+        ? `${item.counterparty.slice(0, 6)}...${item.counterparty.slice(-4)}`
+        : null;
+
     return (
-        <tr className="text-sm">
-            <td className="px-4 py-3 text-xs text-arc-text-muted">{date}</td>
+        <tr className="group text-sm transition-colors hover:bg-white/[0.02]">
+            <td
+                className="px-4 py-3 text-xs text-arc-text-muted"
+                title={formatActivityFull(item.ts)}
+            >
+                {formatActivityDay(item.ts)}
+            </td>
             <td className="px-4 py-3">
                 <div className="flex items-center gap-2">
-                    <Image src={item.iconSrc} alt={item.type} width={20} height={20} className="h-5 w-5 shrink-0 object-contain" unoptimized />
+                    <Image
+                        src={item.iconSrc}
+                        alt={item.type}
+                        width={20}
+                        height={20}
+                        className="h-5 w-5 shrink-0 object-contain"
+                        unoptimized
+                    />
                     <span className="text-arc-text">{item.type}</span>
                 </div>
             </td>
@@ -1381,21 +1450,219 @@ function ActivityRowFull({ item }: { item: UnifiedActivityItem }) {
                 <div className="font-medium text-arc-text">{item.value}</div>
             </td>
             <td className="px-4 py-3">
-                {item.explorerUrl ? (
-                    <a
-                        href={item.explorerUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1 text-xs text-arc-text-muted hover:text-arc-text"
+                {item.counterparty && shortCounter ? (
+                    <div
+                        ref={addressWrapRef}
+                        className="relative inline-block"
+                        onMouseEnter={onAddressEnter}
+                        onMouseLeave={onAddressLeave}
                     >
-                        View tx
-                        <ExternalLink className="h-3 w-3" />
-                    </a>
+                        <div className="flex flex-col">
+                            {item.counterpartyDirection && (
+                                <span className="text-[10px] uppercase tracking-wider text-arc-text-faint">
+                                    {item.counterpartyDirection === "to" ? "To" : "From"}
+                                </span>
+                            )}
+                            <span className="cursor-default text-xs font-medium text-arc-text">
+                                {shortCounter}
+                            </span>
+                        </div>
+                        {addressOpen && (
+                            <AddressPopover
+                                address={item.counterparty}
+                                shortAddress={shortCounter}
+                            />
+                        )}
+                    </div>
                 ) : (
                     <span className="text-[10px] text-arc-text-faint">·</span>
                 )}
             </td>
+            <td className="w-8 px-2 py-3">
+                {/* Hover-revealed arrow trigger for the per-row details popover.
+                    Opacity-0 by default; the group-hover on <tr> reveals it. */}
+                {(item.txHash || item.explorerUrl) && (
+                    <button
+                        type="button"
+                        onClick={() => setDetailsOpen(true)}
+                        className="ml-auto flex h-7 w-7 items-center justify-center rounded-full text-arc-text-faint opacity-0 transition-all hover:bg-white/5 hover:text-arc-text group-hover:opacity-100"
+                        aria-label="Show details"
+                    >
+                        <ArrowRight className="h-3.5 w-3.5" />
+                    </button>
+                )}
+                {detailsOpen && (
+                    <TransactionDetailsModal
+                        item={item}
+                        onClose={() => setDetailsOpen(false)}
+                    />
+                )}
+            </td>
         </tr>
+    );
+}
+
+/** Hover popover anchored under the counterparty address. Mirrors Uniswap's
+ *  hover card: the address chip again (with copy + a chart-trend icon), then
+ *  Balance and 1D change rows. Balance is a placeholder until the indexer
+ *  ships - we can't cheaply derive arbitrary-wallet portfolio value
+ *  on-chain from the client. */
+function AddressPopover({
+    address,
+    shortAddress,
+}: {
+    address: string;
+    shortAddress: string;
+}) {
+    const [copied, setCopied] = useState(false);
+    const onCopy = async () => {
+        try {
+            await navigator.clipboard.writeText(address);
+            setCopied(true);
+            window.setTimeout(() => setCopied(false), 1000);
+        } catch {
+            /* ignore */
+        }
+    };
+    return (
+        <div className="absolute left-0 top-full z-40 mt-2 w-64 overflow-hidden rounded-2xl border border-arc-border bg-arc-bg-elevated p-3 shadow-[0_18px_36px_-12px_rgba(0,0,0,0.65)]">
+            <div className="flex items-center gap-2">
+                <div className="flex h-7 w-7 items-center justify-center rounded-full bg-arc-cta-hover/30 text-arc-cta-hover">
+                    <Wallet className="h-3.5 w-3.5" />
+                </div>
+                <span className="flex-1 truncate text-sm font-semibold text-arc-text">
+                    {shortAddress}
+                </span>
+                <button
+                    type="button"
+                    onClick={onCopy}
+                    className="text-arc-text-faint transition-colors hover:text-arc-text"
+                    aria-label="Copy address"
+                    title="Copy"
+                >
+                    {copied ? (
+                        <Check className="h-3.5 w-3.5 animate-copy-pop text-arc-success" />
+                    ) : (
+                        <Copy className="h-3.5 w-3.5" />
+                    )}
+                </button>
+                <a
+                    href={`https://testnet.arcscan.app/address/${address}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-arc-text-faint transition-colors hover:text-arc-text"
+                    aria-label="View on explorer"
+                    title="View on explorer"
+                >
+                    <ExternalLink className="h-3.5 w-3.5" />
+                </a>
+            </div>
+            <div className="my-2.5 border-t border-arc-border/60" />
+            <div className="flex items-center justify-between text-xs">
+                <span className="text-arc-text-faint">Balance</span>
+                <span className="font-medium text-arc-text-muted">—</span>
+            </div>
+            <div className="mt-1 flex items-center justify-between text-xs">
+                <span className="text-arc-text-faint">1D change</span>
+                <span className="font-medium text-arc-text-muted">—</span>
+            </div>
+        </div>
+    );
+}
+
+/** Per-row transaction details popover, shown when the user clicks the
+ *  hover-revealed arrow. Compact: status header, network cost (when
+ *  available, otherwise dashes), tx hash linked to the explorer, the
+ *  submitted-at timestamp, and a Close button. Mirrors Uniswap's
+ *  Transaction confirmed popover. */
+function TransactionDetailsModal({
+    item,
+    onClose,
+}: {
+    item: UnifiedActivityItem;
+    onClose: () => void;
+}) {
+    const shortHash = item.txHash
+        ? `${item.txHash.slice(0, 6)}...${item.txHash.slice(-4)}`
+        : "—";
+    const headerLabel =
+        item.kind === "claim"
+            ? "Claim confirmed"
+            : item.kind === "bridge"
+              ? "Bridge confirmed"
+              : "Transaction confirmed";
+    return (
+        <Modal
+            open
+            onClose={onClose}
+            widthClassName="max-w-[400px]"
+            backdropClassName="backdrop:bg-black/60 backdrop:backdrop-blur-sm"
+            className="border-arc-border bg-arc-bg-elevated"
+        >
+            <div className="p-5">
+                <div className="flex items-start gap-3">
+                    <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-arc-cta-hover/30 text-arc-cta-hover">
+                        <Image
+                            src={item.iconSrc}
+                            alt=""
+                            width={20}
+                            height={20}
+                            className="h-5 w-5 object-contain"
+                            unoptimized
+                        />
+                    </div>
+                    <div className="flex-1">
+                        <div className="text-base font-semibold text-arc-text">
+                            {headerLabel}
+                        </div>
+                        <div className="text-xs text-arc-text-faint">
+                            {formatActivityFull(item.ts)}
+                        </div>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={onClose}
+                        className="text-arc-text-faint transition-colors hover:text-arc-text"
+                        aria-label="Close"
+                    >
+                        <CrossIcon size={14} />
+                    </button>
+                </div>
+                <div className="mt-4 space-y-2 text-sm">
+                    <div className="flex items-center justify-between">
+                        <span className="text-arc-text-faint">Network cost</span>
+                        <span className="text-arc-text">—</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                        <span className="text-arc-text-faint">Transaction</span>
+                        {item.explorerUrl ? (
+                            <a
+                                href={item.explorerUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-1 font-mono text-xs text-arc-text hover:text-arc-cta-hover"
+                            >
+                                {shortHash}
+                                <ExternalLink className="h-3 w-3" />
+                            </a>
+                        ) : (
+                            <span className="font-mono text-xs text-arc-text-muted">{shortHash}</span>
+                        )}
+                    </div>
+                    <div className="flex items-center justify-between">
+                        <span className="text-arc-text-faint">Submitted on</span>
+                        <span className="text-xs text-arc-text">{formatActivityFull(item.ts)}</span>
+                    </div>
+                </div>
+                <button
+                    type="button"
+                    onClick={onClose}
+                    className="mt-5 w-full rounded-xl bg-arc-cta px-3 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-arc-cta-hover"
+                >
+                    Close
+                </button>
+            </div>
+        </Modal>
     );
 }
 
@@ -1407,8 +1674,11 @@ function buildActivity(account: Address): UnifiedActivityItem[] {
     const claims = listPendingClaims(account);
     const app = loadActivity(account);
 
+    // bridges fan out: every entry produces the Bridge (burn) row, and any
+    // entry whose attestation landed AND was minted on the dst chain also
+    // produces a sibling Claim row. flatMap keeps both on a single timeline.
     const items: UnifiedActivityItem[] = [
-        ...bridges.map((b) => bridgeToUnified(b)),
+        ...bridges.flatMap((b) => bridgeToUnified(b)),
         ...claims.map((c) => claimToUnified(c)),
         ...app.map((a) => appToUnified(a)),
     ];
@@ -1416,7 +1686,7 @@ function buildActivity(account: Address): UnifiedActivityItem[] {
     return items;
 }
 
-function bridgeToUnified(b: HistoryEntry): UnifiedActivityItem {
+function bridgeToUnified(b: HistoryEntry): UnifiedActivityItem[] {
     const amountStr = (() => {
         try {
             return formatUSDC(BigInt(b.amountRaw6), 6, 2);
@@ -1424,22 +1694,46 @@ function bridgeToUnified(b: HistoryEntry): UnifiedActivityItem {
             return "?";
         }
     })();
-    const label =
+    const burnLabel =
         b.status === "minted"
-            ? "Bridge confirmed"
+            ? "Bridge sent"
             : b.status === "failed"
               ? "Bridge failed"
               : "Bridge pending";
-    return {
-        id: `bridge-${b.id}`,
-        kind: "bridge",
-        ts: b.burnedAt,
-        iconSrc: "/bridge.png",
-        type: "Bridge",
-        label,
-        value: `${amountStr} USDC`,
-        explorerUrl: b.burnTxHash ? `https://testnet.arcscan.app/tx/${b.burnTxHash}` : undefined,
-    };
+    const out: UnifiedActivityItem[] = [
+        {
+            id: `bridge-${b.id}`,
+            kind: "bridge",
+            ts: b.burnedAt,
+            iconSrc: "/bridge.png",
+            type: "Bridge",
+            label: burnLabel,
+            value: `${amountStr} USDC`,
+            counterparty: b.recipient,
+            counterpartyDirection: "to",
+            txHash: b.burnTxHash,
+            explorerUrl: b.burnTxHash ? `https://testnet.arcscan.app/tx/${b.burnTxHash}` : undefined,
+        },
+    ];
+    // Minted bridge = a second on-chain action (the dst-chain mint) the user
+    // actually received. Surface it as its own Claim row with the contract
+    // glyph; ts = mintedAt so it sorts after the burn row in the timeline.
+    if (b.status === "minted" && b.mintedAt) {
+        out.push({
+            id: `bridge-${b.id}-claim`,
+            kind: "claim",
+            ts: b.mintedAt,
+            iconSrc: "/contract.png",
+            type: "Claim",
+            label: "Bridge claimed",
+            value: `${amountStr} USDC`,
+            counterparty: b.recipient,
+            counterpartyDirection: "to",
+            txHash: b.mintTxHash,
+            explorerUrl: b.mintTxHash ? `https://testnet.arcscan.app/tx/${b.mintTxHash}` : undefined,
+        });
+    }
+    return out;
 }
 
 function claimToUnified(c: PendingTwitterClaim): UnifiedActivityItem {
