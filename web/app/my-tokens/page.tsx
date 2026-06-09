@@ -44,6 +44,7 @@ import { VaultClaimPanel } from "@/components/pool/VaultClaimPanel";
 import { Modal } from "@/components/ui/Modal";
 import { TokenIcon } from "@/components/ui/TokenIcon";
 import { ReceiveModal } from "@/components/wallet/ReceiveModal";
+import { SendModal } from "@/components/wallet/SendModal";
 import { WalletIcon } from "@/components/wallet/WalletIcon";
 import { ARCADE_HOOK_STATUS } from "@/lib/abis/arcadeHook";
 import { LAUNCHPAD_CURVE_SUPPLY, LAUNCHPAD_GRADUATION_USDC, LAUNCHPAD_TOKEN_DECIMALS, USDC_DECIMALS, V4_HOOK_ENABLED } from "@/lib/constants";
@@ -345,6 +346,7 @@ function OverviewTab({
 }) {
     const { openAccountModal } = useAccountModal();
     const [receiveOpen, setReceiveOpen] = useState(false);
+    const [sendOpen, setSendOpen] = useState(false);
     const [moreOpen, setMoreOpen] = useState(false);
     const moreWrapRef = useRef<HTMLDivElement | null>(null);
 
@@ -477,8 +479,7 @@ function OverviewTab({
                         <ActionTile
                             icon={<Send className="h-[18px] w-[18px]" />}
                             label="Send"
-                            onClick={() => openAccountModal?.()}
-                            disabled={!openAccountModal}
+                            onClick={() => setSendOpen(true)}
                         />
                         <ActionTile
                             icon={<Download className="h-[18px] w-[18px]" />}
@@ -591,6 +592,7 @@ function OverviewTab({
             {receiveOpen && (
                 <ReceiveModal address={account} onClose={() => setReceiveOpen(false)} />
             )}
+            <SendModal open={sendOpen} onClose={() => setSendOpen(false)} />
         </>
     );
 }
