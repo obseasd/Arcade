@@ -206,12 +206,16 @@ contract ArcadeV3Locker is IUniswapV3MintCallback {
     function adminRescue(address token, address to, uint256 amount) external {
         require(msg.sender == owner, "NOT_OWNER");
         require(to != address(0), "ZERO_TO");
-        // Walk every active position and refuse if `token` is either
-        // side of any of them. positionCount is bounded by the number
-        // of CLANKER_V3 launches; for small N this is acceptable. For
-        // large N consider a maintained whitelist.
-        for (uint256 i = 1; i <= positionCount; ++i) {
-            Position memory pos = positions[i];
+        // Audit M-2: skip no-op calls so a compromised owner key can't
+        // spam AdminRescue events at zero cost.
+        if (amount == 0) return;
+        // Audit M-1: storage pointer + only read the 2 fields we care
+        // about. Was `Position memory pos = positions[i]` (8-10 SLOADs
+        // per iteration); now ~3 SLOADs per iteration so the loop
+        // stays under the block gas limit even with 1500+ positions.
+        uint256 n = positionCount;
+        for (uint256 i = 1; i <= n; ++i) {
+            Position storage pos = positions[i];
             if (token == pos.pairedToken || token == pos.clankerToken) revert("ACTIVE_TOKEN");
         }
         _pay(token, to, amount);
@@ -299,7 +303,14 @@ contract ArcadeV3Locker is IUniswapV3MintCallback {
         // stuck forever. Routing to recipient[0] gifts the creator a
         // negligible amount of their own token; over the lifetime of
         // the pool the amount is dust by definition.
-        _sweep(p.token, p.recipients[0].recipient);
+        // Audit M-3: if recipient[0] IS the Twitter escrow, the dust
+        // would arrive without per-slot creditSlot accounting and end
+        // up as free-balance the escrow owner could rescue. Skip the
+        // sweep in that case - the few wei of dust stays in the locker
+        // and is recoverable later via adminRescue when no active
+        // position references the token (post-protocol-wind-down).
+        address sweepTo = p.recipients[0].recipient;
+        if (sweepTo != twitterEscrow) _sweep(p.token, sweepTo);
         emit PositionLocked(positionId, p.token, p.pool, liquidity);
     }
 
