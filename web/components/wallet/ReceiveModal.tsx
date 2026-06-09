@@ -65,18 +65,16 @@ export function ReceiveModal({ address, onClose }: Props) {
             className="border-arc-border bg-arc-bg-elevated"
         >
             {view === "main" ? (
-                <div className="p-5">
-                    <div className="flex items-center justify-end">
-                        <button
-                            type="button"
-                            onClick={onClose}
-                            className="flex h-7 w-7 items-center justify-center rounded-full text-arc-text-faint transition-colors hover:bg-white/5 hover:text-arc-text"
-                            aria-label="Close receive modal"
-                        >
-                            <CrossIcon size={14} />
-                        </button>
-                    </div>
-                    <div className="mt-2 text-center">
+                <div className="relative p-5">
+                    <button
+                        type="button"
+                        onClick={onClose}
+                        className="absolute right-3 top-3 flex h-7 w-7 items-center justify-center rounded-full text-arc-text-faint transition-colors hover:bg-white/5 hover:text-arc-text"
+                        aria-label="Close receive modal"
+                    >
+                        <CrossIcon size={14} />
+                    </button>
+                    <div className="text-center">
                         <h2 className="text-lg font-semibold text-arc-text">
                             Receive crypto
                         </h2>

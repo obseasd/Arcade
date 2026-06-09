@@ -498,27 +498,21 @@ function FormView({
                 </div>
             </div>
 
-            {/* Recipient field - SAME outer dimensions whether the slot is
-                empty or holds a resolved chip. Both branches use a single
-                row with a 28px avatar + 2-line right block + trailing icon
-                so the avatars stack visually with the USDC chip above. */}
-            <div className="mt-3 rounded-2xl border border-arc-border bg-arc-surface px-3 py-3">
+            {/* Recipient field - identical outer dimensions empty vs filled.
+                Both branches render a 28px avatar at the same x position as
+                the USDC token icon above (gap-2.5, px-3) so the icons stack
+                visually. The right side is always a single-row text block
+                so the heights match: empty shows the placeholder, filled
+                shows the address. ENS subtitle (when present) is absolutely
+                positioned BELOW the row to avoid changing the row height. */}
+            <div className="relative mt-3 flex items-center gap-2.5 rounded-2xl border border-arc-border bg-arc-surface px-3 py-3">
                 {resolvedAddress ? (
-                    <div className="flex items-center justify-between gap-3">
-                        <div className="flex min-w-0 items-center gap-2.5">
-                            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-arc-cta-hover/30 text-[10px] font-bold uppercase text-arc-cta-hover">
-                                {(reverseEns ?? resolvedAddress).slice(2, 4)}
-                            </div>
-                            <div className="min-w-0">
-                                <div className="truncate text-sm font-semibold text-arc-text">
-                                    {reverseEns ?? shortAddr}
-                                </div>
-                                {reverseEns && (
-                                    <div className="truncate text-[10px] text-arc-text-faint">
-                                        {shortAddr}
-                                    </div>
-                                )}
-                            </div>
+                    <>
+                        <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-arc-cta-hover/30 text-[10px] font-bold uppercase text-arc-cta-hover">
+                            {(reverseEns ?? resolvedAddress).slice(2, 4)}
+                        </div>
+                        <div className="min-w-0 flex-1 text-sm font-semibold text-arc-text">
+                            <div className="truncate">{reverseEns ?? shortAddr}</div>
                         </div>
                         <button
                             type="button"
@@ -528,27 +522,22 @@ function FormView({
                         >
                             <CrossIcon size={12} />
                         </button>
-                    </div>
+                    </>
                 ) : (
-                    <div className="flex items-center gap-2.5">
+                    <>
                         <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-arc-cta-hover/20 text-[9px] font-bold text-arc-cta-hover">
                             0x
                         </div>
-                        <div className="min-w-0 flex-1">
-                            <div className="text-[10px] uppercase tracking-wider text-arc-text-faint">
-                                To
-                            </div>
-                            <input
-                                value={recipientInput}
-                                onChange={(e) => setRecipientInput(e.target.value.trim())}
-                                placeholder="Wallet address or ENS name"
-                                className="w-full bg-transparent text-sm font-medium text-arc-text outline-none placeholder:text-arc-text-faint"
-                            />
-                        </div>
-                    </div>
+                        <input
+                            value={recipientInput}
+                            onChange={(e) => setRecipientInput(e.target.value.trim())}
+                            placeholder="Wallet address or ENS name"
+                            className="min-w-0 flex-1 bg-transparent text-sm text-arc-text outline-none placeholder:text-arc-text-faint"
+                        />
+                    </>
                 )}
                 {recipientInput && !resolvedAddress && (
-                    <div className="mt-1.5 pl-9 text-[11px]">
+                    <div className="absolute left-3 right-3 top-full mt-1.5 text-[11px]">
                         {ensLoading ? (
                             <span className="text-arc-text-faint">Resolving ENS…</span>
                         ) : (

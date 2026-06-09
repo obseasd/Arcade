@@ -41,13 +41,15 @@ import { V3Positions } from "@/components/pool/V3Positions";
 import { CreatorFeesPanel } from "@/components/pool/CreatorFeesPanel";
 import { PendingWithdrawalsCard } from "@/components/pool/PendingWithdrawalsCard";
 import { VaultClaimPanel } from "@/components/pool/VaultClaimPanel";
+import { CreatePoolModal } from "@/components/pool/CreatePoolModal";
 import { Modal } from "@/components/ui/Modal";
 import { TokenIcon } from "@/components/ui/TokenIcon";
+import type { TokenOption } from "@/components/ui/TokenSelectModal";
 import { ReceiveModal } from "@/components/wallet/ReceiveModal";
 import { SendModal } from "@/components/wallet/SendModal";
 import { WalletIcon } from "@/components/wallet/WalletIcon";
 import { ARCADE_HOOK_STATUS } from "@/lib/abis/arcadeHook";
-import { LAUNCHPAD_CURVE_SUPPLY, LAUNCHPAD_GRADUATION_USDC, LAUNCHPAD_TOKEN_DECIMALS, USDC_DECIMALS, V4_HOOK_ENABLED } from "@/lib/constants";
+import { ADDRESSES, LAUNCHPAD_CURVE_SUPPLY, LAUNCHPAD_GRADUATION_USDC, LAUNCHPAD_TOKEN_DECIMALS, USDC_DECIMALS, V4_HOOK_ENABLED } from "@/lib/constants";
 import { useArcadeHookTokens, type ArcadeHookTokenInfo } from "@/lib/hooks/useArcadeHookTokens";
 import { useLaunchpadTokens } from "@/lib/hooks/useLaunchpadTokens";
 import { useMyHoldings, type HoldingInfo } from "@/lib/hooks/useMyHoldings";
@@ -348,7 +350,38 @@ function OverviewTab({
     const [receiveOpen, setReceiveOpen] = useState(false);
     const [sendOpen, setSendOpen] = useState(false);
     const [moreOpen, setMoreOpen] = useState(false);
+    const [createPoolOpen, setCreatePoolOpen] = useState(false);
     const moreWrapRef = useRef<HTMLDivElement | null>(null);
+
+    // Token list for the CreatePoolModal opened from the More dropdown.
+    // Same shape as /positions/page.tsx: USDC pinned + every launchpad
+    // token, deduplicated.
+    const { tokens: launchpadTokensForPool } = useLaunchpadTokens();
+    const createPoolTokens: TokenOption[] = useMemo(() => {
+        const seen = new Set<string>();
+        const out: TokenOption[] = [
+            {
+                address: ADDRESSES.usdc as Address,
+                symbol: "USDC",
+                name: "USD Coin",
+                decimals: USDC_DECIMALS,
+                pinned: true,
+            },
+        ];
+        seen.add(ADDRESSES.usdc.toLowerCase());
+        for (const t of launchpadTokensForPool) {
+            const k = t.address.toLowerCase();
+            if (seen.has(k)) continue;
+            seen.add(k);
+            out.push({
+                address: t.address,
+                symbol: t.symbol,
+                name: t.name,
+                decimals: 18,
+            });
+        }
+        return out;
+    }, [launchpadTokensForPool]);
 
     // Close the More popover when the user clicks anywhere outside of it,
     // including elsewhere inside the page. Mirrors the pattern used by the
@@ -523,7 +556,7 @@ function OverviewTab({
                                     <MoreMenuItem
                                         icon={<Plus className="h-4 w-4" />}
                                         label="New position"
-                                        href="/positions/add"
+                                        onClick={() => setCreatePoolOpen(true)}
                                         onSelect={() => setMoreOpen(false)}
                                     />
                                 </div>
@@ -593,6 +626,11 @@ function OverviewTab({
                 <ReceiveModal address={account} onClose={() => setReceiveOpen(false)} />
             )}
             <SendModal open={sendOpen} onClose={() => setSendOpen(false)} />
+            <CreatePoolModal
+                open={createPoolOpen}
+                onClose={() => setCreatePoolOpen(false)}
+                tokens={createPoolTokens}
+            />
         </>
     );
 }
@@ -642,30 +680,50 @@ function ActionTile({
 }
 
 /**
- * Row in the More popover (Swap / Sell / Limit / New position). Always a
- * Link so the user can middle-click to open in a new tab; the onSelect
- * callback closes the popover after navigation.
+ * Row in the More popover (Swap / Sell / Limit / New position). Renders as a
+ * Link when an href is supplied (middle-click opens in a new tab), or as a
+ * plain button when only onClick is provided - used by "New position" to
+ * pop the CreatePoolModal instead of navigating away.
  */
 function MoreMenuItem({
     icon,
     label,
     href,
+    onClick,
     onSelect,
 }: {
     icon: React.ReactNode;
     label: string;
-    href: string;
+    href?: string;
+    onClick?: () => void;
     onSelect: () => void;
 }) {
-    return (
-        <Link
-            href={href}
-            onClick={onSelect}
-            className="flex items-center gap-3 px-3.5 py-2.5 text-sm text-arc-text transition-colors hover:bg-white/5"
-        >
+    const className =
+        "flex items-center gap-3 px-3.5 py-2.5 text-sm text-arc-text transition-colors hover:bg-white/5";
+    const inner = (
+        <>
             <span className="text-arc-text-muted">{icon}</span>
             {label}
-        </Link>
+        </>
+    );
+    if (href) {
+        return (
+            <Link href={href} onClick={onSelect} className={className}>
+                {inner}
+            </Link>
+        );
+    }
+    return (
+        <button
+            type="button"
+            onClick={() => {
+                onClick?.();
+                onSelect();
+            }}
+            className={`${className} w-full text-left`}
+        >
+            {inner}
+        </button>
     );
 }
 
@@ -1571,24 +1629,11 @@ function AddressPopover({
                     href={`https://testnet.arcscan.app/address/${address}`}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="inline-flex transition-opacity hover:opacity-80"
+                    className="block h-5 w-5 shrink-0 bg-contain bg-center bg-no-repeat transition-opacity hover:opacity-80"
+                    style={{ backgroundImage: "url('/arcscan.png')" }}
                     aria-label="View on Arcscan"
                     title="View on Arcscan"
-                >
-                    {/* Plain <img> instead of next/image because next/image's
-                        explicit width/height + className can clip transparent
-                        PNGs whose drawable area is smaller than the canvas.
-                        eslint-disable required because next/no-img-element
-                        prefers next/image, but next/image is the bug. */}
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                        src="/arcscan.png"
-                        alt=""
-                        width={20}
-                        height={20}
-                        style={{ width: 20, height: 20, objectFit: "contain" }}
-                    />
-                </a>
+                />
             </div>
             <div className="my-3 border-t border-arc-border/60" />
             <div className="flex items-center justify-between text-sm">

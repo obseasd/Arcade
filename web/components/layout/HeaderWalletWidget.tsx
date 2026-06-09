@@ -33,6 +33,7 @@ import { cn, formatAgo, formatUSDC } from "@/lib/utils";
 import { TokenIcon } from "@/components/ui/TokenIcon";
 import { WalletIcon } from "@/components/wallet/WalletIcon";
 import { ReceiveModal } from "@/components/wallet/ReceiveModal";
+import { SendModal } from "@/components/wallet/SendModal";
 
 /**
  * Header wallet widget. Two-part trigger (USDC balance | wallet chip) that
@@ -61,6 +62,7 @@ export function HeaderWalletWidget() {
     const [menuOpen, setMenuOpen] = useState(false);
     const [powerOpen, setPowerOpen] = useState(false);
     const [receiveOpen, setReceiveOpen] = useState(false);
+    const [sendOpen, setSendOpen] = useState(false);
     // When the user clicks "Changer de wallet" we set this flag, call
     // disconnect(), and let the useEffect below open the connect modal
     // as soon as RainbowKit registers the disconnected state. Setting
@@ -295,7 +297,7 @@ export function HeaderWalletWidget() {
                                 <div className="grid grid-cols-2 gap-2 px-4 pb-3">
                                     <button type="button"
                                         onClick={() => {
-                                            openAccountModal();
+                                            setSendOpen(true);
                                             setMenuOpen(false);
                                         }}
                                         className="flex flex-col items-center justify-center gap-1.5 rounded-xl bg-sky-400/10 px-3 py-4 text-sky-400 transition-colors hover:bg-sky-400/20"
@@ -339,6 +341,7 @@ export function HeaderWalletWidget() {
                                 onClose={() => setReceiveOpen(false)}
                             />
                         )}
+                        <SendModal open={sendOpen} onClose={() => setSendOpen(false)} />
                     </div>
                 );
             }}

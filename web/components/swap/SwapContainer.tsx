@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { Suspense, useState } from "react";
 import { useAccount } from "wagmi";
 import { LIMIT_ORDERS_ENABLED } from "@/lib/constants";
 import { SwapCard } from "./SwapCard";
@@ -9,8 +10,17 @@ import { LimitCard } from "./LimitCard";
 import { LimitOrdersPanel } from "./LimitOrdersPanel";
 import type { SwapTab } from "./SwapTabs";
 
-export function SwapContainer() {
-  const [tab, setTab] = useState<SwapTab>("swap");
+function isValidTab(v: string | null): v is SwapTab {
+  return v === "swap" || v === "limit" || v === "multi";
+}
+
+function SwapContainerInner() {
+  const searchParams = useSearchParams();
+  // Allow callers like the portfolio More dropdown to deep-link to a
+  // specific tab via ?mode=limit. Mapped to "multi" for ?mode=multi.
+  const modeParam = searchParams.get("mode");
+  const initialTab: SwapTab = isValidTab(modeParam) ? modeParam : "swap";
+  const [tab, setTab] = useState<SwapTab>(initialTab);
   const { address: account } = useAccount();
 
   // Each card renders its own copy of the tab strip in its header so the
@@ -60,5 +70,16 @@ export function SwapContainer() {
         </div>
       )}
     </>
+  );
+}
+
+// useSearchParams requires a Suspense boundary in Next.js app router.
+// The fallback renders nothing; the search params are available
+// synchronously once mounted so the user sees the right tab on first paint.
+export function SwapContainer() {
+  return (
+    <Suspense fallback={null}>
+      <SwapContainerInner />
+    </Suspense>
   );
 }
