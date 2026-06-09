@@ -321,7 +321,12 @@ export function HeaderWalletWidget() {
                                     match the in-feed row spacing (space-y-2 = 8px). */}
                                 <div className="flex justify-center px-4 pb-2">
                                     <Link
-                                        href="/my-tokens"
+                                        // ?tab=overview forces the portfolio page to mount on
+                                        // the Overview tab even when the user is already on
+                                        // /my-tokens on a different tab (Tokens / Activity / ...).
+                                        // Without the query the in-page useState would persist
+                                        // and the link click would be a no-op.
+                                        href="/my-tokens?tab=overview"
                                         onClick={() => setMenuOpen(false)}
                                         className="inline-flex items-center gap-1 rounded-md px-3 py-1.5 text-xs font-medium text-arc-text-muted transition-colors hover:text-arc-text"
                                     >

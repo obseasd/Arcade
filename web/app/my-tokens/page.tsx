@@ -23,7 +23,8 @@ import {
 } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import {
     Area,
     AreaChart,
@@ -95,12 +96,36 @@ const TABS: { key: TabKey; label: string }[] = [
     { key: "activity", label: "Activity" },
 ];
 
+// useSearchParams requires a Suspense boundary at the page level.
+// Page default export wraps the body so the hook in MyTokensPageInner
+// always has a parent boundary even on the first paint.
 export default function MyTokensPage() {
+    return (
+        <Suspense fallback={null}>
+            <MyTokensPageInner />
+        </Suspense>
+    );
+}
+
+function MyTokensPageInner() {
     const { address: account, connector } = useAccount();
     const { tokens, isLoading } = useLaunchpadTokens();
     const { holdings, isLoading: holdingsLoading } = useMyHoldings();
     const { tokens: v4Tokens } = useArcadeHookTokens();
     const [tab, setTab] = useState<TabKey>("overview");
+
+    // Read ?tab=... so the header "View portfolio" link forces the user
+    // back to a specific tab even when they're already on /my-tokens on
+    // a different tab. useSearchParams is reactive to URL changes
+    // (client-side navigation via <Link>), so the tab swap happens
+    // without a full reload.
+    const searchParams = useSearchParams();
+    const urlTab = searchParams.get("tab");
+    useEffect(() => {
+        if (urlTab === "overview" || urlTab === "tokens" || urlTab === "positions" || urlTab === "creator" || urlTab === "activity") {
+            setTab(urlTab as TabKey);
+        }
+    }, [urlTab]);
 
     // connector.icon is the connector-supplied logo (data URI for Backpack,
     // MetaMask, etc.). Falls back to a gradient letter circle inside
@@ -1589,15 +1614,21 @@ function ActivityRowFull({ item }: { item: UnifiedActivityItem }) {
  *  only token we have a known 1:1 fiat peg for client-side; everything
  *  else hides the USD line until the indexer ships prices. */
 function AmountCell({ value }: { value: string }) {
-    const match = value.match(/^([\d,]+(?:\.\d+)?)\s+([A-Za-z0-9$]+)$/);
-    if (!match) {
-        return <div className="text-base font-medium text-arc-text">{value}</div>;
-    }
-    const amountStr = match[1];
-    const ticker = match[2].replace(/^\$/, "");
-    const amountNum = Number(amountStr.replace(/,/g, ""));
-    const isUsdc = ticker.toUpperCase() === "USDC";
-    const usdValue = isUsdc && Number.isFinite(amountNum)
+    // Try "amount ticker" first (Bridge 1.00 USDC, Swap 246.78 ETH).
+    const amountMatch = value.match(/^([\d,]+(?:\.\d+)?)\s+([A-Za-z0-9$]+)$/);
+    // Then "$TICKER" only (Launch $PUMP, Launch $CA).
+    const tickerOnlyMatch = !amountMatch && value.match(/^\$([A-Za-z0-9]+)$/);
+
+    const ticker = amountMatch
+        ? amountMatch[2].replace(/^\$/, "")
+        : tickerOnlyMatch
+          ? tickerOnlyMatch[1]
+          : undefined;
+
+    const amountStr = amountMatch ? amountMatch[1] : undefined;
+    const amountNum = amountStr ? Number(amountStr.replace(/,/g, "")) : undefined;
+    const isUsdc = ticker?.toUpperCase() === "USDC";
+    const usdValue = isUsdc && amountNum !== undefined && Number.isFinite(amountNum)
         ? amountNum.toLocaleString("en-US", {
               style: "currency",
               currency: "USD",
@@ -1605,12 +1636,19 @@ function AmountCell({ value }: { value: string }) {
               maximumFractionDigits: 2,
           })
         : undefined;
+
+    // Always reserve the 32px logo column so rows without a parseable
+    // single-token amount (e.g. Add-liquidity "100 USDC + 25000 ETH")
+    // keep the same height as rows with a logo. When no ticker is
+    // detected the slot is transparent.
     return (
         <div className="flex items-center gap-2.5">
-            <TokenIcon symbol={ticker} size={32} />
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center">
+                {ticker && <TokenIcon symbol={ticker} size={32} />}
+            </div>
             <div className="flex min-w-0 flex-col">
                 <span className="truncate text-base font-medium text-arc-text">
-                    {amountStr} {ticker}
+                    {amountStr ? `${amountStr} ${ticker}` : value}
                 </span>
                 {usdValue && (
                     <span className="text-sm text-arc-text-faint">{usdValue}</span>
@@ -1668,19 +1706,12 @@ function AddressPopover({
                     href={`https://testnet.arcscan.app/address/${address}`}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="shrink-0 transition-opacity hover:opacity-80"
-                    style={{
-                        display: "inline-block",
-                        width: 20,
-                        height: 20,
-                        backgroundImage: "url('/arcscan.png')",
-                        backgroundSize: "contain",
-                        backgroundRepeat: "no-repeat",
-                        backgroundPosition: "center",
-                    }}
+                    className="flex h-5 w-5 shrink-0 items-center justify-center text-arc-text-faint transition-colors hover:text-arc-text"
                     aria-label="View on Arcscan"
                     title="View on Arcscan"
-                />
+                >
+                    <ExternalLink className="h-4 w-4" />
+                </a>
             </div>
             <div className="my-3 border-t border-arc-border/40" />
             <div className="flex items-center justify-between text-sm">

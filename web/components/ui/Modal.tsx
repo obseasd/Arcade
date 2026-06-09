@@ -93,20 +93,31 @@ export function Modal({
     return () => dlg.removeEventListener("cancel", handleCancel);
   }, [closeOnEscape, onClose]);
 
-  // Backdrop click detection. When the user clicks the ::backdrop pseudo,
-  // the event's target is the <dialog> itself (because the backdrop
-  // technically belongs to the dialog). Clicks inside the inner card
-  // target one of its descendants, so `target === currentTarget` is the
-  // backdrop-only condition.
+  // Backdrop click detection. Native click fires on mouseup, so a user
+  // who mousedowns INSIDE the modal to select text and drags outside
+  // would otherwise dismiss the modal on release. Track whether the
+  // press *started* on the backdrop and require both ends to land there
+  // before closing - matches Uniswap / native dialog behaviour.
+  const mouseDownOnBackdropRef = useRef(false);
+  const onMouseDown = (e: MouseEvent<HTMLDialogElement>) => {
+    mouseDownOnBackdropRef.current = e.target === e.currentTarget;
+  };
   const onClick = (e: MouseEvent<HTMLDialogElement>) => {
     if (!closeOnBackdrop) return;
-    if (e.target === e.currentTarget) onClose();
+    if (
+      e.target === e.currentTarget &&
+      mouseDownOnBackdropRef.current
+    ) {
+      onClose();
+    }
+    mouseDownOnBackdropRef.current = false;
   };
 
   return (
     <dialog
       ref={dialogRef}
       onClick={onClick}
+      onMouseDown={onMouseDown}
       className={cn(
         // <dialog> defaults: position: fixed, browser-centered margins,
         // white background, default border. Reset to a transparent

@@ -538,15 +538,9 @@ function FormView({
                         />
                     </>
                 )}
-                {recipientInput && !resolvedAddress && (
-                    <div className="absolute left-7 right-3 top-full mt-1.5 text-[11px]">
-                        {ensLoading ? (
-                            <span className="text-arc-text-faint">Resolving ENS…</span>
-                        ) : (
-                            <span className="text-arc-warn">
-                                Not a valid address or ENS name
-                            </span>
-                        )}
+                {recipientInput && !resolvedAddress && !ensLoading && (
+                    <div className="absolute left-7 right-3 top-full mt-1.5 text-[11px] text-arc-warn">
+                        Not a valid address or ENS name
                     </div>
                 )}
             </div>
