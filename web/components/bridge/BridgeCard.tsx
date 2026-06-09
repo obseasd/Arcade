@@ -198,6 +198,44 @@ export function BridgeCard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [account]);
 
+  // Audit Bridge H-3: listen for retry events dispatched from
+  // BridgeHistory when the user clicks Retry on a failed row. Rehydrate
+  // the form + re-enter the attestation poll so the user doesn't have
+  // to fish the burnTxHash out of the explorer to recover.
+  useEffect(() => {
+    const onRetry = (e: Event) => {
+      const detail = (e as CustomEvent).detail as
+        | {
+            burnTxHash?: `0x${string}`;
+            srcChainId?: number;
+            dstChainId?: number;
+            amountRaw6?: string;
+          }
+        | undefined;
+      if (!detail?.burnTxHash || !detail.srcChainId || !detail.dstChainId) return;
+      const srcCfg = getCctpChain(detail.srcChainId);
+      const dstCfg = getCctpChain(detail.dstChainId);
+      if (!srcCfg || !dstCfg) return;
+      setSrcChainId(detail.srcChainId);
+      setDstChainId(detail.dstChainId);
+      if (detail.amountRaw6) {
+        try {
+          setAmountStr(formatUnits(BigInt(detail.amountRaw6), 6));
+        } catch {
+          /* ignore */
+        }
+      }
+      setStep({
+        kind: "attesting",
+        burnTxHash: detail.burnTxHash,
+        srcDomain: srcCfg.cctpDomain,
+        dstId: detail.dstChainId,
+      });
+    };
+    window.addEventListener("arcade-bridge-retry", onRetry as EventListener);
+    return () => window.removeEventListener("arcade-bridge-retry", onRetry as EventListener);
+  }, []);
+
   // RACE-010 + audit BRIDGE-NO-ACCOUNT-BINDING: reset transient form
   // state when the connected wallet changes. Without this, user A picks
   // a custom recipient (Alice), disconnects on a shared computer, and

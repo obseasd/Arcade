@@ -523,11 +523,18 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
     /// trades or post-migration royalty distribution.
     function _safePayUsdc(address to, uint256 amount) internal {
         if (amount == 0 || to == address(0)) return;
-        try IERC20(address(USDC)).transfer(to, amount) returns (bool ok) {
-            if (ok) return;
-        } catch {
-            // fall through to credit
-        }
+        // Audit Launchpad H-5: accept the OZ SafeERC20 success contract
+        // (returns:true OR returns:nothing) instead of strictly requiring
+        // returns:bool. The previous direct `.transfer().bool` path silently
+        // failed every payout if Arc ever ships USDC as a non-standard
+        // implementation (e.g. USDT-style void-returning transfer), routing
+        // 100% of fees to pendingUsdcWithdrawals and forcing every recipient
+        // to come claim manually. Inline `.call` + decode keeps the bytecode
+        // additive minimal (~80 bytes), matching the EIP-170 budget.
+        (bool ok, bytes memory ret) = address(USDC).call(
+            abi.encodeWithSelector(IERC20.transfer.selector, to, amount)
+        );
+        if (ok && (ret.length == 0 || abi.decode(ret, (bool)))) return;
         pendingUsdcWithdrawals[to] += amount;
         emit UsdcCredited(to, amount);
     }

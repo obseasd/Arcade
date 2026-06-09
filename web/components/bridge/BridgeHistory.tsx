@@ -28,6 +28,32 @@ import { formatAgo, formatUSDC, cn } from "@/lib/utils";
 export function BridgeHistory() {
   const { address: account } = useAccount();
   const [entries, setEntries] = useState<HistoryEntry[]>([]);
+
+  // Audit Bridge H-3: re-promote a failed entry to "pending" + signal
+  // BridgeCard to enter the attestation poll for it. Without this the
+  // user's only "recovery" path after a failed bridge was to manually
+  // dig the attestation out of Iris with curl. The CustomEvent payload
+  // lets BridgeCard pick up the entry without coupling the two
+  // components via prop drilling.
+  const onRetry = (entry: HistoryEntry) => {
+    if (!account) return;
+    updateBridge(account, entry.id, {
+      status: "pending",
+      attestationReady: false,
+    });
+    setEntries(loadBridgeHistory(account));
+    window.dispatchEvent(
+      new CustomEvent("arcade-bridge-retry", {
+        detail: {
+          burnTxHash: entry.burnTxHash,
+          srcChainId: entry.srcChainId,
+          dstChainId: entry.dstChainId,
+          amountRaw6: entry.amountRaw6,
+          recipient: entry.recipient,
+        },
+      }),
+    );
+  };
   // Default to expanded so the user sees their most recent bridges
   // immediately. Closing the panel hides every row (closed = empty,
   // open = full list), so there's no half-state to confuse with.
@@ -166,7 +192,12 @@ export function BridgeHistory() {
       {expanded && (
         <div className="divide-y divide-arc-border/40 border-t border-arc-border/40">
           {visible.map((e) => (
-            <Row key={e.id} entry={e} onDismiss={() => dismiss(e.id)} />
+            <Row
+              key={e.id}
+              entry={e}
+              onDismiss={() => dismiss(e.id)}
+              onRetry={onRetry}
+            />
           ))}
         </div>
       )}
@@ -174,7 +205,15 @@ export function BridgeHistory() {
   );
 }
 
-function Row({ entry, onDismiss }: { entry: HistoryEntry; onDismiss: () => void }) {
+function Row({
+  entry,
+  onDismiss,
+  onRetry,
+}: {
+  entry: HistoryEntry;
+  onDismiss: () => void;
+  onRetry: (entry: HistoryEntry) => void;
+}) {
   const src = getCctpChain(entry.srcChainId);
   const dst = getCctpChain(entry.dstChainId);
   const amount = (() => {
@@ -203,6 +242,21 @@ function Row({ entry, onDismiss }: { entry: HistoryEntry; onDismiss: () => void 
         </div>
       </div>
       <StatusBadge status={entry.status} attestationReady={entry.attestationReady} />
+      {/* Audit Bridge H-3: Retry button on failed rows so the user has
+          a way back into the attestation poll without manually
+          fetching an attestation off-chain. Re-promotes the entry to
+          "pending" status and rehydrates the BridgeCard form via the
+          onRetry callback, which sets srcChainId / dstChainId / amount
+          and parks step in "attesting". */}
+      {entry.status === "failed" && (
+        <button
+          type="button"
+          onClick={() => onRetry(entry)}
+          className="rounded-md border border-arc-border bg-arc-bg-elevated px-2 py-0.5 text-[10px] font-medium text-arc-text hover:bg-white/5"
+        >
+          Retry
+        </button>
+      )}
       {explorerTx && (
         <a
           href={explorerTx}
