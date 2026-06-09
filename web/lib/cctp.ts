@@ -237,6 +237,60 @@ function isHexBlob(v: unknown): v is `0x${string}` {
   return typeof v === "string" && /^0x[0-9a-fA-F]+$/.test(v) && v.length >= 4;
 }
 
+/**
+ * Audit Bridge M-1: distinguish "Iris service degraded" from "burn not
+ * indexed yet" so the UI can surface a clear failure state after N
+ * consecutive transient errors instead of leaving the user staring at
+ * the spinner. Callers use `kind` to branch:
+ *   - "complete" / "pending" : payload is valid (existing semantics)
+ *   - "transient"            : 5xx, network error, parse failure -
+ *                              keep polling but bump a retry counter
+ *   - "missing"              : 404 / empty messages - burn not yet
+ *                              indexed; keep polling silently
+ */
+export type IrisResult =
+  | { kind: "complete"; payload: IrisAttestation }
+  | { kind: "pending"; payload: IrisAttestation }
+  | { kind: "transient"; reason: string }
+  | { kind: "missing" };
+
+export async function fetchAttestationDetailed(
+  srcDomain: number,
+  txHash: string,
+): Promise<IrisResult> {
+  const url = `${IRIS_BASE_TESTNET}/v2/messages/${srcDomain}?transactionHash=${txHash}`;
+  try {
+    const res = await fetch(url);
+    if (res.status === 404) return { kind: "missing" };
+    if (res.status >= 500) return { kind: "transient", reason: `HTTP ${res.status}` };
+    if (!res.ok) return { kind: "transient", reason: `HTTP ${res.status}` };
+    const json = (await res.json()) as { messages?: unknown };
+    const messages = Array.isArray(json?.messages) ? json.messages : null;
+    if (!messages || messages.length === 0) return { kind: "missing" };
+    const m = messages[0] as Record<string, unknown> | null;
+    if (!m || typeof m !== "object") return { kind: "transient", reason: "bad-shape" };
+    const status = m.status;
+    if (status !== "pending_confirmations" && status !== "complete") {
+      return { kind: "transient", reason: "bad-status" };
+    }
+    const payload: IrisAttestation = {
+      attestation: isHexBlob(m.attestation) ? m.attestation : ("0x" as `0x${string}`),
+      message: isHexBlob(m.message) ? m.message : ("0x" as `0x${string}`),
+      status,
+      eventNonce: typeof m.eventNonce === "string" ? m.eventNonce : undefined,
+    };
+    if (status === "complete") {
+      if (!isHexBlob(m.attestation) || !isHexBlob(m.message)) {
+        return { kind: "transient", reason: "bad-hex" };
+      }
+      return { kind: "complete", payload };
+    }
+    return { kind: "pending", payload };
+  } catch (e) {
+    return { kind: "transient", reason: e instanceof Error ? e.message : "network" };
+  }
+}
+
 export async function fetchAttestation(
   srcDomain: number,
   txHash: string,

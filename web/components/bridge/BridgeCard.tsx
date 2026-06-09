@@ -175,6 +175,14 @@ export function BridgeCard() {
     if (!account) return;
     const saved = loadPendingBridge(account);
     if (!saved) return;
+    // Audit Bridge M-5: validate the persisted dstChainId is still in
+    // CCTP_CHAINS before restoring. A chain removed between bridge time
+    // and resume would otherwise deref to undefined and the non-null
+    // assertion at the destination chain read would throw.
+    if (!getCctpChain(saved.dstId) || !getCctpChain(saved.srcChainId)) {
+      clearPendingBridge(account);
+      return;
+    }
     setSrcChainId(saved.srcChainId);
     setDstChainId(saved.dstId);
     setAmountStr(formatUnits(BigInt(saved.amountRaw6), 6));
@@ -580,8 +588,19 @@ export function BridgeCard() {
     setStep({ kind: "idle" });
   };
 
+  // Audit Bridge M-3: hard minimum on fast-transfer bridges. Circle's
+  // fast-transfer fee = amount / 10_000; sub-dust bridges hit a maxFee
+  // of 0 which Iris may reject. Surface at canBridge level rather than
+  // failing at burn time.
+  const MIN_BRIDGE_RAW_FAST = 500_000n; // 0.5 USDC at 6dp
+  const underMinFast = fastTransfer && amountRaw > 0n && amountRaw < MIN_BRIDGE_RAW_FAST;
   const canBridge =
-    !!account && amountRaw > 0n && !insufficient && !sameChain && step.kind === "idle";
+    !!account &&
+    amountRaw > 0n &&
+    !insufficient &&
+    !sameChain &&
+    !underMinFast &&
+    step.kind === "idle";
 
   return (
     <div className="arc-card relative p-5">

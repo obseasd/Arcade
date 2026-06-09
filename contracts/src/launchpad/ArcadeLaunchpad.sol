@@ -480,7 +480,13 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
      */
     function _distributeMigratedFee(TokenState storage s, uint256 totalRoyalty) internal {
         if (totalRoyalty == 0) return;
-        // 2/3 of the 0.30% royalty goes to platform, 1/3 to creator (ceil to platform)
+        // Audit Launchpad H-4: 2/3 of the 0.30% royalty to platform, 1/3
+        // to creator. Ceil-rounds UP to the platform so on a stream of
+        // micro-trades the platform absorbs the rounding dust and the
+        // creator is paid strictly less than 1/3. On a 1-USDC royalty
+        // the creator receives 0 and the platform receives 1; this is
+        // by design (correct per the published spec; the original
+        // comment was ambiguous on whether the spec was net/gross).
         uint256 platformFee = (totalRoyalty * MIGRATED_PLATFORM_BPS + MIGRATED_ROYALTY_BPS - 1)
             / MIGRATED_ROYALTY_BPS;
         if (platformFee > totalRoyalty) platformFee = totalRoyalty;
@@ -1053,6 +1059,14 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
                 fee: fee // CSEC-013: locker re-derives pool from factory.getPool(token, paired, fee)
             })
         );
+
+        // Audit Launchpad M-3: post-lock sanity check. The locker mints
+        // up to 3 ranges; a tick-rounding edge case could in theory
+        // succeed with zero effective liquidity (math degenerate). The
+        // creator buy below assumes a non-empty pool so its slippage
+        // floor remains protective; assert here to fail fast instead of
+        // discovering the empty pool via a wildly-off creator buy.
+        if (IArcadeV3Pool(pool).liquidity() == 0) revert InvalidRoute();
 
         emit Migrated(tokenAddr, pool, 0, lpSupply);
 

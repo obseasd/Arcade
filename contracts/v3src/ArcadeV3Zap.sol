@@ -18,6 +18,34 @@ interface IERC20Min {
 }
 
 /**
+ * Audit V3 Zap H-3: minimal inline SafeERC20 to handle non-standard
+ * tokens that don't return a bool from transfer/transferFrom/approve
+ * (USDT-style). The OZ SafeERC20 isn't usable cleanly on 0.7.6 + the
+ * V3 Zap is near the EIP-170 ceiling, so this 30-line vendored helper
+ * is leaner and serves the same purpose: accept either "returns true"
+ * OR "returns nothing" as success; revert on "returns false" or any
+ * non-bool return data.
+ */
+library SafeERC20Mini {
+    function safeTransfer(IERC20Min token, address to, uint256 value) internal {
+        _callOptionalReturn(token, abi.encodeWithSelector(token.transfer.selector, to, value));
+    }
+    function safeTransferFrom(IERC20Min token, address from, address to, uint256 value) internal {
+        _callOptionalReturn(token, abi.encodeWithSelector(token.transferFrom.selector, from, to, value));
+    }
+    function safeApprove(IERC20Min token, address spender, uint256 value) internal {
+        _callOptionalReturn(token, abi.encodeWithSelector(token.approve.selector, spender, value));
+    }
+    function _callOptionalReturn(IERC20Min token, bytes memory data) private {
+        (bool ok, bytes memory ret) = address(token).call(data);
+        require(ok, "SAFE_CALL_FAIL");
+        if (ret.length > 0) {
+            require(abi.decode(ret, (bool)), "SAFE_RET_FALSE");
+        }
+    }
+}
+
+/**
  * @title ArcadeV3Zap
  * @notice Single-asset zap into / out of Uniswap V3 positions on Arcade.
  *
@@ -40,8 +68,26 @@ interface IERC20Min {
  *         v3-core / v3-periphery without re-vendoring.
  */
 contract ArcadeV3Zap is IUniswapV3SwapCallback {
+    using SafeERC20Mini for IERC20Min;
+
     address public immutable factory;
     address public immutable npm;
+
+    /// @notice Audit V3 Zap M-3: minimal events so the indexer can label
+    ///         zap activity without inferring from NPM IncreaseLiquidity.
+    event ZapIn(
+        address indexed recipient,
+        uint256 indexed tokenId,
+        address tokenIn,
+        uint256 amountIn,
+        uint128 liquidity
+    );
+    event ZapOut(
+        address indexed recipient,
+        uint256 indexed tokenId,
+        address tokenOut,
+        uint256 amountOut
+    );
 
     // Sqrt-price limits used by V3.swap to mean "no slippage cap" on the
     // direction of the swap. Reproduced here so we can pass them inline
@@ -96,6 +142,18 @@ contract ArcadeV3Zap is IUniswapV3SwapCallback {
         uint256 deadline;
         // Address that receives the V3 NFT (and any dust sweep).
         address recipient;
+        // Audit V3 Zap C-1: caller-signed sqrtPriceX96 band the pool MUST
+        // sit inside at execution time. Defends against a mempool grief
+        // where an attacker pre-initialises a fresh pool at a hostile
+        // sqrtPriceX96; the zap would otherwise route the user's deposit
+        // around the adverse price and lose them money on the first swap.
+        // Set both to 0 to opt out (e.g. for established pools where the
+        // sqrtPrice has been moved by legitimate swaps and a static band
+        // would no longer fit). When opted-in, the contract reads slot0
+        // once and reverts if outside [min, max] OR if sqrtPrice == 0
+        // (uninitialised pool).
+        uint160 sqrtPriceX96Min;
+        uint160 sqrtPriceX96Max;
     }
 
     struct ZapOutParams {
@@ -170,10 +228,7 @@ contract ArcadeV3Zap is IUniswapV3SwapCallback {
         require(p.amountIn > 0, "ZERO_AMOUNT");
         require(p.tokenIn != p.otherToken, "SAME_TOKEN");
 
-        require(
-            IERC20Min(p.tokenIn).transferFrom(msg.sender, address(this), p.amountIn),
-            "PULL_FAIL"
-        );
+        IERC20Min(p.tokenIn).safeTransferFrom(msg.sender, address(this), p.amountIn);
 
         (address t0, address t1) = p.tokenIn < p.otherToken
             ? (p.tokenIn, p.otherToken)
@@ -181,6 +236,7 @@ contract ArcadeV3Zap is IUniswapV3SwapCallback {
         (tokenId, liquidity) = _zapInRoute(p, t0, t1, tickLower, tickUpper);
         _sweep(t0, p.recipient);
         _sweep(t1, p.recipient);
+        emit ZapIn(p.recipient, tokenId, p.tokenIn, p.amountIn, liquidity);
     }
 
     struct _ZapCtx {
@@ -201,6 +257,21 @@ contract ArcadeV3Zap is IUniswapV3SwapCallback {
         _ZapCtx memory c;
         c.pool = IUniswapV3Factory(factory).getPool(t0, t1, p.fee);
         require(c.pool != address(0), "NO_POOL");
+        // Audit V3 Zap C-1: sqrtPriceX96 band enforcement. Opt-in via
+        // non-zero (min, max) in ZapParams. Always reverts on
+        // uninitialised pools (sqrtPrice == 0) so the user can't be
+        // tricked into routing a swap against a fresh pool an attacker
+        // pre-inits at a hostile price between submit and inclusion.
+        {
+            (uint160 sp,,,,,,) = IUniswapV3Pool(c.pool).slot0();
+            require(sp != 0, "POOL_UNINIT");
+            if (p.sqrtPriceX96Min != 0 || p.sqrtPriceX96Max != 0) {
+                require(
+                    sp >= p.sqrtPriceX96Min && sp <= p.sqrtPriceX96Max,
+                    "SQRT_PRICE_OOB"
+                );
+            }
+        }
         (c.tickLower, c.tickUpper) = _alignTicks(
             tickLower, tickUpper, IUniswapV3Pool(c.pool).tickSpacing()
         );
@@ -323,8 +394,8 @@ contract ArcadeV3Zap is IUniswapV3SwapCallback {
         uint256 amount0Desired,
         uint256 amount1Desired
     ) internal returns (uint256 tokenId, uint128 liquidity) {
-        require(IERC20Min(t0).approve(npm, amount0Desired), "APPROVE0_FAIL");
-        require(IERC20Min(t1).approve(npm, amount1Desired), "APPROVE1_FAIL");
+        IERC20Min(t0).safeApprove(npm, amount0Desired);
+        IERC20Min(t1).safeApprove(npm, amount1Desired);
 
         INonfungiblePositionManager.MintParams memory mp = INonfungiblePositionManager.MintParams({
             token0: t0,
@@ -346,8 +417,8 @@ contract ArcadeV3Zap is IUniswapV3SwapCallback {
         // sits permanently. NPM is trusted, but zeroing matches the
         // forceApprove(router, 0) pattern in the V2 Zap and removes
         // the stale-allowance footgun.
-        require(IERC20Min(t0).approve(npm, 0), "APPROVE0_RESET_FAIL");
-        require(IERC20Min(t1).approve(npm, 0), "APPROVE1_RESET_FAIL");
+        IERC20Min(t0).safeApprove(npm, 0);
+        IERC20Min(t1).safeApprove(npm, 0);
     }
 
     // =================================================================
@@ -429,8 +500,9 @@ contract ArcadeV3Zap is IUniswapV3SwapCallback {
         amountOut = (outIsT0 ? collected0 : collected1) + swapOut;
         require(amountOut >= p.amountOutMin, "ZAPOUT_SLIPPAGE");
 
-        require(IERC20Min(p.tokenOut).transfer(p.recipient, amountOut), "TRANSFER_FAIL");
+        IERC20Min(p.tokenOut).safeTransfer(p.recipient, amountOut);
         _sweep(outIsT0 ? t1 : t0, p.recipient);
+        emit ZapOut(p.recipient, p.tokenId, p.tokenOut, amountOut);
     }
 
     function _readPositionPair(uint256 tokenId)
@@ -558,7 +630,7 @@ contract ArcadeV3Zap is IUniswapV3SwapCallback {
         uint256 amountToPay = amount0Delta > 0
             ? uint256(amount0Delta)
             : uint256(amount1Delta);
-        require(IERC20Min(tokenIn).transfer(msg.sender, amountToPay), "PAY_FAIL");
+        IERC20Min(tokenIn).safeTransfer(msg.sender, amountToPay);
     }
 
     function _sweep(address token, address to) internal {
@@ -566,6 +638,6 @@ contract ArcadeV3Zap is IUniswapV3SwapCallback {
         // Audit V3 Zap L-3: require the transfer return so a silently-
         // failing non-standard ERC20 doesn't leave the dust in the
         // contract while the caller thinks the sweep succeeded.
-        if (bal > 0) require(IERC20Min(token).transfer(to, bal), "SWEEP_FAIL");
+        if (bal > 0) IERC20Min(token).safeTransfer(to, bal);
     }
 }
