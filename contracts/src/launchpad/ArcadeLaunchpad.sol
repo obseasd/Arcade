@@ -54,6 +54,14 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
     /// threshold, the V2 pair is seeded with 17,500 USDC + 200M tokens (the
     /// documented initial post-migration mcap), and 2,500 USDC goes to the
     /// treasury. If you change this, also update SECURITY.md and project memory.
+    /// @dev Audit Launchpad M-2: CLANKER_V3 launches deliberately do NOT
+    ///      pay this one-shot 2_500 USDC. V3 is structured to extract
+    ///      the platform's cut perpetually via the V3 Locker's 20%
+    ///      slice of every recipient payout (see ArcadeV3Locker
+    ///      _distributePot + the platform recipient appended in
+    ///      _validateRecipients). Over the lifetime of an active V3
+    ///      pool that 20% lifetime fee stream is expected to exceed
+    ///      the 2_500 USDC one-shot, so the V3 path is NOT a free seat.
     uint256 public constant MIGRATION_FEE = 2_500e6;
     uint256 internal constant VIRTUAL_USDC_RESERVE = 5_000e6;
     uint256 internal constant VIRTUAL_TOKEN_RESERVE = 1_000_000_000e18;

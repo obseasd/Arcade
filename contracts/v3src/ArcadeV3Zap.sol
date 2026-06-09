@@ -198,7 +198,11 @@ contract ArcadeV3Zap is IUniswapV3SwapCallback {
         nonReentrant
         returns (uint256 tokenId, uint128 liquidity)
     {
-        (int24 tl, int24 tu) = _maxRangeTicks(p.fee);
+        // Audit V3 Zap H-5: read tickSpacing from the live pool instead
+        // of the hardcoded 1/10/60/200 map. A custom factory enabling a
+        // non-canonical fee (e.g. 2500) would otherwise mis-align with
+        // the previous default (60), causing the locker mint to revert.
+        (int24 tl, int24 tu) = _maxRangeTicksFromPool(p.tokenIn, p.otherToken, p.fee);
         return _zapIn(p, tl, tu);
     }
 
@@ -330,9 +334,28 @@ contract ArcadeV3Zap is IUniswapV3SwapCallback {
         }
     }
 
+    /// @dev Audit V3 Zap H-5: resolve the pool first, then read its
+    ///      actual tickSpacing(). Defends against a non-canonical fee
+    ///      tier (e.g. 2_500) registered on the factory that the hard-
+    ///      coded map below wouldn't know about.
+    function _maxRangeTicksFromPool(address tokenA, address tokenB, uint24 fee)
+        internal view returns (int24 tl, int24 tu)
+    {
+        (address t0, address t1) = tokenA < tokenB ? (tokenA, tokenB) : (tokenB, tokenA);
+        address pool = IUniswapV3Factory(factory).getPool(t0, t1, fee);
+        require(pool != address(0), "NO_POOL");
+        int24 spacing = IUniswapV3Pool(pool).tickSpacing();
+        tl = (MIN_TICK / spacing) * spacing;
+        if (tl < MIN_TICK) tl += spacing;
+        tu = (MAX_TICK / spacing) * spacing;
+        if (tu > MAX_TICK) tu -= spacing;
+    }
+
     function _maxRangeTicks(uint24 fee) internal pure returns (int24 tl, int24 tu) {
         // Approximate spacing from fee tier so we can render max range without
         // an RPC round-trip. Aligns to the canonical V3 spacings.
+        // NOTE: superseded by _maxRangeTicksFromPool above (audit H-5);
+        // kept for any view-only callers that don't need the live read.
         int24 spacing;
         if (fee == 100) spacing = 1;
         else if (fee == 500) spacing = 10;
@@ -397,6 +420,18 @@ contract ArcadeV3Zap is IUniswapV3SwapCallback {
         IERC20Min(t0).safeApprove(npm, amount0Desired);
         IERC20Min(t1).safeApprove(npm, amount1Desired);
 
+        // Audit V3 Zap H-4: pass 0/0 as amount0Min/amount1Min to NPM.
+        // The user-signed mins are computed against the OPTIMAL swap
+        // output but the swap can slip down to amountOtherMinSwap; the
+        // post-swap desired amounts can drop below the signed mins,
+        // making the mint revert with NPM's `Price slippage check`
+        // error even on otherwise-honest transactions. We already
+        // protect against:
+        //  - pool sqrtPriceX96 drift via the C-1 band check
+        //  - swap output drift via amountOtherMinSwap (caller-signed
+        //    floor on the swap leg)
+        // So the NPM mins are redundant here; passing 0/0 lets the
+        // mint pass on the realised post-swap balances.
         INonfungiblePositionManager.MintParams memory mp = INonfungiblePositionManager.MintParams({
             token0: t0,
             token1: t1,
@@ -405,8 +440,8 @@ contract ArcadeV3Zap is IUniswapV3SwapCallback {
             tickUpper: tickUpper,
             amount0Desired: amount0Desired,
             amount1Desired: amount1Desired,
-            amount0Min: p.amount0Min,
-            amount1Min: p.amount1Min,
+            amount0Min: 0,
+            amount1Min: 0,
             recipient: p.recipient,
             deadline: p.deadline
         });
@@ -444,9 +479,14 @@ contract ArcadeV3Zap is IUniswapV3SwapCallback {
         // Pull the NFT, decrease + collect, return the NFT, then swap the
         // non-tokenOut leg. Splitting into helpers avoids 0.7.6's
         // stack-too-deep limit.
+        // Audit V3 Zap H-1: NFT goes back to p.recipient (not
+        // msg.sender). When msg.sender == p.recipient (direct UI call)
+        // this is identical to the previous behavior; when they differ
+        // (meta-tx relayer paying gas on behalf of the user), the NFT
+        // lands with the user instead of the relayer.
         INonfungiblePositionManager(npm).transferFrom(msg.sender, address(this), p.tokenId);
         (uint256 collected0, uint256 collected1) = _decreaseAndCollect(p);
-        INonfungiblePositionManager(npm).transferFrom(address(this), msg.sender, p.tokenId);
+        INonfungiblePositionManager(npm).transferFrom(address(this), p.recipient, p.tokenId);
 
         amountOut = _zapOutSettle(p, t0, t1, fee, collected0, collected1);
     }

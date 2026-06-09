@@ -261,7 +261,13 @@ contract ArcadeV3Locker is IUniswapV3MintCallback {
         }
         positionIdByToken[p.token] = positionId;
 
-        _sweep(p.token, launchpad);
+        // Audit V3 Locker H-1: sweep token-side dust to recipient[0]
+        // (creator) instead of the launchpad. The launchpad has no
+        // generic ERC20 withdrawal path, so dust sent there would be
+        // stuck forever. Routing to recipient[0] gifts the creator a
+        // negligible amount of their own token; over the lifetime of
+        // the pool the amount is dust by definition.
+        _sweep(p.token, p.recipients[0].recipient);
         emit PositionLocked(positionId, p.token, p.pool, liquidity);
     }
 
