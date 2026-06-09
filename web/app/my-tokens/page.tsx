@@ -1141,6 +1141,13 @@ interface UnifiedActivityItem {
     /** Tx hash for the transaction-details popover (Network cost +
      *  Submitted on + explorer link). */
     txHash?: string;
+    /** Drives what the Address column renders:
+     *  - "to-from"      : "TO" / "FROM" caption + counterparty short (default)
+     *  - "address-only" : counterparty short only, no caption (mints, claims,
+     *                     fee claims - the action is self-explanatory)
+     *  - "transaction"  : "TRANSACTION" caption + short txHash (swaps - the
+     *                     swap counterparty is the AMM pool which is noise) */
+    addressColumnKind?: "to-from" | "address-only" | "transaction";
 }
 
 type ActivityTypeFilter =
@@ -1285,14 +1292,14 @@ function ActivityTab({ account }: { account: Address }) {
                 </div>
             ) : (
                 <div className="arc-card overflow-visible">
-                    <div className="overflow-x-auto">
+                    <div>
                         <table className="w-full text-sm">
                             <thead className="border-b border-arc-border/60 text-[10px] uppercase tracking-wider text-arc-text-muted">
                                 <tr>
                                     <th className="w-[210px] px-4 py-3 text-left font-medium">Time</th>
-                                    <th className="px-4 py-3 text-left font-medium">Type</th>
-                                    <th className="px-4 py-3 text-left font-medium">Amount</th>
-                                    <th className="px-4 py-3 text-left font-medium">Address</th>
+                                    <th className="w-[180px] px-3 py-3 text-left font-medium">Type</th>
+                                    <th className="w-[280px] px-3 py-3 text-left font-medium">Amount</th>
+                                    <th className="px-3 py-3 text-left font-medium">Address</th>
                                     <th className="w-8 px-2 py-3" aria-label="Details" />
                                 </tr>
                             </thead>
@@ -1433,7 +1440,7 @@ function ActivityRowFull({ item }: { item: UnifiedActivityItem }) {
                 <span className="group-hover:hidden">{formatActivityDay(item.ts)}</span>
                 <span className="hidden group-hover:inline">{formatActivityFull(item.ts)}</span>
             </td>
-            <td className="px-4 py-3">
+            <td className="px-3 py-3">
                 <div className="flex items-center gap-2">
                     <Image
                         src={item.iconSrc}
@@ -1446,12 +1453,21 @@ function ActivityRowFull({ item }: { item: UnifiedActivityItem }) {
                     <span className="text-arc-text">{item.type}</span>
                 </div>
             </td>
-            <td className="px-4 py-3">
+            <td className="px-3 py-3">
                 <div className="text-arc-text-faint">{item.label}</div>
                 <div className="font-medium text-arc-text">{item.value}</div>
             </td>
-            <td className="px-4 py-3">
-                {item.counterparty && shortCounter ? (
+            <td className="px-3 py-3">
+                {item.addressColumnKind === "transaction" && item.txHash ? (
+                    <div className="flex flex-col">
+                        <span className="text-[10px] uppercase tracking-wider text-arc-text-faint">
+                            Transaction
+                        </span>
+                        <span className="cursor-default text-xs font-medium text-arc-text">
+                            {`${item.txHash.slice(0, 6)}...${item.txHash.slice(-4)}`}
+                        </span>
+                    </div>
+                ) : item.counterparty && shortCounter ? (
                     <div
                         ref={addressWrapRef}
                         className="relative inline-block"
@@ -1459,7 +1475,7 @@ function ActivityRowFull({ item }: { item: UnifiedActivityItem }) {
                         onMouseLeave={onAddressLeave}
                     >
                         <div className="flex flex-col">
-                            {item.counterpartyDirection && (
+                            {item.counterpartyDirection && item.addressColumnKind !== "address-only" && (
                                 <span className="text-[10px] uppercase tracking-wider text-arc-text-faint">
                                     {item.counterpartyDirection === "to" ? "To" : "From"}
                                 </span>
@@ -1728,6 +1744,9 @@ function bridgeToUnified(b: HistoryEntry): UnifiedActivityItem[] {
             value: `${amountStr} USDC`,
             counterparty: b.recipient,
             counterpartyDirection: "to",
+            // Mint side of a bridge is a self-action ("you claimed for
+            // yourself") - drop the TO/FROM caption since it's redundant.
+            addressColumnKind: "address-only",
             txHash: b.mintTxHash,
             explorerUrl: b.mintTxHash ? `https://testnet.arcscan.app/tx/${b.mintTxHash}` : undefined,
         });
@@ -1749,6 +1768,19 @@ function claimToUnified(c: PendingTwitterClaim): UnifiedActivityItem {
 }
 
 function appToUnified(a: ActivityEntry): UnifiedActivityItem {
+    // Swaps don't have a meaningful counterparty (it's an AMM pool); show
+    // the tx hash instead. Mints, claims, and fee claims are self-actions;
+    // drop the TO/FROM caption since it's noise. Everything else falls
+    // back to the standard counterparty rendering.
+    const swapTypes = new Set(["swap", "buy", "sell", "multiswap"]);
+    const selfActionTypes = new Set(["launch", "claim-fees", "add-liquidity"]);
+    const addressColumnKind: UnifiedActivityItem["addressColumnKind"] = swapTypes.has(
+        a.type,
+    )
+        ? "transaction"
+        : selfActionTypes.has(a.type)
+          ? "address-only"
+          : "to-from";
     return {
         id: `app-${a.id}`,
         kind: "app",
@@ -1757,6 +1789,8 @@ function appToUnified(a: ActivityEntry): UnifiedActivityItem {
         type: capitalize(a.type),
         label: a.label,
         value: a.value,
+        addressColumnKind,
+        txHash: a.txHash,
         explorerUrl: a.txHash ? `https://testnet.arcscan.app/tx/${a.txHash}` : undefined,
     };
 }

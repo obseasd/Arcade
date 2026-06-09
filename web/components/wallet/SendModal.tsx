@@ -138,10 +138,41 @@ export function SendModal({ open, onClose, defaultToken }: Props) {
     });
     const balanceQ = isNativeUsdc ? nativeBalQ : erc20BalQ;
     const balanceRaw = balanceQ.data?.value ?? 0n;
-    const balanceDecimals = balanceQ.data?.decimals ?? token?.decimals ?? 18;
+    // Arc testnet's nativeCurrency is configured as decimals:6 in our
+    // chain config so USDC reads display 6dp everywhere else, but the
+    // raw EVM `value` is always 18dp wei-equivalent (every EVM chain
+    // does this). useBalance does formatUnits(value, 6) which produces
+    // "152000000000000.000000" when the user actually has 152 USDC.
+    // Override to 18dp for native so the display + parse use the EVM
+    // precision the on-chain value carries.
+    const balanceDecimals = isNativeUsdc
+        ? 18
+        : (balanceQ.data?.decimals ?? token?.decimals ?? 18);
     const balanceFormatted = balanceQ.data
         ? formatUnits(balanceRaw, balanceDecimals)
         : "0";
+    // Compact balance for the chip: 4 dp max, no trailing zeroes.
+    const balanceCompact = (() => {
+        const n = Number(balanceFormatted);
+        if (!Number.isFinite(n)) return balanceFormatted;
+        return n.toLocaleString("en-US", {
+            maximumFractionDigits: 4,
+            minimumFractionDigits: 0,
+        });
+    })();
+    // USD value of the parsed amount. Only USDC has a stable 1:1 price
+    // we trust on Arc testnet (no oracle yet for launchpad tokens), so
+    // we surface the dollar amount for USDC and dash everything else.
+    const amountUsd: number | undefined = (() => {
+        if (!amount) return undefined;
+        const n = Number(amount);
+        if (!Number.isFinite(n)) return undefined;
+        if (isNativeUsdc) return n;
+        return undefined;
+    })();
+    const balanceUsd: number | undefined = isNativeUsdc
+        ? Number(balanceFormatted)
+        : undefined;
 
     // ENS lookup on the recipient: resolve `name.eth` -> address, and
     // reverse-resolve the address to a primary name for the review screen.
@@ -258,10 +289,12 @@ export function SendModal({ open, onClose, defaultToken }: Props) {
                         <FormView
                             amount={amount}
                             setAmount={setAmount}
+                            amountUsd={amountUsd}
                             token={token}
                             onPickToken={() => setTokenSelectOpen(true)}
-                            balanceFormatted={balanceFormatted}
-                            balanceLabel={balanceQ.data?.symbol ?? token?.symbol ?? ""}
+                            balanceCompact={balanceCompact}
+                            balanceUsd={balanceUsd}
+                            balanceLabel={token?.symbol ?? balanceQ.data?.symbol ?? ""}
                             onMax={onMax}
                             recipientInput={recipientInput}
                             setRecipientInput={setRecipientInput}
@@ -338,9 +371,11 @@ export function SendModal({ open, onClose, defaultToken }: Props) {
 function FormView({
     amount,
     setAmount,
+    amountUsd,
     token,
     onPickToken,
-    balanceFormatted,
+    balanceCompact,
+    balanceUsd,
     balanceLabel,
     onMax,
     recipientInput,
@@ -355,9 +390,11 @@ function FormView({
 }: {
     amount: string;
     setAmount: (s: string) => void;
+    amountUsd?: number;
     token: TokenOption | undefined;
     onPickToken: () => void;
-    balanceFormatted: string;
+    balanceCompact: string;
+    balanceUsd?: number;
     balanceLabel: string;
     onMax: () => void;
     recipientInput: string;
@@ -370,11 +407,9 @@ function FormView({
     cta: string;
     onContinue: () => void;
 }) {
-    const recipientDisplay = (() => {
-        if (!resolvedAddress) return null;
-        const short = `${resolvedAddress.slice(0, 6)}...${resolvedAddress.slice(-4)}`;
-        return reverseEns ? `${reverseEns} (${short})` : short;
-    })();
+    const shortAddr = resolvedAddress
+        ? `${resolvedAddress.slice(0, 6)}...${resolvedAddress.slice(-4)}`
+        : "";
 
     return (
         <>
@@ -390,10 +425,10 @@ function FormView({
                 </button>
             </div>
 
-            {/* You're sending - big amount input + token chip at the bottom */}
+            {/* You're sending - big amount input + USD value + token chip */}
             <div className="mt-4 rounded-2xl border border-arc-border bg-arc-surface p-4">
                 <div className="text-xs font-semibold text-arc-text">You&apos;re sending</div>
-                <div className="my-6 flex items-center justify-center">
+                <div className="my-5 flex flex-col items-center">
                     <input
                         inputMode="decimal"
                         autoFocus
@@ -405,6 +440,11 @@ function FormView({
                         placeholder="0"
                         className="w-full bg-transparent text-center text-5xl font-semibold tabular-nums text-arc-text outline-none placeholder:text-arc-text-faint/50"
                     />
+                    {amountUsd !== undefined && (
+                        <div className="mt-1.5 text-sm text-arc-text-faint">
+                            ${amountUsd.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </div>
+                    )}
                 </div>
                 {/* Token chip + balance + Max */}
                 <div className="flex items-center justify-between gap-3 rounded-xl bg-arc-bg-elevated px-3 py-2">
@@ -424,8 +464,16 @@ function FormView({
                                     <div className="truncate text-sm font-semibold text-arc-text">
                                         {token.symbol ?? "?"}
                                     </div>
-                                    <div className="truncate text-[11px] text-arc-text-faint">
-                                        Balance: {balanceFormatted} {balanceLabel}
+                                    <div className="truncate text-[10px] text-arc-text-faint">
+                                        Balance: {balanceCompact} {balanceLabel}
+                                        {balanceUsd !== undefined && (
+                                            <>
+                                                {" "}
+                                                <span className="text-arc-text-faint">
+                                                    (${balanceUsd.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })})
+                                                </span>
+                                            </>
+                                        )}
                                     </div>
                                 </div>
                             </>
@@ -444,29 +492,60 @@ function FormView({
                 </div>
             </div>
 
-            {/* Recipient field */}
-            <div className="mt-3 rounded-2xl border border-arc-border bg-arc-surface px-4 py-3">
-                <div className="text-xs font-semibold text-arc-text">To</div>
-                <input
-                    value={recipientInput}
-                    onChange={(e) => setRecipientInput(e.target.value.trim())}
-                    placeholder="Wallet address or ENS name"
-                    className="mt-1 w-full bg-transparent text-sm text-arc-text outline-none placeholder:text-arc-text-faint"
-                />
-                {recipientInput && (
-                    <div className="mt-1 text-[11px]">
-                        {recipientDisplay ? (
-                            <span className="text-arc-text-faint">Resolves to {recipientDisplay}</span>
-                        ) : ensLoading ? (
-                            <span className="text-arc-text-faint">Resolving ENS…</span>
-                        ) : (
-                            <span className="text-arc-warn">
-                                Not a valid address or ENS name
+            {/* Recipient field - flips to a chip once a valid address is
+                resolved; the chip shows the short form + an X clear button
+                so the user can change recipient without re-typing the whole
+                input. Plain input stays while typing or before resolution. */}
+            {resolvedAddress ? (
+                <div className="mt-3 flex items-center justify-between gap-3 rounded-2xl border border-arc-border bg-arc-surface px-3 py-3">
+                    <div className="flex min-w-0 items-center gap-2.5">
+                        <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-arc-cta-hover/30 text-arc-cta-hover">
+                            <span className="text-[10px] font-bold">
+                                {(reverseEns ?? resolvedAddress).slice(0, 2)}
                             </span>
-                        )}
+                        </div>
+                        <div className="min-w-0">
+                            <div className="truncate text-sm font-semibold text-arc-text">
+                                {reverseEns ?? shortAddr}
+                            </div>
+                            {reverseEns && (
+                                <div className="truncate text-[10px] text-arc-text-faint">
+                                    {shortAddr}
+                                </div>
+                            )}
+                        </div>
                     </div>
-                )}
-            </div>
+                    <button
+                        type="button"
+                        onClick={() => setRecipientInput("")}
+                        className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-arc-text-faint transition-colors hover:bg-white/5 hover:text-arc-text"
+                        aria-label="Clear recipient"
+                    >
+                        <CrossIcon size={12} />
+                    </button>
+                </div>
+            ) : (
+                <div className="mt-3 rounded-2xl border border-arc-border bg-arc-surface px-4 py-3">
+                    <div className="text-xs font-semibold text-arc-text">To</div>
+                    <input
+                        value={recipientInput}
+                        onChange={(e) => setRecipientInput(e.target.value.trim())}
+                        placeholder="Wallet address or ENS name"
+                        className="mt-1 w-full bg-transparent text-sm text-arc-text outline-none placeholder:text-arc-text-faint"
+                    />
+                    {recipientInput && (
+                        <div className="mt-1 text-[11px]">
+                            {ensLoading ? (
+                                <span className="text-arc-text-faint">Resolving ENS…</span>
+                            ) : (
+                                <span className="text-arc-warn">
+                                    Not a valid address or ENS name
+                                </span>
+                            )}
+                        </div>
+                    )}
+                </div>
+            )}
 
             <button
                 type="button"
@@ -529,12 +608,15 @@ function ReviewView({
                 </button>
             </div>
 
-            <div className="mt-4 space-y-3">
-                <div className="flex items-center justify-between gap-3 rounded-2xl border border-arc-border bg-arc-surface px-4 py-3">
-                    <div>
-                        <div className="text-2xl font-semibold tabular-nums text-arc-text">
-                            {amount} {token.symbol ?? ""}
-                        </div>
+            {/* Review card: bordereless sections so the modal reads as a
+                single sheet (the bordered chips were visually busy). A thin
+                divider before the Network cost row separates the "what +
+                where" block from the "how much it costs you" block, per
+                user request. */}
+            <div className="mt-4 overflow-hidden rounded-2xl bg-arc-surface">
+                <div className="flex items-center justify-between gap-3 px-4 py-3">
+                    <div className="text-2xl font-semibold tabular-nums text-arc-text">
+                        {amount} {token.symbol ?? ""}
                     </div>
                     <AutoTokenIcon
                         address={token.address}
@@ -542,7 +624,7 @@ function ReviewView({
                         size={36}
                     />
                 </div>
-                <div className="rounded-2xl border border-arc-border bg-arc-surface px-4 py-3">
+                <div className="px-4 py-3">
                     <div className="text-xs font-semibold text-arc-text">To</div>
                     <div className="mt-1 break-all text-sm font-medium text-arc-text">
                         {reverseEns ?? shortAddr}
@@ -551,9 +633,17 @@ function ReviewView({
                         <div className="text-[11px] text-arc-text-faint">{shortAddr}</div>
                     )}
                 </div>
-                <div className="flex items-center justify-between rounded-2xl border border-arc-border bg-arc-surface px-4 py-2.5 text-sm">
+                <div className="mx-4 border-t border-arc-border/60" />
+                <div className="flex items-center justify-between px-4 py-3 text-sm">
                     <span className="text-arc-text-faint">Network cost</span>
-                    <span className="text-arc-text">~ gas TBD</span>
+                    <div className="flex items-center gap-1.5">
+                        <AutoTokenIcon
+                            address={ADDRESSES.usdc}
+                            symbol="USDC"
+                            size={16}
+                        />
+                        <span className="text-arc-text">~ TBD</span>
+                    </div>
                 </div>
             </div>
 
