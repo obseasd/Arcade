@@ -4,13 +4,17 @@ import { useAccountModal } from "@rainbow-me/rainbowkit";
 import {
     ArrowLeft,
     ArrowRight,
+    ArrowRightLeft,
+    BarChart3,
     Calendar,
     Check,
+    Coins,
     Copy,
     Download,
     ExternalLink,
     Filter,
     MoreHorizontal,
+    Plus,
     Rocket,
     Search,
     Send,
@@ -340,6 +344,22 @@ function OverviewTab({
 }) {
     const { openAccountModal } = useAccountModal();
     const [receiveOpen, setReceiveOpen] = useState(false);
+    const [moreOpen, setMoreOpen] = useState(false);
+    const moreWrapRef = useRef<HTMLDivElement | null>(null);
+
+    // Close the More popover when the user clicks anywhere outside of it,
+    // including elsewhere inside the page. Mirrors the pattern used by the
+    // wallet widget's submenu.
+    useEffect(() => {
+        if (!moreOpen) return;
+        const handler = (e: MouseEvent) => {
+            if (moreWrapRef.current && !moreWrapRef.current.contains(e.target as Node)) {
+                setMoreOpen(false);
+            }
+        };
+        document.addEventListener("mousedown", handler);
+        return () => document.removeEventListener("mousedown", handler);
+    }, [moreOpen]);
 
     const currentUsd = Number(totalHoldingsUsd) / 1e6;
     const series = useMemo(() => generatePlaceholderSeries(currentUsd), [currentUsd]);
@@ -469,11 +489,41 @@ function OverviewTab({
                             label="Buy"
                             href="/swap"
                         />
-                        <ActionTile
-                            icon={<MoreHorizontal className="h-[18px] w-[18px]" />}
-                            label="More"
-                            disabled
-                        />
+                        <div ref={moreWrapRef} className="relative">
+                            <ActionTile
+                                icon={<MoreHorizontal className="h-[18px] w-[18px]" />}
+                                label="More"
+                                onClick={() => setMoreOpen((v) => !v)}
+                            />
+                            {moreOpen && (
+                                <div className="absolute right-0 top-full z-30 mt-1.5 w-44 overflow-hidden rounded-xl border border-arc-border bg-arc-bg-elevated shadow-[0_12px_32px_-8px_rgba(0,0,0,0.6)]">
+                                    <MoreMenuItem
+                                        icon={<ArrowRightLeft className="h-4 w-4" />}
+                                        label="Swap"
+                                        href="/swap"
+                                        onSelect={() => setMoreOpen(false)}
+                                    />
+                                    <MoreMenuItem
+                                        icon={<Coins className="h-4 w-4" />}
+                                        label="Sell"
+                                        href="/swap"
+                                        onSelect={() => setMoreOpen(false)}
+                                    />
+                                    <MoreMenuItem
+                                        icon={<BarChart3 className="h-4 w-4" />}
+                                        label="Limit"
+                                        href="/swap?mode=limit"
+                                        onSelect={() => setMoreOpen(false)}
+                                    />
+                                    <MoreMenuItem
+                                        icon={<Plus className="h-4 w-4" />}
+                                        label="New position"
+                                        href="/positions/add"
+                                        onSelect={() => setMoreOpen(false)}
+                                    />
+                                </div>
+                            )}
+                        </div>
                     </div>
 
                     {/* Flat (no card chrome) so it reads as a section within
@@ -582,6 +632,34 @@ function ActionTile({
         <button type="button" onClick={onClick} disabled={disabled} className={className}>
             {inner}
         </button>
+    );
+}
+
+/**
+ * Row in the More popover (Swap / Sell / Limit / New position). Always a
+ * Link so the user can middle-click to open in a new tab; the onSelect
+ * callback closes the popover after navigation.
+ */
+function MoreMenuItem({
+    icon,
+    label,
+    href,
+    onSelect,
+}: {
+    icon: React.ReactNode;
+    label: string;
+    href: string;
+    onSelect: () => void;
+}) {
+    return (
+        <Link
+            href={href}
+            onClick={onSelect}
+            className="flex items-center gap-3 px-3.5 py-2.5 text-sm text-arc-text transition-colors hover:bg-white/5"
+        >
+            <span className="text-arc-text-muted">{icon}</span>
+            {label}
+        </Link>
     );
 }
 
