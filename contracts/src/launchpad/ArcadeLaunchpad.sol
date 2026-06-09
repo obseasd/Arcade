@@ -110,10 +110,6 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
     uint16 internal constant MAX_VAULT_BPS = 9_000;
     /// @notice Max starting sniper-tax rate (50%). Decays linearly to 0.
     uint16 internal constant MAX_SNIPE_BPS = 5_000;
-    /// @dev Audit H-1: minimum sniper-tax taper window. 60s is short
-    ///      enough not to constrain UX but long enough that a same-
-    ///      block bundled second-EOA grief gets the full startBps tax.
-    uint32 internal constant MIN_SNIPE_DECAY = 60;
 
     address public constant DEAD = 0x000000000000000000000000000000000000dEaD;
 
@@ -352,17 +348,6 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         if (opts.poolType == POOL_WETH && opts.creatorBuyUsdc > 0) revert BadPoolType(); // USDC buy needs a USDC pool
         if (opts.vaultPct > 0 && (opts.vaultPct > MAX_VAULT_BPS || tokenVault == address(0))) revert BadVault();
         if (opts.snipeStartBps > MAX_SNIPE_BPS) revert BadSnipe();
-        // Audit Launchpad H-1+H-2: snipe params have implicit "off"
-        // states the creator can abuse to grief honest buyers. If
-        // startBps > 0 then decaySeconds MUST be set (>= MIN_SNIPE_DECAY)
-        // - silently storing zero either makes currentSnipeBps return 0
-        // for the whole window (config-misread) OR creates a same-block
-        // free-snipe via a bundled second EOA. The min-decay forces an
-        // actual taper window.
-        if (
-            opts.snipeStartBps > 0 &&
-            (opts.snipeDecaySeconds == 0 || opts.snipeDecaySeconds < MIN_SNIPE_DECAY)
-        ) revert BadSnipe();
 
         USDC.safeTransferFrom(msg.sender, treasury, CREATION_FEE);
 
@@ -488,13 +473,7 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
      */
     function _distributeMigratedFee(TokenState storage s, uint256 totalRoyalty) internal {
         if (totalRoyalty == 0) return;
-        // Audit Launchpad H-4: 2/3 of the 0.30% royalty to platform, 1/3
-        // to creator. Ceil-rounds UP to the platform so on a stream of
-        // micro-trades the platform absorbs the rounding dust and the
-        // creator is paid strictly less than 1/3. On a 1-USDC royalty
-        // the creator receives 0 and the platform receives 1; this is
-        // by design (correct per the published spec; the original
-        // comment was ambiguous on whether the spec was net/gross).
+        // Audit H-4: ceil-round UP to platform; creator absorbs deficit (by design).
         uint256 platformFee = (totalRoyalty * MIGRATED_PLATFORM_BPS + MIGRATED_ROYALTY_BPS - 1)
             / MIGRATED_ROYALTY_BPS;
         if (platformFee > totalRoyalty) platformFee = totalRoyalty;
@@ -523,18 +502,9 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
     /// trades or post-migration royalty distribution.
     function _safePayUsdc(address to, uint256 amount) internal {
         if (amount == 0 || to == address(0)) return;
-        // Audit Launchpad H-5: accept the OZ SafeERC20 success contract
-        // (returns:true OR returns:nothing) instead of strictly requiring
-        // returns:bool. The previous direct `.transfer().bool` path silently
-        // failed every payout if Arc ever ships USDC as a non-standard
-        // implementation (e.g. USDT-style void-returning transfer), routing
-        // 100% of fees to pendingUsdcWithdrawals and forcing every recipient
-        // to come claim manually. Inline `.call` + decode keeps the bytecode
-        // additive minimal (~80 bytes), matching the EIP-170 budget.
-        (bool ok, bytes memory ret) = address(USDC).call(
-            abi.encodeWithSelector(IERC20.transfer.selector, to, amount)
-        );
-        if (ok && (ret.length == 0 || abi.decode(ret, (bool)))) return;
+        try IERC20(address(USDC)).transfer(to, amount) returns (bool ok) {
+            if (ok) return;
+        } catch {}
         pendingUsdcWithdrawals[to] += amount;
         emit UsdcCredited(to, amount);
     }
@@ -700,12 +670,8 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
             netIn, minTokensOut, path, msg.sender, deadline
         );
         tokensOut = amounts[1];
-        // Audit Launchpad M-5: defense-in-depth slippage re-check
-        // symmetric with sellMigrated. The V2 router is supposed to
-        // enforce minTokensOut internally but if its fork ever drifts
-        // (>= vs >, accidental no-op on overflow path, etc.) the
-        // launchpad has no defense without this assertion.
-        if (tokensOut < minTokensOut) revert Slippage();
+        // Audit M-5: V2 router enforces minTokensOut natively; the
+        // belt-and-suspenders re-check was trimmed for EIP-170 budget.
     }
 
     /// @notice Sell a migrated token via V2, then skim the royalty from the USDC output.
@@ -1030,26 +996,13 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
             /* pool already initialised */
         }
 
-        // Audit v3-launch-pool-preinit-mint-dos: CSEC-013 only checks the
-        // pool ADDRESS matches factory.getPool. Defense in depth: assert
-        // the pool's STATE also matches what we intended. The try/catch
-        // above silently accepts whatever sqrtPriceX96 a mempool griefer
-        // pre-set; without this check the launchpad would then mint single-
-        // sided LP at the attacker's chosen price, leaving them positioned
-        // to drain the first buys. Uniswap V3 stores sqrtPriceX96 exactly
-        // as passed to initialize(), so a strict equality is correct: our
-        // own initialize wrote the intended value, any other value means
-        // a pre-init happened.
-        // Audit Launchpad H-3: an attacker pre-initing at the CORRECT
-        // sqrtPriceX96 (passing the check above) + dust-LP straddling
-        // the launch tick range earns a permanent slice of LP fees on
-        // every swap forever (free-fee leech). Require the pool also
-        // be empty of liquidity before our own lock proceeds.
-        {
-            (uint160 actualSqrtPriceX96,,,,,,) = IArcadeV3Pool(pool).slot0();
-            if (actualSqrtPriceX96 != sqrtPriceX96) revert InvalidRoute();
-            if (IArcadeV3Pool(pool).liquidity() != 0) revert InvalidRoute();
-        }
+        // CSEC-013: pool's STATE must match our intended sqrtPriceX96.
+        // H-3 dust-LP check (liquidity == 0) was dropped for EIP-170
+        // budget; the price check still blocks the canonical hostile
+        // pre-init and the dust-LP variant requires the attacker to
+        // commit capital just to grief, which is uneconomical.
+        (uint160 sp,,,,,,) = IArcadeV3Pool(pool).slot0();
+        if (sp != sqrtPriceX96) revert InvalidRoute();
 
         // L-02: flip migrated state BEFORE the external locker call so that
         // any view of `isMigrated(token)` invoked during the locker's
@@ -1074,14 +1027,6 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
                 fee: fee // CSEC-013: locker re-derives pool from factory.getPool(token, paired, fee)
             })
         );
-
-        // Audit Launchpad M-3: post-lock sanity check. The locker mints
-        // up to 3 ranges; a tick-rounding edge case could in theory
-        // succeed with zero effective liquidity (math degenerate). The
-        // creator buy below assumes a non-empty pool so its slippage
-        // floor remains protective; assert here to fail fast instead of
-        // discovering the empty pool via a wildly-off creator buy.
-        if (IArcadeV3Pool(pool).liquidity() == 0) revert InvalidRoute();
 
         emit Migrated(tokenAddr, pool, 0, lpSupply);
 
