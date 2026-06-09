@@ -286,7 +286,7 @@ function PortfolioTabs({ current, onChange }: { current: TabKey; onChange: (k: T
                     key={t.key}
                     onClick={() => onChange(t.key)}
                     className={cn(
-                        "relative py-3 text-sm font-medium transition-colors",
+                        "relative py-3.5 text-base font-medium transition-colors",
                         current === t.key
                             ? "text-arc-text"
                             : "text-arc-text-muted hover:text-arc-text",
@@ -1269,14 +1269,14 @@ function ActivityTab({ account }: { account: Address }) {
                     value={timeFilter}
                     onChange={(v) => setTimeFilter(v as ActivityTimeFilter)}
                 />
-                <div className="ml-auto flex h-9 w-full items-center gap-2 rounded-xl border border-arc-border bg-black/15 px-3 backdrop-blur-xl sm:w-72">
-                    <Search className="h-3.5 w-3.5 shrink-0 text-arc-text-faint" />
+                <div className="ml-auto flex h-10 w-full items-center gap-2 rounded-xl border border-arc-border bg-black/15 px-3.5 backdrop-blur-xl sm:w-80">
+                    <Search className="h-4 w-4 shrink-0 text-arc-text-faint" />
                     <input
                         type="search"
                         value={search}
                         onChange={(e) => setSearch(e.target.value)}
                         placeholder="Search activity"
-                        className="w-full bg-transparent text-xs text-arc-text placeholder:text-arc-text-faint focus:outline-none"
+                        className="w-full bg-transparent text-sm text-arc-text placeholder:text-arc-text-faint focus:outline-none"
                         aria-label="Search activity"
                     />
                 </div>
@@ -1294,13 +1294,13 @@ function ActivityTab({ account }: { account: Address }) {
                 <div className="arc-card overflow-visible">
                     <div>
                         <table className="w-full text-sm">
-                            <thead className="border-b border-arc-border/60 text-[10px] uppercase tracking-wider text-arc-text-muted">
+                            <thead className="border-b border-arc-border/60 text-[11px] uppercase tracking-wider text-arc-text-muted">
                                 <tr>
-                                    <th className="w-[210px] px-4 py-3 text-left font-medium">Time</th>
-                                    <th className="w-[180px] px-3 py-3 text-left font-medium">Type</th>
-                                    <th className="w-[280px] px-3 py-3 text-left font-medium">Amount</th>
-                                    <th className="px-3 py-3 text-left font-medium">Address</th>
-                                    <th className="w-8 px-2 py-3" aria-label="Details" />
+                                    <th className="w-[210px] px-4 py-3.5 text-left font-medium">Time</th>
+                                    <th className="w-[180px] px-3 py-3.5 text-left font-medium">Type</th>
+                                    <th className="w-[280px] px-3 py-3.5 text-left font-medium">Amount</th>
+                                    <th className="px-3 py-3.5 text-left font-medium">Address</th>
+                                    <th className="w-8 px-2 py-3.5" aria-label="Details" />
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-arc-border/40">
@@ -1353,7 +1353,7 @@ function FilterMenu({
             <button type="button"
                 onClick={() => setOpen((v) => !v)}
                 className={cn(
-                    "inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-medium transition-colors",
+                    "inline-flex items-center gap-1.5 rounded-xl border px-3.5 py-2.5 text-sm font-medium transition-colors",
                     open
                         ? "border-arc-cta-hover/50 bg-arc-bg-elevated text-arc-text"
                         : "border-arc-border bg-arc-bg-elevated text-arc-text hover:border-arc-cta-hover/40",
@@ -1436,37 +1436,41 @@ function ActivityRowFull({ item }: { item: UnifiedActivityItem }) {
 
     return (
         <tr className="group text-sm transition-colors hover:bg-white/[0.02]">
-            <td className="whitespace-nowrap px-4 py-3 text-xs text-arc-text-muted">
+            <td className="whitespace-nowrap px-4 py-3.5 text-sm text-arc-text-muted">
                 <span className="group-hover:hidden">{formatActivityDay(item.ts)}</span>
                 <span className="hidden group-hover:inline">{formatActivityFull(item.ts)}</span>
             </td>
-            <td className="px-3 py-3">
-                <div className="flex items-center gap-2">
+            <td className="px-3 py-3.5">
+                <div className="flex items-center gap-2.5">
                     <Image
                         src={item.iconSrc}
                         alt={item.type}
-                        width={20}
-                        height={20}
-                        className="h-5 w-5 shrink-0 object-contain"
+                        width={22}
+                        height={22}
+                        className="h-[22px] w-[22px] shrink-0 object-contain"
                         unoptimized
                     />
-                    <span className="text-arc-text">{item.type}</span>
+                    <span className="text-base text-arc-text">{item.type}</span>
                 </div>
             </td>
-            <td className="px-3 py-3">
-                <div className="text-arc-text-faint">{item.label}</div>
-                <div className="font-medium text-arc-text">{item.value}</div>
+            <td className="px-3 py-3.5">
+                <div className="text-sm text-arc-text-faint">{item.label}</div>
+                <div className="text-base font-medium text-arc-text">{item.value}</div>
             </td>
-            <td className="px-3 py-3">
+            <td className="px-3 py-3.5">
                 {item.addressColumnKind === "transaction" && item.txHash ? (
-                    <div className="flex flex-col">
-                        <span className="text-[10px] uppercase tracking-wider text-arc-text-faint">
+                    <button
+                        type="button"
+                        onClick={() => setDetailsOpen(true)}
+                        className="flex flex-col text-left transition-colors hover:text-arc-cta-hover"
+                    >
+                        <span className="text-[11px] uppercase tracking-wider text-arc-text-faint">
                             Transaction
                         </span>
-                        <span className="cursor-default text-xs font-medium text-arc-text">
+                        <span className="text-sm font-medium text-arc-text">
                             {`${item.txHash.slice(0, 6)}...${item.txHash.slice(-4)}`}
                         </span>
-                    </div>
+                    </button>
                 ) : item.counterparty && shortCounter ? (
                     <div
                         ref={addressWrapRef}
@@ -1476,11 +1480,11 @@ function ActivityRowFull({ item }: { item: UnifiedActivityItem }) {
                     >
                         <div className="flex flex-col">
                             {item.counterpartyDirection && item.addressColumnKind !== "address-only" && (
-                                <span className="text-[10px] uppercase tracking-wider text-arc-text-faint">
+                                <span className="text-[11px] uppercase tracking-wider text-arc-text-faint">
                                     {item.counterpartyDirection === "to" ? "To" : "From"}
                                 </span>
                             )}
-                            <span className="cursor-default text-xs font-medium text-arc-text">
+                            <span className="cursor-default text-sm font-medium text-arc-text">
                                 {shortCounter}
                             </span>
                         </div>
@@ -1567,17 +1571,22 @@ function AddressPopover({
                     href={`https://testnet.arcscan.app/address/${address}`}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="flex h-5 w-5 items-center justify-center transition-opacity hover:opacity-80"
+                    className="inline-flex transition-opacity hover:opacity-80"
                     aria-label="View on Arcscan"
                     title="View on Arcscan"
                 >
-                    <Image
+                    {/* Plain <img> instead of next/image because next/image's
+                        explicit width/height + className can clip transparent
+                        PNGs whose drawable area is smaller than the canvas.
+                        eslint-disable required because next/no-img-element
+                        prefers next/image, but next/image is the bug. */}
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
                         src="/arcscan.png"
                         alt=""
                         width={20}
                         height={20}
-                        className="h-5 w-5 object-contain"
-                        unoptimized
+                        style={{ width: 20, height: 20, objectFit: "contain" }}
                     />
                 </a>
             </div>
