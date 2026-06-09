@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Address, erc20Abi, zeroAddress } from "viem";
 import { useAccount, usePublicClient, useReadContract, useReadContracts, useWriteContract } from "wagmi";
 import { V3_LOCKER_ABI } from "@/lib/abis/v3";
@@ -118,6 +119,8 @@ export function CreatorFeesPanel() {
 function PositionRow({ position }: { position: CreatorPosition }) {
   const publicClient = usePublicClient();
   const { writeContractAsync } = useWriteContract();
+  const { address: account } = useAccount();
+  const queryClient = useQueryClient();
   const [claiming, setClaiming] = useState(false);
 
   // Real logo from the creator's uploaded metadata.
@@ -150,6 +153,13 @@ function PositionRow({ position }: { position: CreatorPosition }) {
 
   const claim = async () => {
     setClaiming(true);
+    // Snapshot the previewed amounts BEFORE the claim so the success toast
+    // can show what was actually received. collectFees drains the position,
+    // so reading previewQ after the receipt would just print zeros.
+    const snapPaired = pairedRaw;
+    const snapClanker = clankerRaw;
+    const snapPairedSymbol = pairedMeta.symbol ?? "?";
+    const snapPairedDecimals = pairedMeta.decimals;
     try {
       const hash = await writeContractAsync({
         address: ADDRESSES.v3Locker,
@@ -158,12 +168,28 @@ function PositionRow({ position }: { position: CreatorPosition }) {
         args: [position.positionId],
       });
       if (publicClient) await publicClient.waitForTransactionReceipt({ hash });
+      const isUsdc = snapPairedSymbol === "USDC" || snapPairedSymbol === "EURC";
+      const pairedFmt = isUsdc
+        ? `${formatUSDC(snapPaired, snapPairedDecimals, 4)} ${snapPairedSymbol}`
+        : `${formatToken(snapPaired, snapPairedDecimals, 6)} ${snapPairedSymbol}`;
+      const clankerFmt = `${formatToken(snapClanker, 18, 6)} ${position.symbol ?? "TOKEN"}`;
+      const parts: string[] = [];
+      if (snapPaired > 0n) parts.push(pairedFmt);
+      if (snapClanker > 0n) parts.push(clankerFmt);
       pushToast({
         kind: "info",
         title: "Fees claimed",
-        message: `${position.symbol ?? "Token"} creator fees sent to your wallet`,
+        message: parts.length > 0
+          ? `Received ${parts.join(" + ")}`
+          : `${position.symbol ?? "Token"} creator fees sent to your wallet`,
       });
       previewQ.refetch();
+      // Force the all-time Creator Earnings card to re-scan now so the
+      // CLAIMED counter picks up the new RecipientPaid event without
+      // waiting 5 min for the staleTime to expire.
+      queryClient.invalidateQueries({
+        queryKey: ["arcade", "creator-earnings-scan", account?.toLowerCase() ?? null],
+      });
     } catch (e: any) {
       pushToast({ kind: "error", title: "Claim failed", message: e?.shortMessage || e?.message });
     } finally {

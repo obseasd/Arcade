@@ -42,7 +42,6 @@ import { CreatorFeesPanel } from "@/components/pool/CreatorFeesPanel";
 import { PendingWithdrawalsCard } from "@/components/pool/PendingWithdrawalsCard";
 import { VaultClaimPanel } from "@/components/pool/VaultClaimPanel";
 import { Modal } from "@/components/ui/Modal";
-import { CrossIcon } from "@/components/ui/MaskIcon";
 import { TokenIcon } from "@/components/ui/TokenIcon";
 import { ReceiveModal } from "@/components/wallet/ReceiveModal";
 import { WalletIcon } from "@/components/wallet/WalletIcon";
@@ -491,7 +490,10 @@ function OverviewTab({
                             label="Buy"
                             href="/swap"
                         />
-                        <div ref={moreWrapRef} className="relative">
+                        <div
+                            ref={moreWrapRef}
+                            className="relative grid"
+                        >
                             <ActionTile
                                 icon={<MoreHorizontal className="h-[18px] w-[18px]" />}
                                 label="More"
@@ -1426,11 +1428,9 @@ function ActivityRowFull({ item }: { item: UnifiedActivityItem }) {
 
     return (
         <tr className="group text-sm transition-colors hover:bg-white/[0.02]">
-            <td
-                className="px-4 py-3 text-xs text-arc-text-muted"
-                title={formatActivityFull(item.ts)}
-            >
-                {formatActivityDay(item.ts)}
+            <td className="whitespace-nowrap px-4 py-3 text-xs text-arc-text-muted">
+                <span className="group-hover:hidden">{formatActivityDay(item.ts)}</span>
+                <span className="hidden group-hover:inline">{formatActivityFull(item.ts)}</span>
             </td>
             <td className="px-4 py-3">
                 <div className="flex items-center gap-2">
@@ -1525,12 +1525,12 @@ function AddressPopover({
         }
     };
     return (
-        <div className="absolute left-0 top-full z-40 mt-2 w-64 overflow-hidden rounded-2xl border border-arc-border bg-arc-bg-elevated p-3 shadow-[0_18px_36px_-12px_rgba(0,0,0,0.65)]">
+        <div className="absolute left-0 top-full z-40 mt-2 w-[19.2rem] overflow-hidden rounded-2xl border border-arc-border bg-arc-bg-elevated p-3.5 shadow-[0_18px_36px_-12px_rgba(0,0,0,0.65)]">
             <div className="flex items-center gap-2">
-                <div className="flex h-7 w-7 items-center justify-center rounded-full bg-arc-cta-hover/30 text-arc-cta-hover">
-                    <Wallet className="h-3.5 w-3.5" />
+                <div className="flex h-8 w-8 items-center justify-center rounded-full bg-arc-cta-hover/30 text-arc-cta-hover">
+                    <Wallet className="h-4 w-4" />
                 </div>
-                <span className="flex-1 truncate text-sm font-semibold text-arc-text">
+                <span className="flex-1 truncate text-base font-semibold text-arc-text">
                     {shortAddress}
                 </span>
                 <button
@@ -1541,28 +1541,35 @@ function AddressPopover({
                     title="Copy"
                 >
                     {copied ? (
-                        <Check className="h-3.5 w-3.5 animate-copy-pop text-arc-success" />
+                        <Check className="h-4 w-4 animate-copy-pop text-arc-success" />
                     ) : (
-                        <Copy className="h-3.5 w-3.5" />
+                        <Copy className="h-4 w-4" />
                     )}
                 </button>
                 <a
                     href={`https://testnet.arcscan.app/address/${address}`}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-arc-text-faint transition-colors hover:text-arc-text"
-                    aria-label="View on explorer"
-                    title="View on explorer"
+                    className="flex h-5 w-5 items-center justify-center transition-opacity hover:opacity-80"
+                    aria-label="View on Arcscan"
+                    title="View on Arcscan"
                 >
-                    <ExternalLink className="h-3.5 w-3.5" />
+                    <Image
+                        src="/arcscan.png"
+                        alt=""
+                        width={20}
+                        height={20}
+                        className="h-5 w-5 object-contain"
+                        unoptimized
+                    />
                 </a>
             </div>
-            <div className="my-2.5 border-t border-arc-border/60" />
-            <div className="flex items-center justify-between text-xs">
+            <div className="my-3 border-t border-arc-border/60" />
+            <div className="flex items-center justify-between text-sm">
                 <span className="text-arc-text-faint">Balance</span>
                 <span className="font-medium text-arc-text-muted">—</span>
             </div>
-            <div className="mt-1 flex items-center justify-between text-xs">
+            <div className="mt-1.5 flex items-center justify-between text-sm">
                 <span className="text-arc-text-faint">1D change</span>
                 <span className="font-medium text-arc-text-muted">—</span>
             </div>
@@ -1596,21 +1603,19 @@ function TransactionDetailsModal({
             open
             onClose={onClose}
             widthClassName="max-w-[400px]"
-            backdropClassName="backdrop:bg-black/60 backdrop:backdrop-blur-sm"
+            backdropClassName="backdrop:bg-black/60"
             className="border-arc-border bg-arc-bg-elevated"
         >
             <div className="p-5">
                 <div className="flex items-start gap-3">
-                    <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-arc-cta-hover/30 text-arc-cta-hover">
-                        <Image
-                            src={item.iconSrc}
-                            alt=""
-                            width={20}
-                            height={20}
-                            className="h-5 w-5 object-contain"
-                            unoptimized
-                        />
-                    </div>
+                    <Image
+                        src={item.iconSrc}
+                        alt=""
+                        width={28}
+                        height={28}
+                        className="h-7 w-7 shrink-0 object-contain"
+                        unoptimized
+                    />
                     <div className="flex-1">
                         <div className="text-base font-semibold text-arc-text">
                             {headerLabel}
@@ -1619,14 +1624,6 @@ function TransactionDetailsModal({
                             {formatActivityFull(item.ts)}
                         </div>
                     </div>
-                    <button
-                        type="button"
-                        onClick={onClose}
-                        className="text-arc-text-faint transition-colors hover:text-arc-text"
-                        aria-label="Close"
-                    >
-                        <CrossIcon size={14} />
-                    </button>
                 </div>
                 <div className="mt-4 space-y-2 text-sm">
                     <div className="flex items-center justify-between">
