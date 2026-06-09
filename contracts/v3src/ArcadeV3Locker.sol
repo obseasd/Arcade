@@ -53,6 +53,11 @@ interface IArcadeV3FactoryMin {
 contract ArcadeV3Locker is IUniswapV3MintCallback {
     address public immutable launchpad;
     address public immutable factory;
+    /// @dev Audit V3 Locker M-3: owner with restricted rescue power.
+    ///      Set in the constructor (typically a multisig). Can only
+    ///      sweep tokens that are NEITHER the paired NOR token side of
+    ///      ANY active position - so principal LP fees stay locked.
+    address public immutable owner;
     /// @notice Optional V3 Twitter escrow. When non-zero, every successful
     ///         direct payout whose recipient equals this address also calls
     ///         `escrow.creditSlot(positionId, slot, token, amount)` so the
@@ -130,6 +135,7 @@ contract ArcadeV3Locker is IUniswapV3MintCallback {
         uint256 amount
     );
     event PendingWithdrawn(address indexed token, address indexed recipient, uint256 amount);
+    event AdminRescue(address indexed token, address indexed to, uint256 amount);
     event RecipientUpdated(uint256 indexed positionId, uint256 index, address indexed newRecipient);
     event AdminUpdated(uint256 indexed positionId, uint256 index, address indexed newAdmin);
     /// @notice Emitted when the locker successfully transferred to the Twitter
@@ -179,11 +185,37 @@ contract ArcadeV3Locker is IUniswapV3MintCallback {
     ///                       escrow can enforce on-chain balances at claim
     ///                       time. The escrow MUST recognise this locker
     ///                       address as the authorised depositor.
-    constructor(address launchpad_, address factory_, address twitterEscrow_) {
-        require(launchpad_ != address(0) && factory_ != address(0), "ZERO");
+    constructor(address launchpad_, address factory_, address twitterEscrow_, address owner_) {
+        require(launchpad_ != address(0) && factory_ != address(0) && owner_ != address(0), "ZERO");
         launchpad = launchpad_;
         factory = factory_;
         twitterEscrow = twitterEscrow_;
+        owner = owner_;
+    }
+
+    /**
+     * @notice Audit V3 Locker M-3: rescue tokens accidentally sent to
+     *         the locker. Only callable by the owner (typically the
+     *         multisig). Whitelist of token addresses NEVER allowed:
+     *         every position's paired side + launch token. Principal
+     *         LP fees cannot be drained.
+     * @param token Token address to rescue.
+     * @param to Recipient of the rescued balance.
+     * @param amount Amount to transfer (must be <= balanceOf(this)).
+     */
+    function adminRescue(address token, address to, uint256 amount) external {
+        require(msg.sender == owner, "NOT_OWNER");
+        require(to != address(0), "ZERO_TO");
+        // Walk every active position and refuse if `token` is either
+        // side of any of them. positionCount is bounded by the number
+        // of CLANKER_V3 launches; for small N this is acceptable. For
+        // large N consider a maintained whitelist.
+        for (uint256 i = 1; i <= positionCount; ++i) {
+            Position memory pos = positions[i];
+            if (token == pos.pairedToken || token == pos.clankerToken) revert("ACTIVE_TOKEN");
+        }
+        _pay(token, to, amount);
+        emit AdminRescue(token, to, amount);
     }
 
     // ====================== Locking ======================

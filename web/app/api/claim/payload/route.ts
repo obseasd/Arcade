@@ -28,6 +28,18 @@ export async function GET(req: NextRequest) {
       { status: 403 },
     );
   }
+  // Audit Twitter Escrow H-6: require a custom header any direct
+  // `fetch()` from our own page can set, but a passive XSS payload
+  // exfiltrating via <img src=> / <iframe> / window.open() cannot.
+  // The /claim client page sets `x-arcade-claim: 1` on its fetch();
+  // any cross-context exfil from same-origin XSS now needs to also
+  // forge this header, which requires controlled execution in our
+  // app context - if the attacker already has that, the cookie path
+  // is the least of our problems anyway.
+  const claimHeader = req.headers.get("x-arcade-claim");
+  if (claimHeader !== "1") {
+    return NextResponse.json({ error: "csrf_block" }, { status: 403 });
+  }
   const raw = req.cookies.get(COOKIE)?.value;
   if (!raw) {
     return NextResponse.json({ error: "no_payload" }, { status: 404 });

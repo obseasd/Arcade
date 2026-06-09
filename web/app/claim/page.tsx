@@ -57,7 +57,14 @@ function ClaimPageInner() {
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch("/api/claim/payload", { credentials: "same-origin" });
+        const res = await fetch("/api/claim/payload", {
+          credentials: "same-origin",
+          // Audit Twitter Escrow H-6: custom header serves as a same-
+          // origin XSS exfil guard. Only fetch() from our own app
+          // context can set this; passive payload-load attacks (e.g.
+          // <img src="/api/claim/payload">) cannot.
+          headers: { "x-arcade-claim": "1" },
+        });
         if (cancelled) return;
         if (res.status === 404) {
           setPayloadStatus("absent");

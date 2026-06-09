@@ -98,7 +98,9 @@ contract LockerEscrowIntegrationTest is Test {
         // Wire the locker with the mock escrow as the trusted depositor.
         v3Locker = _deploy(
             "out-v3/ArcadeV3Locker.sol/ArcadeV3Locker.json",
-            abi.encode(address(launchpad), v3Factory, address(escrow))
+            // Audit V3 Locker M-3: constructor now takes an owner.
+            // In tests we use the deployer address (this contract).
+            abi.encode(address(launchpad), v3Factory, address(escrow), address(this))
         );
         v3Router = _deploy(
             "out-v3/ArcadeV3SwapRouter.sol/ArcadeV3SwapRouter.json",

@@ -105,7 +105,8 @@ contract ArcadeV3MigrationTest is Test {
         v3Locker = _deploy(
             "out-v3/ArcadeV3Locker.sol/ArcadeV3Locker.json",
             // address(0) = legacy behavior (no Twitter escrow integration).
-            abi.encode(address(launchpad), v3Factory, address(0))
+            // Audit V3 Locker M-3: owner = test contract address.
+            abi.encode(address(launchpad), v3Factory, address(0), address(this))
         );
         v3Router = _deploy(
             "out-v3/ArcadeV3SwapRouter.sol/ArcadeV3SwapRouter.json",

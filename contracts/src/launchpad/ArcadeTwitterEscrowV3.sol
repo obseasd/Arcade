@@ -139,6 +139,17 @@ contract ArcadeTwitterEscrowV3 is Ownable2Step, Pausable, ReentrancyGuard {
     mapping(uint256 positionId => mapping(uint256 slotIndex => bool)) public hasPending;
     mapping(bytes32 nonce => PendingClaim) public pendingClaims;
 
+    /// @dev Audit Twitter Escrow H-4: persist the (paired, clanker)
+    ///      token pair the slot was credited with on first creditSlot,
+    ///      so forfeitStaleClaim cannot be called with an arbitrary
+    ///      owner-supplied pair to drain the slot's balance of an
+    ///      unrelated token.
+    struct SlotPair {
+        address first;
+        address second;
+    }
+    mapping(uint256 positionId => mapping(uint256 slotIndex => SlotPair)) public slotPair;
+
     struct PendingClaim {
         address recipient;
         address pairedToken;
@@ -208,6 +219,10 @@ contract ArcadeTwitterEscrowV3 is Ownable2Step, Pausable, ReentrancyGuard {
     error NothingToClaim();
     error RenounceDisabled();
     error SlotAlreadyClaimed();
+    /// @dev Audit Twitter Escrow H-4: forfeitStaleClaim was called with a
+    ///      (pairedToken, clankerToken) pair that doesn't match what the
+    ///      slot was credited with on first creditSlot.
+    error InvalidSlotPair();
     error NotStaleYet();
 
     // ====================== Construction ======================
@@ -302,7 +317,30 @@ contract ArcadeTwitterEscrowV3 is Ownable2Step, Pausable, ReentrancyGuard {
         // the locker's own try/catch route the amount to its pendingWithdrawals
         // ledger for the escrow's address, recoverable via pullFromLocker.
         if (claimed[positionId][slotIndex]) revert SlotAlreadyClaimed();
+        // Audit Twitter Escrow H-5: refuse credits to a slot with an
+        // active pending authorize. Without this lock, an attacker who
+        // obtained one signature via the C-1 weakness could front-run a
+        // claim with their own authorize at far-edge deadline; every
+        // new credit during the timelock window would then sweep into
+        // the attacker's claim instead of being available to the next
+        // honest authorize. Owner veto still works, but the lock makes
+        // the grief less profitable in the first place.
+        if (hasPending[positionId][slotIndex]) revert SlotPending();
         balances[positionId][slotIndex][token] += amount;
+        // Audit Twitter Escrow H-4: remember the (pairedToken,
+        // clankerToken) pair the first credit established for this slot
+        // so a later forfeitStaleClaim cannot be invoked with an
+        // arbitrary pair the owner picks. Initialised on first credit;
+        // subsequent credits must use the same pair (cross-checked in
+        // authorize already via the same-slot balances).
+        if (slotPair[positionId][slotIndex].first == address(0)) {
+            slotPair[positionId][slotIndex].first = token;
+        } else if (
+            slotPair[positionId][slotIndex].first != token &&
+            slotPair[positionId][slotIndex].second == address(0)
+        ) {
+            slotPair[positionId][slotIndex].second = token;
+        }
         creditedTotal[token] += amount;
         // Anchor the staleness clock at every credit. As long as the locker
         // routes fees here, the slot stays "active" and never becomes
@@ -592,6 +630,21 @@ contract ArcadeTwitterEscrowV3 is Ownable2Step, Pausable, ReentrancyGuard {
         uint64 last = lastCreditedAt[positionId][slotIndex];
         if (last == 0) revert NothingToClaim();
         if (block.timestamp < uint256(last) + uint256(FORFEIT_DELAY)) revert NotStaleYet();
+
+        // Audit Twitter Escrow H-4: force forfeit to use the same
+        // (pairedToken, clankerToken) the slot was actually credited
+        // with. Without this, the owner could pass any token addresses
+        // and forfeit unrelated balance lines. Order is canonicalised
+        // off-chain; here we accept either pair ordering as long as
+        // both tokens are members of the persisted pair.
+        SlotPair memory sp = slotPair[positionId][slotIndex];
+        bool pairOk =
+            (pairedToken == sp.first && clankerToken == sp.second) ||
+            (pairedToken == sp.second && clankerToken == sp.first) ||
+            // Single-token slot (only first ever populated) - either arg can be 0
+            (sp.second == address(0) && pairedToken == sp.first && clankerToken == address(0)) ||
+            (sp.second == address(0) && clankerToken == sp.first && pairedToken == address(0));
+        if (!pairOk) revert InvalidSlotPair();
 
         uint256 paired = pairedToken != address(0) ? balances[positionId][slotIndex][pairedToken] : 0;
         // Same-token aliasing: if pairedToken == clankerToken, only count
