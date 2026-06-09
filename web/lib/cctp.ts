@@ -161,6 +161,69 @@ export function addressToBytes32(addr: Address): `0x${string}` {
   return ("0x" + "00".repeat(12) + addr.slice(2).toLowerCase()) as `0x${string}`;
 }
 
+/**
+ * Audit Bridge C-2: parse the fixed-layout header of a CCTP V2 message
+ * blob. The on-chain MessageTransmitterV2 verifies Circle's signature on
+ * the message, so a forged blob can never mint — BUT a MITM that swaps a
+ * real Circle-signed message for a DIFFERENT burn (e.g. the attacker's
+ * own earlier burn for the same domain pair) would still satisfy the
+ * signature check, and the victim's wallet would pay gas to mint USDC
+ * into the attacker's recipient.
+ *
+ * Defense: before passing the blob to receiveMessage(), parse the header
+ * and assert sourceDomain / destinationDomain / mintRecipient match what
+ * the user actually signed. Layout per Circle's spec:
+ *
+ *   bytes 0-3   : version (uint32)
+ *   bytes 4-7   : sourceDomain (uint32)
+ *   bytes 8-11  : destinationDomain (uint32)
+ *   bytes 12-19 : nonce (uint64)
+ *   bytes 20-51 : sender (bytes32)  -- source-chain TokenMessenger
+ *   bytes 52-83 : recipient (bytes32) -- dest-chain MessageTransmitter
+ *   bytes 84-115: destinationCaller (bytes32)
+ *   bytes 116-119: minFinalityThreshold (uint32)
+ *   bytes 120-123: finalityThresholdExecuted (uint32)
+ *   bytes 124+  : messageBody (TokenMessenger burn payload)
+ *
+ * The burn-message body inside messageBody for a depositForBurn carries
+ * the burnToken (bytes32) and mintRecipient (bytes32) at well-known
+ * offsets within the body. We extract mintRecipient at body offset 36
+ * (version + burnToken + mintRecipient layout).
+ */
+export interface ParsedCctpMessage {
+  version: number;
+  sourceDomain: number;
+  destinationDomain: number;
+  nonce: bigint;
+  mintRecipient: `0x${string}`;
+}
+
+export function parseCctpV2Message(message: `0x${string}`): ParsedCctpMessage | null {
+  if (!message.startsWith("0x")) return null;
+  const hex = message.slice(2);
+  // 124 header bytes + at least 68 body bytes (4 version + 32 burnToken
+  // + 32 mintRecipient) = 192 bytes = 384 hex chars minimum.
+  if (hex.length < 384) return null;
+  const u32 = (offset: number) =>
+    Number.parseInt(hex.slice(offset * 2, (offset + 4) * 2), 16);
+  const u64 = (offset: number) =>
+    BigInt("0x" + hex.slice(offset * 2, (offset + 8) * 2));
+  try {
+    const version = u32(0);
+    const sourceDomain = u32(4);
+    const destinationDomain = u32(8);
+    const nonce = u64(12);
+    // messageBody starts at byte 124. Within the burn-message body:
+    //   bytes 0-3   : body version (uint32)
+    //   bytes 4-35  : burnToken (bytes32)
+    //   bytes 36-67 : mintRecipient (bytes32)
+    const mintRecipient = ("0x" + hex.slice((124 + 36) * 2, (124 + 68) * 2)) as `0x${string}`;
+    return { version, sourceDomain, destinationDomain, nonce, mintRecipient };
+  } catch {
+    return null;
+  }
+}
+
 /** Poll Circle's attestation service. Returns the signed attestation + message bytes. */
 export interface IrisAttestation {
   attestation: `0x${string}`;

@@ -473,6 +473,16 @@ contract ArcadeV3Locker is IUniswapV3MintCallback {
         bytes32 key = keccak256(abi.encodePacked(address(this), tickLower, tickUpper));
         (uint128 liq, uint256 fgi0Last, uint256 fgi1Last, uint128 owed0, uint128 owed1) =
             IUniswapV3Pool(c.pool).positions(key);
+        // Audit V3 Locker H-2: short-circuit when the locker owns zero
+        // liquidity in this range. positions() returns default zeros
+        // and ticks() returns zeroed feeGrowthOutside on a never-
+        // initialised tick, so the fee-growth-inside math degenerates
+        // to fg_global (the global fee growth since pool init), and
+        // owed*+(liq*d)/(1<<128) just returns owed* (which is 0). The
+        // bug surfaces only if liq=0 with non-zero owed, which can't
+        // happen post-creation but the early-return matches Uniswap's
+        // own convention and removes the dead read.
+        if (liq == 0) return (uint256(owed0), uint256(owed1));
         (uint256 fgi0, uint256 fgi1) = _feeGrowthInside(c, tickLower, tickUpper);
         // 256-bit wraparound subtraction; Solidity 0.7.6 underflows silently.
         uint256 d0 = fgi0 - fgi0Last;
@@ -600,8 +610,11 @@ contract ArcadeV3Locker is IUniswapV3MintCallback {
         amount = pendingWithdrawals[token][msg.sender];
         require(amount > 0, "NOTHING");
         pendingWithdrawals[token][msg.sender] = 0;
-        // If this still reverts the caller can retry once their token status
-        // changes; the ledger entry stays at 0 only after a successful transfer.
+        // Audit V3 Locker H-4: ledger is set to 0 BEFORE _pay so a
+        // revert here rolls back BOTH the SSTORE and the transfer
+        // attempt - the row is preserved for a retry. If _pay
+        // succeeds the ledger stays at 0. There is no partial-state
+        // window. Comment was previously misleading.
         _pay(token, msg.sender, amount);
         emit PendingWithdrawn(token, msg.sender, amount);
     }

@@ -278,13 +278,19 @@ contract ArcadeV3Zap is IUniswapV3SwapCallback {
         internal pure returns (int24 tl, int24 tu)
     {
         require(spacing > 0 && lo < hi, "BAD_TICKS");
-        // Round towards zero, then nudge inside the legal range. int24
-        // division rounds towards zero in Solidity, which is the wrong
-        // direction for negative ticks - the explicit nudge below corrects.
+        // Audit V3 Zap H-6: int24 division rounds toward ZERO in
+        // Solidity, but the lower tick must round AWAY from zero (down)
+        // so the user's signed range is widened, not narrowed. Same
+        // mirrored for the upper tick. Without the negative-tick
+        // adjustment, lo=-100 spacing=60 was producing tl=-60 (inside
+        // the signed range) instead of tl=-120.
         tl = (lo / spacing) * spacing;
-        if (tl < lo) tl += spacing;
+        if (lo < 0 && lo % spacing != 0) tl -= spacing;
         tu = (hi / spacing) * spacing;
-        if (tu > hi) tu -= spacing;
+        if (hi > 0 && hi % spacing != 0) tu += spacing;
+        // Tightening guards: bound after the away-from-zero round.
+        if (tl < MIN_TICK) tl += spacing;
+        if (tu > MAX_TICK) tu -= spacing;
         require(tl >= MIN_TICK && tu <= MAX_TICK && tl < tu, "TICK_OOB");
     }
 
@@ -334,6 +340,14 @@ contract ArcadeV3Zap is IUniswapV3SwapCallback {
             deadline: p.deadline
         });
         (tokenId, liquidity, , ) = INonfungiblePositionManager(npm).mint(mp);
+        // Audit V3 Zap H-2: zero out residual allowance to the NPM. If
+        // the mint consumed less than amount0Desired/amount1Desired
+        // (the common case at a non-50/50 ratio), the leftover allowance
+        // sits permanently. NPM is trusted, but zeroing matches the
+        // forceApprove(router, 0) pattern in the V2 Zap and removes
+        // the stale-allowance footgun.
+        require(IERC20Min(t0).approve(npm, 0), "APPROVE0_RESET_FAIL");
+        require(IERC20Min(t1).approve(npm, 0), "APPROVE1_RESET_FAIL");
     }
 
     // =================================================================
@@ -533,6 +547,13 @@ contract ArcadeV3Zap is IUniswapV3SwapCallback {
         bytes calldata data
     ) external override {
         require(msg.sender == _authorisedPool, "BAD_CALLBACK");
+        // Audit V3 Zap C-2: defense in depth — even though
+        // _authorisedPool is set inline by _doSwap and gates re-entry
+        // by virtue of being address(0) outside the active swap, also
+        // sanity-check the deltas. A real V3 pool always passes one
+        // positive and one non-positive (or both zero on a no-op swap
+        // which never happens). Reject anything else.
+        require(amount0Delta > 0 || amount1Delta > 0, "BAD_DELTAS");
         address tokenIn = abi.decode(data, (address));
         uint256 amountToPay = amount0Delta > 0
             ? uint256(amount0Delta)
@@ -542,6 +563,9 @@ contract ArcadeV3Zap is IUniswapV3SwapCallback {
 
     function _sweep(address token, address to) internal {
         uint256 bal = IERC20Min(token).balanceOf(address(this));
-        if (bal > 0) IERC20Min(token).transfer(to, bal);
+        // Audit V3 Zap L-3: require the transfer return so a silently-
+        // failing non-standard ERC20 doesn't leave the dust in the
+        // contract while the caller thinks the sweep succeeded.
+        if (bal > 0) require(IERC20Min(token).transfer(to, bal), "SWEEP_FAIL");
     }
 }

@@ -65,11 +65,32 @@ export function BridgeHistory() {
       // until visibility returns; visibilitychange below kicks off a fresh
       // poll immediately when the tab comes back.
       if (typeof document !== "undefined" && document.hidden) return;
+      // Audit Bridge H-5: stop polling entries older than 24h that have
+      // never seen attestationReady=true. Without this cap, a burn that
+      // Iris never returned for (network outage on either side, source-
+      // chain reorg before finality, etc.) keeps the poll firing forever
+      // and burns IP rate-limit budget on every user. After 24h the row
+      // is auto-flipped to "failed" so the user can dismiss it from the
+      // history surface.
+      const STALE_MS = 24 * 60 * 60 * 1000;
+      const now = Date.now();
+      if (account) {
+        for (const e of entries) {
+          if (
+            e.status === "pending" &&
+            !e.attestationReady &&
+            now - e.burnedAt > STALE_MS
+          ) {
+            updateBridge(account, e.id, { status: "failed" });
+          }
+        }
+      }
       const candidates = entries.filter(
         (e) =>
           e.status === "pending" &&
           !e.attestationReady &&
           !!e.burnTxHash &&
+          now - e.burnedAt <= STALE_MS &&
           getCctpChain(e.srcChainId)?.cctpDomain !== undefined,
       );
       // Cap the fanout. Even with the Visibility gate, a user with the

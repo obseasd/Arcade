@@ -21,6 +21,7 @@ import {
   addressToBytes32,
   fetchAttestation,
   getCctpChain,
+  parseCctpV2Message,
 } from "@/lib/cctp";
 import { Address } from "viem";
 import { ChainIcon } from "@/components/ui/ChainIcon";
@@ -145,12 +146,14 @@ export function BridgeCard() {
       const data = e.data as { burnTxHash?: string; account?: string };
       if (!data?.burnTxHash) return;
       if (data.account?.toLowerCase() !== account?.toLowerCase()) return;
+      // Audit Bridge C-3: BroadcastChannel payloads come from any
+      // same-origin script (XSS / 3rd-party widget). NEVER delete the
+      // persisted pendingBridge entry from an inbound message - that
+      // would erase the user's only resume path. Only drop the local
+      // UI step; the persisted state still surfaces on reload if the
+      // other tab didn't actually mint.
       if (step.kind === "attesting" || step.kind === "minting") {
         if (step.burnTxHash?.toLowerCase() === data.burnTxHash.toLowerCase()) {
-          // Another tab is minting this burn; drop our local step and
-          // clear the pending entry so the user doesn't see a stale
-          // Claim banner here.
-          if (account) clearPendingBridge(account);
           setStep({ kind: "idle" });
         }
       }
@@ -201,11 +204,17 @@ export function BridgeCard() {
   useEffect(() => {
     const prev = prevAccountRef.current;
     prevAccountRef.current = account;
-    setRecipientOverride(null);
+    // Audit Bridge H-1: only clear recipientOverride on the HARD-RESET
+    // branch (X -> Y). A connector hiccup (X -> undefined -> X) was
+    // silently reverting the user's custom recipient to their wallet
+    // address with no UI signal - if they were mid-form they may have
+    // already mentally committed to "I am sending to Alice" while the
+    // form silently re-targeted their own wallet.
     setHistoryId(null);
     setRecipientModalOpen(false);
     if (prev && account && prev.toLowerCase() !== account.toLowerCase()) {
       // Hard reset: wallet B connected after wallet A had a burn in flight.
+      setRecipientOverride(null);
       setStep({ kind: "idle" });
       setAmountStr("");
       setResumedFromStorage(false);
@@ -398,6 +407,27 @@ export function BridgeCard() {
       // eslint-disable-next-line no-console
       console.log(`[CCTP] poll #${attempts}`, { status: att?.status, hasAtt: !!att });
       if (att && att.status === "complete" && !cancelled) {
+        // Audit Bridge C-2: parse the Iris message header and assert
+        // sourceDomain / destinationDomain / mintRecipient match what
+        // we actually signed. A MITM that returns a real Circle-signed
+        // message for a DIFFERENT burn would pass the on-chain signature
+        // check but mint USDC into the attacker's recipient at the
+        // victim's gas. Reject mismatched payloads here so the user
+        // sees an error instead of paying gas to fund the attacker.
+        const dstChainCfg = getCctpChain(step.dstId);
+        const expectedRecipient = recipientOverride ?? account ?? "";
+        const parsed = parseCctpV2Message(att.message);
+        if (
+          !parsed ||
+          parsed.sourceDomain !== step.srcDomain ||
+          (dstChainCfg && parsed.destinationDomain !== dstChainCfg.cctpDomain) ||
+          (expectedRecipient && parsed.mintRecipient.toLowerCase() !==
+            addressToBytes32(expectedRecipient as Address).toLowerCase())
+        ) {
+          // eslint-disable-next-line no-console
+          console.warn("[CCTP] Iris payload mismatch, ignoring", { parsed });
+          return false;
+        }
         // Flip the matching history entry's badge from "Pending" -> "To claim"
         // so the user sees there's an action waiting on them. The mint
         // handler later flips status -> "minted" which supersedes this.
@@ -446,20 +476,16 @@ export function BridgeCard() {
     attestStartMs !== null &&
     attestElapsedSec > expectedAttestUpperSec(srcChain.id, fastTransfer);
 
+  // Audit Bridge C-1: in-flight guard against double-click on Claim.
+  // setStep("minting") is async w.r.t. the wallet popup, so a fast
+  // re-click before the popup opens would fire writeContractAsync a
+  // second time. The ref is set synchronously at the top of doMint and
+  // cleared in the finally below; while it's true, re-entry returns.
+  const mintingInFlightRef = useRef(false);
   const doMint = async () => {
     if (step.kind !== "minting" || !account) return;
-    // BRIDGE-MULTITAB-DOUBLE-MINT-REVERT: broadcast the burn we're about
-    // to mint to any other tab on the same origin. The other tabs listen
-    // on the same BroadcastChannel and reset their step machine to "idle"
-    // if they see this burn, so the user can't click Claim twice and
-    // waste gas on a second tx that's guaranteed to revert.
-    try {
-      const channel = new BroadcastChannel("arcade-bridge-mint");
-      channel.postMessage({ burnTxHash: step.burnTxHash, account });
-      channel.close();
-    } catch {
-      /* old browser - the worst case is the original UX */
-    }
+    if (mintingInFlightRef.current) return;
+    mintingInFlightRef.current = true;
     try {
       if (chainId !== step.dstId) {
         await switchChainAsync({ chainId: step.dstId });
@@ -473,6 +499,18 @@ export function BridgeCard() {
         args: [step.message, step.attestation],
         chainId: step.dstId,
       });
+      // Audit Bridge H-4: broadcast the burn ONLY after the wallet
+      // accepts the submission. Previously the broadcast fired at the
+      // top of doMint; if the user rejected the wallet popup, other
+      // tabs had already cleared their step + pending entry and the
+      // user could not recover the mint UI without a refresh.
+      try {
+        const channel = new BroadcastChannel("arcade-bridge-mint");
+        channel.postMessage({ burnTxHash: step.burnTxHash, account });
+        channel.close();
+      } catch {
+        /* old browser - the worst case is the original UX */
+      }
       // BRIDGE-CLEAR-AFTER-MINT-RECEIPT-GAP: clear pendingBridge as soon as
       // the mint tx is BROADCAST (writeContractAsync returns when the user
       // signs + submits). If the user closes the tab between broadcast and
@@ -508,6 +546,10 @@ export function BridgeCard() {
       });
     } catch (e: any) {
       setStep({ kind: "error", message: e?.shortMessage || e?.message || "Claim failed" });
+    } finally {
+      // Always clear the in-flight ref so the user can retry on error
+      // without a page refresh. Audit Bridge C-1.
+      mintingInFlightRef.current = false;
     }
   };
 

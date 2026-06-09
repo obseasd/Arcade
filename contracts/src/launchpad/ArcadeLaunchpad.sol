@@ -102,6 +102,10 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
     uint16 internal constant MAX_VAULT_BPS = 9_000;
     /// @notice Max starting sniper-tax rate (50%). Decays linearly to 0.
     uint16 internal constant MAX_SNIPE_BPS = 5_000;
+    /// @dev Audit H-1: minimum sniper-tax taper window. 60s is short
+    ///      enough not to constrain UX but long enough that a same-
+    ///      block bundled second-EOA grief gets the full startBps tax.
+    uint32 internal constant MIN_SNIPE_DECAY = 60;
 
     address public constant DEAD = 0x000000000000000000000000000000000000dEaD;
 
@@ -340,6 +344,17 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         if (opts.poolType == POOL_WETH && opts.creatorBuyUsdc > 0) revert BadPoolType(); // USDC buy needs a USDC pool
         if (opts.vaultPct > 0 && (opts.vaultPct > MAX_VAULT_BPS || tokenVault == address(0))) revert BadVault();
         if (opts.snipeStartBps > MAX_SNIPE_BPS) revert BadSnipe();
+        // Audit Launchpad H-1+H-2: snipe params have implicit "off"
+        // states the creator can abuse to grief honest buyers. If
+        // startBps > 0 then decaySeconds MUST be set (>= MIN_SNIPE_DECAY)
+        // - silently storing zero either makes currentSnipeBps return 0
+        // for the whole window (config-misread) OR creates a same-block
+        // free-snipe via a bundled second EOA. The min-decay forces an
+        // actual taper window.
+        if (
+            opts.snipeStartBps > 0 &&
+            (opts.snipeDecaySeconds == 0 || opts.snipeDecaySeconds < MIN_SNIPE_DECAY)
+        ) revert BadSnipe();
 
         USDC.safeTransferFrom(msg.sender, treasury, CREATION_FEE);
 
@@ -664,6 +679,12 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
             netIn, minTokensOut, path, msg.sender, deadline
         );
         tokensOut = amounts[1];
+        // Audit Launchpad M-5: defense-in-depth slippage re-check
+        // symmetric with sellMigrated. The V2 router is supposed to
+        // enforce minTokensOut internally but if its fork ever drifts
+        // (>= vs >, accidental no-op on overflow path, etc.) the
+        // launchpad has no defense without this assertion.
+        if (tokensOut < minTokensOut) revert Slippage();
     }
 
     /// @notice Sell a migrated token via V2, then skim the royalty from the USDC output.
@@ -998,9 +1019,15 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         // as passed to initialize(), so a strict equality is correct: our
         // own initialize wrote the intended value, any other value means
         // a pre-init happened.
+        // Audit Launchpad H-3: an attacker pre-initing at the CORRECT
+        // sqrtPriceX96 (passing the check above) + dust-LP straddling
+        // the launch tick range earns a permanent slice of LP fees on
+        // every swap forever (free-fee leech). Require the pool also
+        // be empty of liquidity before our own lock proceeds.
         {
             (uint160 actualSqrtPriceX96,,,,,,) = IArcadeV3Pool(pool).slot0();
             if (actualSqrtPriceX96 != sqrtPriceX96) revert InvalidRoute();
+            if (IArcadeV3Pool(pool).liquidity() != 0) revert InvalidRoute();
         }
 
         // L-02: flip migrated state BEFORE the external locker call so that
