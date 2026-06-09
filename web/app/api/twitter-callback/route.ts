@@ -28,6 +28,34 @@ const TOKEN_CREATED_EVT = parseAbiItem(
   "event TokenCreated(address indexed token, address indexed creator, uint8 mode, address creator2, uint16 creator2ShareBps, string name, string symbol, string metadataURI)",
 );
 
+/**
+ * Audit Twitter Escrow C-2: defensive Twitter-handle normalisation.
+ * Applies, in order:
+ *  1) UTS-46 / NFKC Unicode normalisation (case-fold + canonical
+ *     decomposition + compatibility recomposition) so e.g. fullwidth
+ *     and halfwidth digits collapse to the same handle.
+ *  2) Strip zero-width characters that Twitter rejects on signup but
+ *     can sneak into an on-chain metadata blob.
+ *  3) Lowercase.
+ *  4) Validate against Twitter's strict character set
+ *     ^[A-Za-z0-9_]{1,15}$. Anything else is treated as a bad handle
+ *     so the signing flow refuses to proceed (Cyrillic homoglyph,
+ *     emoji-injected, leading dot, etc.).
+ *
+ * Returns the cleaned handle or undefined when validation fails.
+ */
+function normaliseHandle(raw: string | undefined | null): string | undefined {
+  if (typeof raw !== "string") return undefined;
+  let h = raw.normalize("NFKC");
+  // Strip zero-width characters: ZWSP, ZWNJ, ZWJ, BOM.
+  h = h.replace(/[​-‍﻿]/g, "");
+  h = h.toLowerCase().trim();
+  // Strip a leading @ if the deployer included it.
+  if (h.startsWith("@")) h = h.slice(1);
+  if (!/^[a-z0-9_]{1,15}$/.test(h)) return undefined;
+  return h;
+}
+
 const client = createPublicClient({
   chain: arcTestnet,
   transport: http(arcTestnet.rpcUrls.default.http[0]),
@@ -79,9 +107,36 @@ export async function GET(req: NextRequest) {
   const stateCookie = req.cookies.get(cookieName)?.value;
   if (!stateCookie) return redirectBackWithError(origin, "invalid_state");
 
+  // Audit Twitter Escrow H-2: verify the HMAC the login route attached
+  // so a tampered cookie value (recipient swap, slot swap) is rejected
+  // before the OAuth callback even talks to Twitter.
+  const sepIdx = stateCookie.lastIndexOf(".");
+  if (sepIdx < 0) return redirectBackWithError(origin, "bad_state");
+  const stateJson = stateCookie.slice(0, sepIdx);
+  const providedMac = stateCookie.slice(sepIdx + 1);
+  const secret = process.env.ARCADE_OAUTH_STATE_SECRET || "";
+  if (!secret) return redirectBackWithError(origin, "server_misconfigured");
+  const expectedMac = crypto
+    .createHmac("sha256", secret)
+    .update(stateJson)
+    .digest("hex");
+  // Constant-time compare so cookie-tamper attempts can't bisect bytes.
+  let macOk = providedMac.length === expectedMac.length;
+  try {
+    macOk =
+      macOk &&
+      crypto.timingSafeEqual(
+        Buffer.from(providedMac, "hex"),
+        Buffer.from(expectedMac, "hex"),
+      );
+  } catch {
+    macOk = false;
+  }
+  if (!macOk) return redirectBackWithError(origin, "bad_state");
+
   let stateData: StateData;
   try {
-    stateData = JSON.parse(stateCookie);
+    stateData = JSON.parse(stateJson);
   } catch {
     return redirectBackWithError(origin, "bad_state");
   }
@@ -150,7 +205,14 @@ export async function GET(req: NextRequest) {
   }
   if (!meRes.ok) return redirectBackWithError(origin, "me_failed");
   const meJson = (await meRes.json()) as { data?: { username?: string } };
-  const oauthHandle = meJson.data?.username?.toLowerCase();
+  const rawOauthHandle = meJson.data?.username;
+  // Audit Twitter Escrow C-2: normalise the handle through NFKC, strip
+  // zero-width characters, and gate against Twitter's strict character
+  // set so a Unicode homoglyph (Cyrillic 'е' in 'еlonmusk', emoji
+  // injection, ZWJ insertion) cannot impersonate a real handle. The
+  // raw handle from the OAuth response is otherwise compared as-is
+  // against the on-chain metadata, which a deployer fully controls.
+  const oauthHandle = normaliseHandle(rawOauthHandle);
   if (!oauthHandle) return redirectBackWithError(origin, "no_handle");
 
   // 3) Look up the token's metadata to read slot attribution.
@@ -201,7 +263,12 @@ export async function GET(req: NextRequest) {
     // causing every claim with an IPFS metadata to fail with
     // "slot_not_attributed" even when the handle was set correctly.
     const metadata = await fetchMetadata(metadataURI);
-    const expectedHandle = metadata?.slotTwitterHandles?.[slotIndex]?.toLowerCase();
+    // Audit Twitter Escrow C-2: also normalise the on-chain expected
+    // handle through the same gate. A deployer-supplied
+    // slotTwitterHandles entry containing zero-width chars or homoglyphs
+    // would otherwise fail the strict equality and silently lock funds,
+    // OR (worse) be set to a real handle the deployer doesn't own.
+    const expectedHandle = normaliseHandle(metadata?.slotTwitterHandles?.[slotIndex]);
     if (!expectedHandle) {
       return redirectBackWithError(origin, "slot_not_attributed");
     }

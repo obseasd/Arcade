@@ -70,18 +70,58 @@ export function resolveIpfs(uri: string): string {
  * Returns null if the URI shape is unsupported, the fetch fails, the
  * response isn't valid JSON, or the timeout fires.
  */
+/**
+ * Audit Twitter Escrow H-3: IPFS gateway plurality. The previous code
+ * fetched from ipfs.io only and trusted the returned body byte-for-byte.
+ * A compromised gateway can substitute the slotTwitterHandles array
+ * silently, capturing claims for an attacker handle. Defense:
+ *  - Race two independent gateways (ipfs.io + cf-ipfs.com or
+ *    NEXT_PUBLIC_IPFS_GATEWAY) and require their bodies to match
+ *    byte-for-byte before returning the parsed JSON.
+ *  - If only one gateway is reachable, return null (fail closed) for
+ *    metadata that drives the claim-attribution path; an indexer
+ *    re-fetch can pick it up later once gateways agree.
+ */
+const IPFS_GATEWAYS: readonly string[] = [
+  process.env.NEXT_PUBLIC_IPFS_GATEWAY?.replace(/\/$/, "") || "https://ipfs.io",
+  "https://cloudflare-ipfs.com",
+];
+
+async function fetchSingleIpfs(url: string, signal: AbortSignal): Promise<string | null> {
+  try {
+    const res = await fetch(url, { signal });
+    if (!res.ok) return null;
+    return await res.text();
+  } catch {
+    return null;
+  }
+}
+
 export async function fetchMetadata(uri: string, timeoutMs = 5_000): Promise<TokenMetadata | null> {
   if (!uri) return null;
   const inline = parseInlineMetadata(uri);
   if (inline) return inline;
   if (uri.startsWith("ipfs://")) {
-    const url = resolveIpfs(uri);
+    const cid = uri.replace(/^ipfs:\/\//, "").split("/")[0];
+    if (!cid) return null;
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), timeoutMs);
     try {
-      const res = await fetch(url, { signal: ctrl.signal });
-      if (!res.ok) return null;
-      return (await res.json()) as TokenMetadata;
+      const bodies = await Promise.all(
+        IPFS_GATEWAYS.map((g) =>
+          fetchSingleIpfs(`${g}/ipfs/${cid}${uri.replace(/^ipfs:\/\/[^/]+/, "")}`, ctrl.signal),
+        ),
+      );
+      const reachable = bodies.filter((b): b is string => b !== null);
+      if (reachable.length === 0) return null;
+      // Quorum: require all reachable gateways to return identical bytes.
+      // If only one is reachable, fail closed - the claim-attribution
+      // path can't safely act on a single unverified source. Indexer
+      // can re-fetch later.
+      const first = reachable[0];
+      const allMatch = reachable.every((b) => b === first);
+      if (!allMatch || reachable.length < 2) return null;
+      return JSON.parse(first) as TokenMetadata;
     } catch {
       return null;
     } finally {

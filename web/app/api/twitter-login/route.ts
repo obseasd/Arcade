@@ -105,11 +105,30 @@ export async function GET(req: NextRequest) {
     createdAt: Date.now(),
   };
 
+  // Audit Twitter Escrow H-2: HMAC the state cookie value so a same-
+  // origin cookie-tamper attempt (XSS or shared-device cookie swap)
+  // can't substitute a different `recipient` without the HMAC failing.
+  // The signing secret lives only in the server env; tamper attempts
+  // can't reproduce a valid MAC.
+  const stateJson = JSON.stringify(stateData);
+  const secret = process.env.ARCADE_OAUTH_STATE_SECRET || "";
+  if (!secret) {
+    // Hard fail rather than silently accepting an unsigned cookie -
+    // the operator must set ARCADE_OAUTH_STATE_SECRET in Vercel env.
+    return NextResponse.json({ error: "server_misconfigured" }, { status: 500 });
+  }
+  const mac = crypto.createHmac("sha256", secret).update(stateJson).digest("hex");
+  const cookieValue = `${stateJson}.${mac}`;
+
   const res = NextResponse.redirect(authUrl.toString());
-  res.cookies.set(`tw_state_${state}`, JSON.stringify(stateData), {
+  res.cookies.set(`tw_state_${state}`, cookieValue, {
     httpOnly: true,
     secure: req.nextUrl.protocol === "https:",
-    sameSite: "lax",
+    // Audit Twitter Escrow H-2: switch sameSite from "lax" to "strict".
+    // The callback is same-origin GET so strict doesn't break the flow,
+    // and strict blocks tab-jacking that fires a top-level navigation
+    // to a forged callback URL inheriting the in-flight state cookie.
+    sameSite: "strict",
     maxAge: 600, // 10 minutes
     path: "/",
   });
