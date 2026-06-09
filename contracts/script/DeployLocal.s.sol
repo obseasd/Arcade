@@ -52,7 +52,8 @@ contract DeployLocal is Script {
 
         // V3 locker + swap router + quoter so CLANKER_V3 tokens are tradeable.
         // Local deploys don't wire the Twitter escrow integration - pass 0.
-        address v3Locker = _deployV3Locker(address(launchpad), v3Factory, address(0));
+        // Audit V3 Locker M-3: owner_ is the deployer in local dev.
+        address v3Locker = _deployV3Locker(address(launchpad), v3Factory, address(0), msg.sender);
         address v3Router = _deployV3Router(v3Factory, address(usdc), address(launchpad));
         address v3Quoter = _deployV3Aux("out-v3/ArcadeV3Quoter.sol/ArcadeV3Quoter.json", v3Factory, address(usdc));
         ArcadeTokenVault tokenVault = new ArcadeTokenVault(address(launchpad));
@@ -177,13 +178,15 @@ contract DeployLocal is Script {
         require(factory != address(0), "v3 factory deploy failed");
     }
 
-    function _deployV3Locker(address launchpad_, address factory_, address twitterEscrow_)
-        internal
-        returns (address locker)
-    {
+    function _deployV3Locker(
+        address launchpad_,
+        address factory_,
+        address twitterEscrow_,
+        address owner_
+    ) internal returns (address locker) {
         bytes memory code = abi.encodePacked(
             vm.getCode("out-v3/ArcadeV3Locker.sol/ArcadeV3Locker.json"),
-            abi.encode(launchpad_, factory_, twitterEscrow_)
+            abi.encode(launchpad_, factory_, twitterEscrow_, owner_)
         );
         assembly {
             locker := create(0, add(code, 0x20), mload(code))

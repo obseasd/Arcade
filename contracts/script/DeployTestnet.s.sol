@@ -51,7 +51,9 @@ contract DeployTestnet is Script {
         // Empty / unset → legacy behavior (locker forwards tokens with no
         // on-chain attribution).
         address twitterEscrow = vm.envOr("TWITTER_ESCROW_ADDRESS", address(0));
-        address v3Locker = _deployV3Locker(address(launchpad), v3Factory, twitterEscrow);
+        // Audit V3 Locker M-3: owner = deployer on testnet. For mainnet
+        // pass the multisig address via env var or hardcode the value.
+        address v3Locker = _deployV3Locker(address(launchpad), v3Factory, twitterEscrow, msg.sender);
         address v3Router = _deployV3Router(v3Factory, usdc, address(launchpad));
         address v3Quoter = _deployV3Aux("out-v3/ArcadeV3Quoter.sol/ArcadeV3Quoter.json", v3Factory, usdc);
         ArcadeTokenVault tokenVault = new ArcadeTokenVault(address(launchpad));
@@ -111,13 +113,15 @@ contract DeployTestnet is Script {
     /// @dev `twitterEscrow_` is optional. Pass `address(0)` to skip the V3
     ///      escrow integration (the locker still works, just doesn't mirror
     ///      transfers to the escrow's on-chain accounting).
-    function _deployV3Locker(address launchpad_, address factory_, address twitterEscrow_)
-        internal
-        returns (address locker)
-    {
+    function _deployV3Locker(
+        address launchpad_,
+        address factory_,
+        address twitterEscrow_,
+        address owner_
+    ) internal returns (address locker) {
         bytes memory code = abi.encodePacked(
             vm.getCode("out-v3/ArcadeV3Locker.sol/ArcadeV3Locker.json"),
-            abi.encode(launchpad_, factory_, twitterEscrow_)
+            abi.encode(launchpad_, factory_, twitterEscrow_, owner_)
         );
         assembly {
             locker := create(0, add(code, 0x20), mload(code))

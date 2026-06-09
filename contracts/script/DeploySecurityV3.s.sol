@@ -132,7 +132,12 @@ contract DeploySecurityV3 is Script {
 
         // 5) Locker (0.7.6 bytecode) carries launchpad + factory + escrow.
         // M-06: locker re-validates `paired ∈ {USDC, WETH}` at lockSingleSided.
-        d.v3Locker = _deployV3Locker(address(d.launchpad), d.v3Factory, address(d.escrow));
+        d.v3Locker = _deployV3Locker(
+            address(d.launchpad),
+            d.v3Factory,
+            address(d.escrow),
+            cfg.escrowOwner
+        );
 
         // 6-7) V3 router + quoter (0.7.6 bytecode).
         d.v3Router = _deployV3Router(d.v3Factory, cfg.usdc, address(d.launchpad));
@@ -244,13 +249,24 @@ contract DeploySecurityV3 is Script {
         require(factory != address(0), "v3 factory deploy failed");
     }
 
-    function _deployV3Locker(address launchpad_, address factory_, address twitterEscrow_)
+    function _deployV3Locker(
+        address launchpad_,
+        address factory_,
+        address twitterEscrow_,
+        address owner_
+    )
         internal
         returns (address locker)
     {
+        // Audit V3 Locker M-3: constructor grew an owner_ argument.
+        // Owner is the only caller of adminRescue (whitelist excludes
+        // every active position's paired + clanker tokens), so a
+        // multisig is the recommended value at production. Tests pass
+        // address(this); local/testnet deploys use the deployer (or
+        // ESCROW_OWNER env override which we reuse for consistency).
         bytes memory code = abi.encodePacked(
             vm.getCode("out-v3/ArcadeV3Locker.sol/ArcadeV3Locker.json"),
-            abi.encode(launchpad_, factory_, twitterEscrow_)
+            abi.encode(launchpad_, factory_, twitterEscrow_, owner_)
         );
         assembly {
             locker := create(0, add(code, 0x20), mload(code))
