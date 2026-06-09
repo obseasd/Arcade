@@ -71,11 +71,6 @@ contract ArcadeTwitterEscrowV3 is Ownable2Step, Pausable, ReentrancyGuard {
     address public LOCKER;
     bytes32 private immutable _DOMAIN_SEPARATOR_CACHED;
     uint256 private immutable _CACHED_CHAIN_ID;
-    /// @dev Audit Twitter Escrow C-3: per-deployment salt mixed into
-    ///      the EIP-712 domain separator. Defends against cross-
-    ///      deployment signature replay if the backend signing key is
-    ///      ever reused for a sibling escrow. Set in the constructor.
-    bytes32 private immutable _DOMAIN_SALT;
 
     bytes32 private constant CLAIM_TYPEHASH = keccak256(
         "Claim(uint256 positionId,uint256 slotIndex,address recipient,address pairedToken,uint256 pairedAmount,address clankerToken,uint256 clankerAmount,uint256 deadline,bytes32 nonce)"
@@ -238,13 +233,6 @@ contract ArcadeTwitterEscrowV3 is Ownable2Step, Pausable, ReentrancyGuard {
         // in a single tx by a compromised signer.
         claimTimelock = DEFAULT_TIMELOCK;
         _CACHED_CHAIN_ID = block.chainid;
-        // Audit C-3: unique-per-deployment salt mixed into the EIP-712
-        // domain. address(this) + chainid alone bind the domain to the
-        // instance, but the salt adds defense-in-depth against a future
-        // sibling deployment sharing the typehash and the backend key.
-        _DOMAIN_SALT = keccak256(
-            abi.encode("ArcadeTwitterEscrowV3", block.chainid, address(this), block.number)
-        );
         _DOMAIN_SEPARATOR_CACHED = _buildDomainSeparator();
         emit TrustedSignerUpdated(address(0), trustedSigner_);
         emit TimelockChanged(DEFAULT_TIMELOCK);
@@ -266,26 +254,19 @@ contract ArcadeTwitterEscrowV3 is Ownable2Step, Pausable, ReentrancyGuard {
     }
 
     function _buildDomainSeparator() private view returns (bytes32) {
-        // Audit Twitter Escrow C-3: include a `salt` in the EIP-712
-        // domain hash to defend against cross-deployment signature
-        // replay. The backend signing key is documented as reused
-        // V2 -> V3; chainId + verifyingContract already bind the
-        // domain to this specific contract instance on this chain,
-        // but a salt also defends against a future sibling deployment
-        // accidentally sharing typehash + key (e.g. an upgrade
-        // shadow-deployed for migration testing). The salt is the
-        // contract's bytecode hash at deploy time - unique per
-        // deployment without requiring a constructor argument.
+        // Audit C-3 (salt) reverted: chainid + verifyingContract +
+        // version="3" already disambiguate the V3 instance from any
+        // V2 sibling AND from a hypothetical sibling V3 deployment
+        // (they'd have different verifyingContracts). The salt added
+        // overhead without a real defense gap for this deployment
+        // topology.
         return keccak256(
             abi.encode(
-                keccak256(
-                    "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract,bytes32 salt)"
-                ),
+                keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
                 keccak256("ArcadeTwitterEscrow"),
                 keccak256("3"),
                 block.chainid,
-                address(this),
-                _DOMAIN_SALT
+                address(this)
             )
         );
     }
@@ -317,15 +298,14 @@ contract ArcadeTwitterEscrowV3 is Ownable2Step, Pausable, ReentrancyGuard {
         // the locker's own try/catch route the amount to its pendingWithdrawals
         // ledger for the escrow's address, recoverable via pullFromLocker.
         if (claimed[positionId][slotIndex]) revert SlotAlreadyClaimed();
-        // Audit Twitter Escrow H-5: refuse credits to a slot with an
-        // active pending authorize. Without this lock, an attacker who
-        // obtained one signature via the C-1 weakness could front-run a
-        // claim with their own authorize at far-edge deadline; every
-        // new credit during the timelock window would then sweep into
-        // the attacker's claim instead of being available to the next
-        // honest authorize. Owner veto still works, but the lock makes
-        // the grief less profitable in the first place.
-        if (hasPending[positionId][slotIndex]) revert SlotPending();
+        // Audit H-5 was reverted: blocking credits during the timelock
+        // window conflicted with the H-04 design (sweep current balance
+        // at claim time, allow locker.collectFees - which is
+        // permissionless - to keep crediting). The grief vector
+        // (attacker captures mid-timelock credits via a stolen sig)
+        // is mitigated by F2 (recipient == msg.sender at authorize)
+        // and the owner-veto window. Re-evaluate if F2 is ever
+        // weakened.
         balances[positionId][slotIndex][token] += amount;
         // Audit Twitter Escrow H-4: remember the (pairedToken,
         // clankerToken) pair the first credit established for this slot

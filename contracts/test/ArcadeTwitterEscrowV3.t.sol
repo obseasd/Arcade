@@ -161,6 +161,7 @@ contract ArcadeTwitterEscrowV3Test is Test {
         uint256 deadline = block.timestamp + 1 hours;
         bytes memory sig = _signClaim(1, 0, recipient, address(usdc), 200, address(0), 0, deadline, nonce);
         vm.expectRevert(ArcadeTwitterEscrowV3.InsufficientBalance.selector);
+        vm.prank(recipient);
         escrow.authorize(1, 0, recipient, address(usdc), 200, address(0), 0, deadline, nonce, sig);
     }
 
@@ -169,6 +170,7 @@ contract ArcadeTwitterEscrowV3Test is Test {
         bytes32 nonce = bytes32("ok-1");
         uint256 deadline = block.timestamp + 1 hours;
         bytes memory sig = _signClaim(1, 0, recipient, address(usdc), 100, address(0), 0, deadline, nonce);
+        vm.prank(recipient);
         escrow.authorize(1, 0, recipient, address(usdc), 100, address(0), 0, deadline, nonce, sig);
         // Pending claim was recorded.
         // PendingClaim layout: (recipient, pairedToken, pairedAmount,
@@ -185,6 +187,7 @@ contract ArcadeTwitterEscrowV3Test is Test {
         // Deadline must outlast the default 1h timelock (H-01) and the warp below.
         uint256 deadline = block.timestamp + 1 days;
         bytes memory sig = _signClaim(1, 0, recipient, address(usdc), 100, address(0), 0, deadline, nonce);
+        vm.prank(recipient);
         escrow.authorize(1, 0, recipient, address(usdc), 100, address(0), 0, deadline, nonce, sig);
         vm.warp(block.timestamp + escrow.claimTimelock() + 1);
         escrow.claimByTwitter(nonce);
@@ -203,6 +206,7 @@ contract ArcadeTwitterEscrowV3Test is Test {
         uint256 deadline = block.timestamp + 1 hours;
         bytes memory sig = _signClaim(1, 0, recipient, address(usdc), 100, address(0), 0, deadline, nonce);
         vm.expectRevert(Pausable.EnforcedPause.selector);
+        vm.prank(recipient);
         escrow.authorize(1, 0, recipient, address(usdc), 100, address(0), 0, deadline, nonce, sig);
     }
 
@@ -211,6 +215,7 @@ contract ArcadeTwitterEscrowV3Test is Test {
         bytes32 nonce = bytes32("blocked");
         uint256 deadline = block.timestamp + 1 hours;
         bytes memory sig = _signClaim(1, 0, recipient, address(usdc), 100, address(0), 0, deadline, nonce);
+        vm.prank(recipient);
         escrow.authorize(1, 0, recipient, address(usdc), 100, address(0), 0, deadline, nonce, sig);
         vm.prank(OWNER);
         escrow.pause();
@@ -223,6 +228,7 @@ contract ArcadeTwitterEscrowV3Test is Test {
         bytes32 nonce = bytes32("veto-while-paused");
         uint256 deadline = block.timestamp + 1 hours;
         bytes memory sig = _signClaim(1, 0, recipient, address(usdc), 100, address(0), 0, deadline, nonce);
+        vm.prank(recipient);
         escrow.authorize(1, 0, recipient, address(usdc), 100, address(0), 0, deadline, nonce, sig);
         vm.prank(OWNER);
         escrow.pause();
@@ -248,6 +254,7 @@ contract ArcadeTwitterEscrowV3Test is Test {
         // Old signer's sig is rejected.
         bytes memory oldSig = _signClaim(1, 0, recipient, address(usdc), 100, address(0), 0, deadline, nonce);
         vm.expectRevert(ArcadeTwitterEscrowV3.InvalidSignature.selector);
+        vm.prank(recipient);
         escrow.authorize(1, 0, recipient, address(usdc), 100, address(0), 0, deadline, nonce, oldSig);
 
         // New signer's sig works.
@@ -258,6 +265,7 @@ contract ArcadeTwitterEscrowV3Test is Test {
         bytes32 digest = MessageHashUtils.toTypedDataHash(escrow.DOMAIN_SEPARATOR(), structHash);
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(newPk, digest);
         bytes memory newSig = abi.encodePacked(r, s, v);
+        vm.prank(recipient);
         escrow.authorize(1, 0, recipient, address(usdc), 100, address(0), 0, deadline, nonce, newSig);
     }
 
@@ -342,6 +350,7 @@ contract ArcadeTwitterEscrowV3Test is Test {
         bytes32 nonce = bytes32("rotrev1");
         uint256 deadline = block.timestamp + 1 days;
         bytes memory sig = _signClaim(1, 0, recipient, address(usdc), 100, address(0), 0, deadline, nonce);
+        vm.prank(recipient);
         escrow.authorize(1, 0, recipient, address(usdc), 100, address(0), 0, deadline, nonce, sig);
         vm.warp(block.timestamp + escrow.claimTimelock() + 1);
         // claim should NOT revert; user gets tokens; RotationFailed event fires.
@@ -356,6 +365,7 @@ contract ArcadeTwitterEscrowV3Test is Test {
         bytes32 nonce = bytes32("rotrev2");
         uint256 deadline = block.timestamp + 1 days;
         bytes memory sig = _signClaim(1, 0, recipient, address(usdc), 100, address(0), 0, deadline, nonce);
+        vm.prank(recipient);
         escrow.authorize(1, 0, recipient, address(usdc), 100, address(0), 0, deadline, nonce, sig);
         vm.warp(block.timestamp + escrow.claimTimelock() + 1);
         escrow.claimByTwitter(nonce);
@@ -369,6 +379,7 @@ contract ArcadeTwitterEscrowV3Test is Test {
         bytes32 nonce = bytes32("already");
         uint256 deadline = block.timestamp + 1 days;
         bytes memory sig = _signClaim(1, 0, recipient, address(usdc), 100, address(0), 0, deadline, nonce);
+        vm.prank(recipient);
         escrow.authorize(1, 0, recipient, address(usdc), 100, address(0), 0, deadline, nonce, sig);
         vm.warp(block.timestamp + escrow.claimTimelock() + 1);
         escrow.claimByTwitter(nonce);
@@ -386,6 +397,7 @@ contract ArcadeTwitterEscrowV3Test is Test {
         uint256 deadline = uint256(type(uint64).max) + 100;
         bytes32 nonce = bytes32("future");
         bytes memory sig = _signClaim(1, 0, recipient, address(usdc), 100, address(0), 0, deadline, nonce);
+        vm.prank(recipient);
         escrow.authorize(1, 0, recipient, address(usdc), 100, address(0), 0, deadline, nonce, sig);
         (,,,,,,,, uint256 storedDeadline,,) = escrow.pendingClaims(nonce);
         assertEq(storedDeadline, deadline, "full deadline preserved");
@@ -400,14 +412,22 @@ contract ArcadeTwitterEscrowV3Test is Test {
         // pairedToken == clankerToken == USDC, both > 0 -> revert.
         bytes memory sig = _signClaim(1, 0, recipient, address(usdc), 50, address(usdc), 50, deadline, nonce);
         vm.expectRevert(ArcadeTwitterEscrowV3.InvalidTokens.selector);
+        vm.prank(recipient);
         escrow.authorize(1, 0, recipient, address(usdc), 50, address(usdc), 50, deadline, nonce, sig);
     }
 
-    function test_F10_authorize_allowsSameTokenWhenOneAmountZero() public {
+    function test_F10_authorize_revertsOnSameTokenEvenWithZeroAmount() public {
+        // F-10 was tightened: pairedToken == clankerToken now reverts
+        // regardless of amounts. The same-token aliasing case has no
+        // legitimate use - a slot would always be (paired, 0) with
+        // a distinct paired vs clanker. Test documents the stricter
+        // behaviour.
         _credit(1, 0, address(usdc), 100);
-        bytes32 nonce = bytes32("alias-ok");
+        bytes32 nonce = bytes32("alias-strict");
         uint256 deadline = block.timestamp + 1 hours;
         bytes memory sig = _signClaim(1, 0, recipient, address(usdc), 100, address(usdc), 0, deadline, nonce);
+        vm.expectRevert(ArcadeTwitterEscrowV3.InvalidTokens.selector);
+        vm.prank(recipient);
         escrow.authorize(1, 0, recipient, address(usdc), 100, address(usdc), 0, deadline, nonce, sig);
     }
 
@@ -421,6 +441,7 @@ contract ArcadeTwitterEscrowV3Test is Test {
         bytes32 nonce = bytes32("delayed");
         uint256 deadline = block.timestamp + 1 days;
         bytes memory sig = _signClaim(1, 0, recipient, address(usdc), 100, address(0), 0, deadline, nonce);
+        vm.prank(recipient);
         escrow.authorize(1, 0, recipient, address(usdc), 100, address(0), 0, deadline, nonce, sig);
 
         // Immediately: timelocked.
@@ -441,6 +462,7 @@ contract ArcadeTwitterEscrowV3Test is Test {
         bytes32 nonce = bytes32("vetoed");
         uint256 deadline = block.timestamp + 1 days;
         bytes memory sig = _signClaim(1, 0, recipient, address(usdc), 100, address(0), 0, deadline, nonce);
+        vm.prank(recipient);
         escrow.authorize(1, 0, recipient, address(usdc), 100, address(0), 0, deadline, nonce, sig);
 
         vm.prank(OWNER);
@@ -464,8 +486,10 @@ contract ArcadeTwitterEscrowV3Test is Test {
         bytes32 nonce = bytes32("replay");
         uint256 deadline = block.timestamp + 1 hours;
         bytes memory sig = _signClaim(1, 0, recipient, address(usdc), 100, address(0), 0, deadline, nonce);
+        vm.prank(recipient);
         escrow.authorize(1, 0, recipient, address(usdc), 100, address(0), 0, deadline, nonce, sig);
         vm.expectRevert(ArcadeTwitterEscrowV3.SlotPending.selector);
+        vm.prank(recipient);
         escrow.authorize(1, 0, recipient, address(usdc), 100, address(0), 0, deadline, nonce, sig);
     }
 
@@ -476,6 +500,7 @@ contract ArcadeTwitterEscrowV3Test is Test {
         bytes32 nonce = bytes32("expired");
         bytes memory sig = _signClaim(1, 0, recipient, address(usdc), 100, address(0), 0, deadline, nonce);
         vm.expectRevert(ArcadeTwitterEscrowV3.DeadlineInPast.selector);
+        vm.prank(recipient);
         escrow.authorize(1, 0, recipient, address(usdc), 100, address(0), 0, deadline, nonce, sig);
     }
 
@@ -513,6 +538,7 @@ contract ArcadeTwitterEscrowV3Test is Test {
         bytes32 nonce = bytes32("claim-then-credit");
         uint256 deadline = block.timestamp + 1 days;
         bytes memory sig = _signClaim(1, 0, recipient, address(usdc), 100, address(0), 0, deadline, nonce);
+        vm.prank(recipient);
         escrow.authorize(1, 0, recipient, address(usdc), 100, address(0), 0, deadline, nonce, sig);
         vm.warp(block.timestamp + escrow.claimTimelock() + 1);
         escrow.claimByTwitter(nonce);
@@ -533,6 +559,7 @@ contract ArcadeTwitterEscrowV3Test is Test {
         bytes32 nonce = bytes32("sweep");
         uint256 deadline = block.timestamp + 1 days;
         bytes memory sig = _signClaim(1, 0, recipient, address(usdc), 100, address(0), 0, deadline, nonce);
+        vm.prank(recipient);
         escrow.authorize(1, 0, recipient, address(usdc), 100, address(0), 0, deadline, nonce, sig);
 
         // Locker credits ANOTHER 50 USDC during the timelock window.
@@ -556,6 +583,7 @@ contract ArcadeTwitterEscrowV3Test is Test {
         bytes32 nonce = bytes32("floor");
         uint256 deadline = block.timestamp + 1 days;
         bytes memory sig = _signClaim(1, 0, recipient, address(usdc), 100, address(0), 0, deadline, nonce);
+        vm.prank(recipient);
         escrow.authorize(1, 0, recipient, address(usdc), 100, address(0), 0, deadline, nonce, sig);
 
         // Manually rip the balance down (simulating an impossible reverse
@@ -624,6 +652,7 @@ contract ArcadeTwitterEscrowV3Test is Test {
         uint256 deadline = block.timestamp + 1 days;
         bytes memory sig = _signClaim(1, 0, recipient, address(usdc), 0, address(clanker), 0, deadline, nonce);
         vm.expectRevert(ArcadeTwitterEscrowV3.NothingToClaim.selector);
+        vm.prank(recipient);
         escrow.authorize(1, 0, recipient, address(usdc), 0, address(clanker), 0, deadline, nonce, sig);
     }
 
@@ -633,6 +662,7 @@ contract ArcadeTwitterEscrowV3Test is Test {
         bytes32 nonce = bytes32("one-side");
         uint256 deadline = block.timestamp + 1 days;
         bytes memory sig = _signClaim(1, 0, recipient, address(usdc), 100, address(clanker), 0, deadline, nonce);
+        vm.prank(recipient);
         escrow.authorize(1, 0, recipient, address(usdc), 100, address(clanker), 0, deadline, nonce, sig);
     }
 
@@ -721,6 +751,7 @@ contract ArcadeTwitterEscrowV3Test is Test {
         bytes32 nonce = bytes32("preclaim");
         uint256 deadline = block.timestamp + 365 days;
         bytes memory sig = _signClaim(1, 0, recipient, address(usdc), 100, address(0), 0, deadline, nonce);
+        vm.prank(recipient);
         escrow.authorize(1, 0, recipient, address(usdc), 100, address(0), 0, deadline, nonce, sig);
         vm.warp(block.timestamp + escrow.claimTimelock() + 1);
         escrow.claimByTwitter(nonce);
@@ -742,6 +773,7 @@ contract ArcadeTwitterEscrowV3Test is Test {
         bytes32 nonce = bytes32("pending");
         uint256 deadline = block.timestamp + 365 days;
         bytes memory sig = _signClaim(1, 0, recipient, address(usdc), 100, address(0), 0, deadline, nonce);
+        vm.prank(recipient);
         escrow.authorize(1, 0, recipient, address(usdc), 100, address(0), 0, deadline, nonce, sig);
 
         vm.prank(OWNER);
@@ -768,7 +800,9 @@ contract ArcadeTwitterEscrowV3Test is Test {
         _credit(1, 0, address(usdc), 100);
         vm.warp(block.timestamp + 200 days);
         vm.prank(OWNER);
-        escrow.forfeitStaleClaim(1, 0, address(usdc), address(clanker), address(0xCAFE));
+        // Audit H-4: pass the pair the slot was actually credited
+        // with (usdc-only here), not an arbitrary token pair.
+        escrow.forfeitStaleClaim(1, 0, address(usdc), address(0), address(0xCAFE));
 
         // After forfeit the slot is marked claimed; locker's later credit attempt reverts.
         vm.prank(address(locker));
