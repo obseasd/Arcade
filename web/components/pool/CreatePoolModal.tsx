@@ -283,10 +283,10 @@ function TypeButton({
         <button type="button"
             onClick={onClick}
             className={cn(
-                "rounded-xl px-3.5 py-1.5 text-sm font-medium transition-colors",
+                "rounded-xl border px-4 py-1.5 text-sm font-medium transition-colors",
                 active
-                    ? "bg-arc-surface-3 text-arc-text"
-                    : "bg-arc-surface-2 text-arc-text-muted hover:bg-arc-surface-3 hover:text-arc-text",
+                    ? "border-arc-gray bg-arc-cta-hover text-white"
+                    : "border-arc-border bg-arc-surface text-arc-text-muted hover:bg-arc-surface-2 hover:text-arc-text",
             )}
         >
             {children}
