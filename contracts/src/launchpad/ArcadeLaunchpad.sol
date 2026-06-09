@@ -473,10 +473,12 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
      */
     function _distributeMigratedFee(TokenState storage s, uint256 totalRoyalty) internal {
         if (totalRoyalty == 0) return;
-        // Audit H-4: ceil-round UP to platform; creator absorbs deficit (by design).
+        // platformFee = ceil(totalRoyalty * 20/30). For any totalRoyalty >= 0
+        // this is bounded by totalRoyalty (verified algebraically: ceil(2x/3)
+        // <= x for all x >= 0), so the prior `if (platformFee > totalRoyalty)`
+        // clamp was provably dead code - dropped for EIP-170 budget.
         uint256 platformFee = (totalRoyalty * MIGRATED_PLATFORM_BPS + MIGRATED_ROYALTY_BPS - 1)
             / MIGRATED_ROYALTY_BPS;
-        if (platformFee > totalRoyalty) platformFee = totalRoyalty;
         uint256 creatorPortion = totalRoyalty - platformFee;
         _payCreatorShare(s, creatorPortion);
         if (platformFee > 0) _safePayUsdc(treasury, platformFee);
@@ -899,23 +901,21 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         // M-09 + audit medium [24]: defend against TWO grief vectors:
         //   (a) raw donation - attacker transfers USDC directly to the pair
         //   (b) pre-mint - attacker calls createPair + mint themselves at
-        //       a ratio-matching deposit, claiming the LP. M-09's old
-        //       "short-pay" path treats this as a giant donation, transfers
-        //       0 USDC, mints 0 LP for the launchpad, then reverts inside
-        //       pair.mint(DEAD) - bricking the token at the migration
-        //       boundary.
+        //       a ratio-matching deposit, claiming the LP.
         //
-        // New strategy: always transfer the full `usdcForLP` (so the mint
-        // produces non-zero liquidity regardless of pre-existing reserves)
-        // and skim afterwards to recover any value the attacker tried to
-        // donate. The attacker's pre-mint LP (if any) is unaffected but the
-        // launchpad's mint always succeeds — the launch can never be DoS'd
-        // at this step. The skim grabs the donation portion only; the
-        // attacker's own pre-mint balance stays in the pair as their LP.
+        // Strategy: skim FIRST to drain any donation that's currently
+        // unbacked by reserves (the pre-existing donation goes to
+        // treasury). Then transfer the launchpad's seed and mint to
+        // DEAD; the mint produces non-zero LP regardless of pre-mint
+        // state because the transferred seed creates a non-zero delta
+        // between balance and reserves. Skim AFTER mint is a no-op
+        // because mint synchronises reserves to balance, so the only
+        // window where skim can grab a donation is BEFORE the seed
+        // transfer.
+        IArcadeV2Pair(pair).skim(treasury);
         USDC.safeTransfer(pair, usdcForLP);
         IERC20(tokenAddr).safeTransfer(pair, tokensForLP);
         IArcadeV2Pair(pair).mint(DEAD);
-        IArcadeV2Pair(pair).skim(treasury);
         s.v2Pair = pair;
         emit Migrated(tokenAddr, pair, usdcForLP, tokensForLP);
     }
@@ -996,11 +996,8 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
             /* pool already initialised */
         }
 
-        // CSEC-013: pool's STATE must match our intended sqrtPriceX96.
-        // H-3 dust-LP check (liquidity == 0) was dropped for EIP-170
-        // budget; the price check still blocks the canonical hostile
-        // pre-init and the dust-LP variant requires the attacker to
-        // commit capital just to grief, which is uneconomical.
+        // CSEC-013: pool's actual sqrtPriceX96 must match our intent.
+        // H-3 dust-LP check (liquidity == 0) dropped for EIP-170 budget.
         (uint160 sp,,,,,,) = IArcadeV3Pool(pool).slot0();
         if (sp != sqrtPriceX96) revert InvalidRoute();
 
@@ -1037,16 +1034,12 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         if (creatorBuyUsdc > 0 && paired == address(USDC)) {
             USDC.safeTransferFrom(s.creator, address(this), creatorBuyUsdc);
             USDC.forceApprove(v3Router, creatorBuyUsdc);
-            // Audit launchpad-creator-buy-no-slippage: derive a hard minOut
-            // from the intended-mcap price (NOT slot0, which can be set by a
-            // mempool pre-init attacker). At the FDV-based intended price,
-            // expectedOut = creatorBuyUsdc * TOTAL_SUPPLY / mcap. We accept
-            // up to 5% slippage off that ideal, which leaves enough room
-            // for the single-sided position's natural tick walk on a fresh
-            // pool while rejecting a corrupted pre-init that would deliver
-            // an order of magnitude fewer tokens for the same USDC.
+            // Slippage hard minOut from intended-mcap FDV (NOT slot0,
+            // attacker-pre-init defence). 25% accepts the single-sided
+            // tick walk for realistic creator buys while still catching
+            // an order-of-magnitude pre-init corruption.
             uint256 expectedOut = (creatorBuyUsdc * TOTAL_SUPPLY) / mcap;
-            uint256 minOut = (expectedOut * 9500) / 10000;
+            uint256 minOut = (expectedOut * 7500) / 10000;
             IArcadeV3Router(v3Router).exactInputSingle(
                 address(USDC), tokenAddr, fee, s.creator, creatorBuyUsdc, minOut, block.timestamp + 600
             );

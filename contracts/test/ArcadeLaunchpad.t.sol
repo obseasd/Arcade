@@ -349,9 +349,10 @@ contract ArcadeLaunchpadTest is Test {
         // Platform = 0.20% / 0.30% of total royalty = 2/3
         // Creator  = 0.10% / 0.30% = 1/3
         // So total platform should equal ~2x total creator
-        // Each leg rounds independently (royalty floor → 2/3 platform / 1/3 creator floor),
-        // so we allow up to 2 wei of rounding drift on the platform vs 2*creator invariant.
-        assertApproxEqAbs(totalPlatformPaid, 2 * totalCreatorPaid, 2, "platform = 2x creator");
+        // Each leg rounds independently (royalty ceil → 2/3 platform / 1/3 creator floor).
+        // Per-leg max drift = 2 wei (when totalRoyalty falls right above an even multiple
+        // of 3); with 2 legs the bound is 4 wei.
+        assertApproxEqAbs(totalPlatformPaid, 2 * totalCreatorPaid, 4, "platform = 2x creator");
         assertEq(totalPlatformPaid + totalCreatorPaid, quotedRoyalty, "royalty conserved");
     }
 
