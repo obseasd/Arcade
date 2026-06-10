@@ -39,9 +39,9 @@ interface Props {
 const PINNED: PinnedTemplate[] = [
   { symbol: "USDC", name: "USD Coin" },
   { symbol: "ETH", name: "Wrapped Ether" },
-  { symbol: "WUSDC", name: "Wrapped USDC" },
+  { symbol: "EURC", name: "Euro Coin" },
   { symbol: "USDT", name: "Tether" },
-  { symbol: "BTC", name: "Wrapped BTC" },
+  { symbol: "cirBTC", name: "Circle Wrapped BTC" },
 ];
 
 export function TokenSelectModal({ open, onClose, tokens, onSelect, selectedAddress, excludeAddress }: Props) {
@@ -72,6 +72,12 @@ export function TokenSelectModal({ open, onClose, tokens, onSelect, selectedAddr
       if (p.symbol === "ETH" && ADDRESSES.seedEth !== zeroAddress) {
         return { ...p, address: ADDRESSES.seedEth };
       }
+      // Canonical Circle tokens on Arc testnet are hardcoded in constants.
+      if (p.symbol === "EURC") return { ...p, address: ADDRESSES.eurc };
+      if (p.symbol === "cirBTC") return { ...p, address: ADDRESSES.cirBtc };
+      // USDT has no canonical deployment on Arc (Circle-stablecoin-native
+      // chain) so we render it with a "Soon" badge — wire an address when
+      // an official Tether bridge or test deployment lands.
       return p;
     });
   }, []);
@@ -287,9 +293,19 @@ export function TokenSelectModal({ open, onClose, tokens, onSelect, selectedAddr
               >
                 <AutoTokenIcon address={t.address} symbol={t.symbol} size={36} />
                 <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2 text-sm font-medium">
-                    <span>{t.symbol ?? "-"}</span>
-                    <span className="font-mono text-[11px] font-normal text-arc-text-muted">
+                  {/* Synthra-style two-line layout: full name on top, then
+                      ticker + truncated address + explorer link below. The
+                      name carries the visual weight because that's what
+                      users scan for; the ticker plays a secondary "what's
+                      the symbol" role next to the address. */}
+                  <div className="truncate text-sm font-semibold text-arc-text">
+                    {t.name ?? t.symbol ?? "Token"}
+                  </div>
+                  <div className="flex items-center gap-1.5 text-xs">
+                    <span className="font-medium uppercase text-arc-text-muted">
+                      {t.symbol ?? "-"}
+                    </span>
+                    <span className="font-mono text-[10px] text-arc-text-faint">
                       {shortAddr(t.address)}
                     </span>
                     <a
@@ -302,9 +318,9 @@ export function TokenSelectModal({ open, onClose, tokens, onSelect, selectedAddr
                     >
                       <ExternalLink className="h-3 w-3" />
                     </a>
-                  </div>
-                  <div className="text-xs text-arc-text-muted">
-                    {price ?? <span className="text-arc-text-faint">{t.name ?? "Token"}</span>}
+                    {price && (
+                      <span className="ml-auto text-[11px] text-arc-text-muted">{price}</span>
+                    )}
                   </div>
                 </div>
                 {active && <Check className="h-4 w-4 text-arc-cta-hover" />}

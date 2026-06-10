@@ -61,7 +61,26 @@ export const ADDRESSES = {
   orbsExchangeV2: safeAddress(process.env.NEXT_PUBLIC_ORBS_EXCHANGE_V2_ADDRESS),
   /** Lens read-only helper for the frontend. */
   orbsLens: safeAddress(process.env.NEXT_PUBLIC_ORBS_LENS_ADDRESS),
+  // --- Canonical Circle tokens on Arc testnet (well-known, hardcoded) ---
+  /** Circle Euro stablecoin on Arc testnet. 6 decimals like USDC. */
+  eurc: "0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a" as Address,
+  /** Circle-wrapped BTC ("cirBTC") on Arc testnet. 8 decimals. */
+  cirBtc: "0xf0C4a4CE82A5746AbAAd9425360Ab04fbBA432BF" as Address,
+  // --- Synthra (Uniswap V3 fork on Arc testnet, alternate swap route) ---
+  /** Synthra V3 Factory (canonical Uniswap V3 ABI). */
+  synthraFactory: "0x0fB6EEDA6e90E90797083861A75D15752a27f59c" as Address,
+  /** Synthra SwapRouter02 (Uniswap V3 swap router). */
+  synthraRouter: "0xA545bCB1Bd7985c59ea162aB1748A0803434C31b" as Address,
+  /** Synthra QuoterV2 (gives exact-in / exact-out quotes per pool). */
+  synthraQuoter: "0x3Ce954107b1A675826B33bF23060Dd655e3758fE" as Address,
+  /** Synthra UniversalRouter (used by their app for routed swaps). */
+  synthraUniversalRouter: "0xbf4479C07Dc6fdc6dAa764A0ccA06969e894275F" as Address,
+  /** Synthra Wrapped USDC (their canonical "ETH-equivalent" — 18 dec). */
+  synthraWusdc: "0x911b4000D3422F482F4062a913885f7b035382Df" as Address,
 } as const;
+
+/** Synthra V3 routing fee tiers (Uniswap V3 standard: 0.01% / 0.05% / 0.3% / 1%). */
+export const SYNTHRA_V3_FEES = [100, 500, 3_000, 10_000] as const;
 
 /** True iff Orbs limit orders are wired in this env. Gates the Limit tab. */
 export const LIMIT_ORDERS_ENABLED: boolean =

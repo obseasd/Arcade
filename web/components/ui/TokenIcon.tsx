@@ -16,6 +16,7 @@ const PNG_LOGOS: Record<string, string> = {
   WETH: "/eth.png",
   BTC: "/btc.png",
   WBTC: "/btc.png",
+  CIRBTC: "/btc.png",
   USDT: "/usdt.png",
 };
 
