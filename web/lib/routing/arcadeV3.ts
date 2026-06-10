@@ -1,6 +1,7 @@
 import { Address } from "viem";
 import { ADDRESSES, V3_FEE } from "@/lib/constants";
 import { V3_QUOTER_ABI, V3_ROUTER_ABI } from "@/lib/abis/v3";
+import { LAUNCHPAD_ABI } from "@/lib/abis/launchpad";
 import { PROVIDER_META, RouteProvider, RouteQuote } from "./types";
 
 const ZERO = "0x0000000000000000000000000000000000000000" as const;
@@ -28,13 +29,36 @@ export const arcadeV3Provider: RouteProvider = {
     const direct = isUsdcIn || isUsdcOut;
     const functionName = direct ? "quoteExactInputSingle" : "quoteExactInputThroughUsdc";
 
+    // Audit A-4: anti-sniper tax read INSIDE the provider so the quoted
+    // amountOut matches what the router actually executes. SwapCard's
+    // legacy quoteV3 was deducting the skim before quoting; the
+    // aggregator ignored it, producing too-optimistic quotes that
+    // tripped slippage at exec time. Tax applies on USDC-in buys
+    // (skim taken off the input); for sells the V3-3 fix already
+    // skims on tokenIn → no quote-side correction needed.
+    let snipeBps = 0n;
+    if (isUsdcIn && ADDRESSES.launchpad !== ZERO) {
+      try {
+        const bps = (await publicClient.readContract({
+          address: ADDRESSES.launchpad,
+          abi: LAUNCHPAD_ABI,
+          functionName: "currentSnipeBps",
+          args: [req.tokenOut],
+        })) as bigint;
+        snipeBps = bps;
+      } catch {
+        snipeBps = 0n;
+      }
+    }
+    const netAmountIn = req.amountIn - (req.amountIn * snipeBps) / 10_000n;
+
     let amountOut: bigint;
     try {
       const result = await publicClient.readContract({
         address: ADDRESSES.v3Quoter,
         abi: V3_QUOTER_ABI,
         functionName,
-        args: [req.tokenIn, req.tokenOut, V3_FEE, req.amountIn],
+        args: [req.tokenIn, req.tokenOut, V3_FEE, netAmountIn],
       });
       amountOut = result as bigint;
     } catch {

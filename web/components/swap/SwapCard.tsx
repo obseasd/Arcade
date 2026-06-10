@@ -5,7 +5,7 @@ import Image from "next/image";
 import { useRef } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { erc20Abi, formatUnits, parseUnits } from "viem";
-import { useAccount, useReadContract, useWriteContract, usePublicClient } from "wagmi";
+import { useAccount, useReadContract, useReadContracts, useWriteContract, usePublicClient } from "wagmi";
 import { ROUTER_ABI } from "@/lib/abis/dex";
 import { LAUNCHPAD_ABI } from "@/lib/abis/launchpad";
 import { V3_QUOTER_ABI, V3_ROUTER_ABI } from "@/lib/abis/v3";
@@ -333,22 +333,31 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
   const maxIn = (finalAmountIn * BigInt(10_000 + slippageBps)) / 10_000n;
 
   // Balances
-  const balanceIn = useReadContract({
-    address: tokenIn.address,
-    abi: erc20Abi,
-    functionName: "balanceOf",
-    args: account ? [account] : undefined,
-    query: { enabled: !!account && !!tokenIn.address },
+  // Audit A-3: batch the two balanceOf reads via Multicall3 (wired in
+  // arcTestnet chain config). Single eth_call instead of two parallel
+  // RPC roundtrips — meaningful on Arc's public RPC. Falls back to
+  // independent calls on chains without multicall3 (anvil local).
+  const balances = useReadContracts({
+    contracts: [
+      {
+        address: tokenIn.address,
+        abi: erc20Abi,
+        functionName: "balanceOf",
+        args: account ? [account] : undefined,
+      },
+      {
+        address: tokenOut?.address,
+        abi: erc20Abi,
+        functionName: "balanceOf",
+        args: account ? [account] : undefined,
+      },
+    ],
+    query: { enabled: !!account && !!tokenIn.address && !!tokenOut },
   });
-  const balanceOut = useReadContract({
-    address: tokenOut?.address,
-    abi: erc20Abi,
-    functionName: "balanceOf",
-    args: account ? [account] : undefined,
-    query: { enabled: !!account && !!tokenOut },
-  });
-  const balInRaw = (balanceIn.data as bigint | undefined) ?? 0n;
-  const balOutRaw = (balanceOut.data as bigint | undefined) ?? 0n;
+  const balanceIn = { data: balances.data?.[0]?.result as bigint | undefined, refetch: balances.refetch };
+  const balanceOut = { data: balances.data?.[1]?.result as bigint | undefined, refetch: balances.refetch };
+  const balInRaw = balanceIn.data ?? 0n;
+  const balOutRaw = balanceOut.data ?? 0n;
 
   // USD values
   const inUsd = useUsdValue(tokenIn.address, finalAmountIn, decimalsIn);
