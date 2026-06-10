@@ -1,9 +1,19 @@
 "use client";
 
+import Image from "next/image";
 import { Check, Loader2 } from "lucide-react";
-import { RouteQuote, PROVIDER_META } from "@/lib/routing/types";
+import { RouteQuote, PROVIDER_META, ProviderId } from "@/lib/routing/types";
 import { formatUnits } from "viem";
 import { cn } from "@/lib/utils";
+
+// Logos for the external DEXs. Arcade routes use a generic "A" badge so
+// users get a consistent visual signal between "this swap stays in
+// Arcade" and "this swap routes through a third-party DEX". Add a new
+// entry here when wiring a new external provider.
+const PROVIDER_LOGOS: Partial<Record<ProviderId, string>> = {
+  "synthra-v3": "/synthra.svg",
+  "unitflow-v3": "/unitflow.svg",
+};
 
 /**
  * Compact comparison panel: shows the top-N routes (default 3) ranked by
@@ -27,6 +37,11 @@ interface Props {
   decimalsOut: number;
   /** Symbol of tokenOut for the per-row caption. */
   symbolOut: string;
+  /** USD price per whole token of tokenOut. When provided, the routes
+   *  panel shows the USD value of each quote (matches Tower / Hyperswap
+   *  style) in place of the raw token amount. Undefined falls back to the
+   *  raw token amount. */
+  usdPricePerOut?: number;
   /** Top-N to display. Default 3. */
   topN?: number;
 }
@@ -38,6 +53,7 @@ export function SwapRoutes({
   onSelect,
   decimalsOut,
   symbolOut,
+  usdPricePerOut,
   topN = 3,
 }: Props) {
   if (loading && quotes.length === 0) {
@@ -99,13 +115,21 @@ export function SwapRoutes({
               <div className="flex min-w-0 items-center gap-2.5">
                 <div
                   className={cn(
-                    "flex h-7 w-7 shrink-0 items-center justify-center rounded-full border",
+                    "flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-full border",
                     active
                       ? "border-arc-cta-hover bg-arc-cta-hover/20"
                       : "border-arc-border bg-black/30",
                   )}
                 >
-                  {active ? (
+                  {PROVIDER_LOGOS[q.provider] ? (
+                    <Image
+                      src={PROVIDER_LOGOS[q.provider]!}
+                      alt={meta.label}
+                      width={20}
+                      height={20}
+                      className="h-5 w-5 object-contain"
+                    />
+                  ) : active ? (
                     <Check className="h-3.5 w-3.5 text-arc-cta-hover" />
                   ) : (
                     <span className={cn("text-[10px] font-bold uppercase", meta.accent)}>
@@ -129,8 +153,14 @@ export function SwapRoutes({
               </div>
               <div className="text-right">
                 <div className="text-sm font-semibold tabular-nums text-arc-text">
-                  {formatAmount(q.amountOut, decimalsOut)}{" "}
-                  <span className="text-[10px] font-medium text-arc-text-faint">{symbolOut}</span>
+                  {usdPricePerOut !== undefined
+                    ? formatUsd(q.amountOut, decimalsOut, usdPricePerOut)
+                    : (
+                      <>
+                        {formatAmount(q.amountOut, decimalsOut)}{" "}
+                        <span className="text-[10px] font-medium text-arc-text-faint">{symbolOut}</span>
+                      </>
+                    )}
                 </div>
                 {!isBest && deltaBps > 0 && (
                   <div className="text-[10px] tabular-nums text-arc-warn">
@@ -154,4 +184,14 @@ function formatAmount(raw: bigint, decimals: number): string {
   if (n >= 1) return n.toLocaleString("en-US", { maximumFractionDigits: 4 });
   if (n >= 0.0001) return n.toLocaleString("en-US", { maximumFractionDigits: 6 });
   return n.toExponential(2);
+}
+
+function formatUsd(raw: bigint, decimals: number, usdPerToken: number): string {
+  const tokens = Number(formatUnits(raw, decimals));
+  if (!Number.isFinite(tokens)) return "$0.00";
+  const usd = tokens * usdPerToken;
+  if (usd >= 1) return `$${usd.toLocaleString("en-US", { maximumFractionDigits: 2, minimumFractionDigits: 2 })}`;
+  if (usd >= 0.01) return `$${usd.toFixed(3)}`;
+  if (usd > 0) return `$${usd.toFixed(5)}`;
+  return "$0.00";
 }

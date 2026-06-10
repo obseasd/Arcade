@@ -213,7 +213,7 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
   const amountsOut = quoteOut.data as bigint[] | undefined;
   const amountsIn = quoteIn.data as bigint[] | undefined;
   const migratedQuote = quoteMigratedOut.data as readonly [bigint, bigint] | undefined;
-  const computedAmountOut = isV3Swap
+  const legacyComputedAmountOut = isV3Swap
     ? v3AmountOut
     : route.useLaunchpadRouter
       ? migratedQuote?.[0]
@@ -248,6 +248,26 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
   useEffect(() => {
     setSelectedRoute(undefined);
   }, [tokenIn.address, tokenOut?.address, amountInRaw]);
+
+  // The currently-active route: either the user's manual pick or the
+  // aggregator's auto-picked best. When non-null and the provider is
+  // external (Synthra / UnitFlow / future XyloNet), the SwapCard wires
+  // the route's pre-built executor into the writeContract path and
+  // takes amountOut directly from it. Arcade routes keep the legacy
+  // pipeline since the existing V3/V2 quote + writeContract already
+  // handle them (anti-sniper tax, launchpad multi-hop, etc).
+  const activeRoute: RouteQuote | null = selectedRoute ?? routeQuotes.best ?? null;
+  const isExternalRoute =
+    !!activeRoute &&
+    (activeRoute.provider === "synthra-v3" || activeRoute.provider === "unitflow-v3");
+
+  // computedAmountOut drives the For field. When an external route is
+  // active, override with its amountOut so the user sees Synthra's /
+  // UnitFlow's real number even when the legacy Arcade quoter returns 0
+  // (no Arcade pool exists). Arcade routes use the legacy value as-is.
+  const computedAmountOut: bigint | undefined = isExternalRoute
+    ? activeRoute!.amountOut
+    : legacyComputedAmountOut;
 
   // Capture the latest forward (in->out) ratio whenever it lands. Stays in
   // a ref so future renders that toggle lastEdited still see the last known
@@ -342,13 +362,17 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
       ? ((outUsd.usd - inUsd.usd) / inUsd.usd) * 100
       : undefined;
 
-  // Pick the spender to approve based on the route: V3 router for CLANKER_V3
-  // tokens, launchpad for royalty-aware multi-hop, else the V2 router.
-  const swapSpender = isV3Swap
-    ? ADDRESSES.v3Router
-    : route.useLaunchpadRouter
-      ? ADDRESSES.launchpad
-      : ADDRESSES.router;
+  // Pick the spender to approve based on the route: external route uses
+  // its own router (Synthra / UnitFlow SwapRouter02), V3 router for
+  // CLANKER_V3 tokens, launchpad for royalty-aware multi-hop, else the
+  // V2 router.
+  const swapSpender = isExternalRoute
+    ? activeRoute!.approval.spender
+    : isV3Swap
+      ? ADDRESSES.v3Router
+      : route.useLaunchpadRouter
+        ? ADDRESSES.launchpad
+        : ADDRESSES.router;
   const { ensureAllowance } = useApproveIfNeeded(tokenIn.address, swapSpender);
 
   // Slippage helpers
@@ -410,7 +434,19 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
       setTx({ status: "pending", message: "Submitting swap…" });
       const deadline = BigInt(Math.floor(Date.now() / 1000) + 600);
       let hash: `0x${string}`;
-      if (isV3Swap) {
+      if (isExternalRoute && activeRoute) {
+        // Route the swap through the selected provider's pre-built
+        // executor (e.g. Synthra SwapRouter02.exactInputSingle). The
+        // executor payload (recipient, amountOutMinimum, deadline) was
+        // baked at quote time by the provider, so we just call as-is.
+        hash = await writeContractAsync({
+          address: activeRoute.executor.router,
+          abi: activeRoute.executor.abi,
+          functionName: activeRoute.executor.functionName,
+          args: activeRoute.executor.args,
+          value: activeRoute.executor.value,
+        });
+      } else if (isV3Swap) {
         // CLANKER_V3 token: trade on the V3 pool via our V3 router. Exact-in
         // only (the effect above forces lastEdited="in"). Single hop if one
         // side is USDC, else 2-hop through USDC.
@@ -581,7 +617,11 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
         usdValue={outUsd.usd}
         lossPct={lossPct}
         feeLabel={
-          feeRaw > 0n
+          // External routes (Synthra / UnitFlow) carry their own LP fee
+          // inside the quote, so showing our Arcade V2 / V3 fee math here
+          // would double-count and confuse the user. Only show the fee
+          // hint on Arcade-routed swaps.
+          !isExternalRoute && feeRaw > 0n
             ? `Fee ${feePctLabel} (${feeFormatted} ${tokenIn.symbol ?? "TOKEN"})`
             : undefined
         }
@@ -608,8 +648,11 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
         </div>
       )}
 
-      {/* Route + rate row (between For box and Swap button) */}
-      {finalAmountIn > 0n && finalAmountOut > 0n && tokenOut && (
+      {/* Route + rate row (between For box and Swap button). Hidden on
+          external routes — the SwapRoutes panel renders the route info
+          (Synthra V3 / UnitFlow V3) right under the swap button, so
+          repeating the "via Arcade V3" caption would be wrong and noisy. */}
+      {!isExternalRoute && finalAmountIn > 0n && finalAmountOut > 0n && tokenOut && (
         <div className="mt-4 flex items-center justify-between text-xs">
           <div className="flex items-center gap-1.5 text-arc-text-muted">
             <Image src="/route.png" alt="" width={14} height={14} className="h-3.5 w-3.5 opacity-75" />
@@ -654,8 +697,11 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
       )}
 
       {/* Multi-DEX routes comparison. Auto-picks the best, user can tap
-          a row to override. Phase 1: display only. Phase 2 will route
-          execution through the selected route's executor. */}
+          a row to override. usdPricePerOut is derived from Arcade's USDC
+          pool when available; for tokens with no Arcade pool (EURC, USDT,
+          cirBTC), fall back to deriving it from the trade itself (inUsd
+          / out tokens) — anchors the display USD value to the input USD
+          even when no spot oracle is reachable. */}
       {aggregatorEnabled && tokenOut && (
         <SwapRoutes
           quotes={routeQuotes.quotes}
@@ -664,6 +710,14 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
           onSelect={(q) => setSelectedRoute(q)}
           decimalsOut={decimalsOut}
           symbolOut={symOut}
+          usdPricePerOut={
+            outUsd.spotUsdPerToken ??
+            (inUsd.usd !== undefined &&
+            finalAmountOut > 0n &&
+            decimalsOut !== undefined
+              ? inUsd.usd / (Number(finalAmountOut) / Math.pow(10, decimalsOut))
+              : undefined)
+          }
         />
       )}
 
