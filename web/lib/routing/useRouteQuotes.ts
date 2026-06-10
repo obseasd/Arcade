@@ -8,6 +8,7 @@ import { synthraV3Provider } from "./synthraV3";
 import { arcadeV3Provider } from "./arcadeV3";
 import { arcadeV2Provider } from "./arcadeV2";
 import { unitflowV3Provider } from "./unitflowV3";
+import { xylonetV1Provider } from "./xylonetV1";
 
 /**
  * Aggregator hook: fans out a quote request to every registered provider
@@ -37,9 +38,7 @@ const PROVIDERS: RouteProvider[] = [
   arcadeV2Provider,
   synthraV3Provider,
   unitflowV3Provider,
-  // XyloNet pending — ForgeLabs has not published their StableSwap
-  // contracts on Arc yet (docs site marks GitHub as "Soon"). Wire it
-  // here when addresses land.
+  xylonetV1Provider,
 ];
 
 export interface UseRouteQuotesArgs {

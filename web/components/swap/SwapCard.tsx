@@ -241,13 +241,22 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
     enabled: aggregatorEnabled,
   });
   const [selectedRoute, setSelectedRoute] = useState<RouteQuote | undefined>(undefined);
-  // Auto-pick the best every time the quotes array changes shape, unless
-  // the user explicitly picked a different one in this comparison cycle.
-  // Reset on a fresh request key so a token change does not carry over a
-  // stale user choice that no longer exists in the new quotes list.
+  // Reset the user's manual pick only when the token PAIR changes (a new
+  // pair always has its own provider set). We do NOT reset on amountIn
+  // changes — that would wipe the user's selection every single
+  // keystroke (audit finding R-3). Instead, watch the live quotes list:
+  // if the selected provider drops out (e.g. amount went above its
+  // available liquidity), fall back to the auto-best on next render.
   useEffect(() => {
     setSelectedRoute(undefined);
-  }, [tokenIn.address, tokenOut?.address, amountInRaw]);
+  }, [tokenIn.address, tokenOut?.address]);
+  useEffect(() => {
+    if (!selectedRoute) return;
+    const stillPresent = routeQuotes.quotes.some(
+      (q) => q.provider === selectedRoute.provider,
+    );
+    if (!stillPresent) setSelectedRoute(undefined);
+  }, [selectedRoute, routeQuotes.quotes]);
 
   // The currently-active route: either the user's manual pick or the
   // aggregator's auto-picked best. When non-null and the provider is
@@ -259,7 +268,9 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
   const activeRoute: RouteQuote | null = selectedRoute ?? routeQuotes.best ?? null;
   const isExternalRoute =
     !!activeRoute &&
-    (activeRoute.provider === "synthra-v3" || activeRoute.provider === "unitflow-v3");
+    (activeRoute.provider === "synthra-v3" ||
+      activeRoute.provider === "unitflow-v3" ||
+      activeRoute.provider === "xylonet-v1");
 
   // computedAmountOut drives the For field. When an external route is
   // active, override with its amountOut so the user sees Synthra's /
@@ -773,7 +784,24 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
           tx={tx}
           inputUsd={inUsd.usd}
           outputUsd={outUsd.usd}
-          protocolLabel={isV3Swap ? "Arcade V3" : "Arcade V2"}
+          protocolLabel={
+            // When an external route wins, the confirm screen has to
+            // reflect that — otherwise the user signs a Synthra tx but
+            // reads "Arcade V2", which is a UX trust hit and an audit
+            // finding (🟡 R-5). Fall back to the legacy label only when
+            // the legacy Arcade pipeline is the executor.
+            isExternalRoute && activeRoute
+              ? activeRoute.provider === "synthra-v3"
+                ? "Synthra V3"
+                : activeRoute.provider === "unitflow-v3"
+                  ? "UnitFlow V3"
+                  : activeRoute.provider === "xylonet-v1"
+                    ? "XyloNet"
+                    : "External"
+              : isV3Swap
+                ? "Arcade V3"
+                : "Arcade V2"
+          }
         />
       )}
 

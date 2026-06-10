@@ -103,10 +103,14 @@ export const ADDRESSES = {
   /** WUSDC (Wrapped USDC, 18 dec) — UnitFlow + Synthra pools route
    *  through this instead of the native 6-dec USDC. */
   wusdc: "0x911b4000D3422F482F4062a913885f7b035382Df" as Address,
-  // XyloNet addresses pending — ForgeLabs has not published their
-  // StableSwap contracts; the docs site marks GitHub as "Soon". When
-  // addresses land, add xylonetFactory / xylonetRouter / xylonetPool
-  // here and wire a provider mirroring synthraV3.
+  // --- XyloNet (StableSwap with V2-style router on Arc testnet) ---
+  // Curve-style invariant inside the pool but Uniswap-V2-shaped router
+  // (swapExactTokensForTokens + getAmountsOut + path[] addressing).
+  // Accepts native USDC directly — NO wrap step required, unlike
+  // Synthra/UnitFlow. Currently only supports the stablecoin matrix
+  // (USDC, EURC, USYC). No USDT, no cirBTC pools.
+  /** XyloRouter (V2-style ABI fronting the StableSwap pool). */
+  xyloRouter: "0x73742278c31a76dbb0d2587d03ef92e6e2141023" as Address,
 } as const;
 
 /** Synthra V3 routing fee tiers (Uniswap V3 standard: 0.01% / 0.05% / 0.3% / 1%). */
