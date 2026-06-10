@@ -722,6 +722,17 @@ contract ArcadeV3Locker is IUniswapV3MintCallback {
         require(newRecipient != address(0), "ZERO");
         Recipient storage r = _recipients[positionId][index];
         require(msg.sender == r.admin, "ONLY_ADMIN");
+        // Audit L-4: enforce (recipient == escrow) <=> (admin == escrow).
+        // Launchpad sets this invariant at creation; without enforcing it
+        // post-rotation a non-escrow admin could re-route fees to the
+        // escrow address mid-life and strand them there because the
+        // escrow has no slot attribution for an unbound payout.
+        address esc = twitterEscrow;
+        if (newRecipient == esc) {
+            require(r.admin == esc, "ESCROW_PAIR");
+        } else {
+            require(r.admin != esc, "ESCROW_PAIR");
+        }
         r.recipient = newRecipient;
         emit RecipientUpdated(positionId, index, newRecipient);
     }
@@ -731,6 +742,13 @@ contract ArcadeV3Locker is IUniswapV3MintCallback {
         require(newAdmin != address(0), "ZERO");
         Recipient storage r = _recipients[positionId][index];
         require(msg.sender == r.admin, "ONLY_ADMIN");
+        // Audit L-4: mirror the symmetric escrow-pair check.
+        address esc = twitterEscrow;
+        if (newAdmin == esc) {
+            require(r.recipient == esc, "ESCROW_PAIR");
+        } else {
+            require(r.recipient != esc, "ESCROW_PAIR");
+        }
         r.admin = newAdmin;
         emit AdminUpdated(positionId, index, newAdmin);
     }

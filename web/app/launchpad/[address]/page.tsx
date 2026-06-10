@@ -259,17 +259,35 @@ export default function TokenDetailPage() {
                   >
                     {formatAddress(state.creator)}
                   </a>
-                  {metadata.creatorTwitter && (
-                    <a
-                      href={`https://x.com/${metadata.creatorTwitter}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      title="Creator-claimed Twitter / X handle (unverified)"
-                      className="inline-flex items-center gap-1 rounded-full border border-arc-border bg-arc-surface-2 px-1.5 py-0.5 text-[10px] text-arc-text transition-colors hover:bg-arc-surface-3"
-                    >
-                      <Twitter className="h-3 w-3" />@{metadata.creatorTwitter}
-                    </a>
-                  )}
+                  {/* Audit F-3: normalise the Twitter handle to a strict
+                      `^[a-z0-9_]{1,15}$` shape before embedding in the href.
+                      Without this, a deployer who pins metadata with a
+                      handle like "victim?ref=phish" or "victim/../page"
+                      produces a crafted x.com URL that looks legitimate
+                      but redirects through abused x.com features. React
+                      escapes the rendered text but does NOT URL-escape
+                      the href value. Honest deployers with weird
+                      capitalisation see their handle silently lowercased
+                      (Twitter handles are case-insensitive anyway).
+                      Handles that don't match the pattern → no link. */}
+                  {(() => {
+                    const raw = (metadata.creatorTwitter ?? "")
+                      .replace(/^@+/, "")
+                      .trim()
+                      .toLowerCase();
+                    if (!/^[a-z0-9_]{1,15}$/.test(raw)) return null;
+                    return (
+                      <a
+                        href={`https://x.com/${raw}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title="Creator-claimed Twitter / X handle (unverified)"
+                        className="inline-flex items-center gap-1 rounded-full border border-arc-border bg-arc-surface-2 px-1.5 py-0.5 text-[10px] text-arc-text transition-colors hover:bg-arc-surface-3"
+                      >
+                        <Twitter className="h-3 w-3" />@{raw}
+                      </a>
+                    );
+                  })()}
                 </div>
                 {metadata.description && (
                   <p className="mt-3 max-w-2xl text-sm text-arc-text-muted">{metadata.description}</p>

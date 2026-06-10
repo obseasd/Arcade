@@ -163,18 +163,13 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
   // Amount the router actually swaps after the skim.
   const v3NetAmountIn = amountInRaw - (amountInRaw * snipeBps) / 10_000n;
 
-  // V3 quote (exact-in). Single-hop or 2-hop-through-USDC depending on the pair.
-  const quoteV3 = useReadContract({
-    address: ADDRESSES.v3Quoter,
-    abi: V3_QUOTER_ABI,
-    functionName: v3DoubleHop ? "quoteExactInputThroughUsdc" : "quoteExactInputSingle",
-    args:
-      isV3Swap && !v3Unsupported && tokenOut && v3NetAmountIn > 0n
-        ? [tokenIn.address, tokenOut.address, v3Fee, v3NetAmountIn]
-        : undefined,
-    query: { enabled: isV3Swap && !v3Unsupported && !!tokenOut && v3NetAmountIn > 0n },
-  });
-  const v3AmountOut = quoteV3.data as bigint | undefined;
+  // Audit A-1 (partial): legacy quoteV3 useReadContract removed. The
+  // arcadeV3Provider in lib/routing/arcadeV3.ts now performs the same
+  // quote AND deducts the anti-sniper skim internally (audit A-4) so
+  // SwapCard no longer needs to recompute it. activeRoute.amountOut
+  // becomes the canonical V3 quote when the route is active.
+  // v3NetAmountIn remains computed above only for the anti-sniper UI
+  // banner (the "Anti-sniper tax active" warning surfaced at line ~570).
 
   // V2 router quotes - used for direct routes and as the input estimator for
   // multi-hop routes that DON'T touch a migrated launchpad token.
@@ -219,11 +214,14 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
   const amountsOut = quoteOut.data as bigint[] | undefined;
   const amountsIn = quoteIn.data as bigint[] | undefined;
   const migratedQuote = quoteMigratedOut.data as readonly [bigint, bigint] | undefined;
-  const legacyComputedAmountOut = isV3Swap
-    ? v3AmountOut
-    : route.useLaunchpadRouter
-      ? migratedQuote?.[0]
-      : amountsOut?.[amountsOut.length - 1];
+  // Audit A-1: V3 branch no longer reads its own quote — the
+  // arcadeV3Provider already produces it inside the aggregator and
+  // computedAmountOut below prefers activeRoute.amountOut when set.
+  // legacyComputedAmountOut retains the V2 + launchpad-migrated paths,
+  // which the aggregator does not yet cover.
+  const legacyComputedAmountOut: bigint | undefined = route.useLaunchpadRouter
+    ? migratedQuote?.[0]
+    : amountsOut?.[amountsOut.length - 1];
 
   // Multi-DEX route comparison: fan out the same QuoteRequest to every
   // RouteProvider registered in lib/routing/. Each one returns an
@@ -278,13 +276,14 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
       activeRoute.provider === "unitflow-v3" ||
       activeRoute.provider === "xylonet-v1");
 
-  // computedAmountOut drives the For field. When an external route is
-  // active, override with its amountOut so the user sees Synthra's /
-  // UnitFlow's real number even when the legacy Arcade quoter returns 0
-  // (no Arcade pool exists). Arcade routes use the legacy value as-is.
-  const computedAmountOut: bigint | undefined = isExternalRoute
-    ? activeRoute!.amountOut
-    : legacyComputedAmountOut;
+  // Audit A-1: computedAmountOut drives the For field. When ANY route
+  // is active (external OR arcade-v3 / arcade-v2 / xylonet via the
+  // aggregator), prefer its amountOut over the legacy quote since the
+  // aggregator's providers are now the canonical source for those
+  // paths. legacyComputedAmountOut remains the source for the
+  // launchpad migrated route — the aggregator does not (yet) cover it.
+  const computedAmountOut: bigint | undefined =
+    activeRoute?.amountOut ?? legacyComputedAmountOut;
 
   // Capture the latest forward (in->out) ratio whenever it lands. Stays in
   // a ref so future renders that toggle lastEdited still see the last known
@@ -448,12 +447,12 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
   // for an extra 5 s while Synthra has already priced the trade was the
   // bug the user reported on the routes panel screenshot.
   const externalReady = isExternalRoute && !!activeRoute && activeRoute.amountOut > 0n;
+  // Audit A-1: quoteV3.isFetching dropped — the legacy V3 quoter was
+  // removed in favour of arcadeV3Provider's quote. routeQuotes.loading
+  // covers the new pipeline.
   const fetching =
     !externalReady &&
-    (quoteOut.isFetching ||
-      quoteIn.isFetching ||
-      quoteMigratedOut.isFetching ||
-      quoteV3.isFetching);
+    (quoteOut.isFetching || quoteIn.isFetching || quoteMigratedOut.isFetching);
   const canSwap =
     !!account &&
     !!tokenOut &&

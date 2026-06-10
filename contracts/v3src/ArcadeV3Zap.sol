@@ -555,6 +555,14 @@ contract ArcadeV3Zap is IUniswapV3SwapCallback {
         bool outIsT0 = p.tokenOut == t0;
         uint256 swapInAmount = outIsT0 ? collected1 : collected0;
         uint256 swapOut = 0;
+        // Audit V3-2: when there is a non-zero swap leg, the caller MUST
+        // supply a non-zero floor on the resulting swap output. The old
+        // version silently skipped the swap when the caller passed 0,
+        // delivering the "other" leg in its native token instead of the
+        // requested tokenOut — a UI bug that handed the user a mixed
+        // bag. Force the issue at the contract level so the next caller
+        // can't repeat the mistake.
+        require(swapInAmount == 0 || p.amountOtherMinSwap > 0, "NO_SWAP_FLOOR");
         if (swapInAmount > 0 && p.amountOtherMinSwap > 0) {
             // Audit V3 Zap V3-4: zapOut has no caller-signed band field
             // today; pass 0/0 so _doSwap falls back to the wide-open
