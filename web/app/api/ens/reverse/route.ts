@@ -1,22 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createPublicClient, http, isAddress, keccak256, stringToBytes, parseAbi } from "viem";
+import { createPublicClient, http, isAddress, keccak256, stringToBytes, concat, type Hex, parseAbi } from "viem";
 import { mainnet } from "viem/chains";
-import { namehash } from "viem/ens";
 
 /**
- * Server-side ENS reverse resolution + forward-verify roundtrip.
+ * Server-side ENS reverse resolution + forward-verify roundtrip. Manual
+ * Registry + Resolver lookup like the forward route, because viem/ens's
+ * `normalize` + `namehash` silently bundle to undefined in serverless,
+ * which made every lookup target the ENS root node and return address(0).
  *
- * Manual ENS Registry + Resolver flow (no Universal Resolver / CCIP-Read)
- * so we dodge viem 2.50's getEnsAddress crash in serverless. Reverse:
- *   1. node = namehash(<addrLower>.addr.reverse)
- *   2. resolver = ENSRegistry.resolver(node)
- *   3. name = Resolver.name(node)
- * Then forward-resolve `name` back through the same Registry → Resolver
- * → addr flow and only return `name` if it round-trips back to the same
- * address (anti-impersonation: an attacker can set their primary name to
- * "vitalik.eth" but can't make the forward resolver return their address).
+ * Reverse path: namehash("<addrLower-no-0x>.addr.reverse") -> Registry
+ * -> Resolver.name -> forward-verify the returned name back through the
+ * same Registry -> Resolver.addr to defend against impersonation.
  *
- * Null responses are NOT cached. `?debug=1` returns the per-RPC attempt log.
+ * No CCIP-Read (which is what we need for cross-chain reverse), but
+ * standard *.eth reverse records (the common case for our Send modal)
+ * still work. Null responses are NOT cached.
  */
 
 const ENS_REGISTRY = "0x00000000000C2E074eC69A0dFb2997BA6C7d2e1e" as const;
@@ -35,7 +33,6 @@ const RPCS = [
     process.env.NEXT_PUBLIC_MAINNET_RPC,
     "https://eth.llamarpc.com",
     "https://ethereum-rpc.publicnode.com",
-    "https://rpc.flashbots.net",
     "https://eth-mainnet.public.blastapi.io",
     "https://eth.merkle.io",
     "https://endpoints.omniatech.io/v1/eth/mainnet/public",
@@ -59,22 +56,25 @@ const clients = RPCS.map((url) => ({
 }));
 
 const ZERO = "0x0000000000000000000000000000000000000000";
+const EMPTY_NODE = ("0x" + "00".repeat(32)) as Hex;
 
-// reverseNode computes namehash("<addr-lower-no-0x>.addr.reverse"). This
-// matches the convention used by ENS's reverse registrar so resolver.name
-// returns the primary name. We compute it manually using viem's namehash
-// instead of the helper viem doesn't export for this path.
-function reverseNode(address: `0x${string}`): `0x${string}` {
-    const lower = address.toLowerCase().slice(2);
-    // ENS reverse namehash: hash("addr.reverse") + hash(addrLowerNo0x)
-    // viem's namehash does this when given "<lower>.addr.reverse".
-    return namehash(`${lower}.addr.reverse`);
+function manualNamehash(name: string): Hex {
+    if (!name) return EMPTY_NODE;
+    let node: Hex = EMPTY_NODE;
+    const labels = name.split(".");
+    for (let i = labels.length - 1; i >= 0; i--) {
+        const label = labels[i];
+        if (!label) continue;
+        const labelHash = keccak256(stringToBytes(label));
+        node = keccak256(concat([node, labelHash]));
+    }
+    return node;
 }
 
-// keccak256 is imported just so the bundler keeps it; viem's namehash uses
-// it internally. stringToBytes too. (Both required by named import shape.)
-void keccak256;
-void stringToBytes;
+function reverseNode(address: `0x${string}`): Hex {
+    const lower = address.toLowerCase().slice(2);
+    return manualNamehash(`${lower}.addr.reverse`);
+}
 
 interface AttemptLog {
     url: string;
@@ -114,7 +114,7 @@ async function reverse(address: `0x${string}`): Promise<{
             attempts.push({
                 url,
                 ok: false,
-                error: e instanceof Error ? e.message.slice(0, 200) : String(e).slice(0, 200),
+                error: e instanceof Error ? e.message.slice(0, 500) : String(e).slice(0, 500),
             });
         }
     }
@@ -126,7 +126,7 @@ async function forward(name: string): Promise<{
     attempts: AttemptLog[];
 }> {
     const attempts: AttemptLog[] = [];
-    const node = namehash(name);
+    const node = manualNamehash(name);
     for (const { url, client } of clients) {
         try {
             const resolver = await client.readContract({
@@ -151,7 +151,7 @@ async function forward(name: string): Promise<{
             attempts.push({
                 url,
                 ok: false,
-                error: e instanceof Error ? e.message.slice(0, 200) : String(e).slice(0, 200),
+                error: e instanceof Error ? e.message.slice(0, 500) : String(e).slice(0, 500),
             });
         }
     }
