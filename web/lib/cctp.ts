@@ -203,7 +203,19 @@ export function parseCctpV2Message(message: `0x${string}`): ParsedCctpMessage | 
   const hex = message.slice(2);
   // 124 header bytes + at least 68 body bytes (4 version + 32 burnToken
   // + 32 mintRecipient) = 192 bytes = 384 hex chars minimum.
+  // Audit B-5: tighten to a hard `> 384` (header+body is at LEAST 384,
+  // never fewer). The strict-equal path used to slip a truncated body
+  // through `hex.slice` which then returned a shorter mintRecipient
+  // that the on-chain bytes32 match would always reject — safe by
+  // accident, but the strict guard makes the invariant explicit.
   if (hex.length < 384) return null;
+  // Defensive: the mintRecipient slice must be EXACTLY 64 hex chars
+  // (bytes32). A truncated message could produce a shorter mintRecipient
+  // string whose `.toLowerCase()` then can't match the 64-char bytes32
+  // we compare against — we make that an explicit reject rather than
+  // relying on the equality check to fail.
+  const mintRecipientHex = hex.slice((124 + 36) * 2, (124 + 68) * 2);
+  if (mintRecipientHex.length !== 64) return null;
   const u32 = (offset: number) =>
     Number.parseInt(hex.slice(offset * 2, (offset + 4) * 2), 16);
   const u64 = (offset: number) =>
@@ -213,11 +225,14 @@ export function parseCctpV2Message(message: `0x${string}`): ParsedCctpMessage | 
     const sourceDomain = u32(4);
     const destinationDomain = u32(8);
     const nonce = u64(12);
+    if (!Number.isFinite(version) || !Number.isFinite(sourceDomain) || !Number.isFinite(destinationDomain)) {
+      return null;
+    }
     // messageBody starts at byte 124. Within the burn-message body:
     //   bytes 0-3   : body version (uint32)
     //   bytes 4-35  : burnToken (bytes32)
     //   bytes 36-67 : mintRecipient (bytes32)
-    const mintRecipient = ("0x" + hex.slice((124 + 36) * 2, (124 + 68) * 2)) as `0x${string}`;
+    const mintRecipient = ("0x" + mintRecipientHex) as `0x${string}`;
     return { version, sourceDomain, destinationDomain, nonce, mintRecipient };
   } catch {
     return null;

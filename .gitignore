@@ -12,6 +12,15 @@ web/out/
 web/.env
 web/.env.local
 web/next-env.d.ts
+# Audit C-1: tsbuildinfo can bake env hashes incremental info and create
+# noisy diffs on every tsc --noEmit run. Untracked from now on.
+web/tsconfig.tsbuildinfo
+# Audit C-1 + privacy: keep agent / research / skills scratch out of git
+# even if a `git add -A` slips into a future commit.
+.research/
+web/.agents/
+web/skills/
+contracts/deploy_log_*.txt
 
 # Editors
 .vscode/

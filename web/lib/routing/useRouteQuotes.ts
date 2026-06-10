@@ -100,7 +100,29 @@ export function useRouteQuotes(args: UseRouteQuotesArgs): UseRouteQuotesResult {
       setLoading(false);
       return;
     }
+    // Audit R-9: same-token in/out is a no-op. The TokenSelectModal
+    // already filters via excludeAddress, but a token swap that happens
+    // exactly while the aggregator is mid-flight can briefly emit a
+    // QuoteRequest with tokenIn == tokenOut. Skip providers entirely
+    // and clear quotes — every provider would return null anyway,
+    // saving a 5-way RPC fan-out.
+    if (
+      args.tokenIn &&
+      args.tokenOut &&
+      args.tokenIn.toLowerCase() === args.tokenOut.toLowerCase()
+    ) {
+      setQuotes([]);
+      setLoading(false);
+      return;
+    }
     let cancelled = false;
+    // Audit R-6: pass an AbortSignal so a fast-typing user doesn't
+    // accumulate dead-but-still-running provider RPC fan-outs. Each
+    // provider receives the signal and forwards it to viem; the abort
+    // controller is cancelled on cleanup so the previous request's
+    // RPC traffic is killed at the network layer, not just discarded
+    // at the result-handling layer.
+    const ctrl = new AbortController();
     setLoading(true);
     const req: QuoteRequest = {
       tokenIn: args.tokenIn!,
@@ -111,6 +133,7 @@ export function useRouteQuotes(args: UseRouteQuotesArgs): UseRouteQuotesResult {
       recipient: args.recipient!,
       slippageBps: args.slippageBps,
       deadline: BigInt(Math.floor(Date.now() / 1000) + (args.deadlineSeconds ?? 600)),
+      signal: ctrl.signal,
     };
     Promise.all(
       PROVIDERS.map((p) =>
@@ -119,12 +142,38 @@ export function useRouteQuotes(args: UseRouteQuotesArgs): UseRouteQuotesResult {
     ).then((results) => {
       if (cancelled) return;
       const good = results.filter((r): r is RouteQuote => r !== null);
-      good.sort((a, b) => (b.amountOut > a.amountOut ? 1 : b.amountOut < a.amountOut ? -1 : 0));
+      // Audit R-10: bucket amountOut by 1 bp before sorting so a
+      // 1-wei rounding difference between two equally-good routes does
+      // not flip the "Best" badge. Within a bucket, fall back to a
+      // stable provider preference: native Arcade routes first (no
+      // sig dance), then XyloNet (V2-ABI, no Permit2 setup), then
+      // Synthra, then UnitFlow. The user sees the same total cost on
+      // a tie but the cheapest-to-execute route wins.
+      const providerRank: Record<string, number> = {
+        "arcade-v3": 0,
+        "arcade-v2": 1,
+        "xylonet-v1": 2,
+        "synthra-v3": 3,
+        "unitflow-v3": 4,
+      };
+      good.sort((a, b) => {
+        if (a.amountOut === b.amountOut) {
+          return (providerRank[a.provider] ?? 99) - (providerRank[b.provider] ?? 99);
+        }
+        // Bucket relative to the larger amountOut to ~1 bp (1e-4).
+        const max = a.amountOut > b.amountOut ? a.amountOut : b.amountOut;
+        const diff = a.amountOut > b.amountOut ? a.amountOut - b.amountOut : b.amountOut - a.amountOut;
+        if (diff * 10_000n < max) {
+          return (providerRank[a.provider] ?? 99) - (providerRank[b.provider] ?? 99);
+        }
+        return b.amountOut > a.amountOut ? 1 : -1;
+      });
       setQuotes(good);
       setLoading(false);
     });
     return () => {
       cancelled = true;
+      ctrl.abort();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reqKey, publicClient]);

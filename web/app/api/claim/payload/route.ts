@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import crypto from "crypto";
 
 /**
  * GET /api/claim/payload
@@ -44,9 +45,43 @@ export async function GET(req: NextRequest) {
   if (!raw) {
     return NextResponse.json({ error: "no_payload" }, { status: 404 });
   }
+  // Audit F-9: verify the HMAC the twitter-callback route attached so a
+  // same-origin XSS that managed to swap the cookie body before this
+  // route reads it (recipient / amount swap) fails the MAC check here
+  // and never reaches the client. Defense in depth on top of HttpOnly +
+  // SameSite=Strict + the x-arcade-claim CSRF header above.
+  const sepIdx = raw.lastIndexOf(".");
+  if (sepIdx < 0) {
+    const res = NextResponse.json({ error: "bad_payload" }, { status: 400 });
+    res.cookies.delete(COOKIE);
+    return res;
+  }
+  const body = raw.slice(0, sepIdx);
+  const providedMac = raw.slice(sepIdx + 1);
+  const secret = process.env.ARCADE_OAUTH_STATE_SECRET || "";
+  if (!secret) {
+    return new NextResponse(null, { status: 500 });
+  }
+  const expectedMac = crypto.createHmac("sha256", secret).update(body).digest("hex");
+  let macOk = providedMac.length === expectedMac.length;
+  try {
+    macOk =
+      macOk &&
+      crypto.timingSafeEqual(
+        Buffer.from(providedMac, "hex"),
+        Buffer.from(expectedMac, "hex"),
+      );
+  } catch {
+    macOk = false;
+  }
+  if (!macOk) {
+    const res = NextResponse.json({ error: "bad_payload" }, { status: 400 });
+    res.cookies.delete(COOKIE);
+    return res;
+  }
   let payload: unknown;
   try {
-    payload = JSON.parse(raw);
+    payload = JSON.parse(body);
   } catch {
     const res = NextResponse.json({ error: "bad_payload" }, { status: 400 });
     res.cookies.delete(COOKIE);

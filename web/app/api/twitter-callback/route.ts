@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
-import { rateLimit } from "@/lib/apiGuard";
+import { rateLimit, rateLimitGlobal } from "@/lib/apiGuard";
 import {
   Address,
   createPublicClient,
@@ -102,6 +102,14 @@ export async function GET(req: NextRequest) {
   // stockpiled signatures for any handle they happen to control.
   const rl = rateLimit(req, "twitter-callback", 10, 60_000);
   if (rl) return rl;
+  // Audit F-5: per-slot global cap on top of per-IP. A botnet controlling
+  // N residential IPs can farm 10*N sigs/min for any (token, slot) pair
+  // the attacker owns; bounding by (token, slot) regardless of source IP
+  // closes that funnel. We read state from the cookie's decoded payload
+  // below; here we hash the raw state cookie name which already encodes
+  // the (token, slot) tuple via the OAuth state nonce.
+  const slotRl = rateLimitGlobal(`twitter-callback:state:${state}`, 30, 60_000);
+  if (slotRl) return slotRl;
 
   const cookieName = `tw_state_${state}`;
   const stateCookie = req.cookies.get(cookieName)?.value;
@@ -450,7 +458,14 @@ export async function GET(req: NextRequest) {
   const url = new URL(`${origin}/claim`);
   const res = NextResponse.redirect(url.toString());
   res.cookies.delete(cookieName);
-  res.cookies.set("arcade_claim_payload", JSON.stringify(payload), {
+  // Audit F-9: HMAC the cookie body with ARCADE_OAUTH_STATE_SECRET so a
+  // tampered cookie (recipient swap, amount swap, sig swap) fails server-
+  // side verification at /api/claim/payload. The cookie was already
+  // HttpOnly + SameSite=Strict; this is defense-in-depth against same-
+  // origin XSS that could otherwise rewrite the body silently.
+  const claimBody = JSON.stringify(payload);
+  const claimMac = crypto.createHmac("sha256", secret).update(claimBody).digest("hex");
+  res.cookies.set("arcade_claim_payload", `${claimBody}.${claimMac}`, {
     httpOnly: true,
     secure: req.nextUrl.protocol === "https:",
     sameSite: "strict",

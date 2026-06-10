@@ -107,3 +107,39 @@ export function rateLimit(
   }
   return null;
 }
+
+/**
+ * Audit F-5: per-key rate limit that ignores client IP/UA. Use for caps
+ * that must hold regardless of who calls — e.g. "no more than N OAuth
+ * callbacks for a single (token, slotIndex) per minute", which prevents
+ * a residential-proxy botnet from farming signatures by spreading IPs.
+ *
+ * The key SHOULD be derived from request payload (state cookie, slot id,
+ * etc.), never from req.headers, so it cuts across IP and UA buckets.
+ */
+const globalBuckets = new Map<string, { count: number; windowStart: number }>();
+export function rateLimitGlobal(
+  key: string,
+  maxPerWindow: number,
+  windowMs: number,
+): NextResponse | null {
+  const now = Date.now();
+  if (globalBuckets.size >= BUCKET_HARD_CAP) {
+    for (const [k, b] of globalBuckets) {
+      if (now - b.windowStart > windowMs) globalBuckets.delete(k);
+    }
+  }
+  const bucket = globalBuckets.get(key);
+  if (!bucket || now - bucket.windowStart > windowMs) {
+    globalBuckets.set(key, { count: 1, windowStart: now });
+    return null;
+  }
+  bucket.count += 1;
+  if (bucket.count > maxPerWindow) {
+    return NextResponse.json(
+      { error: "Rate limit exceeded" },
+      { status: 429, headers: { "Retry-After": String(Math.ceil(windowMs / 1000)) } },
+    );
+  }
+  return null;
+}

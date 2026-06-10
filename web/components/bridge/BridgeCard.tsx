@@ -34,7 +34,7 @@ import {
   loadPendingBridge,
   savePendingBridge,
 } from "@/lib/pendingBridge";
-import { recordBridge, updateBridge, updateBridgeByBurnTx } from "@/lib/bridgeHistory";
+import { loadBridgeHistory, recordBridge, updateBridge, updateBridgeByBurnTx } from "@/lib/bridgeHistory";
 import { BridgeStepsProgress } from "./BridgeStepsProgress";
 import { pushToast } from "@/lib/toast";
 
@@ -202,6 +202,17 @@ export function BridgeCard() {
   // BridgeHistory when the user clicks Retry on a failed row. Rehydrate
   // the form + re-enter the attestation poll so the user doesn't have
   // to fish the burnTxHash out of the explorer to recover.
+  //
+  // Audit B-8: cross-check the retry payload against the user's own
+  // bridge history before trusting it. Without this, ANY same-origin
+  // script can dispatch `arcade-bridge-retry` with arbitrary
+  // burnTxHash + srcChainId + dstChainId and coerce the connected
+  // wallet into entering the attestation poll for an attacker's burn.
+  // Combined with the now-fixed B-1 (recipient bypass when account is
+  // briefly undefined), that path used to be a real way to make a
+  // victim mint someone else's burn. Now we refuse retries whose
+  // burnTxHash isn't in `loadBridgeHistory(account)` for the connected
+  // wallet — i.e. this user is the one who initiated that burn.
   useEffect(() => {
     const onRetry = (e: Event) => {
       const detail = (e as CustomEvent).detail as
@@ -216,6 +227,12 @@ export function BridgeCard() {
       const srcCfg = getCctpChain(detail.srcChainId);
       const dstCfg = getCctpChain(detail.dstChainId);
       if (!srcCfg || !dstCfg) return;
+      // B-8: require the burnTxHash to be in this wallet's history.
+      const history = loadBridgeHistory(account);
+      const known = history.some(
+        (h) => h.burnTxHash?.toLowerCase() === detail.burnTxHash!.toLowerCase(),
+      );
+      if (!known) return;
       setSrcChainId(detail.srcChainId);
       setDstChainId(detail.dstChainId);
       if (detail.amountRaw6) {
@@ -234,7 +251,7 @@ export function BridgeCard() {
     };
     window.addEventListener("arcade-bridge-retry", onRetry as EventListener);
     return () => window.removeEventListener("arcade-bridge-retry", onRetry as EventListener);
-  }, []);
+  }, [account]);
 
   // RACE-010 + audit BRIDGE-NO-ACCOUNT-BINDING: reset transient form
   // state when the connected wallet changes. Without this, user A picks
@@ -460,15 +477,28 @@ export function BridgeCard() {
         // check but mint USDC into the attacker's recipient at the
         // victim's gas. Reject mismatched payloads here so the user
         // sees an error instead of paying gas to fund the attacker.
+        //
+        // Audit B-1: when `account` is briefly undefined (wagmi reconnect
+        // race, SSR hydration), the old `recipientOverride ?? account ?? ""`
+        // fell back to "" and the recipient gate became a no-op. Read
+        // the canonical recipient from the persisted pendingBridge entry
+        // — that's the address the BURN tx was signed for, so it's the
+        // only safe ground truth. Fail closed if neither persisted nor
+        // live account is available.
         const dstChainCfg = getCctpChain(step.dstId);
-        const expectedRecipient = recipientOverride ?? account ?? "";
+        const persistedRecipient = account
+          ? loadPendingBridge(account)?.recipient
+          : null;
+        const expectedRecipient = persistedRecipient ?? recipientOverride ?? account;
         const parsed = parseCctpV2Message(att.message);
         if (
           !parsed ||
           parsed.sourceDomain !== step.srcDomain ||
           (dstChainCfg && parsed.destinationDomain !== dstChainCfg.cctpDomain) ||
-          (expectedRecipient && parsed.mintRecipient.toLowerCase() !==
-            addressToBytes32(expectedRecipient as Address).toLowerCase())
+          // B-1: fail closed when expectedRecipient is missing
+          !expectedRecipient ||
+          parsed.mintRecipient.toLowerCase() !==
+            addressToBytes32(expectedRecipient as Address).toLowerCase()
         ) {
           // eslint-disable-next-line no-console
           console.warn("[CCTP] Iris payload mismatch, ignoring", { parsed });

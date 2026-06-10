@@ -44,6 +44,19 @@ export async function GET(req: NextRequest) {
     );
   }
 
+  // Audit F-8: validate critical server config BEFORE the rate limit so
+  // a "server_misconfigured" response can't be distinguished from a
+  // legitimate 429 by an external prober trying to fingerprint the
+  // deployment's env state. Without this an attacker learns whether
+  // ARCADE_OAUTH_STATE_SECRET / TWITTER_CLIENT_ID / TWITTER_CLIENT_SECRET
+  // are set just by sweeping the route. Now everything looks like an
+  // anonymous 500 with no body diff.
+  const secret = process.env.ARCADE_OAUTH_STATE_SECRET || "";
+  const clientIdEnv = process.env.TWITTER_CLIENT_ID || "";
+  if (!secret || !clientIdEnv) {
+    return new NextResponse(null, { status: 500 });
+  }
+
   // twitter-login-state-cookie-spam-self-dos: rate-limit state-cookie
   // allocation. Without this, a same-origin XSS (or a buggy retry loop)
   // could spam tw_state_<state> cookies past the browser's per-origin
@@ -109,14 +122,9 @@ export async function GET(req: NextRequest) {
   // origin cookie-tamper attempt (XSS or shared-device cookie swap)
   // can't substitute a different `recipient` without the HMAC failing.
   // The signing secret lives only in the server env; tamper attempts
-  // can't reproduce a valid MAC.
+  // can't reproduce a valid MAC. The secret is already validated above
+  // (audit F-8) before the rate limit check.
   const stateJson = JSON.stringify(stateData);
-  const secret = process.env.ARCADE_OAUTH_STATE_SECRET || "";
-  if (!secret) {
-    // Hard fail rather than silently accepting an unsigned cookie -
-    // the operator must set ARCADE_OAUTH_STATE_SECRET in Vercel env.
-    return NextResponse.json({ error: "server_misconfigured" }, { status: 500 });
-  }
   const mac = crypto.createHmac("sha256", secret).update(stateJson).digest("hex");
   const cookieValue = `${stateJson}.${mac}`;
 

@@ -82,10 +82,31 @@ export function resolveIpfs(uri: string): string {
  *    metadata that drives the claim-attribution path; an indexer
  *    re-fetch can pick it up later once gateways agree.
  */
-const IPFS_GATEWAYS: readonly string[] = [
-  process.env.NEXT_PUBLIC_IPFS_GATEWAY?.replace(/\/$/, "") || "https://ipfs.io",
-  "https://cloudflare-ipfs.com",
-];
+// Audit F-4: dedup the gateway list by registrable hostname so an
+// operator who sets `NEXT_PUBLIC_IPFS_GATEWAY=https://cloudflare-ipfs.com`
+// can't accidentally collapse the quorum to "ipfs.io vs ipfs.io" (one
+// gateway compared with itself). After dedup we hard-require >= 2
+// distinct hosts to be reachable for the quorum check to mean anything.
+function buildIpfsGateways(): readonly string[] {
+  const candidates = [
+    process.env.NEXT_PUBLIC_IPFS_GATEWAY?.replace(/\/$/, "") || "https://ipfs.io",
+    "https://cloudflare-ipfs.com",
+    "https://gateway.pinata.cloud",
+    "https://dweb.link",
+  ];
+  const byHost = new Map<string, string>();
+  for (const url of candidates) {
+    try {
+      const h = new URL(url).hostname.toLowerCase();
+      if (!byHost.has(h)) byHost.set(h, url);
+    } catch {
+      // ignore malformed env value
+    }
+  }
+  return [...byHost.values()];
+}
+
+const IPFS_GATEWAYS: readonly string[] = buildIpfsGateways();
 
 async function fetchSingleIpfs(url: string, signal: AbortSignal): Promise<string | null> {
   try {

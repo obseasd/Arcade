@@ -14,6 +14,120 @@ import { PROVIDER_META, RouteProvider, RouteQuote } from "./types";
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000" as const;
 
 /**
+ * Audit R-3 helper: when the direct (tokenIn -> tokenOut) pool does not
+ * exist, try a two-hop path through USDC. Returns a RouteQuote whose
+ * executor still uses Universal Router + Permit2 (no UX change vs the
+ * single-hop path) but the encoded V3 path carries the USDC mid leg.
+ */
+async function tryUsdcPivot(
+    req: import("./types").QuoteRequest,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    publicClient: any,
+): Promise<RouteQuote | null> {
+    if (
+        ADDRESSES.usdc === ZERO_ADDRESS ||
+        req.tokenIn.toLowerCase() === ADDRESSES.usdc.toLowerCase() ||
+        req.tokenOut.toLowerCase() === ADDRESSES.usdc.toLowerCase()
+    ) {
+        // Either pivot token equals one side or USDC isn't configured —
+        // single-hop would have caught those; nothing more to try.
+        return null;
+    }
+    // Fan-out pool discovery for both legs in parallel.
+    const fanOut = SYNTHRA_V3_FEES.flatMap((fee) => [
+        publicClient
+            .readContract({
+                address: ADDRESSES.synthraFactory,
+                abi: SYNTHRA_FACTORY_ABI,
+                functionName: "getPool",
+                args: [req.tokenIn, ADDRESSES.usdc, fee],
+            })
+            .then((pool: Address) => ({ leg: "in" as const, fee, ok: pool !== ZERO_ADDRESS }))
+            .catch(() => ({ leg: "in" as const, fee, ok: false })),
+        publicClient
+            .readContract({
+                address: ADDRESSES.synthraFactory,
+                abi: SYNTHRA_FACTORY_ABI,
+                functionName: "getPool",
+                args: [ADDRESSES.usdc, req.tokenOut, fee],
+            })
+            .then((pool: Address) => ({ leg: "out" as const, fee, ok: pool !== ZERO_ADDRESS }))
+            .catch(() => ({ leg: "out" as const, fee, ok: false })),
+    ]);
+    const results = await Promise.all(fanOut);
+    const inLegFees = results.filter((r) => r.leg === "in" && r.ok).map((r) => r.fee);
+    const outLegFees = results.filter((r) => r.leg === "out" && r.ok).map((r) => r.fee);
+    if (inLegFees.length === 0 || outLegFees.length === 0) return null;
+
+    // Quote every (inFee, outFee) combination — at most 16, usually 2-4.
+    // The V3 path encoder lays the bytes out as: tokenIn | inFee | USDC | outFee | tokenOut.
+    const combos = inLegFees.flatMap((inF) =>
+        outLegFees.map((outF) => ({ inFee: inF, outFee: outF })),
+    );
+    const quoteCalls = combos.map(({ inFee, outFee }) => {
+        const path: Hex = encodeV3Path([
+            { token: req.tokenIn },
+            { token: ADDRESSES.usdc, fee: inFee },
+            { token: req.tokenOut, fee: outFee },
+        ]);
+        return publicClient
+            .readContract({
+                address: ADDRESSES.synthraQuoter,
+                abi: SYNTHRA_QUOTER_ABI,
+                functionName: "quoteExactInput",
+                args: [path, req.amountIn],
+            })
+            .then((result: readonly unknown[]) => ({
+                inFee,
+                outFee,
+                path,
+                amountOut: result[0] as bigint,
+            }))
+            .catch(() => ({ inFee, outFee, path, amountOut: 0n }));
+    });
+    const quotes = await Promise.all(quoteCalls);
+    let best = quotes[0];
+    for (const q of quotes) if (q.amountOut > best.amountOut) best = q;
+    if (best.amountOut === 0n) return null;
+
+    const amountOutMinimum =
+        (best.amountOut * BigInt(10_000 - req.slippageBps)) / 10_000n;
+    const commands = encodeCommands([
+        UR_COMMANDS.PERMIT2_PERMIT,
+        UR_COMMANDS.V3_SWAP_EXACT_IN,
+    ]);
+    const swapInput = encodeV3SwapExactInInput({
+        recipient: req.recipient,
+        amountIn: req.amountIn,
+        amountOutMin: amountOutMinimum,
+        path: best.path,
+        payerIsUser: true,
+    });
+    const executor: RouteQuote["executor"] = {
+        router: ADDRESSES.synthraUniversalRouter,
+        abi: UNIVERSAL_ROUTER_ABI,
+        functionName: "execute",
+        args: [commands, ["0x" as Hex, swapInput], req.deadline],
+    };
+    return {
+        provider: "synthra-v3",
+        amountOut: best.amountOut,
+        fee: best.outFee, // surface the second-leg fee as the "label" tier
+        pathLabel: "via USDC",
+        approval: {
+            token: req.tokenIn,
+            spender: "0x000000000022D473030F116dDEE9F6B43aC78BA3" as Address,
+            amount: req.amountIn,
+        },
+        executor,
+        permit2: {
+            permitSpender: ADDRESSES.synthraUniversalRouter,
+            permitInputIndex: 0,
+        },
+    };
+}
+
+/**
  * Synthra V3 provider — vanilla Uniswap V3 fork at
  * `ADDRESSES.synthra*`. Quote logic walks the standard 4 fee tiers via
  * Factory.getPool, then quotes survivors in parallel via QuoterV2 and
@@ -59,7 +173,13 @@ export const synthraV3Provider: RouteProvider = {
         );
         const pools = await Promise.all(poolChecks);
         const liveTiers = pools.filter((p) => p.ok);
-        if (liveTiers.length === 0) return null;
+        if (liveTiers.length === 0) {
+            // Audit R-3: no direct pool — try the through-USDC pivot
+            // (X -> USDC -> Y). Most non-USDC pairs on Synthra are not
+            // directly paired but route trivially via USDC. Single
+            // additional getPool fan-out + a multi-hop quoteExactInput.
+            return tryUsdcPivot(req, publicClient);
+        }
 
         // 2. Parallel quoting via QuoterV2.quoteExactInputSingle.
         const quoteCalls = liveTiers.map((p) =>
