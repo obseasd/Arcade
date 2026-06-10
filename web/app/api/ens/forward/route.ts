@@ -102,7 +102,7 @@ async function resolveForward(name: string): Promise<{
             });
             attempts.push({ url, ok: true, resolver, address: addr ?? null });
             if (addr && isAddress(addr) && addr !== ZERO) {
-                return { address: addr, attempts };
+                return { address: addr, attempts, node };
             }
         } catch (e) {
             attempts.push({
