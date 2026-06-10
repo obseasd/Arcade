@@ -78,6 +78,7 @@ interface AttemptLog {
 async function resolveForward(name: string): Promise<{
     address: `0x${string}` | null;
     attempts: AttemptLog[];
+    node: string;
 }> {
     const attempts: AttemptLog[] = [];
     const node = namehash(name);
@@ -107,11 +108,11 @@ async function resolveForward(name: string): Promise<{
             attempts.push({
                 url,
                 ok: false,
-                error: e instanceof Error ? e.message.slice(0, 200) : String(e).slice(0, 200),
+                error: e instanceof Error ? e.message.slice(0, 500) : String(e).slice(0, 500),
             });
         }
     }
-    return { address: null, attempts };
+    return { address: null, attempts, node };
 }
 
 export async function GET(req: NextRequest) {
@@ -132,6 +133,8 @@ export async function GET(req: NextRequest) {
     if (debug) {
         body.attempts = result.attempts;
         body.normalized = normalized;
+        body.node = result.node;
+        body.registry = ENS_REGISTRY;
     }
     return NextResponse.json(body, {
         status: 200,
