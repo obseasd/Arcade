@@ -29,6 +29,7 @@ import { V4RoutingNotice } from "./V4RoutingNotice";
 import { SwapRoutes } from "./SwapRoutes";
 import { useRouteQuotes } from "@/lib/routing/useRouteQuotes";
 import type { RouteQuote } from "@/lib/routing/types";
+import { trackSwap, classifyError } from "@/lib/telemetry";
 import {
     usePermit2Approval,
     usePermit2AllowanceFor,
@@ -617,6 +618,17 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
           value: `${outFormatted} ${tokenOut.symbol}`,
           txHash: hash,
         });
+        // Audit A-6: telemetry on swap success.
+        trackSwap({
+          provider: activeRoute?.provider ?? (isV3Swap ? "arcade-v3" : "arcade-v2"),
+          tokenIn: tokenIn.address,
+          tokenOut: tokenOut.address,
+          amountInUsd: inUsd.usd,
+          success: true,
+          txHash: hash,
+          account,
+          chainId: 5042002,
+        });
       }
       pushToast({
         kind: "swap",
@@ -638,6 +650,19 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
       const msg = reason || (e instanceof Error ? e.message : "Swap failed");
       setTx({ status: "error", message: msg.slice(0, 200) });
       pushToast({ kind: "error", title: "Swap failed", message: msg.slice(0, 200) });
+      // Audit A-6: telemetry on swap failure. No-op when SENTRY_DSN is
+      // unset so this stays at zero bundle cost until the operator
+      // configures observability. Hashed account, USD-rounded amount.
+      trackSwap({
+        provider: activeRoute?.provider ?? (isV3Swap ? "arcade-v3" : "arcade-v2"),
+        tokenIn: tokenIn.address,
+        tokenOut: tokenOut?.address ?? "0x",
+        amountInUsd: inUsd.usd,
+        success: false,
+        errorClass: classifyError(e),
+        account: account ?? undefined,
+        chainId: 5042002,
+      });
     }
   };
 

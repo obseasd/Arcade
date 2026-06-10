@@ -461,8 +461,7 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         uint256 platformBps = s.mode == LaunchMode.PUMP ? PUMP_PLATFORM_BPS : CLANKER_PLATFORM_BPS;
         uint256 platformFee = (feeIn * platformBps + FEE_DENOMINATOR - 1) / FEE_DENOMINATOR; // ceil
         if (platformFee > feeIn) platformFee = feeIn;
-        uint256 creatorPortion = feeIn - platformFee;
-        _payCreatorShare(s, creatorPortion);
+        _payCreatorShare(s, feeIn - platformFee);
         if (platformFee > 0) _safePayUsdc(treasury, platformFee);
     }
 
@@ -473,14 +472,9 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
      */
     function _distributeMigratedFee(TokenState storage s, uint256 totalRoyalty) internal {
         if (totalRoyalty == 0) return;
-        // platformFee = ceil(totalRoyalty * 20/30). For any totalRoyalty >= 0
-        // this is bounded by totalRoyalty (verified algebraically: ceil(2x/3)
-        // <= x for all x >= 0), so the prior `if (platformFee > totalRoyalty)`
-        // clamp was provably dead code - dropped for EIP-170 budget.
         uint256 platformFee = (totalRoyalty * MIGRATED_PLATFORM_BPS + MIGRATED_ROYALTY_BPS - 1)
             / MIGRATED_ROYALTY_BPS;
-        uint256 creatorPortion = totalRoyalty - platformFee;
-        _payCreatorShare(s, creatorPortion);
+        _payCreatorShare(s, totalRoyalty - platformFee);
         if (platformFee > 0) _safePayUsdc(treasury, platformFee);
     }
 
@@ -502,6 +496,16 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
     /// instead, where the recipient can later pull it via `claimPendingUsdc`.
     /// This guarantees a single blacklisted recipient can never DoS curve
     /// trades or post-migration royalty distribution.
+    /// @dev Audit code-quality #4: build a 2-element address path once.
+    ///      All migrated-route entry points + curve fee distribution used to
+    ///      open-code `address[] memory p = new address[](2); p[0] = a; p[1] = b;`
+    ///      six times. Single helper saves ~80-120 bytes across the file.
+    function _path2(address a, address b) internal pure returns (address[] memory p) {
+        p = new address[](2);
+        p[0] = a;
+        p[1] = b;
+    }
+
     function _safePayUsdc(address to, uint256 amount) internal {
         if (amount == 0 || to == address(0)) return;
         try IERC20(address(USDC)).transfer(to, amount) returns (bool ok) {
@@ -665,11 +669,8 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         if (royalty > 0) _distributeMigratedFee(s, royalty);
         USDC.forceApprove(v2Router, netIn);
 
-        address[] memory path = new address[](2);
-        path[0] = address(USDC);
-        path[1] = tokenAddr;
         uint256[] memory amounts = IArcadeV2Router(v2Router).swapExactTokensForTokens(
-            netIn, minTokensOut, path, msg.sender, deadline
+            netIn, minTokensOut, _path2(address(USDC), tokenAddr), msg.sender, deadline
         );
         tokensOut = amounts[1];
         // Audit M-5: V2 router enforces minTokensOut natively; the
@@ -692,11 +693,8 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         IERC20(tokenAddr).safeTransferFrom(msg.sender, address(this), tokensIn);
         IERC20(tokenAddr).forceApprove(v2Router, tokensIn);
 
-        address[] memory path = new address[](2);
-        path[0] = tokenAddr;
-        path[1] = address(USDC);
         uint256[] memory amounts = IArcadeV2Router(v2Router).swapExactTokensForTokens(
-            tokensIn, 0, path, address(this), deadline
+            tokensIn, 0, _path2(tokenAddr, address(USDC)), address(this), deadline
         );
         uint256 grossUsdc = amounts[1];
 
@@ -769,11 +767,8 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         IERC20(tokenIn).safeTransferFrom(msg.sender, address(this), tokensIn);
         IERC20(tokenIn).forceApprove(v2Router, tokensIn);
 
-        address[] memory path1 = new address[](2);
-        path1[0] = tokenIn;
-        path1[1] = address(USDC);
         uint256[] memory leg1 = IArcadeV2Router(v2Router).swapExactTokensForTokens(
-            tokensIn, 0, path1, address(this), deadline
+            tokensIn, 0, _path2(tokenIn, address(USDC)), address(this), deadline
         );
         uint256 usdcMid = leg1[1];
 
@@ -809,11 +804,8 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
 
         // --- Leg 2: USDC -> tokenOut, delivered to the user ---
         USDC.forceApprove(v2Router, usdcMid);
-        address[] memory path2 = new address[](2);
-        path2[0] = address(USDC);
-        path2[1] = tokenOut;
         uint256[] memory leg2 = IArcadeV2Router(v2Router).swapExactTokensForTokens(
-            usdcMid, minTokensOut, path2, msg.sender, deadline
+            usdcMid, minTokensOut, _path2(address(USDC), tokenOut), msg.sender, deadline
         );
         tokensOut = leg2[1];
         if (tokensOut < minTokensOut) revert Slippage();
@@ -842,10 +834,9 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         // route is invalid before the user signs.
         if (!inMigrated && !outMigrated) return (0, 0);
 
-        address[] memory path1 = new address[](2);
-        path1[0] = tokenIn;
-        path1[1] = address(USDC);
-        uint256[] memory leg1 = IArcadeV2Router(v2Router).getAmountsOut(tokensIn, path1);
+        uint256[] memory leg1 = IArcadeV2Router(v2Router).getAmountsOut(
+            tokensIn, _path2(tokenIn, address(USDC))
+        );
         uint256 usdcMid = leg1[1];
 
         // CSEC-018 mirror: both royalty legs computed on the ORIGINAL usdcMid
@@ -858,10 +849,9 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         usdcMid -= royaltyB;
         totalRoyaltyUsdc = royaltyA + royaltyB;
 
-        address[] memory path2 = new address[](2);
-        path2[0] = address(USDC);
-        path2[1] = tokenOut;
-        uint256[] memory leg2 = IArcadeV2Router(v2Router).getAmountsOut(usdcMid, path2);
+        uint256[] memory leg2 = IArcadeV2Router(v2Router).getAmountsOut(
+            usdcMid, _path2(address(USDC), tokenOut)
+        );
         tokensOut = leg2[1];
     }
 
