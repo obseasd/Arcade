@@ -77,6 +77,21 @@ export const ADDRESSES = {
   synthraUniversalRouter: "0xbf4479C07Dc6fdc6dAa764A0ccA06969e894275F" as Address,
   /** Synthra Wrapped USDC (their canonical "ETH-equivalent" — 18 dec). */
   synthraWusdc: "0x911b4000D3422F482F4062a913885f7b035382Df" as Address,
+  // --- UnitFlow (Uniswap V3 + V4 fork on Arc testnet) ---
+  // Standard Uniswap V3 interfaces with name rebrand (UnitFlowV3*).
+  // POOL_INIT_CODE_HASH differs from canonical so do NOT reuse Synthra's.
+  /** UnitFlow V3 Factory. */
+  unitflowFactory: "0xb0bCabE107e9e37b34900667fa4ded4Df7e910CB" as Address,
+  /** UnitFlow V3 SwapRouter. */
+  unitflowRouter: "0x75eDe46A468Eb600C10982e6FdCeADCB37a40930" as Address,
+  /** UnitFlow V3 QuoterV2. */
+  unitflowQuoter: "0x09ea20bC7Fbb42C202b2Fa108365ccB15165Dc53" as Address,
+  /** UnitFlow V3 NonfungiblePositionManager (NPM). */
+  unitflowNpm: "0xf8ecf496D9c31Cbf2aEa4DEc32471851A5c95181" as Address,
+  // XyloNet addresses pending — ForgeLabs has not published their
+  // StableSwap contracts; the docs site marks GitHub as "Soon". When
+  // addresses land, add xylonetFactory / xylonetRouter / xylonetPool
+  // here and wire a provider mirroring synthraV3.
 } as const;
 
 /** Synthra V3 routing fee tiers (Uniswap V3 standard: 0.01% / 0.05% / 0.3% / 1%). */

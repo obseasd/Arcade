@@ -7,6 +7,7 @@ import { RouteProvider, RouteQuote, QuoteRequest } from "./types";
 import { synthraV3Provider } from "./synthraV3";
 import { arcadeV3Provider } from "./arcadeV3";
 import { arcadeV2Provider } from "./arcadeV2";
+import { unitflowV3Provider } from "./unitflowV3";
 
 /**
  * Aggregator hook: fans out a quote request to every registered provider
@@ -35,8 +36,10 @@ const PROVIDERS: RouteProvider[] = [
   arcadeV3Provider,
   arcadeV2Provider,
   synthraV3Provider,
-  // Xylonet + Unitflow plug in here once their on-chain contracts on Arc
-  // are confirmed. Same Provider interface so SwapCard does not change.
+  unitflowV3Provider,
+  // XyloNet pending — ForgeLabs has not published their StableSwap
+  // contracts on Arc yet (docs site marks GitHub as "Soon"). Wire it
+  // here when addresses land.
 ];
 
 export interface UseRouteQuotesArgs {
