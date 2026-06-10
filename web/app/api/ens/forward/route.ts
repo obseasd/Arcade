@@ -15,16 +15,25 @@ import { normalize } from "viem/ens";
  * ENS reads are pure-view contract calls — any working L1 RPC returns the
  * same answer, so the fallback list is safe to walk indiscriminately.
  *
- * Cached at the edge for 5 minutes per name to keep the RPC budget low
- * when many users resolve the same vanity names (vitalik.eth, etc.).
+ * Only positive responses (address resolved) get edge-cached for 5 minutes;
+ * null responses are NOT cached so a transient RPC outage doesn't poison
+ * the cache for the next 5 minutes.
+ *
+ * Debug mode: append `?debug=1` to the URL to see which RPCs were tried
+ * and what each returned (errors + raw addresses). Useful when null gets
+ * returned and we don't know which provider is misbehaving.
  */
 const RPCS = [
     process.env.MAINNET_RPC,
     process.env.NEXT_PUBLIC_MAINNET_RPC,
     "https://eth.llamarpc.com",
     "https://ethereum-rpc.publicnode.com",
-    "https://rpc.ankr.com/eth",
+    "https://rpc.flashbots.net",
+    "https://eth-mainnet.public.blastapi.io",
+    "https://eth.merkle.io",
+    "https://endpoints.omniatech.io/v1/eth/mainnet/public",
     "https://cloudflare-eth.com",
+    "https://rpc.ankr.com/eth",
 ].filter((u): u is string => {
     if (!u) return false;
     try {
@@ -34,27 +43,51 @@ const RPCS = [
     }
 });
 
-const clients = RPCS.map((url) =>
-    createPublicClient({ chain: mainnet, transport: http(url) }),
-);
+// retryCount: 0 so a single failing RPC doesn't eat the 10s function budget.
+// timeout: 5s per provider, so 10 providers fit in ~50s worst case but in
+// practice the FIRST working provider returns within ~500ms.
+const clients = RPCS.map((url) => ({
+    url,
+    client: createPublicClient({
+        chain: mainnet,
+        transport: http(url, { retryCount: 0, timeout: 5_000 }),
+    }),
+}));
 
-async function resolveForward(name: string) {
-    for (const client of clients) {
+interface AttemptLog {
+    url: string;
+    ok: boolean;
+    error?: string;
+    address?: string | null;
+}
+
+async function resolveForward(name: string): Promise<{
+    address: `0x${string}` | null;
+    attempts: AttemptLog[];
+}> {
+    const attempts: AttemptLog[] = [];
+    for (const { url, client } of clients) {
         try {
             const addr = await client.getEnsAddress({ name });
+            attempts.push({ url, ok: true, address: addr ?? null });
             if (addr && isAddress(addr)) {
-                return { address: addr };
+                return { address: addr, attempts };
             }
-        } catch {
-            // try the next RPC
+        } catch (e) {
+            attempts.push({
+                url,
+                ok: false,
+                error: e instanceof Error ? e.message.slice(0, 200) : String(e).slice(0, 200),
+            });
         }
     }
-    return { address: null };
+    return { address: null, attempts };
 }
 
 export async function GET(req: NextRequest) {
     const url = new URL(req.url);
     const raw = (url.searchParams.get("name") || "").trim();
+    const debug = url.searchParams.get("debug") === "1";
     if (!raw || !raw.includes(".")) {
         return NextResponse.json({ address: null }, { status: 200 });
     }
@@ -65,10 +98,21 @@ export async function GET(req: NextRequest) {
         return NextResponse.json({ address: null }, { status: 200 });
     }
     const result = await resolveForward(normalized);
-    return NextResponse.json(result, {
+    const body: Record<string, unknown> = { address: result.address };
+    if (debug) {
+        body.attempts = result.attempts;
+        body.normalized = normalized;
+    }
+    return NextResponse.json(body, {
         status: 200,
-        headers: {
-            "cache-control": "public, s-maxage=300, stale-while-revalidate=86400",
-        },
+        headers: result.address
+            ? {
+                  "cache-control": "public, s-maxage=300, stale-while-revalidate=86400",
+              }
+            : {
+                  // Do not cache null responses: a transient outage would
+                  // otherwise pin "not found" for 5 minutes for every user.
+                  "cache-control": "no-store",
+              },
     });
 }

@@ -10,14 +10,21 @@ import { mainnet } from "viem/chains";
  * name to "vitalik.eth", but they can't make that name's forward resolver
  * point at their address). Same multi-RPC fallback + cache as
  * /api/ens/forward. Lives server-side to dodge ad-blocker filter lists.
+ *
+ * Null responses are NOT cached (transient outage shouldn't pin a wrong
+ * answer for 5 minutes). `?debug=1` returns the per-RPC attempt log.
  */
 const RPCS = [
     process.env.MAINNET_RPC,
     process.env.NEXT_PUBLIC_MAINNET_RPC,
     "https://eth.llamarpc.com",
     "https://ethereum-rpc.publicnode.com",
-    "https://rpc.ankr.com/eth",
+    "https://rpc.flashbots.net",
+    "https://eth-mainnet.public.blastapi.io",
+    "https://eth.merkle.io",
+    "https://endpoints.omniatech.io/v1/eth/mainnet/public",
     "https://cloudflare-eth.com",
+    "https://rpc.ankr.com/eth",
 ].filter((u): u is string => {
     if (!u) return false;
     try {
@@ -27,62 +34,98 @@ const RPCS = [
     }
 });
 
-const clients = RPCS.map((url) =>
-    createPublicClient({ chain: mainnet, transport: http(url) }),
-);
+const clients = RPCS.map((url) => ({
+    url,
+    client: createPublicClient({
+        chain: mainnet,
+        transport: http(url, { retryCount: 0, timeout: 5_000 }),
+    }),
+}));
 
-async function reverse(address: `0x${string}`) {
-    for (const client of clients) {
-        try {
-            const name = await client.getEnsName({ address });
-            if (name) return name;
-        } catch {
-            // try next
-        }
-    }
-    return null;
+interface AttemptLog {
+    url: string;
+    ok: boolean;
+    error?: string;
+    value?: string | null;
 }
 
-async function forward(name: string) {
-    for (const client of clients) {
+async function reverse(address: `0x${string}`): Promise<{
+    name: string | null;
+    attempts: AttemptLog[];
+}> {
+    const attempts: AttemptLog[] = [];
+    for (const { url, client } of clients) {
         try {
-            const a = await client.getEnsAddress({ name });
-            if (a && isAddress(a)) return a as `0x${string}`;
-        } catch {
-            // try next
+            const name = await client.getEnsName({ address });
+            attempts.push({ url, ok: true, value: name ?? null });
+            if (name) return { name, attempts };
+        } catch (e) {
+            attempts.push({
+                url,
+                ok: false,
+                error: e instanceof Error ? e.message.slice(0, 200) : String(e).slice(0, 200),
+            });
         }
     }
-    return null;
+    return { name: null, attempts };
+}
+
+async function forward(name: string): Promise<{
+    address: `0x${string}` | null;
+    attempts: AttemptLog[];
+}> {
+    const attempts: AttemptLog[] = [];
+    for (const { url, client } of clients) {
+        try {
+            const a = await client.getEnsAddress({ name });
+            attempts.push({ url, ok: true, value: a ?? null });
+            if (a && isAddress(a)) return { address: a as `0x${string}`, attempts };
+        } catch (e) {
+            attempts.push({
+                url,
+                ok: false,
+                error: e instanceof Error ? e.message.slice(0, 200) : String(e).slice(0, 200),
+            });
+        }
+    }
+    return { address: null, attempts };
 }
 
 export async function GET(req: NextRequest) {
     const url = new URL(req.url);
     const addressParam = (url.searchParams.get("address") || "").trim();
+    const debug = url.searchParams.get("debug") === "1";
     if (!isAddress(addressParam)) {
         return NextResponse.json({ name: null }, { status: 200 });
     }
     const addr = addressParam as `0x${string}`;
-    const name = await reverse(addr);
-    if (!name) {
-        return NextResponse.json(
-            { name: null },
-            {
-                status: 200,
-                headers: {
-                    "cache-control": "public, s-maxage=300, stale-while-revalidate=86400",
-                },
-            },
-        );
-    }
-    const back = await forward(name);
-    const verified = back && back.toLowerCase() === addr.toLowerCase();
-    return NextResponse.json(
-        { name: verified ? name : null },
-        {
+    const reverseResult = await reverse(addr);
+    if (!reverseResult.name) {
+        const body: Record<string, unknown> = { name: null };
+        if (debug) body.reverseAttempts = reverseResult.attempts;
+        return NextResponse.json(body, {
             status: 200,
-            headers: {
-                "cache-control": "public, s-maxage=300, stale-while-revalidate=86400",
-            },
-        },
-    );
+            headers: { "cache-control": "no-store" },
+        });
+    }
+    const forwardResult = await forward(reverseResult.name);
+    const verified =
+        forwardResult.address && forwardResult.address.toLowerCase() === addr.toLowerCase();
+    const body: Record<string, unknown> = { name: verified ? reverseResult.name : null };
+    if (debug) {
+        body.reverseAttempts = reverseResult.attempts;
+        body.forwardAttempts = forwardResult.attempts;
+        body.candidateName = reverseResult.name;
+        body.forwardResolved = forwardResult.address;
+    }
+    return NextResponse.json(body, {
+        status: 200,
+        headers: verified
+            ? {
+                  "cache-control": "public, s-maxage=300, stale-while-revalidate=86400",
+              }
+            : {
+                  "cache-control": "no-store",
+              },
+    });
 }
