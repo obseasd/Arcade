@@ -1,132 +1,145 @@
-import { Address, encodeFunctionData } from "viem";
+import { Address, Hex } from "viem";
 import { ADDRESSES, SYNTHRA_V3_FEES } from "@/lib/constants";
-import { SYNTHRA_FACTORY_ABI, SYNTHRA_QUOTER_ABI, SYNTHRA_ROUTER_ABI } from "@/lib/abis/synthraV3";
-import { PROVIDER_META, RouteProvider, RouteQuote, QuoteRequest } from "./types";
+import { SYNTHRA_FACTORY_ABI, SYNTHRA_QUOTER_ABI } from "@/lib/abis/synthraV3";
+import { UNIVERSAL_ROUTER_ABI } from "@/lib/abis/universalRouter";
+import {
+    encodeCommands,
+    encodePermit2PermitInput,
+    encodeV3Path,
+    encodeV3SwapExactInInput,
+    UR_COMMANDS,
+} from "./universalRouter";
+import { PROVIDER_META, RouteProvider, RouteQuote } from "./types";
 
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000" as const;
 
 /**
  * Synthra V3 provider — vanilla Uniswap V3 fork at
- * `ADDRESSES.synthra*`. Quote flow:
+ * `ADDRESSES.synthra*`. Quote logic walks the standard 4 fee tiers via
+ * Factory.getPool, then quotes survivors in parallel via QuoterV2 and
+ * picks the largest amountOut.
  *
- *   1. For each fee tier in SYNTHRA_V3_FEES (100 / 500 / 3_000 / 10_000),
- *      call Factory.getPool(tokenIn, tokenOut, fee). Skip tiers with
- *      pool == 0x0 (no liquidity / not deployed).
- *   2. For surviving tiers, call QuoterV2.quoteExactInputSingle(...) in
- *      parallel. Pick the tier with the largest amountOut.
- *   3. Build an exactInputSingle executor payload pointing at SwapRouter02.
+ * Execution path: Universal Router + Permit2 (instead of the legacy
+ * SwapRouter02 + per-router approve). The user approves USDC to Permit2
+ * ONE TIME EVER; per-swap they sign an EIP-712 PermitSingle authorising
+ * the Universal Router for that exact amount. The UR's PERMIT2_PERMIT
+ * command consumes the signature and the V3_SWAP_EXACT_IN command does
+ * the swap inline.
  *
- * Returns null when no pool exists across any tier, or when every quote
- * reverts. Returning null is normal (some pairs simply aren't on Synthra);
- * the aggregator drops this row gracefully.
- *
- * Multi-hop via `path` (e.g. tokenIn -> WUSDC -> tokenOut) is wired in
- * the ABI but not exercised yet — keep it simple while we ship the
- * single-hop aggregator; add a path-builder when a real route asks for it.
+ * Saves a separate `approve` tx per route switch and matches Tower /
+ * Uniswap modern UX (single-tap swap once Permit2 is approved). The
+ * `permit2` metadata on the returned RouteQuote tells the SwapCard to
+ * (a) check / prompt the one-time Permit2 approval, (b) sign the
+ * permit, (c) inject the signature into the executor args.
  */
 export const synthraV3Provider: RouteProvider = {
-  meta: PROVIDER_META["synthra-v3"],
+    meta: PROVIDER_META["synthra-v3"],
 
-  async quote(req, publicClient) {
-    if (
-      ADDRESSES.synthraFactory === ZERO_ADDRESS ||
-      ADDRESSES.synthraQuoter === ZERO_ADDRESS ||
-      ADDRESSES.synthraRouter === ZERO_ADDRESS
-    ) {
-      return null;
-    }
-    if (req.amountIn === 0n) return null;
+    async quote(req, publicClient) {
+        if (
+            ADDRESSES.synthraFactory === ZERO_ADDRESS ||
+            ADDRESSES.synthraQuoter === ZERO_ADDRESS ||
+            ADDRESSES.synthraUniversalRouter === ZERO_ADDRESS
+        ) {
+            return null;
+        }
+        if (req.amountIn === 0n) return null;
 
-    // Step 1: pool discovery. Reads are cheap (single Factory.getPool
-    // call per tier) so fan them out in parallel.
-    const poolChecks = SYNTHRA_V3_FEES.map((fee) =>
-      publicClient
-        .readContract({
-          address: ADDRESSES.synthraFactory,
-          abi: SYNTHRA_FACTORY_ABI,
-          functionName: "getPool",
-          args: [req.tokenIn, req.tokenOut, fee],
-        })
-        .then((pool: Address) => ({ fee, pool, ok: pool !== ZERO_ADDRESS }))
-        .catch(() => ({ fee, pool: ZERO_ADDRESS as Address, ok: false })),
-    );
-    const pools = await Promise.all(poolChecks);
-    const liveTiers = pools.filter((p) => p.ok);
-    if (liveTiers.length === 0) return null;
+        // 1. Pool discovery across all 4 fee tiers in parallel.
+        const poolChecks = SYNTHRA_V3_FEES.map((fee) =>
+            publicClient
+                .readContract({
+                    address: ADDRESSES.synthraFactory,
+                    abi: SYNTHRA_FACTORY_ABI,
+                    functionName: "getPool",
+                    args: [req.tokenIn, req.tokenOut, fee],
+                })
+                .then((pool: Address) => ({ fee, pool, ok: pool !== ZERO_ADDRESS }))
+                .catch(() => ({ fee, pool: ZERO_ADDRESS as Address, ok: false })),
+        );
+        const pools = await Promise.all(poolChecks);
+        const liveTiers = pools.filter((p) => p.ok);
+        if (liveTiers.length === 0) return null;
 
-    // Step 2: parallel quote-of-quotes. QuoterV2 reverts when there's no
-    // path through the tier at the requested size; treat reverts as 0
-    // and let max() drop them.
-    const quoteCalls = liveTiers.map((p) =>
-      publicClient
-        .readContract({
-          address: ADDRESSES.synthraQuoter,
-          abi: SYNTHRA_QUOTER_ABI,
-          functionName: "quoteExactInputSingle",
-          args: [
-            {
-              tokenIn: req.tokenIn,
-              tokenOut: req.tokenOut,
-              amountIn: req.amountIn,
-              fee: p.fee,
-              sqrtPriceLimitX96: 0n,
+        // 2. Parallel quoting via QuoterV2.quoteExactInputSingle.
+        const quoteCalls = liveTiers.map((p) =>
+            publicClient
+                .readContract({
+                    address: ADDRESSES.synthraQuoter,
+                    abi: SYNTHRA_QUOTER_ABI,
+                    functionName: "quoteExactInputSingle",
+                    args: [
+                        {
+                            tokenIn: req.tokenIn,
+                            tokenOut: req.tokenOut,
+                            amountIn: req.amountIn,
+                            fee: p.fee,
+                            sqrtPriceLimitX96: 0n,
+                        },
+                    ],
+                })
+                .then((result: readonly unknown[]) => ({
+                    fee: p.fee,
+                    amountOut: result[0] as bigint,
+                }))
+                .catch(() => ({ fee: p.fee, amountOut: 0n })),
+        );
+        const quotes = await Promise.all(quoteCalls);
+        let best = quotes[0];
+        for (const q of quotes) if (q.amountOut > best.amountOut) best = q;
+        if (best.amountOut === 0n) return null;
+
+        const amountOutMinimum =
+            (best.amountOut * BigInt(10_000 - req.slippageBps)) / 10_000n;
+
+        // 3. Build Universal Router commands + inputs:
+        //    [PERMIT2_PERMIT, V3_SWAP_EXACT_IN]
+        // PERMIT2_PERMIT input is a placeholder ("0x") — the SwapCard
+        // rewrites it after signing the PermitSingle. V3_SWAP_EXACT_IN
+        // uses payerIsUser=true so the router pulls via Permit2 (which
+        // it does using the just-installed allowance from PERMIT2_PERMIT).
+        const path: Hex = encodeV3Path([
+            { token: req.tokenIn },
+            { token: req.tokenOut, fee: best.fee },
+        ]);
+        const commands = encodeCommands([
+            UR_COMMANDS.PERMIT2_PERMIT,
+            UR_COMMANDS.V3_SWAP_EXACT_IN,
+        ]);
+        const permitPlaceholder: Hex = "0x";
+        const swapInput = encodeV3SwapExactInInput({
+            recipient: req.recipient,
+            amountIn: req.amountIn,
+            amountOutMin: amountOutMinimum,
+            path,
+            payerIsUser: true,
+        });
+
+        const executor: RouteQuote["executor"] = {
+            router: ADDRESSES.synthraUniversalRouter,
+            abi: UNIVERSAL_ROUTER_ABI,
+            functionName: "execute",
+            args: [commands, [permitPlaceholder, swapInput], req.deadline],
+        };
+
+        return {
+            provider: "synthra-v3",
+            amountOut: best.amountOut,
+            fee: best.fee,
+            pathLabel: `${(best.fee / 10_000).toFixed(2)}% pool`,
+            approval: {
+                // The user-facing approval is now to Permit2, not the
+                // router. SwapCard does this once and reuses across all
+                // Permit2-aware routes.
+                token: req.tokenIn,
+                spender: "0x000000000022D473030F116dDEE9F6B43aC78BA3" as Address,
+                amount: req.amountIn,
             },
-          ],
-        })
-        .then((result: readonly unknown[]) => ({
-          fee: p.fee,
-          amountOut: result[0] as bigint,
-        }))
-        .catch(() => ({ fee: p.fee, amountOut: 0n })),
-    );
-    const quotes = await Promise.all(quoteCalls);
-    let best = quotes[0];
-    for (const q of quotes) if (q.amountOut > best.amountOut) best = q;
-    if (best.amountOut === 0n) return null;
-
-    // Step 3: executor payload. amountOutMinimum applies slippage to the
-    // freshly-fetched amountOut; the SwapCard surfaces both numbers in
-    // the review screen.
-    const amountOutMinimum =
-      (best.amountOut * BigInt(10_000 - req.slippageBps)) / 10_000n;
-
-    const executor: RouteQuote["executor"] = {
-      router: ADDRESSES.synthraRouter,
-      abi: SYNTHRA_ROUTER_ABI,
-      functionName: "exactInputSingle",
-      args: [
-        {
-          tokenIn: req.tokenIn,
-          tokenOut: req.tokenOut,
-          fee: best.fee,
-          recipient: req.recipient,
-          amountIn: req.amountIn,
-          amountOutMinimum,
-          sqrtPriceLimitX96: 0n,
-        },
-      ],
-    };
-
-    // Pre-compute the calldata once so the SwapCard can fall back to a
-    // raw `sendTransaction` if its wagmi writeContract path errors out.
-    // Not used in the default flow but cheap to attach.
-    void encodeFunctionData;
-
-    return {
-      provider: "synthra-v3",
-      amountOut: best.amountOut,
-      fee: best.fee,
-      pathLabel: feeLabel(best.fee),
-      approval: {
-        token: req.tokenIn,
-        spender: ADDRESSES.synthraRouter,
-        amount: req.amountIn,
-      },
-      executor,
-    };
-  },
+            executor,
+            permit2: {
+                permitSpender: ADDRESSES.synthraUniversalRouter,
+                permitInputIndex: 0,
+            },
+        };
+    },
 };
-
-function feeLabel(fee: number): string {
-  return `${(fee / 10_000).toFixed(2)}% pool`;
-}

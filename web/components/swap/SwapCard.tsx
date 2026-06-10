@@ -29,6 +29,12 @@ import { V4RoutingNotice } from "./V4RoutingNotice";
 import { SwapRoutes } from "./SwapRoutes";
 import { useRouteQuotes } from "@/lib/routing/useRouteQuotes";
 import type { RouteQuote } from "@/lib/routing/types";
+import {
+    usePermit2Approval,
+    usePermit2AllowanceFor,
+    useSignPermit2,
+} from "@/lib/permit2";
+import { encodePermit2PermitInput } from "@/lib/routing/universalRouter";
 import { cn, formatToken, formatUSDC } from "@/lib/utils";
 
 const USDC_TOKEN: TokenOption = {
@@ -373,10 +379,12 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
       ? ((outUsd.usd - inUsd.usd) / inUsd.usd) * 100
       : undefined;
 
-  // Pick the spender to approve based on the route: external route uses
-  // its own router (Synthra / UnitFlow SwapRouter02), V3 router for
-  // CLANKER_V3 tokens, launchpad for royalty-aware multi-hop, else the
-  // V2 router.
+  // Pick the spender to approve based on the route. For external
+  // UR + Permit2 routes the user-facing approval is to Permit2 (one
+  // time, max) rather than to the route's router directly. For everything
+  // else (Arcade V2/V3, launchpad, XyloNet), classic ERC20 approve to
+  // the route's router.
+  const usesPermit2 = isExternalRoute && !!activeRoute?.permit2;
   const swapSpender = isExternalRoute
     ? activeRoute!.approval.spender
     : isV3Swap
@@ -385,6 +393,16 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
         ? ADDRESSES.launchpad
         : ADDRESSES.router;
   const { ensureAllowance } = useApproveIfNeeded(tokenIn.address, swapSpender);
+
+  // Permit2 wiring. Always runs (cheap reads) so the hook order stays
+  // stable across renders even when the user toggles between Permit2
+  // and classic routes.
+  const permit2Approval = usePermit2Approval(tokenIn.address, finalAmountIn);
+  const permit2Allowance = usePermit2AllowanceFor(
+    tokenIn.address,
+    activeRoute?.permit2?.permitSpender,
+  );
+  const signPermit2 = useSignPermit2();
 
   // Slippage helpers
   const onSlippagePreset = (bps: number) => {
@@ -452,20 +470,61 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
     if (!account || !tokenOut) return;
     setTx({ status: "pending", message: "Approving…" });
     try {
-      await ensureAllowance(exactIn ? finalAmountIn : maxIn);
+      // Permit2-backed external routes (Synthra UR, UnitFlow UR) need a
+      // one-time max approve to Permit2 instead of per-router approves.
+      // After that, the per-swap "approval" is an off-chain EIP-712 sig
+      // the user signs once per swap and we bake into the executor args.
+      // Non-Permit2 routes (Arcade V2/V3, XyloNet, UnitFlow WRAP_ETH
+      // variant where USDC is paid via msg.value) still use the legacy
+      // ensureAllowance path.
+      if (usesPermit2 && activeRoute) {
+        if (permit2Approval.needsApproval) {
+          setTx({ status: "pending", message: "Approving Permit2 (one-time)…" });
+          await permit2Approval.approve();
+        }
+      } else if (
+        activeRoute?.executor.value &&
+        activeRoute.executor.value > 0n
+      ) {
+        // WRAP_ETH variant — no ERC20 allowance needed, value is sent
+        // with the tx. Skip ensureAllowance entirely.
+      } else {
+        await ensureAllowance(exactIn ? finalAmountIn : maxIn);
+      }
       setTx({ status: "pending", message: "Submitting swap…" });
       const deadline = BigInt(Math.floor(Date.now() / 1000) + 600);
       let hash: `0x${string}`;
       if (isExternalRoute && activeRoute) {
         // Route the swap through the selected provider's pre-built
-        // executor (e.g. Synthra SwapRouter02.exactInputSingle). The
-        // executor payload (recipient, amountOutMinimum, deadline) was
-        // baked at quote time by the provider, so we just call as-is.
+        // executor. For UniversalRouter + Permit2 routes we (a) prompt
+        // the user to sign the PermitSingle, (b) inject the signed
+        // permit into the executor args at the index the provider
+        // declared, (c) call execute(). For non-Permit2 externals
+        // (XyloNet, UnitFlow WRAP_ETH variant) we call the executor
+        // as-is.
+        let execArgs = activeRoute.executor.args;
+        const p2 = activeRoute.permit2;
+        if (p2) {
+          setTx({ status: "pending", message: "Signing Permit2…" });
+          const { permit, signature } = await signPermit2({
+            token: tokenIn.address,
+            spender: p2.permitSpender,
+            amount: finalAmountIn,
+            nonce: permit2Allowance.nonce,
+          });
+          const encodedPermit = encodePermit2PermitInput(permit, signature);
+          // executor.args = [commands, inputs[], deadline]. Clone the
+          // inputs[] and rewrite the permit slot.
+          const inputs = [...(execArgs[1] as `0x${string}`[])];
+          inputs[p2.permitInputIndex] = encodedPermit;
+          execArgs = [execArgs[0], inputs, execArgs[2]];
+          setTx({ status: "pending", message: "Submitting swap…" });
+        }
         hash = await writeContractAsync({
           address: activeRoute.executor.router,
           abi: activeRoute.executor.abi,
           functionName: activeRoute.executor.functionName,
-          args: activeRoute.executor.args,
+          args: execArgs,
           value: activeRoute.executor.value,
         });
       } else if (isV3Swap) {

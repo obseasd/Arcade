@@ -42,7 +42,14 @@ export interface RouteQuote {
   pathLabel?: string;
   /** Token the user must approve to the executor.router before swapping. */
   approval: { token: Address; spender: Address; amount: bigint };
-  /** Pre-built execution payload for wagmi useWriteContract. */
+  /** Pre-built execution payload for wagmi useWriteContract.
+   *
+   *  For UniversalRouter-backed routes, `args` is a TEMPLATE: the inputs
+   *  array contains placeholders the SwapCard fills at exec time after
+   *  signing the Permit2 PermitSingle (so the signed `permit` + `signature`
+   *  are baked into the PERMIT2_PERMIT command's input). See
+   *  `permit2.permitSpender` on the parent quote.
+   */
   executor: {
     router: Address;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -53,6 +60,21 @@ export interface RouteQuote {
     /** ETH value to send (non-zero only for native-asset legs; on Arc
      *  this stays 0 since USDC is the native gas asset). */
     value?: bigint;
+  };
+  /** Permit2 metadata. Present when the executor is a UniversalRouter
+   *  that wants to pull tokens via Permit2 instead of plain ERC20
+   *  allowance. SwapCard handles the (a) one-time approve to Permit2,
+   *  (b) per-swap EIP-712 sign of the PermitSingle authorising
+   *  `permit2.permitSpender`, (c) injection of the permit + signature
+   *  into `executor.args` at the index given by `permit2.permitInputIndex`.
+   *  When undefined the route falls back to classic ERC20 approval. */
+  permit2?: {
+    /** Spender to authorise (= the UniversalRouter that will pull tokens). */
+    permitSpender: Address;
+    /** Index inside `executor.args[1]` (the `inputs[]` array of UR.execute)
+     *  where the PERMIT2_PERMIT input lives. SwapCard rewrites this slot
+     *  after signing. */
+    permitInputIndex: number;
   };
 }
 
