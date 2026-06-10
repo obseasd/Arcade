@@ -139,6 +139,16 @@ export function BridgeCard() {
   // BRIDGE-MULTITAB-DOUBLE-MINT-REVERT: listen for sibling-tab mint
   // broadcasts so two tabs both holding the same pending burn don't both
   // sign a `receiveMessage` and revert one of the two.
+  //
+  // Audit B-4: deps depend only on [account]. The previous [account, step]
+  // dep recreated the channel on every step transition (idle -> attesting
+  // -> minting -> idle), which on some browsers leaks MessagePorts under
+  // rapid transitions. The handler reads `step` from a ref kept in sync
+  // by the next effect below so it never sees a stale closure.
+  const stepRef = useRef(step);
+  useEffect(() => {
+    stepRef.current = step;
+  }, [step]);
   useEffect(() => {
     if (typeof BroadcastChannel === "undefined") return;
     const channel = new BroadcastChannel("arcade-bridge-mint");
@@ -152,8 +162,9 @@ export function BridgeCard() {
       // would erase the user's only resume path. Only drop the local
       // UI step; the persisted state still surfaces on reload if the
       // other tab didn't actually mint.
-      if (step.kind === "attesting" || step.kind === "minting") {
-        if (step.burnTxHash?.toLowerCase() === data.burnTxHash.toLowerCase()) {
+      const cur = stepRef.current;
+      if (cur.kind === "attesting" || cur.kind === "minting") {
+        if (cur.burnTxHash?.toLowerCase() === data.burnTxHash.toLowerCase()) {
           setStep({ kind: "idle" });
         }
       }
@@ -163,7 +174,7 @@ export function BridgeCard() {
       channel.removeEventListener("message", onMsg);
       channel.close();
     };
-  }, [account, step]);
+  }, [account]);
 
   useEffect(() => {
     if (step.kind !== "idle") return;
@@ -504,6 +515,12 @@ export function BridgeCard() {
           console.warn("[CCTP] Iris payload mismatch, ignoring", { parsed });
           return false;
         }
+        // Audit B-3: bail out if the user dismissed this claim mid-poll.
+        // The dismissedRef is flipped synchronously by
+        // discardPendingClaim; without this check the just-resolved
+        // promise would call setStep({kind:"minting"}) and resurrect
+        // the claim banner the user explicitly cancelled.
+        if (dismissedRef.current) return false;
         // Flip the matching history entry's badge from "Pending" -> "To claim"
         // so the user sees there's an action waiting on them. The mint
         // handler later flips status -> "minted" which supersedes this.
@@ -634,10 +651,19 @@ export function BridgeCard() {
     setAmountStr("");
   };
 
+  // Audit B-3: ref flipped by discardPendingClaim. The attestation
+  // poll's closure captures the old `step` value; without this ref, a
+  // poll() that resolves AFTER the user clicked dismiss can still call
+  // setStep({ kind: "minting" }) and resurrect the claim banner.
+  // The poll checks dismissedRef before any setStep so the dismiss
+  // wins the race.
+  const dismissedRef = useRef(false);
+
   /** Manually drop a persisted pending claim - used when the user wants to
    * stop watching an old burn (e.g. they already claimed from another tab,
    * or the burn is stale). Does NOT touch on-chain state. */
   const discardPendingClaim = () => {
+    dismissedRef.current = true;
     clearPendingBridge(account);
     // BRIDGE-DISCARD-LEAVES-HISTORY-PENDING: also flip the matching
     // history row to "failed" so BridgeHistory's auto-poll doesn't keep
@@ -655,6 +681,15 @@ export function BridgeCard() {
     }
     setStep({ kind: "idle" });
   };
+
+  // Reset dismissed ref every time the step transitions back to a fresh
+  // attesting cycle (new burn) so a previously-dismissed burn doesn't
+  // poison subsequent attempts.
+  useEffect(() => {
+    if (step.kind === "attesting") {
+      dismissedRef.current = false;
+    }
+  }, [step]);
 
   // Audit Bridge M-3: hard minimum on fast-transfer bridges. Circle's
   // fast-transfer fee = amount / 10_000; sub-dust bridges hit a maxFee

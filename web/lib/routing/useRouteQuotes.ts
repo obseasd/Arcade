@@ -68,18 +68,32 @@ export function useRouteQuotes(args: UseRouteQuotesArgs): UseRouteQuotesResult {
   const [quotes, setQuotes] = useState<RouteQuote[]>([]);
   const [loading, setLoading] = useState(false);
 
+  // Audit R-7: debounce `amountIn` by 250 ms. Without it, a user typing
+  // "1234567" fires 7 cascades × 5 providers × ~5 RPC = 175 reads in
+  // <1 s — meaningful on Arc's rate-limited public RPC and visible in
+  // the routes panel as a strobe of "loading" -> "best route" updates.
+  // Debouncing on the raw bigint keeps the keystrokes-per-character
+  // amountInRaw responsive for display purposes upstream but coalesces
+  // them for the aggregator's fan-out trigger. AbortController in the
+  // effect below kills any in-flight requests on the next change.
+  const [debouncedAmountIn, setDebouncedAmountIn] = useState(args.amountIn);
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedAmountIn(args.amountIn), 250);
+    return () => clearTimeout(t);
+  }, [args.amountIn]);
+
   // Stable serialization of the request. JSON.stringify with BigInt
   // coercion so the dep array compares by value, not identity.
   const reqKey = useMemo(() => {
     if (!args.enabled || !args.tokenIn || !args.tokenOut || !args.recipient) return "";
-    if (args.amountIn === 0n) return "";
+    if (debouncedAmountIn === 0n) return "";
     if (args.decimalsIn === undefined || args.decimalsOut === undefined) return "";
     return [
       args.tokenIn.toLowerCase(),
       args.tokenOut.toLowerCase(),
       args.decimalsIn,
       args.decimalsOut,
-      args.amountIn.toString(),
+      debouncedAmountIn.toString(),
       args.recipient.toLowerCase(),
       args.slippageBps,
     ].join("|");
@@ -89,7 +103,7 @@ export function useRouteQuotes(args: UseRouteQuotesArgs): UseRouteQuotesResult {
     args.tokenOut,
     args.decimalsIn,
     args.decimalsOut,
-    args.amountIn,
+    debouncedAmountIn,
     args.recipient,
     args.slippageBps,
   ]);
@@ -115,6 +129,11 @@ export function useRouteQuotes(args: UseRouteQuotesArgs): UseRouteQuotesResult {
       setLoading(false);
       return;
     }
+    if (debouncedAmountIn === 0n) {
+      setQuotes([]);
+      setLoading(false);
+      return;
+    }
     let cancelled = false;
     // Audit R-6: pass an AbortSignal so a fast-typing user doesn't
     // accumulate dead-but-still-running provider RPC fan-outs. Each
@@ -129,7 +148,9 @@ export function useRouteQuotes(args: UseRouteQuotesArgs): UseRouteQuotesResult {
       tokenOut: args.tokenOut!,
       decimalsIn: args.decimalsIn!,
       decimalsOut: args.decimalsOut!,
-      amountIn: args.amountIn,
+      // Use the debounced amount, not the live `args.amountIn` — the
+      // reqKey already includes debouncedAmountIn so this is consistent.
+      amountIn: debouncedAmountIn,
       recipient: args.recipient!,
       slippageBps: args.slippageBps,
       deadline: BigInt(Math.floor(Date.now() / 1000) + (args.deadlineSeconds ?? 600)),
