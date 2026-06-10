@@ -26,6 +26,9 @@ import { TxStatus, type TxState } from "@/components/ui/TxStatus";
 import { SwapConfirmModal } from "./SwapConfirmModal";
 import { SwapTabs, type SwapTab } from "./SwapTabs";
 import { V4RoutingNotice } from "./V4RoutingNotice";
+import { SwapRoutes } from "./SwapRoutes";
+import { useRouteQuotes } from "@/lib/routing/useRouteQuotes";
+import type { RouteQuote } from "@/lib/routing/types";
 import { cn, formatToken, formatUSDC } from "@/lib/utils";
 
 const USDC_TOKEN: TokenOption = {
@@ -215,6 +218,36 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
     : route.useLaunchpadRouter
       ? migratedQuote?.[0]
       : amountsOut?.[amountsOut.length - 1];
+
+  // Multi-DEX route comparison: fan out the same QuoteRequest to every
+  // RouteProvider registered in lib/routing/. Each one returns an
+  // independent quote + executor; quotes[] is sorted by amountOut desc.
+  // Phase 1 (current): purely display. The SwapCard's existing quote
+  // pipeline above still drives execution. Phase 2 will wire the active
+  // route's executor into writeContract so a Synthra-best route actually
+  // executes through SwapRouter02. Disable on launchpad-router paths
+  // (post-migration royalty) because the migrated quoter has its own
+  // accounting that the generic V2 provider doesn't reproduce.
+  const aggregatorEnabled =
+    !route.useLaunchpadRouter && !v3Unsupported && decimalsKnown && amountInRaw > 0n && !!tokenOut && !!account;
+  const routeQuotes = useRouteQuotes({
+    tokenIn: tokenIn.address,
+    tokenOut: tokenOut?.address,
+    decimalsIn,
+    decimalsOut,
+    amountIn: amountInRaw,
+    recipient: account,
+    slippageBps,
+    enabled: aggregatorEnabled,
+  });
+  const [selectedRoute, setSelectedRoute] = useState<RouteQuote | undefined>(undefined);
+  // Auto-pick the best every time the quotes array changes shape, unless
+  // the user explicitly picked a different one in this comparison cycle.
+  // Reset on a fresh request key so a token change does not carry over a
+  // stale user choice that no longer exists in the new quotes list.
+  useEffect(() => {
+    setSelectedRoute(undefined);
+  }, [tokenIn.address, tokenOut?.address, amountInRaw]);
 
   // Capture the latest forward (in->out) ratio whenever it lands. Stays in
   // a ref so future renders that toggle lastEdited still see the last known
@@ -618,6 +651,20 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
             {symOut}
           </div>
         </div>
+      )}
+
+      {/* Multi-DEX routes comparison. Auto-picks the best, user can tap
+          a row to override. Phase 1: display only. Phase 2 will route
+          execution through the selected route's executor. */}
+      {aggregatorEnabled && tokenOut && (
+        <SwapRoutes
+          quotes={routeQuotes.quotes}
+          loading={routeQuotes.loading}
+          selected={selectedRoute ?? routeQuotes.best ?? undefined}
+          onSelect={(q) => setSelectedRoute(q)}
+          decimalsOut={decimalsOut}
+          symbolOut={symOut}
+        />
       )}
 
       <button type="button"
