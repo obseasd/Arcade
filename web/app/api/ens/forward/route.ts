@@ -1,28 +1,42 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createPublicClient, http, isAddress } from "viem";
+import { createPublicClient, http, isAddress, parseAbi } from "viem";
 import { mainnet } from "viem/chains";
-import { normalize } from "viem/ens";
+import { normalize, namehash } from "viem/ens";
 
 /**
  * Server-side ENS forward resolution. Browser-side calls to public ETH
  * RPCs (llamarpc, publicnode, cloudflare-eth, etc) are routinely blocked
  * by ad-blockers (uBlock, Brave Shields, AdGuard) because those endpoints
  * are on the EasyPrivacy + EasyList web3 filter lists. Routing through a
- * same-origin Next.js API hop bypasses all client-side blockers, since
- * the browser sees /api/ens/forward as our own domain.
+ * same-origin Next.js API hop bypasses all client-side blockers.
  *
- * Multi-RPC fallback: if one provider rate-limits or 5xx's, try the next.
- * ENS reads are pure-view contract calls — any working L1 RPC returns the
- * same answer, so the fallback list is safe to walk indiscriminately.
+ * Why manual ENS Registry + Resolver instead of viem's getEnsAddress:
+ * viem 2.50 routes through the NEW universal resolver
+ * (0xeeeeeeee14d718c2b47d9923deab1335e144eeee) which calls
+ * resolveWithGateways(...) and depends on viem's CCIP-Read offchain
+ * gateway batch handler. That handler crashes in the Vercel serverless
+ * runtime with "Cannot read properties of undefined (reading 'replace')"
+ * for every RPC we tried (confirmed against 8 different providers).
  *
- * Only positive responses (address resolved) get edge-cached for 5 minutes;
- * null responses are NOT cached so a transient RPC outage doesn't poison
- * the cache for the next 5 minutes.
+ * Going manual through ENS Registry → Resolver → addr() skips the
+ * universal resolver + CCIP-Read entirely. It does not resolve cross-
+ * chain ENS names (CCIP-Read is needed for those) but it does resolve
+ * every standard *.eth name including vitalik.eth, which is what users
+ * type in our send field. Edge cache stays on positive responses.
  *
- * Debug mode: append `?debug=1` to the URL to see which RPCs were tried
- * and what each returned (errors + raw addresses). Useful when null gets
- * returned and we don't know which provider is misbehaving.
+ * `?debug=1` returns per-RPC attempt log.
  */
+
+const ENS_REGISTRY = "0x00000000000C2E074eC69A0dFb2997BA6C7d2e1e" as const;
+
+const REGISTRY_ABI = parseAbi([
+    "function resolver(bytes32 node) view returns (address)",
+]);
+
+const RESOLVER_ABI = parseAbi([
+    "function addr(bytes32 node) view returns (address)",
+]);
+
 const RPCS = [
     process.env.MAINNET_RPC,
     process.env.NEXT_PUBLIC_MAINNET_RPC,
@@ -43,9 +57,6 @@ const RPCS = [
     }
 });
 
-// retryCount: 0 so a single failing RPC doesn't eat the 10s function budget.
-// timeout: 5s per provider, so 10 providers fit in ~50s worst case but in
-// practice the FIRST working provider returns within ~500ms.
 const clients = RPCS.map((url) => ({
     url,
     client: createPublicClient({
@@ -54,10 +65,13 @@ const clients = RPCS.map((url) => ({
     }),
 }));
 
+const ZERO = "0x0000000000000000000000000000000000000000";
+
 interface AttemptLog {
     url: string;
     ok: boolean;
     error?: string;
+    resolver?: string;
     address?: string | null;
 }
 
@@ -66,11 +80,27 @@ async function resolveForward(name: string): Promise<{
     attempts: AttemptLog[];
 }> {
     const attempts: AttemptLog[] = [];
+    const node = namehash(name);
     for (const { url, client } of clients) {
         try {
-            const addr = await client.getEnsAddress({ name });
-            attempts.push({ url, ok: true, address: addr ?? null });
-            if (addr && isAddress(addr)) {
+            const resolver = await client.readContract({
+                address: ENS_REGISTRY,
+                abi: REGISTRY_ABI,
+                functionName: "resolver",
+                args: [node],
+            });
+            if (!resolver || resolver === ZERO) {
+                attempts.push({ url, ok: true, resolver: ZERO });
+                continue;
+            }
+            const addr = await client.readContract({
+                address: resolver,
+                abi: RESOLVER_ABI,
+                functionName: "addr",
+                args: [node],
+            });
+            attempts.push({ url, ok: true, resolver, address: addr ?? null });
+            if (addr && isAddress(addr) && addr !== ZERO) {
                 return { address: addr, attempts };
             }
         } catch (e) {
@@ -110,8 +140,6 @@ export async function GET(req: NextRequest) {
                   "cache-control": "public, s-maxage=300, stale-while-revalidate=86400",
               }
             : {
-                  // Do not cache null responses: a transient outage would
-                  // otherwise pin "not found" for 5 minutes for every user.
                   "cache-control": "no-store",
               },
     });

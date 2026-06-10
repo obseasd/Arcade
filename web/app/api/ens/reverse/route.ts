@@ -1,19 +1,35 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createPublicClient, http, isAddress } from "viem";
+import { createPublicClient, http, isAddress, keccak256, stringToBytes, parseAbi } from "viem";
 import { mainnet } from "viem/chains";
+import { namehash } from "viem/ens";
 
 /**
  * Server-side ENS reverse resolution + forward-verify roundtrip.
  *
- * Returns the primary name only when it forward-resolves back to the
- * original address (anti-impersonation: an attacker can set their primary
- * name to "vitalik.eth", but they can't make that name's forward resolver
- * point at their address). Same multi-RPC fallback + cache as
- * /api/ens/forward. Lives server-side to dodge ad-blocker filter lists.
+ * Manual ENS Registry + Resolver flow (no Universal Resolver / CCIP-Read)
+ * so we dodge viem 2.50's getEnsAddress crash in serverless. Reverse:
+ *   1. node = namehash(<addrLower>.addr.reverse)
+ *   2. resolver = ENSRegistry.resolver(node)
+ *   3. name = Resolver.name(node)
+ * Then forward-resolve `name` back through the same Registry → Resolver
+ * → addr flow and only return `name` if it round-trips back to the same
+ * address (anti-impersonation: an attacker can set their primary name to
+ * "vitalik.eth" but can't make the forward resolver return their address).
  *
- * Null responses are NOT cached (transient outage shouldn't pin a wrong
- * answer for 5 minutes). `?debug=1` returns the per-RPC attempt log.
+ * Null responses are NOT cached. `?debug=1` returns the per-RPC attempt log.
  */
+
+const ENS_REGISTRY = "0x00000000000C2E074eC69A0dFb2997BA6C7d2e1e" as const;
+
+const REGISTRY_ABI = parseAbi([
+    "function resolver(bytes32 node) view returns (address)",
+]);
+
+const RESOLVER_ABI = parseAbi([
+    "function addr(bytes32 node) view returns (address)",
+    "function name(bytes32 node) view returns (string)",
+]);
+
 const RPCS = [
     process.env.MAINNET_RPC,
     process.env.NEXT_PUBLIC_MAINNET_RPC,
@@ -42,10 +58,29 @@ const clients = RPCS.map((url) => ({
     }),
 }));
 
+const ZERO = "0x0000000000000000000000000000000000000000";
+
+// reverseNode computes namehash("<addr-lower-no-0x>.addr.reverse"). This
+// matches the convention used by ENS's reverse registrar so resolver.name
+// returns the primary name. We compute it manually using viem's namehash
+// instead of the helper viem doesn't export for this path.
+function reverseNode(address: `0x${string}`): `0x${string}` {
+    const lower = address.toLowerCase().slice(2);
+    // ENS reverse namehash: hash("addr.reverse") + hash(addrLowerNo0x)
+    // viem's namehash does this when given "<lower>.addr.reverse".
+    return namehash(`${lower}.addr.reverse`);
+}
+
+// keccak256 is imported just so the bundler keeps it; viem's namehash uses
+// it internally. stringToBytes too. (Both required by named import shape.)
+void keccak256;
+void stringToBytes;
+
 interface AttemptLog {
     url: string;
     ok: boolean;
     error?: string;
+    resolver?: string;
     value?: string | null;
 }
 
@@ -54,10 +89,26 @@ async function reverse(address: `0x${string}`): Promise<{
     attempts: AttemptLog[];
 }> {
     const attempts: AttemptLog[] = [];
+    const node = reverseNode(address);
     for (const { url, client } of clients) {
         try {
-            const name = await client.getEnsName({ address });
-            attempts.push({ url, ok: true, value: name ?? null });
+            const resolver = await client.readContract({
+                address: ENS_REGISTRY,
+                abi: REGISTRY_ABI,
+                functionName: "resolver",
+                args: [node],
+            });
+            if (!resolver || resolver === ZERO) {
+                attempts.push({ url, ok: true, resolver: ZERO });
+                continue;
+            }
+            const name = await client.readContract({
+                address: resolver,
+                abi: RESOLVER_ABI,
+                functionName: "name",
+                args: [node],
+            });
+            attempts.push({ url, ok: true, resolver, value: name ?? null });
             if (name) return { name, attempts };
         } catch (e) {
             attempts.push({
@@ -75,11 +126,27 @@ async function forward(name: string): Promise<{
     attempts: AttemptLog[];
 }> {
     const attempts: AttemptLog[] = [];
+    const node = namehash(name);
     for (const { url, client } of clients) {
         try {
-            const a = await client.getEnsAddress({ name });
-            attempts.push({ url, ok: true, value: a ?? null });
-            if (a && isAddress(a)) return { address: a as `0x${string}`, attempts };
+            const resolver = await client.readContract({
+                address: ENS_REGISTRY,
+                abi: REGISTRY_ABI,
+                functionName: "resolver",
+                args: [node],
+            });
+            if (!resolver || resolver === ZERO) {
+                attempts.push({ url, ok: true, resolver: ZERO });
+                continue;
+            }
+            const a = await client.readContract({
+                address: resolver,
+                abi: RESOLVER_ABI,
+                functionName: "addr",
+                args: [node],
+            });
+            attempts.push({ url, ok: true, resolver, value: a ?? null });
+            if (a && isAddress(a) && a !== ZERO) return { address: a, attempts };
         } catch (e) {
             attempts.push({
                 url,
