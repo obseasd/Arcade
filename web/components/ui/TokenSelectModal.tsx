@@ -25,6 +25,10 @@ interface PinnedTemplate {
   symbol: string;
   name: string;
   address?: Address;
+  /** Known decimals so the aggregator + parseUnits paths in SwapCard don't
+   *  gate on a missing decimal (which otherwise blocks every quote for a
+   *  pinned token until it's been read on-chain). */
+  decimals?: number;
 }
 
 interface Props {
@@ -37,11 +41,11 @@ interface Props {
 }
 
 const PINNED: PinnedTemplate[] = [
-  { symbol: "USDC", name: "USD Coin" },
-  { symbol: "ETH", name: "Wrapped Ether" },
-  { symbol: "EURC", name: "Euro Coin" },
-  { symbol: "USDT", name: "Tether" },
-  { symbol: "cirBTC", name: "Circle Wrapped BTC" },
+  { symbol: "USDC", name: "USD Coin", decimals: 6 },
+  { symbol: "ETH", name: "Wrapped Ether", decimals: 18 },
+  { symbol: "EURC", name: "Euro Coin", decimals: 6 },
+  { symbol: "USDT", name: "Tether", decimals: 6 },
+  { symbol: "cirBTC", name: "Circle Wrapped BTC", decimals: 8 },
 ];
 
 export function TokenSelectModal({ open, onClose, tokens, onSelect, selectedAddress, excludeAddress }: Props) {
@@ -161,7 +165,18 @@ export function TokenSelectModal({ open, onClose, tokens, onSelect, selectedAddr
     (tpl: PinnedTemplate) => {
       if (!tpl.address || tpl.address === zeroAddress) return;
       const found = tokens.find((t) => t.address.toLowerCase() === tpl.address!.toLowerCase());
-      onSelect(found ?? { address: tpl.address, symbol: tpl.symbol, name: tpl.name });
+      // Carry the template's known decimals through so the SwapCard's
+      // decimalsKnown gate passes immediately and the aggregator can fan
+      // out a quote on the first render after picking. Without this the
+      // For field stayed at 0.0 and the Top-3 routes panel never showed.
+      onSelect(
+        found ?? {
+          address: tpl.address,
+          symbol: tpl.symbol,
+          name: tpl.name,
+          decimals: tpl.decimals,
+        },
+      );
       onClose();
     },
     [tokens, onSelect, onClose],
