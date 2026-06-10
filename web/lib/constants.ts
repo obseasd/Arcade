@@ -66,6 +66,11 @@ export const ADDRESSES = {
   eurc: "0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a" as Address,
   /** Circle-wrapped BTC ("cirBTC") on Arc testnet. 8 decimals. */
   cirBtc: "0xf0C4a4CE82A5746AbAAd9425360Ab04fbBA432BF" as Address,
+  /** Community USDT on Arc testnet — 18 decimals (NOT the canonical
+   *  6-decimal Tether mainnet shape). User-confirmed deployment with
+   *  ~232k holders. Verify integration math against the real on-chain
+   *  decimals before relying on quotes. */
+  usdt: "0x175CdB1D338945f0D851A741ccF787D343E57952" as Address,
   // --- Synthra (Uniswap V3 fork on Arc testnet, alternate swap route) ---
   /** Synthra V3 Factory (canonical Uniswap V3 ABI). */
   synthraFactory: "0x0fB6EEDA6e90E90797083861A75D15752a27f59c" as Address,
