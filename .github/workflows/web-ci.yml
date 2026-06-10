@@ -1,0 +1,61 @@
+name: web CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'web/**'
+      - '.github/workflows/web-ci.yml'
+  pull_request:
+    paths:
+      - 'web/**'
+
+# Concurrency: cancel in-progress runs for the same branch so a fast push
+# doesn't waste two CI runs on overlapping work.
+concurrency:
+  group: web-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  typecheck-test:
+    name: tsc + vitest
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+          # npm ci uses the lockfile — reproducible across CI + Vercel
+          # since vercel.json also uses `npm ci` (audit C-10).
+          cache: 'npm'
+          cache-dependency-path: 'web/package-lock.json'
+
+      - name: install deps
+        run: npm ci
+
+      - name: typecheck (tsc --noEmit)
+        run: npm run typecheck
+
+      - name: vitest run
+        run: npm test
+        # Audit A-7: 23 tests cover universalRouter encoders,
+        # parseCctpV2Message parser, useRouteQuotes tie-break. CI gate
+        # so a bad UR command byte or wrong V3 path encoding fails the
+        # PR rather than reaching users.
+
+      - name: build (next build smoke)
+        run: npm run build
+        # Final guard: catches any production-only TS error tsc misses
+        # (Next.js generates additional types during build).
+        env:
+          # Build needs SOME env values but only NEXT_PUBLIC_* matter for
+          # type generation. Vercel injects the real values; for CI we
+          # provide a no-op so the build doesn't crash on missing addresses.
+          NEXT_PUBLIC_DEFAULT_CHAIN: arc
+          NEXT_PUBLIC_USDC_ADDRESS: '0x3600000000000000000000000000000000000000'
+          NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID: '00000000000000000000000000000000'
