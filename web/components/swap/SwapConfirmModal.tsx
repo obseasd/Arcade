@@ -27,9 +27,14 @@ interface Props {
   /** Estimated USD value of the output leg. */
   outputUsd?: number;
   /** Display label for the route's protocol (eg "Arcade V2", "Arcade V3",
-   *  "Arcade V3 → V2"). Mirrors the badge under the swap card. Defaults
-   *  to "Arcade V2" for the legacy code paths that don't pass it. */
+   *  "Synthra V3", "XyloNet"). Mirrors the badge under the swap card.
+   *  Defaults to "Arcade V2" for the legacy code paths that don't pass it. */
   protocolLabel?: string;
+  /** Optional logo path for the protocol (eg "/synthra.svg"). Renders an
+   *  Image to the left of protocolLabel when provided. Used to surface
+   *  the DEX brand in the confirm modal so the user knows what they're
+   *  about to sign. */
+  protocolLogo?: string;
 }
 
 export function SwapConfirmModal({
@@ -47,6 +52,7 @@ export function SwapConfirmModal({
   inputUsd,
   outputUsd,
   protocolLabel = "Arcade V2",
+  protocolLogo,
 }: Props) {
   const busy = tx.status === "pending";
 
@@ -130,7 +136,22 @@ export function SwapConfirmModal({
         <div className="space-y-1 rounded-xl border border-arc-border bg-arc-bg p-4 text-sm">
           <Row label="Price" value={rateLabel} />
           <Row label={guardKey} value={guardLabel} />
-          <Row label="Protocol" value={protocolLabel} />
+          <div className="flex items-center justify-between py-1">
+            <span className="text-arc-text-muted">Protocol</span>
+            <span className="flex items-center gap-1.5 text-arc-text">
+              {protocolLogo && (
+                <Image
+                  src={protocolLogo}
+                  alt={protocolLabel}
+                  width={16}
+                  height={16}
+                  unoptimized
+                  className="h-4 w-4 object-contain"
+                />
+              )}
+              {protocolLabel}
+            </span>
+          </div>
         </div>
 
         <button type="button"

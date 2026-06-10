@@ -114,30 +114,47 @@ export function SwapRoutes({
               )}
             >
               <div className="flex min-w-0 items-center gap-2.5">
-                <div
-                  className={cn(
-                    "flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-full border",
-                    active
-                      ? "border-arc-cta-hover bg-arc-cta-hover/20"
-                      : "border-arc-border bg-black/30",
-                  )}
-                >
-                  {PROVIDER_LOGOS[q.provider] ? (
+                {/* Logo: external DEXs ship their own SVG (non-square
+                    aspect ratios — synthra is 14:19, xylonet is 21:14,
+                    unitflow is 16:15) so we render at 28px square with
+                    object-contain to preserve them. unoptimized: true
+                    is required for Next.js to serve raw SVG without
+                    re-encoding to PNG. Arcade routes keep the circular
+                    chrome with an initial letter. */}
+                {PROVIDER_LOGOS[q.provider] ? (
+                  <div
+                    className={cn(
+                      "flex h-7 w-7 shrink-0 items-center justify-center",
+                      active && "drop-shadow-[0_0_6px_rgba(120,180,255,0.4)]",
+                    )}
+                  >
                     <Image
                       src={PROVIDER_LOGOS[q.provider]!}
                       alt={meta.label}
-                      width={20}
-                      height={20}
-                      className="h-5 w-5 object-contain"
+                      width={28}
+                      height={28}
+                      unoptimized
+                      className="h-7 w-7 object-contain"
                     />
-                  ) : active ? (
-                    <Check className="h-3.5 w-3.5 text-arc-cta-hover" />
-                  ) : (
-                    <span className={cn("text-[10px] font-bold uppercase", meta.accent)}>
-                      {meta.label.slice(0, 1)}
-                    </span>
-                  )}
-                </div>
+                  </div>
+                ) : (
+                  <div
+                    className={cn(
+                      "flex h-7 w-7 shrink-0 items-center justify-center rounded-full border",
+                      active
+                        ? "border-arc-cta-hover bg-arc-cta-hover/20"
+                        : "border-arc-border bg-black/30",
+                    )}
+                  >
+                    {active ? (
+                      <Check className="h-3.5 w-3.5 text-arc-cta-hover" />
+                    ) : (
+                      <span className={cn("text-[10px] font-bold uppercase", meta.accent)}>
+                        {meta.label.slice(0, 1)}
+                      </span>
+                    )}
+                  </div>
+                )}
                 <div className="min-w-0">
                   <div className="flex items-center gap-1.5 text-sm font-semibold text-arc-text">
                     <span className="truncate">{meta.label}</span>

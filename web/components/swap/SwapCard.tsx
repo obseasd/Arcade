@@ -414,8 +414,19 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
     ? `${formatTokenAmount(minOut, decimalsOut, 6)} ${symOut}`
     : `${formatTokenAmount(maxIn, decimalsIn, 6)} ${symIn}`;
 
+  // External routes (Synthra / UnitFlow / XyloNet) come from the
+  // aggregator's parallel fan-out. When one of them has already returned
+  // a non-zero quote, the swap is ready to execute — even if a legacy
+  // Arcade V3 / V2 quoter is still in-flight. Showing "Fetching price…"
+  // for an extra 5 s while Synthra has already priced the trade was the
+  // bug the user reported on the routes panel screenshot.
+  const externalReady = isExternalRoute && !!activeRoute && activeRoute.amountOut > 0n;
   const fetching =
-    quoteOut.isFetching || quoteIn.isFetching || quoteMigratedOut.isFetching || quoteV3.isFetching;
+    !externalReady &&
+    (quoteOut.isFetching ||
+      quoteIn.isFetching ||
+      quoteMigratedOut.isFetching ||
+      quoteV3.isFetching);
   const canSwap =
     !!account &&
     !!tokenOut &&
@@ -801,6 +812,17 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
               : isV3Swap
                 ? "Arcade V3"
                 : "Arcade V2"
+          }
+          protocolLogo={
+            isExternalRoute && activeRoute
+              ? activeRoute.provider === "synthra-v3"
+                ? "/synthra.svg"
+                : activeRoute.provider === "unitflow-v3"
+                  ? "/unitflow.svg"
+                  : activeRoute.provider === "xylonet-v1"
+                    ? "/xylonet.svg"
+                    : undefined
+              : undefined
           }
         />
       )}
