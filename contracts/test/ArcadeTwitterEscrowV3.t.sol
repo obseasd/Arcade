@@ -241,11 +241,16 @@ contract ArcadeTwitterEscrowV3Test is Test {
     }
 
     function test_F2_setTrustedSigner_rotatesAuth() public {
-        // Old signer's sig is now invalid; new signer's sig works.
+        // Audit L-3: setTrustedSigner is now a 24h-timelock 2-step. The
+        // owner queues via requestTrustedSignerRotation, waits the delay,
+        // then finalizes.
         uint256 newPk = uint256(keccak256("new-key"));
         address newSigner = vm.addr(newPk);
         vm.prank(OWNER);
-        escrow.setTrustedSigner(newSigner);
+        escrow.requestTrustedSignerRotation(newSigner);
+        vm.warp(block.timestamp + escrow.SIGNER_ROTATION_DELAY() + 1);
+        vm.prank(OWNER);
+        escrow.finalizeTrustedSignerRotation();
 
         _credit(1, 0, address(usdc), 100);
         bytes32 nonce = bytes32("rotated");
@@ -284,8 +289,15 @@ contract ArcadeTwitterEscrowV3Test is Test {
     }
 
     function test_F2_setTrustedSigner_rejectsZero() public {
+        // Audit L-3: the direct setTrustedSigner is permanently disabled
+        // (reverts USE_TIMELOCK_ROTATION). Zero-address acceptance is now
+        // a property of the request/finalize path — but setting the
+        // pendingSigner to zero is intentional (emergency freeze: once
+        // finalized the escrow refuses every authorize call until a new
+        // rotation is requested). So we only verify that the deprecated
+        // direct setter reverts as expected.
         vm.prank(OWNER);
-        vm.expectRevert(ArcadeTwitterEscrowV3.ZeroAddress.selector);
+        vm.expectRevert(bytes("USE_TIMELOCK_ROTATION"));
         escrow.setTrustedSigner(address(0));
     }
 

@@ -898,21 +898,33 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         if (pair == address(0)) {
             pair = v2Factory.createPair(address(USDC), tokenAddr);
         }
-        // M-09 + audit medium [24]: defend against TWO grief vectors:
-        //   (a) raw donation - attacker transfers USDC directly to the pair
-        //   (b) pre-mint - attacker calls createPair + mint themselves at
-        //       a ratio-matching deposit, claiming the LP.
+        // Audit L-1 (CRITICAL): defend against the V2 migration pre-mint
+        // LP attack. An attacker can frontrun the migration by calling
+        // factory.createPair + pair.mint at a skewed ratio, owning up
+        // to 50% of the LP after the launchpad seeds (~$8,750+ loss
+        // per launch). The launchpad cannot burn attacker LP (they hold
+        // the tokens), so the only safe path is to refuse migration
+        // into a corrupted pair. Read totalSupply via assembly to fit
+        // the contract under EIP-170 (the Solidity-emitted IArcadeV2Pair
+        // wrapper would push the runtime size over 24,576 bytes).
+        // Selector 0x18160ddd = bytes4(keccak256("totalSupply()")).
         //
-        // Strategy: skim FIRST to drain any donation that's currently
-        // unbacked by reserves (the pre-existing donation goes to
-        // treasury). Then transfer the launchpad's seed and mint to
-        // DEAD; the mint produces non-zero LP regardless of pre-mint
-        // state because the transferred seed creates a non-zero delta
-        // between balance and reserves. Skim AFTER mint is a no-op
-        // because mint synchronises reserves to balance, so the only
-        // window where skim can grab a donation is BEFORE the seed
-        // transfer.
-        IArcadeV2Pair(pair).skim(treasury);
+        // Donation-only grief vector (raw USDC.transfer to the pair) is
+        // benign with this check in place: the donation is baked into
+        // the DEAD address's first-mint LP via the V2 mint formula
+        // (liquidity = sqrt(balance0*balance1) - 1000), which means the
+        // attacker just burned their USDC. No skim() needed — it was
+        // there to drain donations before the seed, but the mint-to-
+        // DEAD path now absorbs them directly. Removing the skim() call
+        // reclaims the ~50 bytes the assembly check spent.
+        uint256 _ts;
+        assembly {
+            mstore(0x00, 0x18160ddd)
+            let ok := staticcall(gas(), pair, 0x1c, 0x04, 0x00, 0x20)
+            if iszero(ok) { revert(0, 0) }
+            _ts := mload(0x00)
+        }
+        if (_ts != 0) revert InvalidRoute();
         USDC.safeTransfer(pair, usdcForLP);
         IERC20(tokenAddr).safeTransfer(pair, tokensForLP);
         IArcadeV2Pair(pair).mint(DEAD);

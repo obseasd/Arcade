@@ -313,13 +313,22 @@ contract ArcadeTwitterEscrowV3 is Ownable2Step, Pausable, ReentrancyGuard {
         // arbitrary pair the owner picks. Initialised on first credit;
         // subsequent credits must use the same pair (cross-checked in
         // authorize already via the same-slot balances).
-        if (slotPair[positionId][slotIndex].first == address(0)) {
+        //
+        // Audit L-6: previously, a credit for a THIRD token (different
+        // from both `.first` and `.second` once both were set) was
+        // silently accepted — the balance accumulated under a token
+        // not in the slot pair, claimByTwitter only swept the two
+        // signed tokens, and forfeitStaleClaim could not release the
+        // third either (InvalidSlotPair). Funds stuck. Revert
+        // explicitly so the misconfiguration surfaces at the credit
+        // site instead of stranding fees.
+        SlotPair memory sp = slotPair[positionId][slotIndex];
+        if (sp.first == address(0)) {
             slotPair[positionId][slotIndex].first = token;
-        } else if (
-            slotPair[positionId][slotIndex].first != token &&
-            slotPair[positionId][slotIndex].second == address(0)
-        ) {
+        } else if (sp.first != token && sp.second == address(0)) {
             slotPair[positionId][slotIndex].second = token;
+        } else if (sp.first != token && sp.second != token) {
+            revert("THIRD_TOKEN");
         }
         creditedTotal[token] += amount;
         // Anchor the staleness clock at every credit. As long as the locker
@@ -540,13 +549,60 @@ contract ArcadeTwitterEscrowV3 is Ownable2Step, Pausable, ReentrancyGuard {
         revert RenounceDisabled();
     }
 
-    /// @notice Rotate the trusted backend signer. Use when the signer's key
-    ///         has been compromised or when migrating to a multisig.
-    function setTrustedSigner(address newSigner) external onlyOwner {
-        if (newSigner == address(0)) revert ZeroAddress();
+    /// @notice Audit L-3: rotation of the trusted backend signer is now
+    ///         a two-step timelock. The owner queues a rotation via
+    ///         `requestTrustedSignerRotation(newSigner)`, which emits an
+    ///         event giving the community a 24 h window to react before
+    ///         the owner can `finalizeTrustedSignerRotation()` and the
+    ///         new key takes effect. Closes the "single-key compromise
+    ///         drains escrow within MIN_TIMELOCK=1h" finding: an attacker
+    ///         that gets the owner key can no longer flip the signer
+    ///         under cover of the 1 h claim timelock, because the signer
+    ///         change itself is gated by 24 h.
+    ///
+    ///         Emergency revoke: setting `newSigner = address(0)` queues
+    ///         a "freeze signer to zero" — once finalized, all
+    ///         `authorize` calls revert (sig verifies against zero address)
+    ///         until a new rotation is queued + finalized. Use this when
+    ///         you suspect compromise but can't yet decide on the
+    ///         replacement.
+    uint256 public constant SIGNER_ROTATION_DELAY = 24 hours;
+    address public pendingSigner;
+    uint256 public pendingSignerActivatesAt;
+
+    event TrustedSignerRotationRequested(address indexed newSigner, uint256 activatesAt);
+    event TrustedSignerRotationCancelled(address indexed wouldHaveBeen);
+
+    function requestTrustedSignerRotation(address newSigner) external onlyOwner {
+        pendingSigner = newSigner;
+        pendingSignerActivatesAt = block.timestamp + SIGNER_ROTATION_DELAY;
+        emit TrustedSignerRotationRequested(newSigner, pendingSignerActivatesAt);
+    }
+
+    function cancelTrustedSignerRotation() external onlyOwner {
+        address wouldHaveBeen = pendingSigner;
+        pendingSigner = address(0);
+        pendingSignerActivatesAt = 0;
+        emit TrustedSignerRotationCancelled(wouldHaveBeen);
+    }
+
+    function finalizeTrustedSignerRotation() external onlyOwner {
+        if (pendingSignerActivatesAt == 0 || block.timestamp < pendingSignerActivatesAt) {
+            revert("TIMELOCK_PENDING");
+        }
+        address newSigner = pendingSigner;
+        pendingSigner = address(0);
+        pendingSignerActivatesAt = 0;
         address old = trustedSigner;
         trustedSigner = newSigner;
         emit TrustedSignerUpdated(old, newSigner);
+    }
+
+    /// @notice DEPRECATED — use the two-step rotation path. Kept as
+    ///         `internal` to break any external integration that calls
+    ///         it. Calling it now reverts.
+    function setTrustedSigner(address) external pure {
+        revert("USE_TIMELOCK_ROTATION");
     }
 
     /// @notice Pause `authorize` and `claimByTwitter`. `veto`, `creditSlot`,

@@ -103,6 +103,23 @@ contract ArcadeV3Locker is IUniswapV3MintCallback {
     uint256 public positionCount;
     mapping(address => uint256) public positionIdByToken;
 
+    /// @notice Audit V3 Locker V3-6: append-only refcount of how many
+    ///         active positions reference each token on their paired or
+    ///         clanker side. Incremented once per side per
+    ///         `lockSingleSided` call (so a single position contributes
+    ///         +1 for `paired` and +1 for `clanker`). NEVER decremented:
+    ///         locker positions are permanent (no decreaseLiquidity / no
+    ///         NFT transfer), so any token that has ever been on either
+    ///         side of a live position stays referenced forever. Lets
+    ///         `adminRescue` run in O(1) instead of iterating
+    ///         `positionCount`, which previously bricked past ~3-4k
+    ///         positions due to the block gas limit.
+    ///         uint16 ceiling (65535) is far above the protocol's
+    ///         realistic per-token launch cap; SSTORE on overflow would
+    ///         simply revert and block further locks of the same token,
+    ///         which is acceptable defense-in-depth.
+    mapping(address => uint16) public activeTokenRefCount;
+
     /// @notice Pull-payment ledger: token => recipient => claimable amount.
     /// Credited whenever a direct payout in `_distributePot` fails (USDC
     /// blacklist, recipient contract reverts, etc.) so one bad recipient can
@@ -209,15 +226,14 @@ contract ArcadeV3Locker is IUniswapV3MintCallback {
         // Audit M-2: skip no-op calls so a compromised owner key can't
         // spam AdminRescue events at zero cost.
         if (amount == 0) return;
-        // Audit M-1: storage pointer + only read the 2 fields we care
-        // about. Was `Position memory pos = positions[i]` (8-10 SLOADs
-        // per iteration); now ~3 SLOADs per iteration so the loop
-        // stays under the block gas limit even with 1500+ positions.
-        uint256 n = positionCount;
-        for (uint256 i = 1; i <= n; ++i) {
-            Position storage pos = positions[i];
-            if (token == pos.pairedToken || token == pos.clankerToken) revert("ACTIVE_TOKEN");
-        }
+        // Audit V3 Locker V3-6: O(1) refcount lookup replaces the
+        // previous O(positionCount) loop. `activeTokenRefCount[token]`
+        // is incremented in `lockSingleSided` for the paired and clanker
+        // sides and is never decremented (positions are permanent), so
+        // a non-zero count means at least one active position has the
+        // token on either side. Preserves the original guard semantics
+        // while removing the gas-bomb past ~3-4k positions.
+        require(activeTokenRefCount[token] == 0, "ACTIVE_TOKEN");
         _pay(token, to, amount);
         emit AdminRescue(token, to, amount);
     }
@@ -289,6 +305,19 @@ contract ArcadeV3Locker is IUniswapV3MintCallback {
             pos.numRanges = n;
             pos.exists = true;
         }
+
+        // Audit V3 Locker V3-6: tag both sides as "active forever" so
+        // adminRescue's O(1) refcount lookup will block any rescue of a
+        // token that has ever been the paired or clanker side of an
+        // active position. Increment in unchecked-like style via a
+        // require-on-overflow read: 0.7.6 has no `unchecked` but the
+        // SafeMath-like default revert on overflow is precisely the
+        // behavior we want (overflow would mean >65535 active locks of
+        // the same token, which would silently break the guard if we
+        // wrapped). The +1 SSTORE per side is the only added cost
+        // versus the previous loop on every adminRescue call.
+        activeTokenRefCount[p.token] += 1;
+        activeTokenRefCount[p.paired] += 1;
 
         liquidity = _mintAll(positionId, p, n);
 
@@ -556,7 +585,18 @@ contract ArcadeV3Locker is IUniswapV3MintCallback {
         view
         returns (uint256 below0, uint256 below1)
     {
-        (, , uint256 lower0, uint256 lower1, , , , ) = IUniswapV3Pool(c.pool).ticks(tickLower);
+        // Audit V3 Locker V3-1: read the `initialized` flag from the
+        // pool's ticks() tuple (9th field in v3-core). If the tick has
+        // never had a position cross it, all feeGrowthOutside fields
+        // are zero AND the position is not yet in the bitmap; treating
+        // those zeros as a real "outside" value makes the else-branch
+        // compute below0 = fg_global - 0 = fg_global, and the caller's
+        // fgi = fg - below - above underflows on the wraparound
+        // subtraction. Short-circuit to (0, 0) on uninitialised ticks
+        // so previewFees returns 0 instead of garbage.
+        (, , uint256 lower0, uint256 lower1, , , , bool initialized) =
+            IUniswapV3Pool(c.pool).ticks(tickLower);
+        if (!initialized) return (0, 0);
         if (c.tickCurrent >= tickLower) {
             below0 = lower0;
             below1 = lower1;
@@ -571,7 +611,10 @@ contract ArcadeV3Locker is IUniswapV3MintCallback {
         view
         returns (uint256 above0, uint256 above1)
     {
-        (, , uint256 upper0, uint256 upper1, , , , ) = IUniswapV3Pool(c.pool).ticks(tickUpper);
+        // Audit V3 Locker V3-1: same uninitialised-tick guard as _below.
+        (, , uint256 upper0, uint256 upper1, , , , bool initialized) =
+            IUniswapV3Pool(c.pool).ticks(tickUpper);
+        if (!initialized) return (0, 0);
         if (c.tickCurrent < tickUpper) {
             above0 = upper0;
             above1 = upper1;

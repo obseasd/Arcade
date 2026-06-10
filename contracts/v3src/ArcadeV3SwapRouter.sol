@@ -51,19 +51,39 @@ contract ArcadeV3SwapRouter is IUniswapV3SwapCallback {
         launchpad = launchpad_; // may be 0 to disable the sniper tax
     }
 
-    /// @dev Anti-sniper skim on a USDC→token buy: pulls a decaying % of the
-    /// USDC input from the payer to the launchpad treasury, returns the skim so
-    /// the caller swaps the remainder. No-op outside the launch window or when
-    /// the launchpad isn't wired.
+    /// @dev Anti-sniper skim. Audit V3-3 extended coverage: the original
+    /// version only taxed USDC→launchToken buys. Sells (launchToken→USDC)
+    /// were free, which gave a team "exit pump" path during the launch
+    /// window. The skim is now taken on EITHER direction whenever one
+    /// side of the swap is a launchToken under active snipe bps:
+    ///   - Buy (USDC→launchToken):  skim X% of USDC input (existing behavior).
+    ///   - Sell (launchToken→USDC): skim X% of launchToken input. Treasury
+    ///     receives launchToken; can be burned or rolled into LP later.
+    /// No-op outside the launch window (bps == 0) or when the launchpad
+    /// isn't wired. Cross-token (non-USDC ↔ non-USDC) routes never enter
+    /// _snipeSkim because the swap router never sees them at the single-
+    /// hop entry; exactInputThroughUsdc explicitly applies the skim on
+    /// the USDC mid for those cases.
     function _snipeSkim(address tokenIn, address tokenOut, uint256 amountIn, address payer)
         internal
         returns (uint256 skim)
     {
-        if (launchpad == address(0) || tokenIn != USDC) return 0;
-        uint256 bps = ILaunchpadSnipe(launchpad).currentSnipeBps(tokenOut);
-        if (bps == 0) return 0;
-        skim = (amountIn * bps) / 10000;
-        if (skim > 0) _pay(USDC, payer, ILaunchpadSnipe(launchpad).treasury(), skim);
+        if (launchpad == address(0)) return 0;
+        if (tokenIn == USDC) {
+            uint256 bps = ILaunchpadSnipe(launchpad).currentSnipeBps(tokenOut);
+            if (bps == 0) return 0;
+            skim = (amountIn * bps) / 10000;
+            if (skim > 0) _pay(USDC, payer, ILaunchpadSnipe(launchpad).treasury(), skim);
+            return skim;
+        }
+        // Sell-side: tokenIn might be a launchpad token under snipe. The
+        // launchpad keys snipe by token address; we look it up directly.
+        // Skim is in tokenIn units so the swap proceeds with the
+        // remainder; treasury holds the launchToken.
+        uint256 sellBps = ILaunchpadSnipe(launchpad).currentSnipeBps(tokenIn);
+        if (sellBps == 0) return 0;
+        skim = (amountIn * sellBps) / 10000;
+        if (skim > 0) _pay(tokenIn, payer, ILaunchpadSnipe(launchpad).treasury(), skim);
     }
 
     /// @notice Swap an exact `amountIn` of `tokenIn` for `tokenOut` in a single

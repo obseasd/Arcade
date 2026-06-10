@@ -284,7 +284,13 @@ contract ArcadeV3Zap is IUniswapV3SwapCallback {
         );
         if (c.swapAmount > 0) {
             c.outReceived = _doSwap(
-                c.pool, p.tokenIn, c.swapAmount, p.tokenIn == t0, p.amountOtherMinSwap
+                c.pool,
+                p.tokenIn,
+                c.swapAmount,
+                p.tokenIn == t0,
+                p.amountOtherMinSwap,
+                p.sqrtPriceX96Min,
+                p.sqrtPriceX96Max
             );
         }
         (tokenId, liquidity) = _doMint(
@@ -393,14 +399,36 @@ contract ArcadeV3Zap is IUniswapV3SwapCallback {
         address tokenIn,
         uint256 swapAmount,
         bool zeroForOne,
-        uint256 amountOutMin
+        uint256 amountOutMin,
+        uint160 sqrtPriceX96Min,
+        uint160 sqrtPriceX96Max
     ) internal returns (uint256 outReceived) {
         _authorisedPool = pool;
+        // Audit V3 Zap V3-4: cap the internal swap with the caller-signed
+        // sqrtPriceX96 band rather than the absolute MIN/MAX_SQRT_RATIO.
+        // A zero-for-one swap pushes price DOWN, so the user's
+        // sqrtPriceX96Min becomes the floor; a one-for-zero pushes price
+        // UP, so sqrtPriceX96Max becomes the ceiling. If the user opted
+        // out of the band (left the relevant field at 0), fall back to
+        // the wide-open MIN+1 / MAX-1 limits so behavior is unchanged.
+        uint160 limit;
+        if (zeroForOne) {
+            // Floor: max(MIN_SQRT_RATIO + 1, sqrtPriceX96Min).
+            limit = sqrtPriceX96Min > MIN_SQRT_RATIO + 1
+                ? sqrtPriceX96Min
+                : MIN_SQRT_RATIO + 1;
+        } else {
+            // Ceiling: min(MAX_SQRT_RATIO - 1, sqrtPriceX96Max). When
+            // the user left max at 0, treat as "no cap" => MAX - 1.
+            limit = (sqrtPriceX96Max != 0 && sqrtPriceX96Max < MAX_SQRT_RATIO - 1)
+                ? sqrtPriceX96Max
+                : MAX_SQRT_RATIO - 1;
+        }
         (int256 amount0Delta, int256 amount1Delta) = IUniswapV3Pool(pool).swap(
             address(this),
             zeroForOne,
             int256(swapAmount),
-            zeroForOne ? MIN_SQRT_RATIO + 1 : MAX_SQRT_RATIO - 1,
+            limit,
             abi.encode(tokenIn)
         );
         _authorisedPool = address(0);
@@ -528,12 +556,18 @@ contract ArcadeV3Zap is IUniswapV3SwapCallback {
         uint256 swapInAmount = outIsT0 ? collected1 : collected0;
         uint256 swapOut = 0;
         if (swapInAmount > 0 && p.amountOtherMinSwap > 0) {
+            // Audit V3 Zap V3-4: zapOut has no caller-signed band field
+            // today; pass 0/0 so _doSwap falls back to the wide-open
+            // MIN+1 / MAX-1 limits. If ZapOutParams ever grows a band
+            // (parity with zap-in), thread the same fields through here.
             swapOut = _doSwap(
                 pool,
                 outIsT0 ? t1 : t0,
                 swapInAmount,
                 outIsT0 ? false : true,
-                p.amountOtherMinSwap
+                p.amountOtherMinSwap,
+                0,
+                0
             );
         }
 

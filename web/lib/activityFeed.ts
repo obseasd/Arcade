@@ -14,8 +14,22 @@
 
 import type { Address } from "viem";
 
-const STORAGE_KEY = "arcade:activity-feed:v1";
+// Audit F-7: scope per-account so wallet A's history can't be read out
+// of the same browser by wallet B (the sibling persistence modules —
+// pendingBridge, pendingClaims, bridgeHistory — already key by account).
+// The pre-fix single-key bucket leaked metadata (counterparty addresses,
+// amounts, timestamps) cross-account on shared devices.
+const STORAGE_KEY_BASE = "arcade:activity-feed:v1";
+// Legacy single-bucket key kept ONLY for a one-time migration read so
+// existing users do not lose their history on the next deploy. Reads
+// fall through to it after the per-account key is empty; writes always
+// go to the per-account key.
+const LEGACY_STORAGE_KEY = "arcade:activity-feed:v1";
 const MAX_ENTRIES = 50;
+
+function keyFor(account: string): string {
+    return `${STORAGE_KEY_BASE}:${account.toLowerCase()}`;
+}
 
 export const ACTIVITY_FEED_CHANGE_EVENT = "arcade-activity-feed-change";
 
@@ -61,25 +75,36 @@ interface OmitId {
     txHash?: string;
 }
 
-function loadAll(): ActivityEntry[] {
+function loadFor(account: string): ActivityEntry[] {
     if (typeof window === "undefined") return [];
     try {
-        const raw = window.localStorage.getItem(STORAGE_KEY);
-        if (!raw) return [];
-        const parsed = JSON.parse(raw);
-        return Array.isArray(parsed) ? parsed : [];
+        const raw = window.localStorage.getItem(keyFor(account));
+        if (raw) {
+            const parsed = JSON.parse(raw);
+            return Array.isArray(parsed) ? parsed : [];
+        }
+        // One-time legacy migration: if a pre-F-7 shared bucket exists,
+        // read it, filter to this account, and return without writing
+        // back to the legacy key. Next saveFor() pushes to the per-
+        // account key, and once every account has been touched the
+        // legacy key becomes dead state (we keep it around for a release
+        // window then clean up in a follow-up).
+        const legacyRaw = window.localStorage.getItem(LEGACY_STORAGE_KEY);
+        if (!legacyRaw) return [];
+        const all = JSON.parse(legacyRaw);
+        if (!Array.isArray(all)) return [];
+        const acc = account.toLowerCase();
+        return all.filter((e) => e?.account === acc);
     } catch {
         return [];
     }
 }
 
-function saveAll(list: ActivityEntry[]) {
+function saveFor(account: string, list: ActivityEntry[]) {
     if (typeof window === "undefined") return;
     try {
-        // Cap to MAX_ENTRIES total to keep localStorage from growing
-        // unbounded for power users. Oldest entries drop off first.
         const trimmed = list.slice(0, MAX_ENTRIES);
-        window.localStorage.setItem(STORAGE_KEY, JSON.stringify(trimmed));
+        window.localStorage.setItem(keyFor(account), JSON.stringify(trimmed));
         window.dispatchEvent(new CustomEvent(ACTIVITY_FEED_CHANGE_EVENT));
     } catch {
         /* quota exceeded, ignore */
@@ -91,25 +116,25 @@ function saveAll(list: ActivityEntry[]) {
  * for the timestamp so call sites only need to set the meaningful fields.
  */
 export function addActivity(entry: OmitId): void {
-    const all = loadAll();
+    const account = entry.account.toLowerCase();
+    const all = loadFor(account);
     const next: ActivityEntry = {
         id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
         type: entry.type,
         timestamp: entry.timestamp ?? Date.now(),
-        account: entry.account.toLowerCase(),
+        account,
         token: entry.token,
         label: entry.label,
         value: entry.value,
         txHash: entry.txHash,
     };
-    saveAll([next, ...all]);
+    saveFor(account, [next, ...all]);
 }
 
 /** Read recent activity for a given account (lowercase-compared). */
 export function loadActivity(account: Address | undefined): ActivityEntry[] {
     if (!account) return [];
-    const acc = account.toLowerCase();
-    return loadAll().filter((e) => e.account === acc);
+    return loadFor(account.toLowerCase());
 }
 
 /**

@@ -413,40 +413,66 @@ contract ArcadeLaunchpadTest is Test {
     // ============= M-09: V2 pair pre-donation skim ========================
 
     function test_M09_v2PairPreDonationSkimmedToTreasury() public {
+        // Renamed-in-spirit-only post audit L-1: skim() was removed from
+        // the migration path (it was a no-op against pre-minted LP and
+        // donations now bake into DEAD's LP via the V2 mint formula
+        // sqrt(b0*b1) - 1000 on first mint). This test now verifies the
+        // donation IS absorbed into the locked LP rather than sitting on
+        // the pair as an attackable balance imbalance, while the
+        // pre-mint hard-revert (audit L-1) is exercised in
+        // test_L1_v2PairPreMintReverts below.
         address token = _createToken();
 
-        // Pre-create the V2 pair (anyone can do this on Uniswap V2 forks) so
-        // we have an address to donate USDC to.
         address pair = factory.createPair(address(usdc), token);
 
-        // Attacker donation pre-migration. Loss-only grief for the attacker
-        // (LP is burned to DEAD) but warps the seeded price - skim neutralises.
         uint256 donation = 5_000 * 10 ** 6;
         vm.startPrank(bob);
         usdc.approve(address(launchpad), type(uint256).max);
         usdc.transfer(pair, donation);
         vm.stopPrank();
 
-        uint256 treasuryBefore = usdc.balanceOf(treasury);
-
-        // Trigger migration.
         vm.startPrank(alice);
         usdc.approve(address(launchpad), type(uint256).max);
         launchpad.buy(token, 100_000 * 10 ** 6, 0);
         vm.stopPrank();
 
+        // After migration the pair holds the seed PLUS the donation —
+        // both went into the V2 mint, both belong to the DEAD LP.
         uint256 pairUsdc = usdc.balanceOf(pair);
-        // After mint(DEAD) + pair.skim(treasury), the pair should hold the
-        // intended LP seed (raised - MIGRATION_FEE +/- 2 wei capped-buy drift).
-        // The donation went to the treasury via skim.
         uint256 expectedSeed = 20_000 * 10 ** 6 - launchpad.MIGRATION_FEE();
-        assertApproxEqAbs(pairUsdc, expectedSeed, 2, "pair holds only intended LP seed");
-        // Treasury got the migration fee + the donation back.
-        assertGe(
-            usdc.balanceOf(treasury) - treasuryBefore,
-            launchpad.MIGRATION_FEE() + donation,
-            "treasury got both fee and skimmed donation"
+        assertApproxEqAbs(
+            pairUsdc,
+            expectedSeed + donation,
+            2,
+            "pair holds seed + donation (both locked in DEAD's LP)"
         );
+    }
+
+    /// @notice Audit L-1: V2 pre-mint LP attack must hard-revert migration.
+    function test_L1_v2PairPreMintReverts() public {
+        address token = _createToken();
+        address pair = factory.createPair(address(usdc), token);
+
+        // Attacker pre-mints: transfer USDC + token then call mint().
+        deal(address(usdc), bob, 1_000 * 10 ** 6);
+        // Give bob a small amount of the launchpad token by buying via curve.
+        vm.startPrank(bob);
+        usdc.approve(address(launchpad), type(uint256).max);
+        launchpad.buy(token, 100 * 10 ** 6, 0);
+        uint256 bobTokenBal = IERC20(token).balanceOf(bob);
+        // Stage donation in the right ratio for a V2 first-mint.
+        usdc.transfer(pair, 100 * 10 ** 6);
+        IERC20(token).transfer(pair, bobTokenBal);
+        IArcadeV2Pair(pair).mint(bob);
+        vm.stopPrank();
+
+        // Now graduate the curve. Migration must revert because the pair
+        // has been pre-minted (totalSupply != 0).
+        vm.startPrank(alice);
+        usdc.approve(address(launchpad), type(uint256).max);
+        vm.expectRevert(ArcadeLaunchpad.InvalidRoute.selector);
+        launchpad.buy(token, 100_000 * 10 ** 6, 0);
+        vm.stopPrank();
     }
 
     // ============= L-12: setV3Infra rejects zero addresses ===============

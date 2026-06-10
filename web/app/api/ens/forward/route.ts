@@ -36,16 +36,20 @@ const RESOLVER_ABI = parseAbi([
     "function addr(bytes32 node) view returns (address)",
 ]);
 
+// Audit F-6: shortlist trimmed from 9 to 4 RPCs. Walking through 9
+// providers leaked the IP + (more importantly) the queried address —
+// which equals the recipient of every transfer the user is about to
+// make — to 9 third-party operators. The remaining 4 are the most
+// reliable + lowest-log providers, and they are tried in the order
+// (paid env → llamarpc → cloudflare-eth → publicnode). For an
+// operator who wants stronger privacy, set MAINNET_RPC to an Alchemy /
+// Infura key and the public list is never consulted.
 const RPCS = [
     process.env.MAINNET_RPC,
     process.env.NEXT_PUBLIC_MAINNET_RPC,
     "https://eth.llamarpc.com",
-    "https://ethereum-rpc.publicnode.com",
-    "https://eth-mainnet.public.blastapi.io",
-    "https://eth.merkle.io",
-    "https://endpoints.omniatech.io/v1/eth/mainnet/public",
     "https://cloudflare-eth.com",
-    "https://rpc.ankr.com/eth",
+    "https://ethereum-rpc.publicnode.com",
 ].filter((u): u is string => {
     if (!u) return false;
     try {

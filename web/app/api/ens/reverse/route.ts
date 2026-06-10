@@ -28,16 +28,13 @@ const RESOLVER_ABI = parseAbi([
     "function name(bytes32 node) view returns (string)",
 ]);
 
+// Audit F-6: shortlist trimmed — see /api/ens/forward for rationale.
 const RPCS = [
     process.env.MAINNET_RPC,
     process.env.NEXT_PUBLIC_MAINNET_RPC,
     "https://eth.llamarpc.com",
-    "https://ethereum-rpc.publicnode.com",
-    "https://eth-mainnet.public.blastapi.io",
-    "https://eth.merkle.io",
-    "https://endpoints.omniatech.io/v1/eth/mainnet/public",
     "https://cloudflare-eth.com",
-    "https://rpc.ankr.com/eth",
+    "https://ethereum-rpc.publicnode.com",
 ].filter((u): u is string => {
     if (!u) return false;
     try {
