@@ -8,18 +8,18 @@ const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000" as const;
 /**
  * UnitFlow V3 provider — Uniswap V3 fork at `ADDRESSES.unitflow*` with
  * the standard interfaces renamed (UnitFlowV3*). Same call shape as
- * Synthra so we reuse the Uniswap-V3 standard ABIs (Factory.getPool +
- * QuoterV2.quoteExactInputSingle + SwapRouter02.exactInputSingle).
+ * Synthra so we reuse the Uniswap-V3 standard ABIs.
  *
- * Pool discovery + tier-by-tier quoting + executor build mirror the
- * Synthra provider. Same 4 fee tiers (100 / 500 / 3_000 / 10_000); the
- * provider picks the tier with the largest amountOut and returns null
- * when no pool exists or every quote reverts.
- *
- * If UnitFlow rolls out a UniversalRouter in the future, swap the
- * executor.router to that and switch the executor.abi+functionName to
- * UniversalRouter.execute(...). The Provider interface lets the
- * SwapCard call this transparently.
+ * WUSDC routing: UnitFlow pools route through Wrapped USDC (18 dec) not
+ * native Arc USDC (6 dec). For a USDC <-> X swap the correct flow is
+ *   wrap USDC -> WUSDC -> swap on WUSDC/X pool -> (optionally unwrap)
+ * which their frontend encodes as a UniversalRouter command stream
+ * (WRAP_ETH + V3_SWAP_EXACT_IN + SWEEP/UNWRAP_WETH). Implementing that
+ * encoder is its own piece of work, so for now we skip UnitFlow on any
+ * pair that has native USDC on either side and only quote/execute pairs
+ * where both sides are already non-USDC tokens (the WUSDC/EURC,
+ * EURC/cirBTC, etc. matrix). Add the UniversalRouter executor in a
+ * follow-up to unlock the USDC <-> X matrix too.
  */
 export const unitflowV3Provider: RouteProvider = {
   meta: PROVIDER_META["unitflow-v3"],
@@ -33,6 +33,16 @@ export const unitflowV3Provider: RouteProvider = {
       return null;
     }
     if (req.amountIn === 0n) return null;
+
+    // Skip native-USDC pairs until the UniversalRouter wrap+swap path
+    // is wired. Quoting the WUSDC pool is straightforward but executing
+    // requires a multi-command UniversalRouter call that lives outside
+    // this MVP scope.
+    const isUsdc = (a: Address) =>
+      a.toLowerCase() === ADDRESSES.usdc.toLowerCase();
+    if (isUsdc(req.tokenIn) || isUsdc(req.tokenOut)) {
+      return null;
+    }
 
     const poolChecks = SYNTHRA_V3_FEES.map((fee) =>
       publicClient

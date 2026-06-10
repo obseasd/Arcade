@@ -82,17 +82,27 @@ export const ADDRESSES = {
   synthraUniversalRouter: "0xbf4479C07Dc6fdc6dAa764A0ccA06969e894275F" as Address,
   /** Synthra Wrapped USDC (their canonical "ETH-equivalent" — 18 dec). */
   synthraWusdc: "0x911b4000D3422F482F4062a913885f7b035382Df" as Address,
-  // --- UnitFlow (Uniswap V3 + V4 fork on Arc testnet) ---
+  // --- UnitFlow (Uniswap V3 fork on Arc testnet) ---
   // Standard Uniswap V3 interfaces with name rebrand (UnitFlowV3*).
-  // POOL_INIT_CODE_HASH differs from canonical so do NOT reuse Synthra's.
-  /** UnitFlow V3 Factory. */
-  unitflowFactory: "0xb0bCabE107e9e37b34900667fa4ded4Df7e910CB" as Address,
-  /** UnitFlow V3 SwapRouter. */
-  unitflowRouter: "0x75eDe46A468Eb600C10982e6FdCeADCB37a40930" as Address,
-  /** UnitFlow V3 QuoterV2. */
-  unitflowQuoter: "0x09ea20bC7Fbb42C202b2Fa108365ccB15165Dc53" as Address,
+  // ACTIVE deployment (the previous 0xb0bCabE... factory has NO pools —
+  // it is an unused duplicate. Use 0xAb6A... as the live one).
+  // All V3 pools route through WUSDC (0x911b...) instead of native USDC
+  // (0x3600...), so USDC↔X swaps require a wrap step via UniversalRouter
+  // — handled in the UnitFlow provider's executor branch.
+  /** UnitFlow V3 Factory (active, has pools). */
+  unitflowFactory: "0xAb6A8AAb7d490007634ef59d424b5d89688a1971" as Address,
+  /** UnitFlow V3 SwapRouter02 (bound to active factory). */
+  unitflowRouter: "0xB0Ba24f9C49D933523219e92528E7e5db93e9AFc" as Address,
+  /** UnitFlow V3 QuoterV2 (bound to active factory). */
+  unitflowQuoter: "0x121aeB6DEf00F6F67665008CaC1C19805886ed1a" as Address,
   /** UnitFlow V3 NonfungiblePositionManager (NPM). */
-  unitflowNpm: "0xf8ecf496D9c31Cbf2aEa4DEc32471851A5c95181" as Address,
+  unitflowNpm: "0x0553682bc188b850acd31CBd3500Dcd0aa35372B" as Address,
+  /** UnitFlow UniversalRouter — required for USDC↔X swaps that need a
+   *  WRAP_ETH + V3_SWAP + SWEEP command stream. */
+  unitflowUniversalRouter: "0xEaF3195bE51861632cd32850973C9515DA48e76F" as Address,
+  /** WUSDC (Wrapped USDC, 18 dec) — UnitFlow + Synthra pools route
+   *  through this instead of the native 6-dec USDC. */
+  wusdc: "0x911b4000D3422F482F4062a913885f7b035382Df" as Address,
   // XyloNet addresses pending — ForgeLabs has not published their
   // StableSwap contracts; the docs site marks GitHub as "Soon". When
   // addresses land, add xylonetFactory / xylonetRouter / xylonetPool
