@@ -49,7 +49,10 @@ export const PERMIT2_ABI = [
 /** Canonical Permit2 deployment address — same on every chain that has it. */
 export const PERMIT2_ADDRESS = "0x000000000022D473030F116dDEE9F6B43aC78BA3" as const;
 
-/** Default expiration window for a signed permit (1 hour). The on-chain
- *  uint48 means the absolute timestamp must fit in 48 bits; 1 h from now
- *  on any reasonable EVM clock fits comfortably. */
-export const PERMIT2_DEFAULT_EXPIRATION_SECONDS = 60 * 60;
+/** Default expiration window for a signed permit (10 min — matches the
+ *  swap-tx deadline used elsewhere). Audit MED-8: a 1 h default leaves a
+ *  large window where leftover Permit2 allowance can be replayed by
+ *  anyone who can call UR.execute with the right calldata. Tightening
+ *  to the swap deadline closes the window quickly without changing the
+ *  legitimate UX. */
+export const PERMIT2_DEFAULT_EXPIRATION_SECONDS = 60 * 10;

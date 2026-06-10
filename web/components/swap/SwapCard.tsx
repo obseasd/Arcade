@@ -510,12 +510,19 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
             token: tokenIn.address,
             spender: p2.permitSpender,
             amount: finalAmountIn,
-            nonce: permit2Allowance.nonce,
           });
           const encodedPermit = encodePermit2PermitInput(permit, signature);
           // executor.args = [commands, inputs[], deadline]. Clone the
-          // inputs[] and rewrite the permit slot.
+          // inputs[] and rewrite the permit slot. Audit MED-7: bounds-
+          // check the index so a misconfigured provider does not silently
+          // extend the array with `undefined` (which would ABI-encode
+          // as a default value and revert at exec time).
           const inputs = [...(execArgs[1] as `0x${string}`[])];
+          if (p2.permitInputIndex < 0 || p2.permitInputIndex >= inputs.length) {
+            throw new Error(
+              `Provider ${activeRoute.provider} configured an invalid permitInputIndex ${p2.permitInputIndex} for an inputs array of length ${inputs.length}`,
+            );
+          }
           inputs[p2.permitInputIndex] = encodedPermit;
           execArgs = [execArgs[0], inputs, execArgs[2]];
           setTx({ status: "pending", message: "Submitting swap…" });

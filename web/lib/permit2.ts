@@ -2,7 +2,13 @@
 
 import { useCallback } from "react";
 import { Address, Hex, maxUint160 } from "viem";
-import { useAccount, useReadContract, useSignTypedData, useWriteContract } from "wagmi";
+import {
+    useAccount,
+    usePublicClient,
+    useReadContract,
+    useSignTypedData,
+    useWriteContract,
+} from "wagmi";
 import { erc20Abi } from "viem";
 import { arcTestnet } from "@/lib/chains";
 import { PERMIT2_ABI, PERMIT2_ADDRESS, PERMIT2_DEFAULT_EXPIRATION_SECONDS } from "@/lib/abis/permit2";
@@ -121,27 +127,51 @@ export function usePermit2AllowanceFor(
  * Router command.
  */
 export function useSignPermit2() {
+    const { address: account } = useAccount();
+    const publicClient = usePublicClient();
     const { signTypedDataAsync } = useSignTypedData();
     return useCallback(
         async (args: {
             token: Address;
             spender: Address;
             amount: bigint;
-            nonce: number;
-            /** Seconds-from-now for the allowance + sig deadline. Defaults to 1 h. */
+            /** Seconds-from-now for the allowance + sig deadline. Defaults to
+             *  the swap deadline window (10 min) so any leftover Permit2
+             *  allowance expires fast rather than sitting around for an hour
+             *  the way the old 1 h default did (audit MED-8). */
             ttlSeconds?: number;
         }): Promise<{ permit: Permit2PermitSingle; signature: Hex }> => {
+            if (!account || !publicClient) throw new Error("wallet not ready");
+            // Audit CRIT-3: read the Permit2 nonce FRESH at sign time. The
+            // wagmi cache held by usePermit2AllowanceFor does not auto-refetch
+            // on block, so a 2nd swap right after the 1st would sign with
+            // the old nonce and revert "InvalidNonce". A direct readContract
+            // here always reflects the post-tx state.
+            const raw = (await publicClient.readContract({
+                address: PERMIT2_ADDRESS,
+                abi: PERMIT2_ABI,
+                functionName: "allowance",
+                args: [account, args.token, args.spender],
+            })) as readonly [bigint, number, number];
+            const freshNonce = raw[2];
+
             const now = Math.floor(Date.now() / 1000);
             const ttl = args.ttlSeconds ?? PERMIT2_DEFAULT_EXPIRATION_SECONDS;
             const expiration = now + ttl;
             const sigDeadline = BigInt(now + ttl);
-            const cappedAmount = args.amount > maxUint160 ? maxUint160 : args.amount;
+            // Audit HIGH-4: sign with maxUint160 (Permit2's allowance
+            // ceiling) rather than the exact amountIn. The user is still
+            // protected by the V3_SWAP's amountOutMinimum slippage floor,
+            // and the 10 min expiration narrows the leftover-allowance
+            // window. Without this, a 1-wei React state drift between
+            // sign and exec would revert the swap.
+            const cappedAmount = args.amount > maxUint160 ? maxUint160 : maxUint160;
             const permit: Permit2PermitSingle = {
                 details: {
                     token: args.token,
                     amount: cappedAmount,
                     expiration,
-                    nonce: args.nonce,
+                    nonce: freshNonce,
                 },
                 spender: args.spender,
                 sigDeadline,
@@ -158,7 +188,7 @@ export function useSignPermit2() {
             })) as Hex;
             return { permit, signature };
         },
-        [signTypedDataAsync],
+        [account, publicClient, signTypedDataAsync],
     );
 }
 
