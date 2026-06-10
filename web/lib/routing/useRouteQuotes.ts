@@ -5,6 +5,8 @@ import { Address } from "viem";
 import { usePublicClient } from "wagmi";
 import { RouteProvider, RouteQuote, QuoteRequest } from "./types";
 import { synthraV3Provider } from "./synthraV3";
+import { arcadeV3Provider } from "./arcadeV3";
+import { arcadeV2Provider } from "./arcadeV2";
 
 /**
  * Aggregator hook: fans out a quote request to every registered provider
@@ -30,12 +32,11 @@ import { synthraV3Provider } from "./synthraV3";
  */
 
 const PROVIDERS: RouteProvider[] = [
+  arcadeV3Provider,
+  arcadeV2Provider,
   synthraV3Provider,
-  // Arcade V3 + V2 providers land in follow-up commits — they wrap the
-  // existing v3Quoter / V2Router reads already wired in SwapCard, plus
-  // the launchpad migrated-route quoter. Keep the interface stable so
-  // SwapCard's execution path is identical regardless of which router
-  // wins the comparison.
+  // Xylonet + Unitflow plug in here once their on-chain contracts on Arc
+  // are confirmed. Same Provider interface so SwapCard does not change.
 ];
 
 export interface UseRouteQuotesArgs {
