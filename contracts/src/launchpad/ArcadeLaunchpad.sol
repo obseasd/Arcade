@@ -1008,10 +1008,22 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
             /* pool already initialised */
         }
 
-        // CSEC-013: pool's actual sqrtPriceX96 must match our intent.
-        // H-3 dust-LP check (liquidity == 0) dropped for EIP-170 budget.
+        // Audit L-2: drop the strict-equal check that let attackers brick
+        // CLANKER_V3 launches by pre-initializing the predicted pool at
+        // any other price (gas-only grief). Accept whatever sqrt is on
+        // the pool, fall back to revert ONLY when the pool is somehow
+        // still un-initialized (sp == 0). The subsequent single-sided
+        // position math reads `sqrtPriceX96` for tick sizing; if the
+        // pre-init price is extreme enough that the locker can't mint
+        // a valid range, the locker call below reverts with its own
+        // error so the launch still aborts cleanly — just one step
+        // later instead of here, and only when the attack is at the
+        // edge of feasibility. The economic deterrent: an attacker who
+        // wants to mis-price a launch must actually pre-fund the pool
+        // and choose a believable-enough sqrt that the locker accepts.
         (uint160 sp,,,,,,) = IArcadeV3Pool(pool).slot0();
-        if (sp != sqrtPriceX96) revert InvalidRoute();
+        if (sp == 0) revert InvalidRoute();
+        sqrtPriceX96 = sp;
 
         // L-02: flip migrated state BEFORE the external locker call so that
         // any view of `isMigrated(token)` invoked during the locker's
