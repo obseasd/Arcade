@@ -36,6 +36,55 @@ export interface StatsSnapshot {
 
 const ARC_RPC = process.env.NEXT_PUBLIC_ARC_RPC_URL ?? "https://rpc.testnet.arc.network";
 
+/**
+ * Predecessor contract addresses from every prior generation we want to keep
+ * counting toward Arcade's cumulative footprint after a fresh deploy. Without
+ * this the /stats page resets to zero every time we redeploy, which buries
+ * the testnet history Circle / partners look at.
+ *
+ * Add new generations at the TOP of each array (newest first) when bumping
+ * the live stack. The address-mode getLogs accepts up to ~100 addresses per
+ * call; we're well under that with 8 generations * 5 contracts each.
+ */
+const PREDECESSOR_CONTRACTS: Address[] = [
+    // gen 7 (2026-06-09, audit-3 batch)
+    "0x62aC6A355D092267a93a1Ffb13B7D1c121A5c0e8",
+    "0xD63609d130698489603AC07dFDa338D958765808",
+    "0x8afb163909BC0C96eD77D5dB3f01840B9227CA39",
+    "0x4dddAdA3Cc38D331897C5F74F955A1194F5A8C64",
+    "0xB501C21cE40b7559e33be0e9FBcD94D86Ece2c26",
+    "0xBD13aB926DE7c82BA56727ea34F11FC4420A09E4",
+    "0x8bE45CF7e5fEE5bf3388B5B95Ff944cbb6F8c82A",
+    "0x5950b3B54C8e81F1d94e92BDEc5F3C73Ea59156a",
+    // gen 6 (2026-06-08)
+    "0xB15282e3a0c67989013c7bdc6cd6f4Fa0CdbaAd6",
+    "0x4BE6f9207451e1e94C9cAEC1Dfbb44E2E4793457",
+    "0xE420484fAd6d20493Cc300B10ACeB6C8c0806a6D",
+    "0xa66b9F1D7FF2F083145E92Fd6d20E5676913A728",
+    "0xDE23177fd69dF8ac2AB5DB1E8b2cef8f291Ac740",
+    "0xC571b19785F90a7D5d6E8925FAD0Cd0B3b3b40bf",
+    "0xEE10F32d7e92208Fcdf5410E401eEa7960578f91",
+    "0x4ecEba4b966a32b42d8c4037308819a2D95b0920",
+    // gen 5 (2026-06-07)
+    "0xF441D73C69f00bf2A11019024A80D46a06bE2BdC",
+    "0xeB5B83697285ac0Bd9dcd1e1d815076528188C63",
+    "0xce9D0FC54574D32646eeC57eB38D82bc02B78901",
+    "0x4A019876a5fCC057204d343e27Cb15f48D5c9431",
+    "0x2eBE99fF479a2ac3100b9FC8AB7F3e6911b2C20a",
+    "0xB89481c7e062c069497F5DbFf1349f92AE06060f",
+    "0x9dED034Cdd1a80E9D07A68Db34f21B6b47d29aA6",
+    "0xE1c9fF6D064c30234Eb6F071A619cdBd0675124b",
+    // gen 4 (2026-06-01)
+    "0xb621925D1aa0f1c2BeC6612Add5290F04F6c3168",
+    "0x72581607da354b0F2EC438D59E9266B12aF73C90",
+    "0x2991528022D6856125c6504D356457E77059659D",
+    "0x5a6Ee52737d3CD5af7e32ed42b02e27FAaD504f4",
+    "0xCaDA87cC272899666E42dD051A5156995e90d8D2",
+    "0x2A8721C3Ed768c2561214040b8a3Ae6372c63c7A",
+    "0xB381442bAB733eD07C77626dCC2Ca4A338763843",
+    "0xc20F1Cc590f505a576bf8Bc5Fef7698f1b900Faa",
+];
+
 const ARC_TESTNET = {
     id: 5042002,
     name: "Arc Testnet",
@@ -79,12 +128,9 @@ export async function getAggregateStats(): Promise<StatsSnapshot> {
         ADDRESSES.tokenVault,
         ...(ADDRESSES.twitterEscrow ? [ADDRESSES.twitterEscrow] : []),
         ...(ADDRESSES.v4Launchpad ? [ADDRESSES.v4Launchpad] : []),
-        // V4 Phase 2 production stack. Counts CurveBuy/CurveSell/Graduated
-        // events alongside the V2 launchpad activity once the hook is in
-        // env. PoolManager activity is included so non-hook V4 traffic
-        // (post-graduation canonical swaps) also counts toward Arcade.
         ...(ADDRESSES.arcadeHook ? [ADDRESSES.arcadeHook] : []),
         ...(ADDRESSES.v4PoolManager ? [ADDRESSES.v4PoolManager] : []),
+        ...PREDECESSOR_CONTRACTS,
     ];
 
     const seenTxs = new Set<string>();
@@ -139,9 +185,19 @@ export async function getAggregateStats(): Promise<StatsSnapshot> {
         (BigInt(seenTxs.size) * AVG_TX_GAS_USED * AVG_GAS_PRICE_WEI) / GAS_TO_USDC_DIVISOR;
 
     // Token counts: best-effort via the well-known TokenCreated topic on the
-    // launchpad. If the launchpad ABI ever changes the topic, this number
-    // resets quietly and the dashboard will show 0 until refreshed.
-    const tokensLaunched = await countLaunchpadEvents(client, ADDRESSES.launchpad, fromBlock, head);
+    // launchpad. Sum across the current launchpad + every prior generation so
+    // the cumulative count keeps growing past a redeploy.
+    const PRIOR_LAUNCHPADS: Address[] = [
+        "0x62aC6A355D092267a93a1Ffb13B7D1c121A5c0e8", // gen 7
+        "0xB15282e3a0c67989013c7bdc6cd6f4Fa0CdbaAd6", // gen 6
+        "0xF441D73C69f00bf2A11019024A80D46a06bE2BdC", // gen 5
+        "0xb621925D1aa0f1c2BeC6612Add5290F04F6c3168", // gen 4
+    ];
+    const launchpadCounts = await Promise.all([
+        countLaunchpadEvents(client, ADDRESSES.launchpad, fromBlock, head),
+        ...PRIOR_LAUNCHPADS.map((a) => countLaunchpadEvents(client, a, fromBlock, head)),
+    ]);
+    const tokensLaunched = launchpadCounts.reduce((a, b) => a + b, 0);
     const v4TokensLaunched = ADDRESSES.v4Launchpad
         ? await countLaunchpadEvents(client, ADDRESSES.v4Launchpad, fromBlock, head)
         : 0;
