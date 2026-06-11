@@ -34,7 +34,19 @@ fs_permissions = [{ access = "read-write", path = "./" }]
 # orbs/ is the orbs-network/twap vendored repo (Solidity 0.8.16); compiled by
 # the dedicated `orbs` profile so it never gets pulled into the default 0.8.24
 # build.
-skip = ["lib/v3-core/**", "lib/v3-periphery/**", "orbs/**"]
+skip = [
+    "lib/v3-core/**",
+    "lib/v3-periphery/**",
+    # v4-core + v4-periphery (and permit2 vendored inside v4-periphery)
+    # are only compiled by the dedicated `v4` profile. Their nested
+    # submodules (permit2/lib/openzeppelin-contracts, permit2/lib/solmate,
+    # certora/munged/...) are not part of our install, so the default
+    # 0.8.24 profile must explicitly skip them or `forge build` chokes on
+    # missing imports it has no business touching.
+    "lib/v4-core/**",
+    "lib/v4-periphery/**",
+    "orbs/**",
+]
 
 # Dedicated profile for the 0.7.6 layer: our own V3 contracts (v3src/) plus
 # the Uniswap V3 fork they depend on. Native V3 settings (0.7.6, legacy
@@ -79,7 +91,17 @@ out = "out-v4"
 libs = ["lib"]
 # v4-core has its own test/ folder we don't want compiled into our out-v4.
 # Same for v4-periphery once added.
-skip = ["lib/v4-core/test/**", "lib/v4-periphery/test/**"]
+# v4-periphery vendors permit2; permit2's own certora/ + test/ have unmet
+# external deps (forge-gas-snapshot, certora/munged generated dirs) that
+# we never need to build for our hook prototype.
+skip = [
+    "lib/v4-core/test/**",
+    "lib/v4-periphery/test/**",
+    "lib/v4-periphery/lib/permit2/test/**",
+    "lib/v4-periphery/lib/permit2/script/**",
+    "lib/v4-periphery/lib/permit2/lib/openzeppelin-contracts/certora/**",
+    "lib/v4-periphery/lib/permit2/lib/openzeppelin-contracts/test/**",
+]
 optimizer = true
 optimizer_runs = 200
 via_ir = true
