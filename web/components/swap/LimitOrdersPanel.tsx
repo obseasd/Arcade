@@ -397,9 +397,9 @@ function OrderRow({
                     )}
                     {state === "open" && (
                         <div className="mt-1 text-[10px] text-arc-text-faint">
-                            Expires:{" "}
+                            Expires in:{" "}
                             {order.ask.deadline > 0
-                                ? new Date(order.ask.deadline * 1000).toLocaleString()
+                                ? formatExpiresIn(order.ask.deadline)
                                 : "no expiry"}
                         </div>
                     )}
@@ -418,6 +418,31 @@ function OrderRow({
             </div>
         </div>
     );
+}
+
+/**
+ * Pretty-print a future deadline (unix seconds) as a human-relative
+ * duration. Picks the largest non-zero unit so a 30-day order reads
+ * "30d", a 12-hour order reads "12h", a 5-minute order "5m". For
+ * already-expired deadlines (defensive - the caller should switch the
+ * row to the "expired" state instead) we return "expired".
+ */
+function formatExpiresIn(deadlineSec: number): string {
+    const nowSec = Math.floor(Date.now() / 1000);
+    const dt = deadlineSec - nowSec;
+    if (dt <= 0) return "expired";
+    const days = Math.floor(dt / 86_400);
+    if (days >= 1) {
+        const hrs = Math.floor((dt - days * 86_400) / 3600);
+        return hrs > 0 ? `${days}d ${hrs}h` : `${days}d`;
+    }
+    const hours = Math.floor(dt / 3600);
+    if (hours >= 1) {
+        const mins = Math.floor((dt - hours * 3600) / 60);
+        return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`;
+    }
+    const mins = Math.floor(dt / 60);
+    return mins >= 1 ? `${mins}m` : `<1m`;
 }
 
 function StatusPill({ state }: { state: "open" | "expired" | "cancelled" | "completed" }) {
