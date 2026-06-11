@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useAccount, useChainId, usePublicClient, useReadContract, useConfig } from "wagmi";
 import { erc20Abi, createPublicClient, http, encodeFunctionData } from "viem";
 import { arcTestnet } from "@/lib/chains";
+import { ADDRESSES } from "@/lib/constants";
 
 const USDC = (process.env.NEXT_PUBLIC_USDC_ADDRESS || "0x3600000000000000000000000000000000000000") as `0x${string}`;
 const ARC_RPC = arcTestnet.rpcUrls.default.http[0];
@@ -215,6 +216,25 @@ export default function DebugWagmiPage() {
             <section className="rounded border border-arc-border bg-arc-bg-elevated p-4">
                 <h2 className="mb-2 text-lg font-semibold">EIP-6963 providers ({eip6963Providers.length})</h2>
                 {eip6963Providers.map((p) => <div key={p}>{p}</div>)}
+            </section>
+
+            <section className="rounded border border-arc-border bg-arc-bg-elevated p-4">
+                <h2 className="mb-2 text-lg font-semibold">ADDRESSES from constants (build-time bundled)</h2>
+                {Object.entries(ADDRESSES).map(([k, v]) => (
+                    <div key={k} className={v === "0x0000000000000000000000000000000000000000" ? "text-red-400" : ""}>
+                        {k}: {String(v)}
+                    </div>
+                ))}
+            </section>
+
+            <section className="rounded border border-arc-border bg-arc-bg-elevated p-4">
+                <h2 className="mb-2 text-lg font-semibold">Raw NEXT_PUBLIC_* env (build-time)</h2>
+                <div>NEXT_PUBLIC_USDC_ADDRESS: {String(process.env.NEXT_PUBLIC_USDC_ADDRESS)}</div>
+                <div>NEXT_PUBLIC_LAUNCHPAD_ADDRESS: {String(process.env.NEXT_PUBLIC_LAUNCHPAD_ADDRESS)}</div>
+                <div>NEXT_PUBLIC_V2_FACTORY_ADDRESS: {String(process.env.NEXT_PUBLIC_V2_FACTORY_ADDRESS)}</div>
+                <div>NEXT_PUBLIC_V2_ROUTER_ADDRESS: {String(process.env.NEXT_PUBLIC_V2_ROUTER_ADDRESS)}</div>
+                <div>NEXT_PUBLIC_V3_FACTORY_ADDRESS: {String(process.env.NEXT_PUBLIC_V3_FACTORY_ADDRESS)}</div>
+                <div>NEXT_PUBLIC_TWITTER_ESCROW_ADDRESS: {String(process.env.NEXT_PUBLIC_TWITTER_ESCROW_ADDRESS)}</div>
             </section>
 
             <section className="rounded border border-arc-border bg-arc-bg-elevated p-4">

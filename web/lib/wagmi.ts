@@ -32,7 +32,19 @@ export const wagmiConfig = getDefaultConfig({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   chains: chains as any,
   transports: {
-    [arcTestnet.id]: http(arcTestnet.rpcUrls.default.http[0]),
+    // Arc transport with JSON-RPC batching enabled. Without batching,
+    // every wagmi useReadContracts on /launchpad / /positions fans out
+    // into N parallel HTTP POSTs to Arc RPC. With many tokens that
+    // hits Arc's per-IP rate limit and the public RPC returns 429.
+    // batch: true tells viem to coalesce eth_calls happening within a
+    // ~16ms window into a single HTTP POST containing N JSON-RPC items
+    // - same call count seen by the node but 1 HTTP request instead of
+    // N. This is NOT the same as multicall3 batching (which we can't
+    // use - see chains.ts) - it's protocol-level batching, supported
+    // by every standard JSON-RPC node.
+    [arcTestnet.id]: http(arcTestnet.rpcUrls.default.http[0], {
+      batch: { wait: 16 },
+    }),
     [anvilLocal.id]: http(anvilLocal.rpcUrls.default.http[0]),
     [sepolia.id]: http(),
     [baseSepolia.id]: http(),
