@@ -20,6 +20,7 @@ import { Address, erc20Abi } from "viem";
 import { useAccount, useDisconnect, useReadContract } from "wagmi";
 import { ADDRESSES, USDC_DECIMALS } from "@/lib/constants";
 import { arcTestnet } from "@/lib/chains";
+import { useArcReadContract } from "@/lib/hooks/useArcReadContract";
 import { TWITTER_ESCROW_V3_ABI } from "@/lib/abis/twitterEscrowV3";
 import { loadBridgeHistory, type HistoryEntry } from "@/lib/bridgeHistory";
 import { listPendingClaims, type PendingTwitterClaim } from "@/lib/pendingClaims";
@@ -99,35 +100,34 @@ export function HeaderWalletWidget() {
         if (!menuOpen) setPowerOpen(false);
     }, [menuOpen]);
 
-    // Audit 2026-06-11 v3: pin chainId so the header always reads the user's
-    // USDC balance ON ARC, regardless of which network their wallet is
-    // currently connected to. Without this, a user whose Rabby/MetaMask is
-    // pointed at Ethereum mainnet would see "0 USDC" in the header even
-    // when they have plenty on Arc — the read would hit mainnet's
-    // 0x3600...000 (no contract there) and return zero. By forcing the
-    // Arc transport (configured in wagmi.ts), we surface the right number
-    // independent of the wallet's UI state.
-    const balanceQ = useReadContract({
+    // Audit 2026-06-11 v3: use a direct viem read instead of wagmi's
+    // `useReadContract`. The wagmi hook had been silently NOT issuing the
+    // `balanceOf` request even with `chainId: arcTestnet.id` pinned —
+    // verified via Network panel (160 RPC calls but none carrying the
+    // selector or the user's address). Most likely cause: Rabby/Backpack
+    // EIP-6963 collision leaves wagmi's internal connector chain out of
+    // sync with `window.ethereum.chainId`, and the singular-read hook
+    // disables itself when it can't reconcile. `useArcReadContract`
+    // bypasses wagmi entirely and hits Arc via a dedicated viem client.
+    const balanceQ = useArcReadContract<bigint>({
         address: ADDRESSES.usdc,
         abi: erc20Abi,
         functionName: "balanceOf",
         args: address ? [address] : undefined,
-        chainId: arcTestnet.id,
-        query: { enabled: !!address, refetchInterval: 8000 },
+        enabled: !!address,
     });
     const raw = (balanceQ.data as bigint | undefined) ?? 0n;
     const amountWhole = formatUSDC(raw, USDC_DECIMALS, 0);
     const usdValue = formatUSDC(raw, USDC_DECIMALS, 2);
 
-    // Owner-only admin shortcut, gated on chain (a "spoof" can see this but
-    // cannot sign any of the admin writes). chainId pinned to Arc so the
-    // read works regardless of the wallet's currently-connected chain.
-    const escrowOwnerQ = useReadContract({
+    // Owner-only admin shortcut. Same direct-viem approach as the USDC
+    // balance above so the Admin menu surfaces correctly even when wagmi's
+    // connector chain is out of sync with the wallet.
+    const escrowOwnerQ = useArcReadContract<`0x${string}`>({
         address: ADDRESSES.twitterEscrow,
         abi: TWITTER_ESCROW_V3_ABI,
         functionName: "owner",
-        chainId: arcTestnet.id,
-        query: { enabled: !!ADDRESSES.twitterEscrow },
+        enabled: !!ADDRESSES.twitterEscrow,
     });
     const isEscrowOwner =
         !!address

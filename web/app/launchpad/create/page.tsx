@@ -10,6 +10,7 @@ import { useAccount, usePublicClient, useReadContract, useWriteContract } from "
 import { LAUNCHPAD_ABI } from "@/lib/abis/launchpad";
 import { ADDRESSES, CREATION_FEE_USDC, LaunchMode } from "@/lib/constants";
 import { arcTestnet } from "@/lib/chains";
+import { useArcReadContract } from "@/lib/hooks/useArcReadContract";
 import { encodeMetadataDataUri, resolveIpfs } from "@/lib/metadata";
 import { useApproveIfNeeded } from "@/lib/hooks/useApproveIfNeeded";
 import { pushToast } from "@/lib/toast";
@@ -351,18 +352,18 @@ function CreateTokenInner() {
     }
   };
 
-  const usdcBalance = useReadContract({
+  // Audit 2026-06-11 v3: bypass wagmi's `useReadContract` (which silently
+  // failed to fire even with `chainId: arcTestnet.id` pinned) by going
+  // directly through a dedicated Arc viem client. See
+  // `lib/hooks/useArcReadContract.ts` for the rationale + the Network-
+  // panel evidence. The "Need X USDC to launch" CTA used to stay locked
+  // with 150+ USDC sitting on Arc because the read never happened.
+  const usdcBalance = useArcReadContract<bigint>({
     address: ADDRESSES.usdc,
     abi: erc20Abi,
     functionName: "balanceOf",
     args: account ? [account] : undefined,
-    // Audit 2026-06-11 v3: pin chainId so the launchpad's "Need X USDC
-    // to launch" CTA reads the user's Arc balance even when their
-    // wallet is briefly pointed at another chain. Without this, the
-    // CTA stayed greyed out at "Need 3 USDC to launch" with 150+
-    // USDC sitting on Arc.
-    chainId: arcTestnet.id,
-    query: { enabled: !!account },
+    enabled: !!account,
   });
 
   const { ensureAllowance } = useApproveIfNeeded(ADDRESSES.usdc, ADDRESSES.launchpad);
