@@ -19,6 +19,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Address, erc20Abi } from "viem";
 import { useAccount, useDisconnect, useReadContract } from "wagmi";
 import { ADDRESSES, USDC_DECIMALS } from "@/lib/constants";
+import { arcTestnet } from "@/lib/chains";
 import { TWITTER_ESCROW_V3_ABI } from "@/lib/abis/twitterEscrowV3";
 import { loadBridgeHistory, type HistoryEntry } from "@/lib/bridgeHistory";
 import { listPendingClaims, type PendingTwitterClaim } from "@/lib/pendingClaims";
@@ -98,11 +99,20 @@ export function HeaderWalletWidget() {
         if (!menuOpen) setPowerOpen(false);
     }, [menuOpen]);
 
+    // Audit 2026-06-11 v3: pin chainId so the header always reads the user's
+    // USDC balance ON ARC, regardless of which network their wallet is
+    // currently connected to. Without this, a user whose Rabby/MetaMask is
+    // pointed at Ethereum mainnet would see "0 USDC" in the header even
+    // when they have plenty on Arc — the read would hit mainnet's
+    // 0x3600...000 (no contract there) and return zero. By forcing the
+    // Arc transport (configured in wagmi.ts), we surface the right number
+    // independent of the wallet's UI state.
     const balanceQ = useReadContract({
         address: ADDRESSES.usdc,
         abi: erc20Abi,
         functionName: "balanceOf",
         args: address ? [address] : undefined,
+        chainId: arcTestnet.id,
         query: { enabled: !!address, refetchInterval: 8000 },
     });
     const raw = (balanceQ.data as bigint | undefined) ?? 0n;
@@ -110,11 +120,13 @@ export function HeaderWalletWidget() {
     const usdValue = formatUSDC(raw, USDC_DECIMALS, 2);
 
     // Owner-only admin shortcut, gated on chain (a "spoof" can see this but
-    // cannot sign any of the admin writes).
+    // cannot sign any of the admin writes). chainId pinned to Arc so the
+    // read works regardless of the wallet's currently-connected chain.
     const escrowOwnerQ = useReadContract({
         address: ADDRESSES.twitterEscrow,
         abi: TWITTER_ESCROW_V3_ABI,
         functionName: "owner",
+        chainId: arcTestnet.id,
         query: { enabled: !!ADDRESSES.twitterEscrow },
     });
     const isEscrowOwner =
