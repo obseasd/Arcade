@@ -6,11 +6,14 @@ import { RouteQuote, PROVIDER_META, ProviderId } from "@/lib/routing/types";
 import { formatUnits } from "viem";
 import { cn } from "@/lib/utils";
 
-// Logos for the external DEXs. Arcade routes use a generic "A" badge so
-// users get a consistent visual signal between "this swap stays in
-// Arcade" and "this swap routes through a third-party DEX". Add a new
+// Logos for every provider. Arcade-internal routes use the brand glyph
+// so the route picker reads visually consistent: "this swap is via
+// Arcade" looks the same shape as "this swap is via Synthra", instead of
+// the previous mix of real DEX logos vs a bare "A" letter. Add a new
 // entry here when wiring a new external provider.
 const PROVIDER_LOGOS: Partial<Record<ProviderId, string>> = {
+  "arcade-v2": "/arcdlogo22.png",
+  "arcade-v3": "/arcdlogo22.png",
   "synthra-v3": "/synthra.svg",
   "unitflow-v3": "/unitflow.svg",
   "xylonet-v1": "/xylonet.svg",
