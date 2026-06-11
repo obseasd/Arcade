@@ -32,12 +32,20 @@ export async function GET(req: NextRequest) {
   // shared apiGuard's "fail open on missing header". OAuth init takes a
   // user-supplied `recipient` that ends up in the EIP-712 Claim the
   // backend later signs, so any cross-origin path here is a phishing
-  // vector. Block requests that don't come from our own UI (Sec-Fetch-
-  // Site: same-origin) or a direct typed URL (Sec-Fetch-Site: none).
-  // Browsers that don't send the header are rare in 2026; we explicitly
-  // require it for this endpoint.
+  // vector. Block requests that don't come from our own UI.
+  // Allowed values:
+  //   - "same-origin" (link click from arcade.trading -> arcade.trading)
+  //   - "none" (typed URL, bookmark)
+  //   - "same-site" (the www -> non-www server-side redirect below
+  //     produces a `same-site` follow-up request because www and apex
+  //     are different origins under the same registrable domain - we
+  //     own every arcade.trading subdomain so this is safe. The state
+  //     cookie is HMAC'd (audit Twitter Escrow H-2) so even a different
+  //     subdomain on arcade.trading couldn't mint a valid claim.)
+  // Older browsers that don't send Sec-Fetch-Site fall through; we
+  // explicitly require it for this endpoint.
   const fetchSite = req.headers.get("sec-fetch-site");
-  if (fetchSite !== "same-origin" && fetchSite !== "none") {
+  if (fetchSite !== "same-origin" && fetchSite !== "none" && fetchSite !== "same-site") {
     return NextResponse.json(
       { error: "Cross-origin OAuth init not allowed" },
       { status: 403 },
