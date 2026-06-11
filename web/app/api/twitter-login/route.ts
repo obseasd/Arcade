@@ -129,15 +129,21 @@ export async function GET(req: NextRequest) {
   const cookieValue = `${stateJson}.${mac}`;
 
   const res = NextResponse.redirect(authUrl.toString());
+  // Regression fix (2026-06-11): the prior "strict" sameSite combined with
+  // the www-stripping callback URL meant the cookie set on www.arcade.trading
+  // never reached the canonical (no-www) callback host, AND strict-sameSite
+  // blocks cookies on the Twitter -> arcade.trading top-level cross-site
+  // redirect even on a matching host. The state param itself is already
+  // crypto-random + HMAC'd (audit Twitter Escrow H-2), so an attacker forging
+  // a callback URL still cannot mint a valid state cookie. `lax` is the
+  // OAuth-standard sameSite for state cookies.
+  const isArcadeHost = req.nextUrl.hostname.endsWith("arcade.trading");
   res.cookies.set(`tw_state_${state}`, cookieValue, {
     httpOnly: true,
     secure: req.nextUrl.protocol === "https:",
-    // Audit Twitter Escrow H-2: switch sameSite from "lax" to "strict".
-    // The callback is same-origin GET so strict doesn't break the flow,
-    // and strict blocks tab-jacking that fires a top-level navigation
-    // to a forged callback URL inheriting the in-flight state cookie.
-    sameSite: "strict",
-    maxAge: 600, // 10 minutes
+    sameSite: "lax",
+    domain: isArcadeHost ? "arcade.trading" : undefined,
+    maxAge: 600,
     path: "/",
   });
   return res;

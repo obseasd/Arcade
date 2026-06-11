@@ -457,18 +457,30 @@ export async function GET(req: NextRequest) {
 
   const url = new URL(`${origin}/claim`);
   const res = NextResponse.redirect(url.toString());
-  res.cookies.delete(cookieName);
+  // Regression fix (2026-06-11): cookies set with domain="arcade.trading"
+  // need the same domain on delete/clear to actually unset in the browser.
+  // Use an explicit overwrite-with-empty + maxAge=0 because cookies.delete
+  // does not propagate the domain attribute.
+  const isArcadeHost = req.nextUrl.hostname.endsWith("arcade.trading");
+  const cookieDomain = isArcadeHost ? "arcade.trading" : undefined;
+  res.cookies.set(cookieName, "", {
+    httpOnly: true,
+    secure: req.nextUrl.protocol === "https:",
+    sameSite: "lax",
+    domain: cookieDomain,
+    path: "/",
+    maxAge: 0,
+  });
   // Audit F-9: HMAC the cookie body with ARCADE_OAUTH_STATE_SECRET so a
   // tampered cookie (recipient swap, amount swap, sig swap) fails server-
-  // side verification at /api/claim/payload. The cookie was already
-  // HttpOnly + SameSite=Strict; this is defense-in-depth against same-
-  // origin XSS that could otherwise rewrite the body silently.
+  // side verification at /api/claim/payload.
   const claimBody = JSON.stringify(payload);
   const claimMac = crypto.createHmac("sha256", secret).update(claimBody).digest("hex");
   res.cookies.set("arcade_claim_payload", `${claimBody}.${claimMac}`, {
     httpOnly: true,
     secure: req.nextUrl.protocol === "https:",
     sameSite: "strict",
+    domain: cookieDomain,
     path: "/",
     maxAge: 120,
   });
