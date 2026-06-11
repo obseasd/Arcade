@@ -23,17 +23,14 @@ export function Providers({ children }: { children: ReactNode }) {
   // user-eyeball-read and wallet-sign. 30s mirrors the existing polling
   // intervals on balance hooks so the window-focus refresh aligns with
   // the cadence the rest of the app already uses.
-  const [queryClient] = useState(
-    () =>
-      new QueryClient({
-        defaultOptions: {
-          queries: {
-            refetchOnWindowFocus: true,
-            staleTime: 30_000,
-          },
-        },
-      }),
-  );
+  // staleTime + refetchOnWindowFocus combined were suspected of stalling
+  // wagmi reads on a fresh page load (0 RPC calls in 5s observed on
+  // /swap, /launchpad, /positions). Reverting to the wagmi default
+  // QueryClient until we isolate which option is incompatible with our
+  // SSR + RainbowKit + Multicall3 setup. Audit findings UX-H-1 (focus
+  // refresh) + V2-F-05 (stale-time) will need a different shape later
+  // — likely refetchOnWindowFocus toggled per-hook rather than globally.
+  const [queryClient] = useState(() => new QueryClient());
 
   return (
     <WagmiProvider config={wagmiConfig}>

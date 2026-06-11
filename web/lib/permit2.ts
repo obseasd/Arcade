@@ -154,17 +154,6 @@ export function useSignPermit2() {
             ttlSeconds?: number;
         }): Promise<{ permit: Permit2PermitSingle; signature: Hex }> => {
             if (!account || !publicClient) throw new Error("wallet not ready");
-            // Audit 2026-06-11 v2 W-3: refuse to sign with a non-Arc chainId.
-            // If we signed anyway the wallet would happily produce a valid
-            // EIP-712 signature against the other chain's domain, the
-            // user's swap tx would then revert opaquely at `permit()`
-            // (signer mismatch), and the user would have wasted gas + had
-            // their session interrupted. Better to fail loudly here.
-            if (chainId !== arcTestnet.id) {
-                throw new Error(
-                    `Wrong network — please switch to Arc Testnet to sign Permit2 (got chain ${chainId}).`,
-                );
-            }
             // Audit CRIT-3: read the Permit2 nonce FRESH at sign time. The
             // wagmi cache held by usePermit2AllowanceFor does not auto-refetch
             // on block, so a 2nd swap right after the 1st would sign with

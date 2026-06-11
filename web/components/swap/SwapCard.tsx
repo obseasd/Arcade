@@ -569,13 +569,6 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
           functionName: activeRoute.executor.functionName,
           args: execArgs,
           value: activeRoute.executor.value,
-          // Audit 2026-06-11 v2 W-4: pin chainId so a wallet that's
-          // briefly on another chain (post-bridge return, OAuth race)
-          // doesn't sign a swap against an address that's a contract on
-          // Arc but a plain EOA on Sepolia. The wallet UI will surface
-          // the chain mismatch immediately instead of letting the user
-          // sign a tx that burns gas on a non-contract.
-          chainId: arcTestnet.id,
         });
       } else if (isV3Swap) {
         // CLANKER_V3 token: trade on the V3 pool via our V3 router. Exact-in
@@ -596,9 +589,6 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
                 `0x${string}`, `0x${string}`, number, `0x${string}`, bigint, bigint, bigint, bigint
               ])
             : [tokenIn.address, tokenOut.address, v3Fee, account, finalAmountIn, minOut, deadline],
-          // Audit 2026-06-11 v2 W-4: pin chainId. See the universal
-          // router branch above for rationale.
-          chainId: arcTestnet.id,
         });
       } else if (route.useLaunchpadRouter) {
         // Multi-hop through the launchpad's router so post-migration royalties
@@ -647,8 +637,6 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
           abi: LAUNCHPAD_ABI,
           functionName: "swapMigratedRoute",
           args: [tokenIn.address, tokenOut.address, finalAmountIn, minOut, usdcMidMinForRoute, deadline],
-          // Audit 2026-06-11 v2 W-4: pin chainId (see UR branch).
-          chainId: arcTestnet.id,
         });
       } else if (exactIn) {
         hash = await writeContractAsync({
@@ -656,8 +644,6 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
           abi: ROUTER_ABI,
           functionName: "swapExactTokensForTokens",
           args: [finalAmountIn, minOut, path, account, deadline],
-          // Audit 2026-06-11 v2 W-4: pin chainId (see UR branch).
-          chainId: arcTestnet.id,
         });
       } else {
         hash = await writeContractAsync({
@@ -665,8 +651,6 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
           abi: ROUTER_ABI,
           functionName: "swapTokensForExactTokens",
           args: [finalAmountOut, maxIn, path, account, deadline],
-          // Audit 2026-06-11 v2 W-4: pin chainId (see UR branch).
-          chainId: arcTestnet.id,
         });
       }
       // Audit high [26]: viem's waitForTransactionReceipt returns a
