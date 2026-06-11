@@ -2,10 +2,48 @@
 
 import { useEffect, useState } from "react";
 import { useAccount, useChainId, usePublicClient, useReadContract, useConfig } from "wagmi";
-import { erc20Abi, createPublicClient, http } from "viem";
+import { erc20Abi, createPublicClient, http, encodeFunctionData } from "viem";
 import { arcTestnet } from "@/lib/chains";
 
-const USDC = (process.env.NEXT_PUBLIC_USDC_ADDRESS || "0x36000000000000000000000000000000000000c2") as `0x${string}`;
+const USDC = (process.env.NEXT_PUBLIC_USDC_ADDRESS || "0x3600000000000000000000000000000000000000") as `0x${string}`;
+const ARC_RPC = arcTestnet.rpcUrls.default.http[0];
+
+// Install fetch interceptor BEFORE wagmi mounts so we catch every eth_call.
+// We log only requests to the Arc RPC to keep the noise down.
+const rpcLog: Array<{ time: string; body: string; resp: string }> = [];
+let interceptorInstalled = false;
+function installInterceptor() {
+    if (interceptorInstalled || typeof window === "undefined") return;
+    interceptorInstalled = true;
+    const origFetch = window.fetch.bind(window);
+    window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+        const isArc = url.includes("arc.network") || url.includes("rpc.testnet.arc");
+        let bodyStr = "";
+        if (isArc && init?.body) {
+            try {
+                bodyStr = typeof init.body === "string" ? init.body : "[non-string body]";
+            } catch {
+                bodyStr = "[unreadable]";
+            }
+        }
+        const r = await origFetch(input, init);
+        if (isArc && bodyStr) {
+            try {
+                const cloned = r.clone();
+                const txt = await cloned.text();
+                const t = new Date().toISOString().split("T")[1].slice(0, 12);
+                rpcLog.push({
+                    time: t,
+                    body: bodyStr.slice(0, 500),
+                    resp: txt.slice(0, 500),
+                });
+            } catch {}
+        }
+        return r;
+    };
+}
+if (typeof window !== "undefined") installInterceptor();
 
 export default function DebugWagmiPage() {
     const { address, isConnected, status: accountStatus, connector } = useAccount();
@@ -17,6 +55,9 @@ export default function DebugWagmiPage() {
     const [mainDirectResult, setMainDirectResult] = useState<string>("(not yet)");
     const [walletChainId, setWalletChainId] = useState<string>("(not yet)");
     const [eip6963Providers, setEip6963Providers] = useState<string[]>([]);
+    const [pcReadContractResult, setPcReadContractResult] = useState<string>("(not yet)");
+    const [pcEthCallResult, setPcEthCallResult] = useState<string>("(not yet)");
+    const [rpcCalls, setRpcCalls] = useState<typeof rpcLog>([]);
 
     const log = (msg: string) => {
         const t = new Date().toISOString().split("T")[1].slice(0, 12);
@@ -32,24 +73,24 @@ export default function DebugWagmiPage() {
     });
 
     useEffect(() => {
-        log(`mount: address=${address ?? "none"} isConnected=${isConnected} chainId=${chainId}`);
+        log(`mount: addr=${address ?? "none"} connected=${isConnected} chain=${chainId} USDC=${USDC}`);
     }, []);
 
     useEffect(() => {
-        log(`account changed: address=${address ?? "none"} isConnected=${isConnected} status=${accountStatus} connector=${connector?.name ?? "none"}`);
+        log(`account: addr=${address ?? "none"} connected=${isConnected} status=${accountStatus} connector=${connector?.name ?? "none"}`);
     }, [address, isConnected, accountStatus, connector]);
 
     useEffect(() => {
-        log(`chainId from wagmi useChainId(): ${chainId} (expect ${arcTestnet.id})`);
-    }, [chainId]);
-
-    useEffect(() => {
-        log(`balanceQ: status=${balanceQ.status} fetchStatus=${balanceQ.fetchStatus} error=${balanceQ.error?.message ?? "none"} data=${balanceQ.data?.toString() ?? "undefined"}`);
+        log(`balanceQ: status=${balanceQ.status} fetchStatus=${balanceQ.fetchStatus} error=${(balanceQ.error?.message ?? "none").slice(0, 200)} data=${balanceQ.data?.toString() ?? "undefined"}`);
     }, [balanceQ.status, balanceQ.fetchStatus, balanceQ.error, balanceQ.data]);
 
     useEffect(() => {
+        const id = setInterval(() => setRpcCalls([...rpcLog]), 1000);
+        return () => clearInterval(id);
+    }, []);
+
+    useEffect(() => {
         async function diag() {
-            // EIP-6963 enum
             const providers: { info: { name: string; uuid: string; rdns: string } }[] = [];
             const handler = (e: Event) => {
                 providers.push((e as CustomEvent).detail);
@@ -59,38 +100,28 @@ export default function DebugWagmiPage() {
             await new Promise((r) => setTimeout(r, 800));
             window.removeEventListener("eip6963:announceProvider", handler as EventListener);
             setEip6963Providers(providers.map((p) => `${p.info.name} (${p.info.rdns})`));
-            log(`EIP-6963 announce: ${providers.length} providers`);
 
-            // Wallet eth_chainId
             if (window.ethereum) {
                 try {
                     const cid = await window.ethereum.request({ method: "eth_chainId" });
                     setWalletChainId(String(cid));
-                    log(`wallet eth_chainId: ${cid}`);
                 } catch (e) {
                     setWalletChainId(`ERROR: ${(e as Error).message}`);
-                    log(`wallet eth_chainId FAILED: ${(e as Error).message}`);
                 }
-            } else {
-                setWalletChainId("(no window.ethereum)");
             }
 
-            // Direct Arc RPC
             try {
-                const r = await fetch(arcTestnet.rpcUrls.default.http[0], {
+                const r = await fetch(ARC_RPC, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_blockNumber", params: [] }),
                 });
                 const j = await r.json();
                 setArcDirectResult(`OK block=${j.result}`);
-                log(`direct Arc RPC: OK block=${j.result}`);
             } catch (e) {
                 setArcDirectResult(`ERROR: ${(e as Error).message}`);
-                log(`direct Arc RPC FAILED: ${(e as Error).message}`);
             }
 
-            // Direct mainnet RPC (publicnode)
             try {
                 const r = await fetch("https://ethereum-rpc.publicnode.com", {
                     method: "POST",
@@ -99,13 +130,10 @@ export default function DebugWagmiPage() {
                 });
                 const j = await r.json();
                 setMainDirectResult(`OK block=${j.result}`);
-                log(`direct mainnet RPC: OK block=${j.result}`);
             } catch (e) {
                 setMainDirectResult(`ERROR: ${(e as Error).message}`);
-                log(`direct mainnet RPC FAILED: ${(e as Error).message}`);
             }
 
-            // Bypass viem client - prove a direct viem call works
             try {
                 const c = createPublicClient({ chain: arcTestnet, transport: http() });
                 const block = await c.getBlockNumber();
@@ -117,33 +145,62 @@ export default function DebugWagmiPage() {
                         functionName: "balanceOf",
                         args: [address],
                     });
-                    log(`bypass viem balanceOf(${address}): ${bal}`);
+                    log(`bypass viem balanceOf: ${bal} on USDC=${USDC}`);
                 }
             } catch (e) {
                 log(`bypass viem FAILED: ${(e as Error).message}`);
             }
 
-            // wagmi publicClient probe
             if (publicClient) {
                 try {
                     const block = await publicClient.getBlockNumber();
                     log(`wagmi publicClient getBlockNumber: ${block}`);
                 } catch (e) {
-                    log(`wagmi publicClient FAILED: ${(e as Error).message}`);
+                    log(`wagmi publicClient getBlockNumber FAILED: ${(e as Error).message}`);
                 }
-            } else {
-                log(`wagmi publicClient: undefined`);
+                // Try the same readContract through wagmi's publicClient
+                if (address) {
+                    try {
+                        const bal = await publicClient.readContract({
+                            address: USDC,
+                            abi: erc20Abi,
+                            functionName: "balanceOf",
+                            args: [address],
+                        });
+                        setPcReadContractResult(`OK ${bal}`);
+                        log(`wagmi publicClient.readContract balanceOf: ${bal}`);
+                    } catch (e) {
+                        setPcReadContractResult(`ERROR: ${(e as Error).message.slice(0, 200)}`);
+                        log(`wagmi publicClient.readContract FAILED: ${(e as Error).message.slice(0, 200)}`);
+                    }
+                    // Also try raw eth_call through publicClient
+                    try {
+                        const data = encodeFunctionData({
+                            abi: erc20Abi,
+                            functionName: "balanceOf",
+                            args: [address],
+                        });
+                        const res = await publicClient.call({ to: USDC, data });
+                        setPcEthCallResult(`OK ${res.data}`);
+                        log(`wagmi publicClient.call raw eth_call: ${res.data}`);
+                    } catch (e) {
+                        setPcEthCallResult(`ERROR: ${(e as Error).message.slice(0, 200)}`);
+                        log(`wagmi publicClient.call FAILED: ${(e as Error).message.slice(0, 200)}`);
+                    }
+                }
             }
         }
         diag();
     }, [address, publicClient]);
 
     return (
-        <div className="mx-auto max-w-4xl space-y-4 p-6 text-sm font-mono">
+        <div className="mx-auto max-w-5xl space-y-4 p-6 text-sm font-mono">
             <h1 className="text-2xl font-bold">wagmi debug</h1>
 
             <section className="rounded border border-arc-border bg-arc-bg-elevated p-4">
                 <h2 className="mb-2 text-lg font-semibold">State</h2>
+                <div>USDC constant: {USDC}</div>
+                <div>USDC env raw: {String(process.env.NEXT_PUBLIC_USDC_ADDRESS)}</div>
                 <div>account address: {address ?? "(none)"}</div>
                 <div>account isConnected: {String(isConnected)}</div>
                 <div>account status: {accountStatus}</div>
@@ -151,6 +208,7 @@ export default function DebugWagmiPage() {
                 <div>wagmi useChainId(): {chainId}</div>
                 <div>wallet eth_chainId: {walletChainId}</div>
                 <div>publicClient defined: {String(!!publicClient)}</div>
+                <div>publicClient chain: {publicClient?.chain?.id}</div>
                 <div>config chains: {config.chains.map((c) => c.id).join(",")}</div>
             </section>
 
@@ -161,19 +219,38 @@ export default function DebugWagmiPage() {
 
             <section className="rounded border border-arc-border bg-arc-bg-elevated p-4">
                 <h2 className="mb-2 text-lg font-semibold">Direct RPC probes</h2>
-                <div>Arc ({arcTestnet.rpcUrls.default.http[0]}): {arcDirectResult}</div>
-                <div>Mainnet (publicnode): {mainDirectResult}</div>
+                <div>Arc fetch: {arcDirectResult}</div>
+                <div>Mainnet fetch: {mainDirectResult}</div>
             </section>
 
             <section className="rounded border border-arc-border bg-arc-bg-elevated p-4">
-                <h2 className="mb-2 text-lg font-semibold">wagmi useReadContract USDC.balanceOf({address?.slice(0, 8) ?? "—"}…)</h2>
+                <h2 className="mb-2 text-lg font-semibold">wagmi publicClient (via usePublicClient)</h2>
+                <div>publicClient.readContract balanceOf: {pcReadContractResult}</div>
+                <div>publicClient.call raw eth_call: {pcEthCallResult}</div>
+            </section>
+
+            <section className="rounded border border-arc-border bg-arc-bg-elevated p-4">
+                <h2 className="mb-2 text-lg font-semibold">wagmi useReadContract USDC.balanceOf</h2>
                 <div>status: {balanceQ.status}</div>
                 <div>fetchStatus: {balanceQ.fetchStatus}</div>
                 <div>isLoading: {String(balanceQ.isLoading)}</div>
                 <div>isFetching: {String(balanceQ.isFetching)}</div>
                 <div>isError: {String(balanceQ.isError)}</div>
                 <div>data: {balanceQ.data?.toString() ?? "(undefined)"}</div>
-                <div>error: {balanceQ.error?.message ?? "(none)"}</div>
+                <div className="break-all">error: {balanceQ.error?.message ?? "(none)"}</div>
+            </section>
+
+            <section className="rounded border border-arc-border bg-arc-bg-elevated p-4">
+                <h2 className="mb-2 text-lg font-semibold">Intercepted RPC calls to Arc ({rpcCalls.length})</h2>
+                <div className="space-y-2">
+                    {rpcCalls.map((c, i) => (
+                        <div key={i} className="rounded bg-arc-bg p-2 text-xs">
+                            <div className="text-arc-text-muted">{c.time}</div>
+                            <div className="break-all">→ {c.body}</div>
+                            <div className="break-all text-arc-text-muted">← {c.resp}</div>
+                        </div>
+                    ))}
+                </div>
             </section>
 
             <section className="rounded border border-arc-border bg-arc-bg-elevated p-4">
