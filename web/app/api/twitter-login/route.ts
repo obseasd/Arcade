@@ -44,6 +44,19 @@ export async function GET(req: NextRequest) {
     );
   }
 
+  // Defense-in-depth (2026-06-11): force the OAuth flow onto the canonical
+  // (no-www) host BEFORE we set any cookies. The callback URL handed to
+  // Twitter is always no-www (see canonicalization further down), so if the
+  // user arrived on www.arcade.trading we'd be setting the state cookie on
+  // a host that the callback never visits. The domain attr also covers this,
+  // but a redirect-first approach is bulletproof against any browser that
+  // treats Domain= conservatively (Brave shields, Safari ITP, etc.).
+  if (req.nextUrl.hostname.startsWith("www.")) {
+    const target = req.nextUrl.clone();
+    target.hostname = req.nextUrl.hostname.slice(4);
+    return NextResponse.redirect(target, 307);
+  }
+
   // Audit F-8: validate critical server config BEFORE the rate limit so
   // a "server_misconfigured" response can't be distinguished from a
   // legitimate 429 by an external prober trying to fingerprint the
