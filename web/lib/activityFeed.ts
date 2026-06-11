@@ -75,13 +75,48 @@ interface OmitId {
     txHash?: string;
 }
 
+// Audit 2026-06-11 UX C-3: per-entry schema validation matching the
+// pendingClaims hardening pattern (FSEC-006). A corrupted row — written
+// by an old schema, XSS, partial quota-exceeded write, manual user
+// fiddling, or a malformed broadcast — used to crash /my-tokens when
+// `capitalize(a.type)` hit a null or undefined `type`. Now every entry
+// loaded from disk is validated and dropped silently if it doesn't match
+// the expected shape. Keeps the feed self-healing across schema bumps.
+const ALLOWED_TYPES: ReadonlySet<ActivityType> = new Set([
+    "launch",
+    "buy",
+    "sell",
+    "swap",
+    "multiswap",
+    "claim-fees",
+    "add-liquidity",
+    "send",
+]);
+
+function isValidEntry(v: unknown): v is ActivityEntry {
+    if (!v || typeof v !== "object") return false;
+    const e = v as Record<string, unknown>;
+    return (
+        typeof e.id === "string" &&
+        typeof e.type === "string" &&
+        ALLOWED_TYPES.has(e.type as ActivityType) &&
+        typeof e.timestamp === "number" &&
+        Number.isFinite(e.timestamp) &&
+        typeof e.account === "string" &&
+        typeof e.label === "string" &&
+        typeof e.value === "string" &&
+        (e.token === undefined || typeof e.token === "string") &&
+        (e.txHash === undefined || typeof e.txHash === "string")
+    );
+}
+
 function loadFor(account: string): ActivityEntry[] {
     if (typeof window === "undefined") return [];
     try {
         const raw = window.localStorage.getItem(keyFor(account));
         if (raw) {
             const parsed = JSON.parse(raw);
-            return Array.isArray(parsed) ? parsed : [];
+            return Array.isArray(parsed) ? parsed.filter(isValidEntry) : [];
         }
         // One-time legacy migration: if a pre-F-7 shared bucket exists,
         // read it, filter to this account, and return without writing
@@ -94,7 +129,7 @@ function loadFor(account: string): ActivityEntry[] {
         const all = JSON.parse(legacyRaw);
         if (!Array.isArray(all)) return [];
         const acc = account.toLowerCase();
-        return all.filter((e) => e?.account === acc);
+        return all.filter((e) => e?.account === acc).filter(isValidEntry);
     } catch {
         return [];
     }

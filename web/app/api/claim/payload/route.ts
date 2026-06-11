@@ -21,6 +21,23 @@ export const runtime = "nodejs";
 
 const COOKIE = "arcade_claim_payload";
 
+// Audit 2026-06-11 FE-1: cookies.delete() does NOT carry the domain attr,
+// so the arcade.trading-scoped cookie set by twitter-callback survives
+// after a delete() call here, breaking the one-shot semantic. Use the
+// explicit overwrite-with-empty + maxAge=0 + matching domain pattern that
+// twitter-callback adopted for the state cookie.
+function clearClaimCookie(req: NextRequest, res: NextResponse): void {
+  const isArcadeHost = req.nextUrl.hostname.endsWith("arcade.trading");
+  res.cookies.set(COOKIE, "", {
+    httpOnly: true,
+    secure: req.nextUrl.protocol === "https:",
+    sameSite: "strict",
+    domain: isArcadeHost ? "arcade.trading" : undefined,
+    path: "/",
+    maxAge: 0,
+  });
+}
+
 export async function GET(req: NextRequest) {
   const fetchSite = req.headers.get("sec-fetch-site");
   if (fetchSite !== "same-origin" && fetchSite !== "none") {
@@ -53,7 +70,7 @@ export async function GET(req: NextRequest) {
   const sepIdx = raw.lastIndexOf(".");
   if (sepIdx < 0) {
     const res = NextResponse.json({ error: "bad_payload" }, { status: 400 });
-    res.cookies.delete(COOKIE);
+    clearClaimCookie(req, res);
     return res;
   }
   const body = raw.slice(0, sepIdx);
@@ -76,7 +93,7 @@ export async function GET(req: NextRequest) {
   }
   if (!macOk) {
     const res = NextResponse.json({ error: "bad_payload" }, { status: 400 });
-    res.cookies.delete(COOKIE);
+    clearClaimCookie(req, res);
     return res;
   }
   let payload: unknown;
@@ -84,13 +101,15 @@ export async function GET(req: NextRequest) {
     payload = JSON.parse(body);
   } catch {
     const res = NextResponse.json({ error: "bad_payload" }, { status: 400 });
-    res.cookies.delete(COOKIE);
+    clearClaimCookie(req, res);
     return res;
   }
-  const res = NextResponse.json(payload);
+  const res = NextResponse.json(payload, {
+    headers: { "cache-control": "no-store" },
+  });
   // One-shot: consume the cookie on the first successful read so a
   // user accidentally re-visiting /claim doesn't expose the same
   // sig to a third party who somehow got read access.
-  res.cookies.delete(COOKIE);
+  clearClaimCookie(req, res);
   return res;
 }

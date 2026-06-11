@@ -165,7 +165,11 @@ export function useSignPermit2() {
             // and the 10 min expiration narrows the leftover-allowance
             // window. Without this, a 1-wei React state drift between
             // sign and exec would revert the swap.
-            const cappedAmount = args.amount > maxUint160 ? maxUint160 : maxUint160;
+            // Audit 2026-06-11 ROUTING F-7: collapse the dead ternary —
+            // both branches returned maxUint160. Signing for the max keeps
+            // Permit2 immune to 1-wei React drift between sign and exec;
+            // the V3_SWAP_EXACT_IN's amountOutMinimum still bounds slippage.
+            const cappedAmount = maxUint160;
             const permit: Permit2PermitSingle = {
                 details: {
                     token: args.token,

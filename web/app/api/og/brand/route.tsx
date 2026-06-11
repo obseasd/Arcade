@@ -5,7 +5,15 @@ import { NextRequest } from "next/server";
 // override it (home, /swap, /launchpad, etc). Token-detail pages keep
 // using ../route.tsx which embeds the token image + FDV.
 export const runtime = "edge";
-export const dynamic = "force-dynamic";
+// Audit 2026-06-11 API-4: force-dynamic was the wrong choice — the brand
+// splash never varies per request, so every visit triggered an
+// ImageResponse + 2 Google Fonts fetches. Switching to force-static lets
+// the edge cache hold the rendered PNG and serve subsequent hits from
+// cache. The runtime is still "edge" because ImageResponse requires it.
+export const dynamic = "force-static";
+// 24h at the edge + 1y stale-while-revalidate. The image is intentionally
+// static (no token, no FDV, no per-page) so a long cache is correct.
+export const revalidate = 86400;
 
 const BG_FROM = "#001029";
 const BG_MID = "#0A1F3A";

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createPublicClient, http, isAddress, keccak256, stringToBytes, concat, type Hex, parseAbi } from "viem";
 import { mainnet } from "viem/chains";
+import { rateLimit } from "@/lib/apiGuard";
 
 /**
  * Server-side ENS reverse resolution + forward-verify roundtrip. Manual
@@ -155,10 +156,19 @@ async function forward(name: string): Promise<{
     return { address: null, attempts };
 }
 
+// Audit 2026-06-11 API-1 + API-3: gate ?debug=1 behind non-production and
+// always strip RPC URLs from attempt logs to prevent MAINNET_RPC (likely
+// Alchemy/Infura key in the path) from leaking. Per-IP rate limit at 30/min
+// — reverse fans out to up to 8 upstream RPC reads per call so its quota
+// burn is roughly 2x the forward route.
+const DEBUG_ENABLED = process.env.NODE_ENV !== "production";
+
 export async function GET(req: NextRequest) {
+    const rl = rateLimit(req, "ens-reverse", 30, 60_000);
+    if (rl) return rl;
     const url = new URL(req.url);
     const addressParam = (url.searchParams.get("address") || "").trim();
-    const debug = url.searchParams.get("debug") === "1";
+    const debug = DEBUG_ENABLED && url.searchParams.get("debug") === "1";
     if (!isAddress(addressParam)) {
         return NextResponse.json({ name: null }, { status: 200 });
     }
@@ -166,7 +176,7 @@ export async function GET(req: NextRequest) {
     const reverseResult = await reverse(addr);
     if (!reverseResult.name) {
         const body: Record<string, unknown> = { name: null };
-        if (debug) body.reverseAttempts = reverseResult.attempts;
+        if (debug) body.reverseAttempts = redactAttempts(reverseResult.attempts);
         return NextResponse.json(body, {
             status: 200,
             headers: { "cache-control": "no-store" },
@@ -177,8 +187,8 @@ export async function GET(req: NextRequest) {
         forwardResult.address && forwardResult.address.toLowerCase() === addr.toLowerCase();
     const body: Record<string, unknown> = { name: verified ? reverseResult.name : null };
     if (debug) {
-        body.reverseAttempts = reverseResult.attempts;
-        body.forwardAttempts = forwardResult.attempts;
+        body.reverseAttempts = redactAttempts(reverseResult.attempts);
+        body.forwardAttempts = redactAttempts(forwardResult.attempts);
         body.candidateName = reverseResult.name;
         body.forwardResolved = forwardResult.address;
     }
@@ -192,4 +202,17 @@ export async function GET(req: NextRequest) {
                   "cache-control": "no-store",
               },
     });
+}
+
+function redactAttempts(attempts: AttemptLog[]): AttemptLog[] {
+    return attempts.map((a) => ({ ...a, url: redactRpcUrl(a.url) }));
+}
+
+function redactRpcUrl(url: string): string {
+    try {
+        const u = new URL(url);
+        return `${u.protocol}//${u.host}`;
+    } catch {
+        return "redacted";
+    }
 }

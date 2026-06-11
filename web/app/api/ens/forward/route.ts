@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createPublicClient, http, isAddress, keccak256, stringToBytes, concat, type Hex, parseAbi } from "viem";
 import { mainnet } from "viem/chains";
+import { rateLimit } from "@/lib/apiGuard";
 
 /**
  * Server-side ENS forward resolution.
@@ -138,10 +139,25 @@ async function resolveForward(name: string): Promise<ResolveResult> {
     return { address: null, attempts, node };
 }
 
+// Audit 2026-06-11 API-1: gate ?debug=1 behind non-production env so the
+// attempts[].url log (which contains MAINNET_RPC = our Alchemy/Infura key in
+// the path) is never returned to anonymous callers in prod.
+const DEBUG_ENABLED = process.env.NODE_ENV !== "production";
+// Audit 2026-06-11 API-3: per-IP rate limit + hard length cap on `name` so
+// cache-busting can't drain llamarpc / Cloudflare / publicnode upstream
+// quota. 60 req/min/IP is way above any honest user typing into the Send
+// recipient field (debounced + edge-cached on positive hits).
+const MAX_NAME_LEN = 253;
+
 export async function GET(req: NextRequest) {
+    const rl = rateLimit(req, "ens-forward", 60, 60_000);
+    if (rl) return rl;
     const url = new URL(req.url);
     const raw = (url.searchParams.get("name") || "").trim();
-    const debug = url.searchParams.get("debug") === "1";
+    if (raw.length > MAX_NAME_LEN) {
+        return NextResponse.json({ address: null }, { status: 200 });
+    }
+    const debug = DEBUG_ENABLED && url.searchParams.get("debug") === "1";
     if (!raw || !raw.includes(".")) {
         return NextResponse.json({ address: null }, { status: 200 });
     }
@@ -149,7 +165,9 @@ export async function GET(req: NextRequest) {
     const result = await resolveForward(normalized);
     const body: Record<string, unknown> = { address: result.address };
     if (debug) {
-        body.attempts = result.attempts;
+        // Strip URLs from attempts before returning even in dev — the
+        // env-leak risk pattern shouldn't differ by NODE_ENV.
+        body.attempts = result.attempts.map((a) => ({ ...a, url: redactRpcUrl(a.url) }));
         body.normalized = normalized;
         body.node = result.node;
         body.registry = ENS_REGISTRY;
@@ -164,4 +182,13 @@ export async function GET(req: NextRequest) {
                   "cache-control": "no-store",
               },
     });
+}
+
+function redactRpcUrl(url: string): string {
+    try {
+        const u = new URL(url);
+        return `${u.protocol}//${u.host}`;
+    } catch {
+        return "redacted";
+    }
 }

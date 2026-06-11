@@ -468,11 +468,20 @@ function Row({ label, value }: { label: string; value: string }) {
   );
 }
 
+// Audit 2026-06-11 FE-4: strict whitelist matching Twitter's documented
+// handle charset + length. Same regex the OG image route runs (F-10). An
+// invalid handle is silently dropped so an attacker can't share
+// `?handle=victim_handle` to phish a user into thinking the slot was
+// attributed to that account. The Lobby falls back to the generic
+// "Enter the token address" copy when the handle fails validation.
+const HANDLE_RE = /^[A-Za-z0-9_]{1,15}$/;
+
 function Lobby() {
   const params = useSearchParams();
   const prefilledToken = params.get("token") ?? "";
   const prefilledSlot = params.get("slot") ?? "0";
-  const prefilledHandle = params.get("handle") ?? "";
+  const rawHandle = params.get("handle") ?? "";
+  const prefilledHandle = HANDLE_RE.test(rawHandle) ? rawHandle : "";
   const [tokenInput, setTokenInput] = useState(prefilledToken);
   const [slot, setSlot] = useState(prefilledSlot);
   const { address: account } = useAccount();

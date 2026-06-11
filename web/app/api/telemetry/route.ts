@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { rateLimit, rejectCrossOrigin } from "@/lib/apiGuard";
 
 /**
  * Server-side telemetry sink (audit A-6). lib/telemetry.ts POSTs here
@@ -43,15 +44,54 @@ interface Body {
     data?: Record<string, unknown>;
 }
 
+// Audit 2026-06-11 API-2: defense-in-depth on the telemetry sink so a
+// third-party page can't drain Sentry quota via cross-origin POSTs nor
+// stuff attacker-controlled strings into the operator dashboard.
+//   1. rejectCrossOrigin gates Sec-Fetch-Site (same OWASP gate as pin
+//      routes and twitter-login).
+//   2. rateLimit caps spam from a single IP/UA bucket.
+//   3. MAX_BODY_BYTES rejects oversized payloads before JSON parse so a
+//      multi-MB body can't OOM the function or stuff Sentry events.
+//   4. ALLOWED_LEVELS whitelists `level` so a hostile body can't bypass
+//      the info-sampler by passing `level: "error"` and burn the full
+//      quota.
+//   5. ALLOWED_NAMES (prefix match on a short list) keeps event names
+//      auditable; an unknown name still ships but with a sanitised
+//      placeholder, so the dashboard's filter UX isn't polluted.
+const MAX_BODY_BYTES = 4_096;
+const ALLOWED_LEVELS = new Set<Body["level"]>(["info", "warning", "error"]);
+const ALLOWED_NAME_PREFIXES = ["swap.", "bridge.", "claim.", "provider.", "ui."];
+
 export async function POST(req: NextRequest) {
+    const cross = rejectCrossOrigin(req);
+    if (cross) return cross;
+    const rl = rateLimit(req, "telemetry", 120, 60_000);
+    if (rl) return rl;
     if (!parsed) return NextResponse.json({ ok: true });
-    let body: Body;
+    const contentLengthHeader = req.headers.get("content-length");
+    if (contentLengthHeader && Number(contentLengthHeader) > MAX_BODY_BYTES) {
+        return NextResponse.json({ ok: false }, { status: 413 });
+    }
+    let bodyText: string;
     try {
-        body = (await req.json()) as Body;
+        bodyText = await req.text();
     } catch {
         return NextResponse.json({ ok: false }, { status: 400 });
     }
-    const level = body.level ?? "info";
+    if (bodyText.length > MAX_BODY_BYTES) {
+        return NextResponse.json({ ok: false }, { status: 413 });
+    }
+    let body: Body;
+    try {
+        body = JSON.parse(bodyText) as Body;
+    } catch {
+        return NextResponse.json({ ok: false }, { status: 400 });
+    }
+    const rawLevel = body.level;
+    const level = rawLevel && ALLOWED_LEVELS.has(rawLevel) ? rawLevel : "info";
+    const rawName = typeof body.name === "string" ? body.name.slice(0, 80) : "";
+    const knownName = ALLOWED_NAME_PREFIXES.some((p) => rawName.startsWith(p));
+    const name = knownName ? rawName : "ui.unknown";
     if (level === "info" && Math.random() > SAMPLE_RATE) {
         return NextResponse.json({ ok: true, sampled: false });
     }
@@ -61,7 +101,7 @@ export async function POST(req: NextRequest) {
     const payload = {
         timestamp: Math.floor(Date.now() / 1000),
         level,
-        message: body.name,
+        message: name,
         platform: "javascript",
         extra: body.data,
         release: process.env.NEXT_PUBLIC_GIT_SHA ?? "dev",

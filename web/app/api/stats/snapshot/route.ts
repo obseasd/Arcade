@@ -1,5 +1,6 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { getAggregateStats } from "@/lib/stats";
+import { rateLimit } from "@/lib/apiGuard";
 
 /**
  * Cached JSON snapshot of Arcade activity metrics. Revalidates every 5
@@ -14,7 +15,14 @@ import { getAggregateStats } from "@/lib/stats";
  */
 export const revalidate = 300;
 
-export async function GET() {
+// Audit 2026-06-11 API-5: per-IP rate limit so a cache-busting query
+// (`?_=...`) can't defeat the 5-minute ISR cache and force a fresh
+// getAggregateStats RPC scan on every hit. 30 req/min/IP is well above
+// honest polling (footer counter polls once every 5 min) but well below
+// the threshold where a sustained burst would flood Arc RPC.
+export async function GET(req: NextRequest) {
+    const rl = rateLimit(req, "stats-snapshot", 30, 60_000);
+    if (rl) return rl;
     const snapshot = await getAggregateStats();
     // bigint cannot serialize directly; stringify for transport.
     return NextResponse.json({
