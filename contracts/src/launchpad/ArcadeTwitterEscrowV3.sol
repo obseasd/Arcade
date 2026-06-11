@@ -86,15 +86,18 @@ contract ArcadeTwitterEscrowV3 is Ownable2Step, Pausable, ReentrancyGuard {
     ///         potential while leaving room for a 7-day mainnet timelock.
     uint64 public constant MAX_TIMELOCK = 7 days;
 
-    /// @notice Minimum value the owner can set for `claimTimelock`. Enforces a
-    ///         non-zero veto window so the F-1/F-8 safety net is never
-    ///         accidentally disabled by setting timelock = 0.
-    uint64 public constant MIN_TIMELOCK = 1 hours;
+    /// @notice Minimum value the owner can set for `claimTimelock`.
+    ///         **TESTNET BUILD** - relaxed to 0 so dev iteration on the
+    ///         OAuth/claim flow isn't gated by an hour-long wait.
+    ///         MAINNET TODO: restore MIN_TIMELOCK = 1 hours to keep the
+    ///         F-1/F-8 veto safety net active.
+    uint64 public constant MIN_TIMELOCK = 0;
 
-    /// @notice Default timelock applied at construction so the veto window is
-    ///         active from block one, even if the owner forgets to call
-    ///         setClaimTimelock post-deploy.
-    uint64 public constant DEFAULT_TIMELOCK = 1 hours;
+    /// @notice Default timelock applied at construction.
+    ///         **TESTNET BUILD** - 0 so a fresh testnet escrow is
+    ///         immediately claim-able with no admin call required.
+    ///         MAINNET TODO: restore DEFAULT_TIMELOCK = 1 hours.
+    uint64 public constant DEFAULT_TIMELOCK = 0;
 
     /// @notice After this many seconds of no `creditSlot` activity on a
     ///         (positionId, slotIndex), the owner can forfeit any credited

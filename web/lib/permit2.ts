@@ -154,6 +154,21 @@ export function useSignPermit2() {
             ttlSeconds?: number;
         }): Promise<{ permit: Permit2PermitSingle; signature: Hex }> => {
             if (!account || !publicClient) throw new Error("wallet not ready");
+            // Audit 2026-06-11 v2 W-3 (RE-APPLIED after multicall3 fix):
+            // refuse to sign a Permit2 payload when the wallet's live
+            // chainId doesn't match Arc. Without this, a wallet that
+            // briefly switched chains (post-bridge return, OAuth
+            // reconnect race) would sign a payload that the on-chain
+            // permit() rejects with an opaque "InvalidSigner" revert
+            // because the EIP-712 domain chainId baked into the
+            // signature wouldn't match the verifying contract's chain.
+            // Reverted during the wagmi-frozen-reads hunt; safe to
+            // restore now.
+            if (chainId !== arcTestnet.id) {
+                throw new Error(
+                    `Permit2 sign requires Arc Testnet (chainId ${arcTestnet.id}); wallet is on ${chainId}`,
+                );
+            }
             // Audit CRIT-3: read the Permit2 nonce FRESH at sign time. The
             // wagmi cache held by usePermit2AllowanceFor does not auto-refetch
             // on block, so a 2nd swap right after the 1st would sign with

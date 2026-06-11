@@ -14,9 +14,14 @@ import { cn } from "@/lib/utils";
 interface Props {
   token: LaunchpadTokenInfo;
   curveSupply: bigint;
+  /** Render the logo with `priority` (above-the-fold first paint). The
+   *  launchpad list passes true for the first row of cards so logos
+   *  appear immediately instead of waiting for the lazy-load
+   *  IntersectionObserver to fire. */
+  priority?: boolean;
 }
 
-export function TokenCard({ token, curveSupply }: Props) {
+export function TokenCard({ token, curveSupply, priority }: Props) {
   const progress = curveSupply > 0n ? Number((token.tokensSold * 10_000n) / curveSupply) / 100 : 0;
   // The list hook's bulk scan can be slow (multi-second on Arc RPC) so the
   // image URL may not be populated yet. useTokenImage handles all 3 metadata
@@ -70,6 +75,7 @@ export function TokenCard({ token, curveSupply }: Props) {
           image={image}
           size={56}
           className="rounded-xl border border-arc-border"
+          priority={priority}
         />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">

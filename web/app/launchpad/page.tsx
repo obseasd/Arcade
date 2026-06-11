@@ -247,8 +247,17 @@ export default function LaunchpadIndexPage() {
       )}
       {!isLoading && filtered.length > 0 && (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {filtered.map((t) => (
-            <TokenCard key={t.address} token={t} curveSupply={LAUNCHPAD_CURVE_SUPPLY} />
+          {filtered.map((t, i) => (
+            <TokenCard
+              key={t.address}
+              token={t}
+              curveSupply={LAUNCHPAD_CURVE_SUPPLY}
+              // First row of cards gets priority loading so above-the-fold
+              // logos appear on first paint instead of after the lazy-load
+              // IntersectionObserver fires. 6 covers the widest layout
+              // (lg = 3 cols, sm = 2 cols → top two rows).
+              priority={i < 6}
+            />
           ))}
         </div>
       )}

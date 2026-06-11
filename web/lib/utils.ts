@@ -31,6 +31,18 @@ export function formatToken(value: bigint, decimals = 18, fractionDigits = 4): s
   const frac = abs % base;
   const fracStr = frac.toString().padStart(decimals, "0").slice(0, fractionDigits).replace(/0+$/, "");
   const sign = negative ? "-" : "";
+  // Tiny-non-zero guard: when raw > 0 but truncation collapses to plain
+  // "0", surface "<0.0001" (or the matching minimum at the requested
+  // precision) so the user knows balance exists. Without this an 8-dec
+  // token like cirBTC with a 474-wei balance reads as "0" everywhere
+  // (header chip, swap card, my-tokens) and the user thinks they lost
+  // their funds. The bound string is composed from `fractionDigits` so
+  // a 6-frac caller gets "<0.000001" while the default 4-frac caller
+  // gets "<0.0001".
+  if (abs > 0n && whole === 0n && fracStr.length === 0) {
+    const min = `0.${"0".repeat(Math.max(0, fractionDigits - 1))}1`;
+    return `${sign}<${min}`;
+  }
   return fracStr.length > 0
     ? `${sign}${whole.toLocaleString("en-US")}.${fracStr}`
     : `${sign}${whole.toLocaleString("en-US")}`;

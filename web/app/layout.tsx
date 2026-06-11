@@ -49,6 +49,15 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className={`${inter.variable} ${spaceGrotesk.variable}`} suppressHydrationWarning>
+      <head>
+        {/* Preconnect to the Pinata IPFS gateway so the TLS handshake +
+            DNS lookup are done before the first token logo on /launchpad
+            requests bytes. Saves ~150-300 ms on cold renders where 20+
+            logos race to the same host. dns-prefetch is a fallback for
+            browsers that ignore preconnect on third-party origins. */}
+        <link rel="preconnect" href="https://gateway.pinata.cloud" crossOrigin="" />
+        <link rel="dns-prefetch" href="https://gateway.pinata.cloud" />
+      </head>
       <body className="font-sans antialiased" suppressHydrationWarning>
         <Providers>
           <div className="arc-header-glow" aria-hidden />

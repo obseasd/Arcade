@@ -569,6 +569,7 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
           functionName: activeRoute.executor.functionName,
           args: execArgs,
           value: activeRoute.executor.value,
+          chainId: arcTestnet.id,
         });
       } else if (isV3Swap) {
         // CLANKER_V3 token: trade on the V3 pool via our V3 router. Exact-in
@@ -589,6 +590,7 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
                 `0x${string}`, `0x${string}`, number, `0x${string}`, bigint, bigint, bigint, bigint
               ])
             : [tokenIn.address, tokenOut.address, v3Fee, account, finalAmountIn, minOut, deadline],
+          chainId: arcTestnet.id,
         });
       } else if (route.useLaunchpadRouter) {
         // Multi-hop through the launchpad's router so post-migration royalties
@@ -637,6 +639,7 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
           abi: LAUNCHPAD_ABI,
           functionName: "swapMigratedRoute",
           args: [tokenIn.address, tokenOut.address, finalAmountIn, minOut, usdcMidMinForRoute, deadline],
+          chainId: arcTestnet.id,
         });
       } else if (exactIn) {
         hash = await writeContractAsync({
@@ -644,6 +647,7 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
           abi: ROUTER_ABI,
           functionName: "swapExactTokensForTokens",
           args: [finalAmountIn, minOut, path, account, deadline],
+          chainId: arcTestnet.id,
         });
       } else {
         hash = await writeContractAsync({
@@ -651,6 +655,7 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
           abi: ROUTER_ABI,
           functionName: "swapTokensForExactTokens",
           args: [finalAmountOut, maxIn, path, account, deadline],
+          chainId: arcTestnet.id,
         });
       }
       // Audit high [26]: viem's waitForTransactionReceipt returns a
@@ -1071,20 +1076,14 @@ function TokenBox({
   feeLabel,
 }: TokenBoxProps) {
   const decimals = token?.decimals ?? 18;
-  // Tiny-balance guard: formatToken truncates to 4 fractional digits, so
-  // anything below 0.0001 renders as "0" even though raw > 0. For an
-  // 8-decimal token like cirBTC the user can easily hold dust (a few
-  // hundred wei) that's worth a few cents but invisible at 4 digits.
-  // Surface "<0.0001" so the user knows balance exists and can MAX into
-  // it (toOneDecimal now falls through to 6/8 digit precision for sub-
-  // 0.0001 balances).
-  const rawFormatted = formatToken(balanceRaw, decimals, 4);
+  // formatToken now surfaces "<0.0001" for sub-0.0001 non-zero balances
+  // globally (see lib/utils.ts), so cirBTC-style 8-decimal dust no longer
+  // reads as "0" on the swap card. toOneDecimal also walks deeper
+  // precisions so MAX still fills the input with whatever dust is there.
   const balLabel =
     decimals === USDC_DECIMALS
       ? formatUSDC(balanceRaw, decimals, 2)
-      : balanceRaw > 0n && rawFormatted === "0"
-        ? "<0.0001"
-        : rawFormatted;
+      : formatToken(balanceRaw, decimals, 4);
   const usdLabel =
     usdValue !== undefined
       ? `~$${usdValue >= 100 ? usdValue.toFixed(2) : usdValue >= 1 ? usdValue.toFixed(3) : usdValue.toFixed(5)}`

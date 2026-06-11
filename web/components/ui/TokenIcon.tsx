@@ -26,9 +26,17 @@ interface Props {
   image?: string;
   size?: number;
   className?: string;
+  /** When true, Next/Image is rendered with `priority` so the loader
+   *  emits a `<link rel="preload">` for this image and skips lazy-load.
+   *  Use for the first 6-8 above-the-fold tokens on /launchpad / /explore
+   *  so the user sees logos immediately on first paint instead of after
+   *  the IntersectionObserver fires (which can be 200-400 ms behind on
+   *  slow networks). Off-fold tokens leave this false to keep the bytes
+   *  out of the critical path. */
+  priority?: boolean;
 }
 
-export function TokenIcon({ symbol, image, size = 32, className }: Props) {
+export function TokenIcon({ symbol, image, size = 32, className, priority }: Props) {
   // Resolve ipfs:// to an HTTPS gateway since native <img> can't load the
   // ipfs:// protocol. Pass through http(s):// and data: URLs untouched.
   const rawImage = image ? resolveIpfs(image) : undefined;
@@ -56,6 +64,7 @@ export function TokenIcon({ symbol, image, size = 32, className }: Props) {
         height={size}
         style={{ width: size, height: size }}
         className={cn("shrink-0 rounded-full object-cover", className)}
+        priority={priority}
       />
     );
   }
