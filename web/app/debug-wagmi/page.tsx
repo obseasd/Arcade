@@ -228,13 +228,25 @@ export default function DebugWagmiPage() {
             </section>
 
             <section className="rounded border border-arc-border bg-arc-bg-elevated p-4">
-                <h2 className="mb-2 text-lg font-semibold">Raw NEXT_PUBLIC_* env (build-time)</h2>
-                <div>NEXT_PUBLIC_USDC_ADDRESS: {String(process.env.NEXT_PUBLIC_USDC_ADDRESS)}</div>
-                <div>NEXT_PUBLIC_LAUNCHPAD_ADDRESS: {String(process.env.NEXT_PUBLIC_LAUNCHPAD_ADDRESS)}</div>
-                <div>NEXT_PUBLIC_V2_FACTORY_ADDRESS: {String(process.env.NEXT_PUBLIC_V2_FACTORY_ADDRESS)}</div>
-                <div>NEXT_PUBLIC_V2_ROUTER_ADDRESS: {String(process.env.NEXT_PUBLIC_V2_ROUTER_ADDRESS)}</div>
-                <div>NEXT_PUBLIC_V3_FACTORY_ADDRESS: {String(process.env.NEXT_PUBLIC_V3_FACTORY_ADDRESS)}</div>
-                <div>NEXT_PUBLIC_TWITTER_ESCROW_ADDRESS: {String(process.env.NEXT_PUBLIC_TWITTER_ESCROW_ADDRESS)}</div>
+                <h2 className="mb-2 text-lg font-semibold">Raw NEXT_PUBLIC_* env (build-time, with byte length)</h2>
+                {[
+                    "NEXT_PUBLIC_USDC_ADDRESS",
+                    "NEXT_PUBLIC_LAUNCHPAD_ADDRESS",
+                    "NEXT_PUBLIC_V2_FACTORY_ADDRESS",
+                    "NEXT_PUBLIC_V2_ROUTER_ADDRESS",
+                    "NEXT_PUBLIC_V3_FACTORY_ADDRESS",
+                    "NEXT_PUBLIC_TWITTER_ESCROW_ADDRESS",
+                ].map((k) => {
+                    const v = (process.env as Record<string, string | undefined>)[k];
+                    const len = v?.length ?? 0;
+                    const expected = 42; // 0x + 40 hex
+                    const flag = len !== expected ? `  ⚠ len=${len} (expected ${expected})` : "";
+                    return (
+                        <div key={k} className={len !== expected ? "text-yellow-400" : ""}>
+                            {k}: {JSON.stringify(v)}{flag}
+                        </div>
+                    );
+                })}
             </section>
 
             <section className="rounded border border-arc-border bg-arc-bg-elevated p-4">

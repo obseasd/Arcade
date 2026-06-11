@@ -1,7 +1,20 @@
 import { Address, isAddress, zeroAddress } from "viem";
 
 function safeAddress(v: string | undefined): Address {
-  return v && isAddress(v) ? (v as Address) : zeroAddress;
+  // Trim whitespace + drop strict EIP-55 checksum validation. Without
+  // .trim(), an env var pasted with a trailing newline / leading space
+  // / invisible unicode in the Vercel dashboard fails `isAddress` and
+  // safeAddress silently falls back to zeroAddress - so every approve /
+  // contract write in the app targets the zero address (the failed
+  // launch creation fee approve at tx 0x4229b9... is exactly this).
+  // {strict: false} keeps the check on hex shape only (length + 0x +
+  // hex chars), not on EIP-55 mixed-case casing - we don't gain
+  // anything by enforcing checksums on env input we control, and the
+  // strict default in viem 2.21+ rejects lowercase addresses that
+  // would otherwise be valid.
+  if (!v) return zeroAddress;
+  const trimmed = v.trim();
+  return isAddress(trimmed, { strict: false }) ? (trimmed as Address) : zeroAddress;
 }
 
 export const ADDRESSES = {
