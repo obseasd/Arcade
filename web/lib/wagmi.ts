@@ -32,16 +32,7 @@ export const wagmiConfig = getDefaultConfig({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   chains: chains as any,
   transports: {
-    // Plain http transport. Earlier wrap in `fallback([...])` was
-    // suspected of breaking wagmi reads across SwapCard / Launchpad /
-    // Positions on the latest deploy (user-visible: all V2/V3 token
-    // reads went empty, swap quote pipeline never populated). Reverted
-    // to single-URL http to restore baseline wagmi behaviour; the env
-    // override path is preserved by reading
-    // NEXT_PUBLIC_ARC_RPC_URL when set.
-    [arcTestnet.id]: http(
-      process.env.NEXT_PUBLIC_ARC_RPC_URL || arcTestnet.rpcUrls.default.http[0],
-    ),
+    [arcTestnet.id]: http(arcTestnet.rpcUrls.default.http[0]),
     [anvilLocal.id]: http(anvilLocal.rpcUrls.default.http[0]),
     [sepolia.id]: http(),
     [baseSepolia.id]: http(),
