@@ -56,11 +56,6 @@ export function useArcReadContract<T = unknown>(opts: {
 
     useEffect(() => {
         if (!enabled || !address) {
-            // eslint-disable-next-line no-console
-            console.debug("[useArcReadContract]", functionName, "SKIPPED", {
-                enabled,
-                address,
-            });
             setData(undefined);
             return;
         }
@@ -78,19 +73,11 @@ export function useArcReadContract<T = unknown>(opts: {
                     functionName,
                     args: (args ?? []) as readonly unknown[],
                 })) as T;
-                // eslint-disable-next-line no-console
-                console.debug("[useArcReadContract]", functionName, "OK", { result });
                 if (!cancelled) {
                     setData(result);
                     setError(null);
                 }
             } catch (e) {
-                // eslint-disable-next-line no-console
-                console.warn("[useArcReadContract]", functionName, "FAILED", {
-                    address,
-                    args,
-                    error: e instanceof Error ? e.message : String(e),
-                });
                 if (!cancelled) {
                     setError(e instanceof Error ? e : new Error(String(e)));
                 }
