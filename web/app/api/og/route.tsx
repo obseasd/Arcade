@@ -156,7 +156,7 @@ export async function GET(req: NextRequest) {
     const image = isAllowedImageHost(rawImage) ? rawImage : "";
 
     const origin = originFromReq(req);
-    const brandLogo = `${origin}/arcdlogo.png`;
+    const brandLogo = `${origin}/arcdlogo22.png`;
 
     return new ImageResponse(
         (

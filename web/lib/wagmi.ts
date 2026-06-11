@@ -1,5 +1,5 @@
 import { getDefaultConfig } from "@rainbow-me/rainbowkit";
-import { http } from "wagmi";
+import { http, fallback } from "wagmi";
 import { mainnet } from "wagmi/chains";
 import {
   arcTestnet,
@@ -32,7 +32,23 @@ export const wagmiConfig = getDefaultConfig({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   chains: chains as any,
   transports: {
-    [arcTestnet.id]: http(arcTestnet.rpcUrls.default.http[0]),
+    // Audit 2026-06-11 v3: wrap the Arc transport in a `fallback` so a
+    // primary-RPC slowdown / blip falls through to a secondary endpoint
+    // automatically. Without this, every wagmi read that hit a 500 or
+    // a timeout on the primary turned into a silent `data: undefined`
+    // and the user saw "0 USDC" with no error surfaced. The fallback
+    // adapter retries on the next URL transparently. The env var
+    // `NEXT_PUBLIC_ARC_RPC_URL` lets us inject a paid endpoint at
+    // build time without touching this list.
+    [arcTestnet.id]: fallback(
+      [
+        ...(process.env.NEXT_PUBLIC_ARC_RPC_URL
+          ? [http(process.env.NEXT_PUBLIC_ARC_RPC_URL)]
+          : []),
+        http(arcTestnet.rpcUrls.default.http[0]),
+      ],
+      { rank: false, retryCount: 1 },
+    ),
     [anvilLocal.id]: http(anvilLocal.rpcUrls.default.http[0]),
     [sepolia.id]: http(),
     [baseSepolia.id]: http(),
