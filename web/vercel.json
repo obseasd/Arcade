@@ -3,5 +3,5 @@
   "framework": "nextjs",
   "buildCommand": "next build",
   "installCommand": "npm ci",
-  "regions": ["cdg1", "iad1"]
+  "regions": ["cdg1"]
 }
