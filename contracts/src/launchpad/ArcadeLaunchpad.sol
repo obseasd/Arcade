@@ -155,6 +155,7 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
     error AlreadyMigrated();
     error NotMigrated();
     error Slippage();
+    error MidSlippage();
     error EmptyName();
     error CommentTooLong();
     error CommentEmpty();
@@ -778,7 +779,10 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         // royalty + leg-2 chain could still scrape past minTokensOut on
         // a thin pair. Frontend computes usdcMidMin from
         // quoteSwapMigratedRoute's intermediate USDC value at 97%.
-        require(usdcMid >= usdcMidMin, "MID_SLIPPAGE");
+        // Custom error (vs `require(... , "STR")`) saves ~20 bytes of
+        // bytecode — keeps ArcadeLaunchpad under EIP-170 with the
+        // forge nightly compiler used in CI.
+        if (usdcMid < usdcMidMin) revert MidSlippage();
 
         // CSEC-018: both royalty legs computed from the ORIGINAL usdcMid so the
         // combined royalty stays exactly at 2 * MIGRATED_ROYALTY_BPS (advertised
