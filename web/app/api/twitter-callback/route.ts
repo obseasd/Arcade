@@ -78,18 +78,15 @@ function redirectBackWithError(origin: string, error: string) {
 }
 
 export async function GET(req: NextRequest) {
-  // Audit 2026-06-11 FE-3: mirror twitter-login's hard www -> non-www
-  // redirect BEFORE any work. Twitter redirects here with the user's
-  // cookies; if the user somehow lands on www (deep link, manual edit,
-  // ITP-shaped retry), the cookie set on arcade.trading wouldn't be
-  // visible. The domain= attr is the primary defence (commit 1281ed8) and
-  // this is belt-and-suspenders for conservative browsers + future
-  // canonical-host changes.
-  if (req.nextUrl.hostname.startsWith("www.")) {
-    const target = req.nextUrl.clone();
-    target.hostname = req.nextUrl.hostname.slice(4);
-    return NextResponse.redirect(target, 307);
-  }
+  // Audit 2026-06-11 FE-3 REVERTED: the previous block 307-redirected
+  // www -> apex here as a belt-and-suspenders defence for conservative
+  // browsers + future canonical-host changes. But Vercel canonicalizes
+  // apex -> www at the platform level, which creates ERR_TOO_MANY_
+  // REDIRECTS (the same loop we hit on /api/twitter-login). The state
+  // cookie (and the claim payload cookie set below) are both scoped
+  // Domain=arcade.trading via cookieDomain, so the browser makes them
+  // available on every arcade.trading subdomain including www - we
+  // don't need a host-level redirect to find them.
 
   const { searchParams } = req.nextUrl;
   const code = searchParams.get("code");
