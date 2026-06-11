@@ -1,3 +1,16 @@
+import bundleAnalyzer from "@next/bundle-analyzer";
+
+// Audit 2026-06-11 v2 Perf: bundle analyzer wired but gated on
+// ANALYZE=1 so it's a no-op for normal builds. Run with:
+//   ANALYZE=1 npm run build
+// to produce client + server bundle HTML reports in .next/analyze/.
+// Audit found /my-tokens 503 kB First Load and the analyzer is the
+// canonical way to verify the dynamic-import wins shipped in the same
+// audit pass.
+const withBundleAnalyzer = bundleAnalyzer({
+  enabled: process.env.ANALYZE === "1",
+});
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
@@ -57,4 +70,4 @@ const nextConfig = {
   },
 };
 
-export default nextConfig;
+export default withBundleAnalyzer(nextConfig);

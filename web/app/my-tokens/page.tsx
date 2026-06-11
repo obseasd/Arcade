@@ -25,17 +25,17 @@ import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
-import {
-    Area,
-    AreaChart,
-    ResponsiveContainer,
-    Tooltip as RechartsTooltip,
-    XAxis,
-    YAxis,
-} from "recharts";
 import { Address, erc20Abi, formatUnits } from "viem";
 import { useAccount, useReadContracts } from "wagmi";
 import dynamic from "next/dynamic";
+// Audit 2026-06-11 v2 Perf P0-1: defer recharts into its own chunk via
+// next/dynamic + ssr:false. The /my-tokens route was 503 kB First Load
+// because the placeholder portfolio chart pulled recharts into the main
+// bundle; lazy-loading it brings the route in line with the rest.
+const PortfolioChart = dynamic(
+    () => import("@/components/my-tokens/PortfolioChart").then((m) => m.PortfolioChart),
+    { ssr: false, loading: () => <div className="h-full w-full" /> },
+);
 import { TokenCard } from "@/components/launchpad/TokenCard";
 import { MyPositions } from "@/components/pool/MyPositions";
 import { V3Positions } from "@/components/pool/V3Positions";
@@ -475,38 +475,7 @@ function OverviewTab({
                         </div>
 
                         <div className="mt-4 h-40 w-full">
-                            <ResponsiveContainer width="100%" height="100%">
-                                <AreaChart data={series}>
-                                    <defs>
-                                        <linearGradient id="portfolioFill" x1="0" y1="0" x2="0" y2="1">
-                                            <stop offset="0%" stopColor="#15508F" stopOpacity={0.4} />
-                                            <stop offset="100%" stopColor="#15508F" stopOpacity={0} />
-                                        </linearGradient>
-                                    </defs>
-                                    <XAxis dataKey="x" hide />
-                                    <YAxis hide domain={["dataMin", "dataMax"]} />
-                                    <RechartsTooltip
-                                        cursor={false}
-                                        contentStyle={{
-                                            background: "rgba(6, 26, 54, 0.95)",
-                                            border: "1px solid rgba(40, 60, 90, 0.6)",
-                                            borderRadius: 8,
-                                            fontSize: 11,
-                                            padding: "4px 8px",
-                                        }}
-                                        formatter={(v: number) => [`$${v.toFixed(2)}`, ""]}
-                                        labelFormatter={() => ""}
-                                    />
-                                    <Area
-                                        type="monotone"
-                                        dataKey="y"
-                                        stroke="#15508F"
-                                        strokeWidth={2}
-                                        fill="url(#portfolioFill)"
-                                        isAnimationActive={false}
-                                    />
-                                </AreaChart>
-                            </ResponsiveContainer>
+                            <PortfolioChart series={series} />
                         </div>
 
                         {/* Timeframe row (visual only) */}

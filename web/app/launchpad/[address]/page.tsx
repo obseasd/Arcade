@@ -2,6 +2,7 @@
 
 import { ExternalLink, Twitter, MessageSquare, Globe, ArrowLeft, HelpCircle } from "lucide-react";
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import { useParams } from "next/navigation";
 import { useCallback, useMemo, useState } from "react";
 import { Address, erc20Abi, isAddress, parseAbiItem } from "viem";
@@ -16,7 +17,15 @@ import { useWatchEvent } from "@/lib/hooks/useWatchEvent";
 import { type TokenMetadata } from "@/lib/metadata";
 import { formatAddress, formatToken, formatUSDC } from "@/lib/utils";
 import { TokenIcon } from "@/components/ui/TokenIcon";
-import { PriceChart } from "@/components/launchpad/PriceChart";
+// Audit 2026-06-11 v2 Perf P0-3: PriceChart pulls lightweight-charts
+// (~50 kB gzipped) and lives below the fold under the trade panel +
+// header. Dynamic-import with ssr:false defers it out of the initial
+// route bundle. Loading skeleton matches the chart's container height
+// to avoid a layout shift while the chunk fetches.
+const PriceChart = dynamic(
+  () => import("@/components/launchpad/PriceChart").then((m) => m.PriceChart),
+  { ssr: false, loading: () => <div className="h-full w-full rounded-2xl bg-arc-bg-elevated/50" /> },
+);
 import { TradePanel } from "@/components/launchpad/TradePanel";
 import { ClankerTradePanel } from "@/components/launchpad/ClankerTradePanel";
 import { CreatorTokenPanel } from "@/components/launchpad/CreatorTokenPanel";

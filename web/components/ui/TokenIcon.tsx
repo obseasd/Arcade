@@ -39,6 +39,15 @@ export function TokenIcon({ symbol, image, size = 32, className }: Props) {
   const cleanSymbol = symbol?.replace(/^\$+/, "");
   const src = rawImage || (cleanSymbol ? PNG_LOGOS[cleanSymbol.toUpperCase()] : undefined);
   if (src) {
+    // Audit 2026-06-11 v2 Perf P0-2: drop `unoptimized` so Next/Image
+    // emits WebP/AVIF variants + lazy-loads off-screen tokens. The
+    // upstream PNGs in /public are large (~50 kB each for the brand
+    // icons, ~5-15 kB for the local glyphs); WebP cuts those by 60-80%
+    // and the lazy-load defers tokens below the dropdown fold. The
+    // unoptimized flag was a temporary bypass — Next can now resolve
+    // the static `/path.png` URLs natively for both first-party PNGs
+    // and IPFS gateway URLs (via the http remotePatterns in
+    // next.config.mjs).
     return (
       <Image
         src={src}
@@ -47,7 +56,6 @@ export function TokenIcon({ symbol, image, size = 32, className }: Props) {
         height={size}
         style={{ width: size, height: size }}
         className={cn("shrink-0 rounded-full object-cover", className)}
-        unoptimized
       />
     );
   }
