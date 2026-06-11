@@ -314,23 +314,40 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
 
     const onForChange = (s: string) => {
         setForAmount(s);
-        // Editing For drives the srcAmount (how much USDC to sell). The
-        // trigger price stays fixed (that is the user's target rate; they
-        // are now adjusting how many tokens they want at that rate). Use
-        // skipNextSyncRef so the derived effect below does not overwrite
-        // forAmount when srcAmount lands.
+        // Editing For: there are 3 fields (From, Trigger, For) and only 2 are
+        // independent. Choose which field to derive based on what the user
+        // most recently edited:
+        //   - Trigger set + From empty -> derive From (legacy behavior).
+        //   - From set + Trigger empty -> derive Trigger from (For / From).
+        //     This is the natural "I have N USDC, I want M tokens, set the
+        //     limit price for me" flow that the prior code broke by
+        //     clearing From the moment the user touched For without first
+        //     setting Trigger.
+        //   - Both set -> keep both, derive Trigger again (last-edit wins).
+        //   - Neither set -> nothing to derive, leave From alone.
+        // skipNextSyncRef stays "for" so the From-or-Trigger auto-sync
+        // effect below doesn't immediately overwrite forAmount.
         skipNextSyncRef.current = "for";
-        if (!triggerPrice || Number(triggerPrice) <= 0) {
-            setAmountIn("");
+        const fr = Number(s);
+        if (!isFinite(fr) || fr <= 0) {
+            // Empty / invalid For value: don't clobber From, just leave it.
             return;
         }
         const tp = Number(triggerPrice);
-        const fr = Number(s);
-        if (!isFinite(tp) || !isFinite(fr) || fr <= 0) {
-            setAmountIn("");
+        const srcAmt = Number(amountIn);
+        const triggerSet = !!triggerPrice && isFinite(tp) && tp > 0;
+        const fromSet = !!amountIn && isFinite(srcAmt) && srcAmt > 0;
+        if (triggerSet && !fromSet) {
+            // Trigger fixed, derive From = For / Trigger.
+            setAmountIn(formatPriceStr(fr / tp, 8));
             return;
         }
-        setAmountIn(formatPriceStr(fr / tp, 8));
+        if (fromSet) {
+            // From fixed, derive Trigger = For / From (price per src unit).
+            setTriggerPrice(formatPriceStr(fr / srcAmt, 8));
+            return;
+        }
+        // Neither side set: just store For, nothing else to compute yet.
     };
 
     // When srcAmount or triggerPrice changes (and we are not currently inside

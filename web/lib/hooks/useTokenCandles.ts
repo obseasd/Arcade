@@ -37,6 +37,11 @@ interface Trade {
   time: number;
   price: number;
   volumeUsdc: number;
+  /** True when the trade was a BUY (USDC -> token). Used by bucketize
+   *  to force a candle break on side change so a sell never visually
+   *  inherits the open of a preceding buy (which made the merged
+   *  candle render green even though the sell pushed price down). */
+  isBuy?: boolean;
 }
 
 interface FetchResult {
@@ -235,6 +240,7 @@ export function useTokenCandles(args: {
           time: tsForBlock(log.blockNumber as bigint),
           price,
           volumeUsdc,
+          isBuy,
         });
       }
       appendTrades(parsed);
@@ -349,7 +355,12 @@ async function fetchTrades(
       const usdcRaw = usdcIsToken0 ? a0 : a1;
       const usdcAbs = usdcRaw < 0n ? -usdcRaw : usdcRaw;
       const volumeUsdc = Number(usdcAbs) / 1e6;
-      trades.push({ time: tsFor(log.blockNumber as bigint), price, volumeUsdc });
+      // V3 Swap delta convention: positive = pool received, negative =
+      // pool sent. USDC entering the pool means the user spent USDC for
+      // token (buy of token). USDC leaving the pool means the user sold
+      // token for USDC.
+      const isBuy = usdcRaw > 0n;
+      trades.push({ time: tsFor(log.blockNumber as bigint), price, volumeUsdc, isBuy });
     }
     trades.sort((a, b) => a.time - b.time);
     return { trades, initialPrice };
@@ -379,7 +390,7 @@ async function fetchTrades(
     const price = Number(priceE24) / 1e24;
     const isBuy = "usdcIn" in (log.args as any);
     const volumeUsdc = Number(isBuy ? log.args.usdcIn : log.args.usdcOut) / 1e6;
-    trades.push({ time: tsFor(log.blockNumber as bigint), price, volumeUsdc });
+    trades.push({ time: tsFor(log.blockNumber as bigint), price, volumeUsdc, isBuy });
   }
   trades.sort((a, b) => a.time - b.time);
   return { trades };
@@ -390,6 +401,7 @@ function bucketize(trades: Trade[], bucketSize: number, initialPrice?: number): 
   const candles: Candle[] = [];
   let currentBucket = Math.floor(trades[0].time / bucketSize) * bucketSize;
   let currentCandle: Candle | null = null;
+  let currentSide: boolean | undefined = undefined; // tracks isBuy of the open trade
   // Track the close of the previous candle so the next candle's `open` chains
   // onto it. Without chaining, every bucket would have `open == close` for
   // single-trade buckets and the chart shows flat dojis instead of colored
@@ -398,12 +410,23 @@ function bucketize(trades: Trade[], bucketSize: number, initialPrice?: number): 
 
   for (const t of trades) {
     const bucket = Math.floor(t.time / bucketSize) * bucketSize;
-    if (currentCandle === null || bucket !== currentBucket) {
+    // Force a candle break when the trade side flips (buy <-> sell) even
+    // inside the same time bucket. Without this, a buy + sell pair landing
+    // in the same minute aggregates into one candle whose color depends on
+    // (initialPrice vs sellPrice), so a sell that pushes price down can
+    // still render green if the open was below the sell-side close. Each
+    // distinct side gets its own visible candle that moves the right way.
+    const sideChanged =
+      t.isBuy !== undefined &&
+      currentSide !== undefined &&
+      t.isBuy !== currentSide;
+    if (currentCandle === null || bucket !== currentBucket || sideChanged) {
       if (currentCandle !== null) {
         candles.push(currentCandle);
         prevClose = currentCandle.close;
       }
       currentBucket = bucket;
+      currentSide = t.isBuy;
       const open: number = prevClose ?? t.price;
       currentCandle = {
         time: bucket,

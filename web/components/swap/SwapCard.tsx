@@ -1071,10 +1071,20 @@ function TokenBox({
   feeLabel,
 }: TokenBoxProps) {
   const decimals = token?.decimals ?? 18;
+  // Tiny-balance guard: formatToken truncates to 4 fractional digits, so
+  // anything below 0.0001 renders as "0" even though raw > 0. For an
+  // 8-decimal token like cirBTC the user can easily hold dust (a few
+  // hundred wei) that's worth a few cents but invisible at 4 digits.
+  // Surface "<0.0001" so the user knows balance exists and can MAX into
+  // it (toOneDecimal now falls through to 6/8 digit precision for sub-
+  // 0.0001 balances).
+  const rawFormatted = formatToken(balanceRaw, decimals, 4);
   const balLabel =
     decimals === USDC_DECIMALS
       ? formatUSDC(balanceRaw, decimals, 2)
-      : formatToken(balanceRaw, decimals, 4);
+      : balanceRaw > 0n && rawFormatted === "0"
+        ? "<0.0001"
+        : rawFormatted;
   const usdLabel =
     usdValue !== undefined
       ? `~$${usdValue >= 100 ? usdValue.toFixed(2) : usdValue >= 1 ? usdValue.toFixed(3) : usdValue.toFixed(5)}`
@@ -1181,11 +1191,22 @@ function formatTokenAmount(raw: bigint, decimals: number, fraction: number = 6):
  * amount can never exceed the actual on-chain balance.
  */
 function toOneDecimal(raw: bigint, decimals: number): string {
+  if (raw <= 0n) return "0";
   const asFloat = Number(formatUnits(raw, decimals));
   if (!isFinite(asFloat) || asFloat <= 0) return "0";
   const floored = Math.floor(asFloat * 10) / 10;
-  // Sub-decimal balances (eg 0.05) would floor to 0 and break the swap.
-  // Fall back to a tighter 4-decimal floor for these edge cases.
-  if (floored === 0) return (Math.floor(asFloat * 10_000) / 10_000).toString();
-  return floored.toString();
+  // Sub-decimal balances: try tighter floors until non-zero. A cirBTC
+  // balance of 474 wei (8 decimals) = 0.00000474 - the previous 4-decimal
+  // floor still rounded to 0, MAX put "0" in the input and the swap
+  // couldn't proceed. Fall back through 4 / 6 / 8 decimal floors before
+  // finally surfacing the full-precision formatUnits string so the user
+  // can spend whatever dust they have.
+  if (floored > 0) return floored.toString();
+  const at4 = Math.floor(asFloat * 10_000) / 10_000;
+  if (at4 > 0) return at4.toString();
+  const at6 = Math.floor(asFloat * 1_000_000) / 1_000_000;
+  if (at6 > 0) return at6.toString();
+  // Below 1e-6 we can't round-trip through JS Number without precision
+  // loss; emit the raw formatUnits string (which is exact bigint arithmetic).
+  return formatUnits(raw, decimals);
 }

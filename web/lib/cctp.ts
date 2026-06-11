@@ -172,23 +172,32 @@ export function addressToBytes32(addr: Address): `0x${string}` {
  *
  * Defense: before passing the blob to receiveMessage(), parse the header
  * and assert sourceDomain / destinationDomain / mintRecipient match what
- * the user actually signed. Layout per Circle's spec:
+ * the user actually signed. Layout per Circle's CCTP V2 spec (NOT V1):
  *
  *   bytes 0-3   : version (uint32)
  *   bytes 4-7   : sourceDomain (uint32)
  *   bytes 8-11  : destinationDomain (uint32)
- *   bytes 12-19 : nonce (uint64)
- *   bytes 20-51 : sender (bytes32)  -- source-chain TokenMessenger
- *   bytes 52-83 : recipient (bytes32) -- dest-chain MessageTransmitter
- *   bytes 84-115: destinationCaller (bytes32)
- *   bytes 116-119: minFinalityThreshold (uint32)
- *   bytes 120-123: finalityThresholdExecuted (uint32)
- *   bytes 124+  : messageBody (TokenMessenger burn payload)
+ *   bytes 12-43 : nonce (bytes32)    <- V2 widened nonce from uint64 to bytes32
+ *   bytes 44-75 : sender (bytes32)
+ *   bytes 76-107: recipient (bytes32)
+ *   bytes 108-139: destinationCaller (bytes32)
+ *   bytes 140-143: minFinalityThreshold (uint32)
+ *   bytes 144-147: finalityThresholdExecuted (uint32)
+ *   bytes 148+  : messageBody (TokenMessenger burn payload)
  *
- * The burn-message body inside messageBody for a depositForBurn carries
- * the burnToken (bytes32) and mintRecipient (bytes32) at well-known
- * offsets within the body. We extract mintRecipient at body offset 36
- * (version + burnToken + mintRecipient layout).
+ * The burn-message body for a V2 depositForBurn carries:
+ *   body bytes 0-3   : body version (uint32)
+ *   body bytes 4-35  : burnToken (bytes32)
+ *   body bytes 36-67 : mintRecipient (bytes32)
+ *   body bytes 68+   : amount, sender, fees, expiration, hookData
+ *
+ * BUG fix 2026-06-11: the previous header offset constants used CCTP V1's
+ * 124-byte header (which assumed uint64 nonce). On V2 the header is 148
+ * bytes, so the V1 offsets sliced 24 bytes too early -- mintRecipient
+ * came out as part of burnToken + leading body bytes, never matched the
+ * user's address, and BridgeCard's poll silently dropped every
+ * attestation. Every CCTP V2 bridge was therefore stuck on "Waiting for
+ * Circle attestation" forever even though Iris had `status: complete`.
  */
 export interface ParsedCctpMessage {
   version: number;
@@ -198,40 +207,42 @@ export interface ParsedCctpMessage {
   mintRecipient: `0x${string}`;
 }
 
+// CCTP V2 header is 148 bytes (V1 was 124 - nonce widened from uint64
+// to bytes32). Body offset to mintRecipient is 36 (4 version + 32
+// burnToken). Total minimum message length = 148 + 36 + 32 = 216 bytes
+// = 432 hex chars.
+const CCTP_V2_HEADER_BYTES = 148;
+const CCTP_V2_BODY_MINT_RECIPIENT_OFFSET = 36;
+const CCTP_V2_MIN_MESSAGE_HEX = (CCTP_V2_HEADER_BYTES + CCTP_V2_BODY_MINT_RECIPIENT_OFFSET + 32) * 2;
+
 export function parseCctpV2Message(message: `0x${string}`): ParsedCctpMessage | null {
   if (!message.startsWith("0x")) return null;
   const hex = message.slice(2);
-  // 124 header bytes + at least 68 body bytes (4 version + 32 burnToken
-  // + 32 mintRecipient) = 192 bytes = 384 hex chars minimum.
-  // Audit B-5: tighten to a hard `> 384` (header+body is at LEAST 384,
-  // never fewer). The strict-equal path used to slip a truncated body
-  // through `hex.slice` which then returned a shorter mintRecipient
-  // that the on-chain bytes32 match would always reject — safe by
-  // accident, but the strict guard makes the invariant explicit.
-  if (hex.length < 384) return null;
+  if (hex.length < CCTP_V2_MIN_MESSAGE_HEX) return null;
   // Defensive: the mintRecipient slice must be EXACTLY 64 hex chars
   // (bytes32). A truncated message could produce a shorter mintRecipient
   // string whose `.toLowerCase()` then can't match the 64-char bytes32
-  // we compare against — we make that an explicit reject rather than
-  // relying on the equality check to fail.
-  const mintRecipientHex = hex.slice((124 + 36) * 2, (124 + 68) * 2);
+  // we compare against.
+  const mrStart = (CCTP_V2_HEADER_BYTES + CCTP_V2_BODY_MINT_RECIPIENT_OFFSET) * 2;
+  const mrEnd = mrStart + 64;
+  const mintRecipientHex = hex.slice(mrStart, mrEnd);
   if (mintRecipientHex.length !== 64) return null;
   const u32 = (offset: number) =>
     Number.parseInt(hex.slice(offset * 2, (offset + 4) * 2), 16);
-  const u64 = (offset: number) =>
-    BigInt("0x" + hex.slice(offset * 2, (offset + 8) * 2));
+  // V2 nonce is bytes32; we expose its low 8 bytes as a bigint for
+  // backwards-compat with the existing ParsedCctpMessage.nonce field
+  // (used in telemetry / debug logging only - the on-chain receiveMessage
+  // never sees this parsed value, it gets the raw blob).
+  const nonceBytes32 = (offset: number) =>
+    BigInt("0x" + hex.slice((offset + 24) * 2, (offset + 32) * 2));
   try {
     const version = u32(0);
     const sourceDomain = u32(4);
     const destinationDomain = u32(8);
-    const nonce = u64(12);
+    const nonce = nonceBytes32(12);
     if (!Number.isFinite(version) || !Number.isFinite(sourceDomain) || !Number.isFinite(destinationDomain)) {
       return null;
     }
-    // messageBody starts at byte 124. Within the burn-message body:
-    //   bytes 0-3   : body version (uint32)
-    //   bytes 4-35  : burnToken (bytes32)
-    //   bytes 36-67 : mintRecipient (bytes32)
     const mintRecipient = ("0x" + mintRecipientHex) as `0x${string}`;
     return { version, sourceDomain, destinationDomain, nonce, mintRecipient };
   } catch {

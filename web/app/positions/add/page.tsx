@@ -383,7 +383,9 @@ function AddLiquidityInner() {
             // Drop the user on the pool detail page (or /positions when we still
             // need to refetch the pair address after a first-LP add).
             router.push(
-                pair && pair !== zeroAddress ? `/pool/${pair}` : "/positions",
+                pair && pair !== zeroAddress
+                    ? `/pool/${pair}?t=${Date.now()}`
+                    : `/positions?t=${Date.now()}`,
             );
         } catch (e: unknown) {
             // Build the most informative error message we can: prefer viem's

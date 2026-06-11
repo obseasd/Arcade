@@ -47,6 +47,16 @@ function PositionsInner() {
   // its query cache and re-fetches the pair list. Cheaper than threading a
   // bespoke refetch handle through the tree.
   const [refreshKey, setRefreshKey] = useState(0);
+  // Auto-bump refreshKey when arriving from /positions/add (or any flow
+  // that appends `?t=<timestamp>`). Without this, V2/V3 position lists
+  // mounted before the new pair was created don't refetch and the user
+  // has to click Refresh to see their just-minted position. Reads the
+  // `t` param as a freshness nonce - it isn't compared to anything, just
+  // changing it triggers the effect once per navigation.
+  const tParam = sp.get("t");
+  useEffect(() => {
+    if (tParam) setRefreshKey((k) => k + 1);
+  }, [tParam]);
   // Refresh spinner. Flips true on click, auto-clears after a beat so the
   // user gets visual feedback even when the underlying queries already
   // resolve from cache (in which case there's nothing to "wait" for).

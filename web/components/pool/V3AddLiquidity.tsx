@@ -561,7 +561,7 @@ export function V3AddLiquidity({
                     poolHref: pool ? `/pool/${pool}` : "/positions",
                     explorerUrl: `${arcTestnet.blockExplorers?.default.url}/tx/${hash}`,
                 });
-                router.push("/positions?tab=concentrated");
+                router.push(`/positions?tab=concentrated&t=${Date.now()}`);
                 return;
             }
 
@@ -863,7 +863,7 @@ export function V3AddLiquidity({
             });
             // Route to /positions?tab=concentrated so the new NFT is in view
             // without the user having to click the V3 tab themselves.
-            router.push("/positions?tab=concentrated");
+            router.push(`/positions?tab=concentrated&t=${Date.now()}`);
         } catch (e: unknown) {
             // Same multi-layer dig as the V2 path: reason -> shortMessage ->
             // details -> message. V3 mint reverts often surface as "TLU"
