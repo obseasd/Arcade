@@ -124,10 +124,18 @@ contract ArcadeV3SwapRouter is IUniswapV3SwapCallback {
         uint256 deadline
     ) external returns (uint256 amountOut) {
         require(block.timestamp <= deadline, "EXPIRED");
+        // Audit 2026-06-11 CONTRACT-1: apply sell-side skim on leg 1.
+        // Prior to this, exactInputSingle taxed sells (via _snipeSkim on
+        // tokenIn) but the multi-hop entrypoint never did. A sniper could
+        // dump launchToken → USDC → anyOther and pay zero sell tax during
+        // the snipe window. Mirror exactInputSingle's pattern: skim before
+        // the leg, deduct from the amount actually swapped, payer pays in
+        // tokenIn so the treasury holds the launchToken.
+        uint256 sellSkim = _snipeSkim(tokenIn, USDC, amountIn, msg.sender);
         // Leg 1: tokenIn -> USDC, output held by this router.
         uint256 usdcMid = _swap(
             SwapCallbackData({tokenIn: tokenIn, tokenOut: USDC, fee: fee, payer: msg.sender}),
-            amountIn,
+            amountIn - sellSkim,
             address(this)
         );
         // Audit low [5]: cap the mid-leg slippage independently of the

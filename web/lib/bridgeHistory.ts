@@ -35,6 +35,19 @@ export interface HistoryEntry {
    * status flips to "minted" and supersedes the badge anyway.
    */
   attestationReady?: boolean;
+  /**
+   * Audit 2026-06-11 bug #8: cache the Iris message + signature blobs so
+   * whichever poller catches `complete` first (BridgeHistory's 60s sweep
+   * or BridgeCard's 6s active poll) can hand the blob to the OTHER one
+   * via the localStorage event. Without this the "To claim" badge could
+   * fire 60s before BridgeCard's poll catches up, leaving the claim
+   * button greyed out while the badge invites the user to claim. Both
+   * blobs are 0x-prefixed hex strings stored as-is; the consumer parses
+   * them via parseCctpV2Message and re-verifies sourceDomain /
+   * destinationDomain / mintRecipient before transitioning to mint.
+   */
+  attestationMessage?: `0x${string}`;
+  attestationSignature?: `0x${string}`;
   /** Wallet that initiated this bridge. Used to scope the list per wallet. */
   account?: string;
 }

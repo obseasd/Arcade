@@ -34,7 +34,13 @@ import {
   loadPendingBridge,
   savePendingBridge,
 } from "@/lib/pendingBridge";
-import { loadBridgeHistory, recordBridge, updateBridge, updateBridgeByBurnTx } from "@/lib/bridgeHistory";
+import {
+  BRIDGE_HISTORY_CHANGE_EVENT,
+  loadBridgeHistory,
+  recordBridge,
+  updateBridge,
+  updateBridgeByBurnTx,
+} from "@/lib/bridgeHistory";
 import { BridgeStepsProgress } from "./BridgeStepsProgress";
 import { pushToast } from "@/lib/toast";
 
@@ -524,7 +530,14 @@ export function BridgeCard() {
         // Flip the matching history entry's badge from "Pending" -> "To claim"
         // so the user sees there's an action waiting on them. The mint
         // handler later flips status -> "minted" which supersedes this.
-        const patch = { attestationReady: true } as const;
+        // Audit 2026-06-11 bug #8: cache the message + signature blobs in
+        // history too, so a future second tab opened on the same burn can
+        // pick up the result without an extra Iris hit.
+        const patch = {
+          attestationReady: true,
+          attestationMessage: att.message as `0x${string}`,
+          attestationSignature: att.attestation as `0x${string}`,
+        } as const;
         if (account) {
           if (historyId) updateBridge(account, historyId, patch);
           else updateBridgeByBurnTx(account, step.burnTxHash, patch);
@@ -558,6 +571,61 @@ export function BridgeCard() {
       clearInterval(tickInterval);
     };
   }, [step]);
+
+  // Audit 2026-06-11 bug #8: cross-poller sync. The 60s BridgeHistory poll
+  // catches Iris attestations faster than our local 6s poll on CCTP V2
+  // fast burns (~9-15s vs 30+ s). When that happens, the history badge
+  // flips to "To claim" but BridgeCard's `step` stays in "attesting" and
+  // the claim button stays disabled — a 2+ minute UX gap. We watch the
+  // history change event (same-tab) + the storage event (other-tab) and,
+  // if our current burnTxHash now has cached attestation blobs, we
+  // re-validate them through the SAME C-2 / B-1 checks the active poller
+  // runs (sourceDomain, destinationDomain, mintRecipient) and transition
+  // to "minting" with the cached message + signature.
+  useEffect(() => {
+    if (step.kind !== "attesting" || !account) return;
+    const burnLower = step.burnTxHash.toLowerCase();
+    const tryCachedAttestation = () => {
+      if (dismissedRef.current) return;
+      const entry = loadBridgeHistory(account).find(
+        (e) => e.burnTxHash.toLowerCase() === burnLower,
+      );
+      if (!entry || !entry.attestationReady || !entry.attestationMessage || !entry.attestationSignature) {
+        return;
+      }
+      const dstChainCfg = getCctpChain(step.dstId);
+      const persistedRecipient = loadPendingBridge(account)?.recipient;
+      const expectedRecipient = persistedRecipient ?? recipientOverride ?? account;
+      const parsed = parseCctpV2Message(entry.attestationMessage);
+      if (
+        !parsed ||
+        parsed.sourceDomain !== step.srcDomain ||
+        (dstChainCfg && parsed.destinationDomain !== dstChainCfg.cctpDomain) ||
+        !expectedRecipient ||
+        parsed.mintRecipient.toLowerCase() !==
+          addressToBytes32(expectedRecipient as Address).toLowerCase()
+      ) {
+        return;
+      }
+      setStep({
+        kind: "minting",
+        burnTxHash: step.burnTxHash,
+        message: entry.attestationMessage,
+        attestation: entry.attestationSignature,
+        dstId: step.dstId,
+      });
+    };
+    // Check immediately in case the history poll already finished before
+    // this effect ran (refresh-mid-attest case).
+    tryCachedAttestation();
+    const handler = () => tryCachedAttestation();
+    window.addEventListener(BRIDGE_HISTORY_CHANGE_EVENT, handler);
+    window.addEventListener("storage", handler);
+    return () => {
+      window.removeEventListener(BRIDGE_HISTORY_CHANGE_EVENT, handler);
+      window.removeEventListener("storage", handler);
+    };
+  }, [step, account, recipientOverride]);
 
   /**
    * Upper bound (in seconds) of the "normal" attestation window per source

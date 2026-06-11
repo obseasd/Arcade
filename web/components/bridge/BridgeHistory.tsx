@@ -132,7 +132,16 @@ export function BridgeHistory() {
           try {
             const att = await fetchAttestation(cfg.cctpDomain, entry.burnTxHash);
             if (att && att.status === "complete" && !cancelled && account) {
-              updateBridge(account, entry.id, { attestationReady: true });
+              // Audit 2026-06-11 bug #8: cache the message + signature
+              // blobs alongside the flag. BridgeCard's storage listener
+              // re-validates them and transitions to "minting" as soon
+              // as the badge flips, removing the 60-vs-6 s race that
+              // left the claim button greyed out for 2+ minutes.
+              updateBridge(account, entry.id, {
+                attestationReady: true,
+                attestationMessage: att.message as `0x${string}`,
+                attestationSignature: att.attestation as `0x${string}`,
+              });
               setEntries(loadBridgeHistory(account));
             }
           } catch {

@@ -19,6 +19,10 @@ export interface TokenOption {
   name?: string;
   decimals?: number;
   pinned?: boolean;
+  /** Audit 2026-06-11 bug #5: source-of-truth marker for tokens that don't
+   *  trade on V2/V3 AMMs. "launchpad-curve" = bonding curve only (PUMP
+   *  pre-grad); the SwapCard renders a redirect CTA instead of a quote. */
+  via?: "launchpad-curve";
 }
 
 interface PinnedTemplate {
@@ -128,18 +132,19 @@ export function TokenSelectModal({ open, onClose, tokens, onSelect, selectedAddr
     const name = nameQ.data as string | undefined;
     const symbol = symbolQ.data as string | undefined;
     const decimals = decimalsQ.data as number | undefined;
-    // Surface the import row as long as at least one ERC20 call succeeded.
-    // Some Arc RPC nodes intermittently miss freshly-deployed contracts on
-    // one of the three calls; rather than block the user we accept the hit
-    // with sane defaults so the pair-creation flow can proceed.
-    const allFailed =
-        symbol === undefined && name === undefined && decimals === undefined;
-    if (allFailed) return undefined;
+    // Audit 2026-06-11 UX-H-4: decimals are SAFETY-CRITICAL — they scale
+    // every amount we sign on-chain. A scam token whose `decimals()`
+    // reverts but exposes name() / symbol() used to be importable with
+    // an 18 fallback, which then mis-scaled parseUnits by 10^12 against
+    // a 6-decimal token (the user-typed "1.0" became 1e18 instead of
+    // 1e6). Require decimals MANDATORY at import time so the SwapCard's
+    // downstream `decimalsKnown` gate has something to check.
+    if (decimals === undefined) return undefined;
     return {
         address: pastedAddress,
         name: name ?? "Imported token",
         symbol: symbol || "TOKEN",
-        decimals: decimals ?? 18,
+        decimals,
     };
   }, [pastedAddress, nameQ.data, symbolQ.data, decimalsQ.data]);
 
@@ -319,6 +324,11 @@ export function TokenSelectModal({ open, onClose, tokens, onSelect, selectedAddr
                     <span className="font-medium uppercase text-arc-text-muted">
                       {t.symbol ?? "-"}
                     </span>
+                    {t.via === "launchpad-curve" && (
+                      <span className="rounded-md bg-amber-400/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-amber-300">
+                        Curve
+                      </span>
+                    )}
                     <span className="font-mono text-[10px] text-arc-text-faint">
                       {shortAddr(t.address)}
                     </span>

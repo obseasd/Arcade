@@ -736,6 +736,7 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         address tokenOut,
         uint256 tokensIn,
         uint256 minTokensOut,
+        uint256 usdcMidMin,
         uint256 deadline
     ) external nonReentrant returns (uint256 tokensOut) {
         if (block.timestamp > deadline) revert Expired();
@@ -771,6 +772,13 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
             tokensIn, 0, _path2(tokenIn, address(USDC)), address(this), deadline
         );
         uint256 usdcMid = leg1[1];
+        // Audit 2026-06-11 contract #10: mid-leg slippage floor mirrors
+        // the V3 router's MID_SLIPPAGE defence. Sandwiching the leg-1
+        // pool drives usdcMid arbitrarily low; without this gate the
+        // royalty + leg-2 chain could still scrape past minTokensOut on
+        // a thin pair. Frontend computes usdcMidMin from
+        // quoteSwapMigratedRoute's intermediate USDC value at 97%.
+        require(usdcMid >= usdcMidMin, "MID_SLIPPAGE");
 
         // CSEC-018: both royalty legs computed from the ORIGINAL usdcMid so the
         // combined royalty stays exactly at 2 * MIGRATED_ROYALTY_BPS (advertised

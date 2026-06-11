@@ -241,6 +241,7 @@ export const LAUNCHPAD_ABI = [
       { name: "tokenOut", type: "address" },
       { name: "tokensIn", type: "uint256" },
       { name: "minTokensOut", type: "uint256" },
+      { name: "usdcMidMin", type: "uint256" },
       { name: "deadline", type: "uint256" },
     ],
     outputs: [{ name: "tokensOut", type: "uint256" }],

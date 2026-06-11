@@ -753,6 +753,44 @@ contract ArcadeV3Locker is IUniswapV3MintCallback {
         emit AdminUpdated(positionId, index, newAdmin);
     }
 
+    /// @notice Atomically rotate BOTH a slot's recipient and admin in one tx.
+    /// @dev Audit 2026-06-11 CONTRACT-2: the L-4 invariant
+    /// `(recipient == escrow) <=> (admin == escrow)` is correct on the
+    /// final state but accidentally locked the canonical `(esc, esc) ->
+    /// (user, user)` transition because BOTH `updateRecipient(esc -> user)`
+    /// and `updateAdmin(esc -> user)` would have to pass through a
+    /// temporarily asymmetric state that the single-field setters reject.
+    /// Result: every slot routed through TwitterEscrow stranded after the
+    /// first `claimByTwitter`, requiring per-token owner rescue. This
+    /// atomic setter takes both new values, writes both, and applies the
+    /// invariant ONLY on the final state — preserving the L-4 security
+    /// posture while unlocking the legitimate rotation path. Caller must
+    /// still be the current admin (so the TwitterEscrow can sign-and-call
+    /// this from inside `claimByTwitter`, where it already holds the
+    /// admin role on credited slots).
+    function rotateSlot(
+        uint256 positionId,
+        uint256 index,
+        address newRecipient,
+        address newAdmin
+    ) external {
+        require(newRecipient != address(0) && newAdmin != address(0), "ZERO");
+        Recipient storage r = _recipients[positionId][index];
+        require(msg.sender == r.admin, "ONLY_ADMIN");
+        address esc = twitterEscrow;
+        // Invariant on the FINAL state only — intermediate writes can be
+        // asymmetric because they happen atomically in this single call.
+        if (newRecipient == esc) {
+            require(newAdmin == esc, "ESCROW_PAIR");
+        } else {
+            require(newAdmin != esc, "ESCROW_PAIR");
+        }
+        r.recipient = newRecipient;
+        r.admin = newAdmin;
+        emit RecipientUpdated(positionId, index, newRecipient);
+        emit AdminUpdated(positionId, index, newAdmin);
+    }
+
     // ====================== Internal token transfers ======================
 
     function _pay(address token, address to, uint256 amount) internal {

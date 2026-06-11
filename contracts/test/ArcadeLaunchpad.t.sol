@@ -334,7 +334,7 @@ contract ArcadeLaunchpadTest is Test {
         // Execute the multi-hop swap through the launchpad
         vm.startPrank(bob);
         IERC20(tokenA).approve(address(launchpad), type(uint256).max);
-        uint256 receivedB = launchpad.swapMigratedRoute(tokenA, tokenB, tokensA, 0, block.timestamp + 600);
+        uint256 receivedB = launchpad.swapMigratedRoute(tokenA, tokenB, tokensA, 0, 0, block.timestamp + 600);
         vm.stopPrank();
 
         assertEq(receivedB, quotedOut, "actual matches quote");
@@ -364,9 +364,9 @@ contract ArcadeLaunchpadTest is Test {
         // Audit renamed this from UnknownToken to InvalidRoute since the tokens
         // ARE known; the route shape is what's wrong.
         vm.expectRevert(ArcadeLaunchpad.InvalidRoute.selector);
-        launchpad.swapMigratedRoute(address(usdc), tokenA, 1, 0, block.timestamp + 600);
+        launchpad.swapMigratedRoute(address(usdc), tokenA, 1, 0, 0, block.timestamp + 600);
         vm.expectRevert(ArcadeLaunchpad.InvalidRoute.selector);
-        launchpad.swapMigratedRoute(tokenA, address(usdc), 1, 0, block.timestamp + 600);
+        launchpad.swapMigratedRoute(tokenA, address(usdc), 1, 0, 0, block.timestamp + 600);
     }
 
     function test_marketCap_increasesWithBuys() public {

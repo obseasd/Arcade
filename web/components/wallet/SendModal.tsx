@@ -247,8 +247,19 @@ export function SendModal({ open, onClose, defaultToken }: Props) {
             // a hash so we mark it "submitted" rather than "success" so
             // the user sees the explorer link + a clear caveat. Audit
             // UI-M-12.
+            // Audit 2026-06-11 UX-C-3: receipt.status check. Critical for
+            // Send specifically — without this, a reverted transfer (e.g.
+            // recipient is a contract that rejects the token) was reported
+            // as success and the user believed their funds had left the
+            // wallet. addActivity would also write a misleading "Sent ..."
+            // row to the feed.
             if (publicClient) {
-                await publicClient.waitForTransactionReceipt({ hash });
+                const receipt = await publicClient.waitForTransactionReceipt({ hash });
+                if (receipt.status !== "success") {
+                    throw new Error(
+                        `Transfer reverted on-chain (tx ${hash.slice(0, 10)}…). Recipient may reject this token, or the network rejected the transaction.`,
+                    );
+                }
                 setStep("success");
             } else {
                 setStep("success");

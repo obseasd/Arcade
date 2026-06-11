@@ -63,6 +63,7 @@ interface IArcadeLaunchpad {
         address tokenOut,
         uint256 tokensIn,
         uint256 minTokensOut,
+        uint256 usdcMidMin,
         uint256 deadline
     ) external returns (uint256 tokensOut);
 

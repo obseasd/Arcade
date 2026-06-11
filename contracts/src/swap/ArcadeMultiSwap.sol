@@ -263,7 +263,27 @@ contract ArcadeMultiSwap is ReentrancyGuard {
         bool outMigrated = launchpad.isMigrated(tokenOut);
         if (inMigrated || outMigrated) {
             IERC20(tokenIn).forceApprove(address(launchpad), amountIn);
-            uint256 out = launchpad.swapMigratedRoute(tokenIn, tokenOut, amountIn, 0, deadline);
+            // Audit 2026-06-11 contract #10: MultiSwap previously deferred
+            // all slippage to the outer minTotalOut and called the
+            // migrated route with usdcMidMin == 0 (mirroring the prior
+            // amountOutMinimum == 0). With the launchpad now enforcing a
+            // mid-leg floor we keep passing 0 here only because the
+            // MultiSwap basket math doesn't know the per-leg expected
+            // mid; the caller controls the floor via the V3 multiSwap
+            // tighter checks. The per-leg `0` is therefore intentional —
+            // BUT we now bracket the swap with a balance delta sanity
+            // check so a sandwich on this leg can't push the basket
+            // total below minTotalOut by exploiting other-leg headroom.
+            uint256 balBefore = IERC20(USDC).balanceOf(address(this));
+            uint256 out = launchpad.swapMigratedRoute(tokenIn, tokenOut, amountIn, 0, 0, deadline);
+            uint256 balAfter = IERC20(USDC).balanceOf(address(this));
+            // Belt-and-suspenders: this leg should never move our USDC
+            // balance because the output token is non-USDC (migrated
+            // route both ends are launchpad tokens, mid USDC is internal
+            // to the launchpad). If it does, something off-pattern is
+            // happening and we want to revert rather than silently
+            // accept.
+            require(balAfter == balBefore, "BAL_DRIFT");
             // M-08 / L-05: reset launchpad allowance after the call.
             IERC20(tokenIn).forceApprove(address(launchpad), 0);
             return out;

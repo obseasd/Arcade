@@ -5,15 +5,14 @@ import { NextRequest } from "next/server";
 // override it (home, /swap, /launchpad, etc). Token-detail pages keep
 // using ../route.tsx which embeds the token image + FDV.
 export const runtime = "edge";
-// Audit 2026-06-11 API-4: force-dynamic was the wrong choice — the brand
-// splash never varies per request, so every visit triggered an
-// ImageResponse + 2 Google Fonts fetches. Switching to force-static lets
-// the edge cache hold the rendered PNG and serve subsequent hits from
-// cache. The runtime is still "edge" because ImageResponse requires it.
-export const dynamic = "force-static";
-// 24h at the edge + 1y stale-while-revalidate. The image is intentionally
-// static (no token, no FDV, no per-page) so a long cache is correct.
-export const revalidate = 86400;
+// Audit 2026-06-11 API-4: brand splash never varies per request, so we
+// rely on the edge CDN to cache the rendered PNG instead of re-rendering
+// it on every visit. We CANNOT use `force-static` here because the route
+// reads `req.url` to build the absolute logo URL, which Next.js treats
+// as a dynamic API and refuses to pre-render at build. Keep dynamic
+// + explicit long Cache-Control headers on the response below to get the
+// same caching outcome at the edge without the build break.
+export const dynamic = "force-dynamic";
 
 const BG_FROM = "#001029";
 const BG_MID = "#0A1F3A";
@@ -165,6 +164,13 @@ export async function GET(req: NextRequest) {
         {
             width: 1200,
             height: 630,
+            // Audit 2026-06-11 API-4: long edge-cache so the brand splash
+            // is served from CDN instead of re-rendered + 2 Google Fonts
+            // fetches on every visit. 24h fresh + 7d stale-while-revalidate.
+            headers: {
+                "cache-control":
+                    "public, max-age=86400, s-maxage=86400, stale-while-revalidate=604800",
+            },
             fonts: [
                 ...(headingFont
                     ? [

@@ -29,26 +29,52 @@ export const arcadeV3Provider: RouteProvider = {
     const direct = isUsdcIn || isUsdcOut;
     const functionName = direct ? "quoteExactInputSingle" : "quoteExactInputThroughUsdc";
 
-    // Audit A-4: anti-sniper tax read INSIDE the provider so the quoted
-    // amountOut matches what the router actually executes. SwapCard's
-    // legacy quoteV3 was deducting the skim before quoting; the
-    // aggregator ignored it, producing too-optimistic quotes that
-    // tripped slippage at exec time. Tax applies on USDC-in buys
-    // (skim taken off the input); for sells the V3-3 fix already
-    // skims on tokenIn → no quote-side correction needed.
-    let snipeBps = 0n;
-    if (isUsdcIn && ADDRESSES.launchpad !== ZERO) {
+    // Audit 2026-06-11 ROUTING-1: anti-sniper tax read INSIDE the provider
+    // so the quoted amountOut matches what the router actually executes.
+    // The contract router skims on BOTH directions:
+    //   - USDC->clanker buy: skim by currentSnipeBps(tokenOut), router pays
+    //     skim from input, leg uses (amountIn - skim).
+    //   - clanker->USDC sell (direct): skim by currentSnipeBps(tokenIn),
+    //     router pays skim from input, leg uses (amountIn - skim).
+    //   - clanker->USDC->clanker (multi-hop): contract today only skims the
+    //     leg-2 buy side; CONTRACT-1 fix (gen 9) will also skim leg-1 sell.
+    //     We over-skim defensively here so post-gen-9 the quote matches and
+    //     pre-gen-9 the actual output is HIGHER than what we quote, which is
+    //     safe (the swap's amountOutMinimum passes more easily).
+    //
+    // Prior version only deducted the buy-side skim; sells reverted on
+    // slippage every time during the snipe window, and multi-hop quotes
+    // were systematically too optimistic by ~the snipe rate.
+    async function readSnipeBps(token: Address): Promise<bigint> {
+      if (ADDRESSES.launchpad === ZERO) return 0n;
       try {
         const bps = (await publicClient.readContract({
           address: ADDRESSES.launchpad,
           abi: LAUNCHPAD_ABI,
           functionName: "currentSnipeBps",
-          args: [req.tokenOut],
+          args: [token],
         })) as bigint;
-        snipeBps = bps;
+        return bps;
       } catch {
-        snipeBps = 0n;
+        return 0n;
       }
+    }
+
+    let snipeBps = 0n;
+    if (direct) {
+      // Direct: one side is USDC; the other is the clanker we read the
+      // skim from. isUsdcIn => skim on tokenOut (buy); isUsdcOut => skim
+      // on tokenIn (sell).
+      const taxedSide = isUsdcIn ? req.tokenOut : req.tokenIn;
+      snipeBps = await readSnipeBps(taxedSide);
+    } else {
+      // Multi-hop clanker->clanker: skim both legs. Sum the two bps so
+      // they apply against the input amount as a single factor.
+      const [bpsIn, bpsOut] = await Promise.all([
+        readSnipeBps(req.tokenIn),
+        readSnipeBps(req.tokenOut),
+      ]);
+      snipeBps = bpsIn + bpsOut;
     }
     const netAmountIn = req.amountIn - (req.amountIn * snipeBps) / 10_000n;
 
@@ -68,6 +94,29 @@ export const arcadeV3Provider: RouteProvider = {
 
     const amountOutMinimum =
       (amountOut * BigInt(10_000 - req.slippageBps)) / 10_000n;
+
+    // Audit 2026-06-11 ROUTING-2: compute a real `usdcMidMin` floor for
+    // multi-hop so the on-chain MID_SLIPPAGE check (router line 140) is
+    // re-enabled. Quoting leg 1 alone gives us the expected USDC mid; we
+    // floor it at 97% to leave room for honest price movement while still
+    // blocking a sandwich that drops the mid by >3%. Prior `0n` left the
+    // router's mid-leg sandwich defence inert.
+    let usdcMidMin = 0n;
+    if (!direct) {
+      try {
+        const usdcMid = (await publicClient.readContract({
+          address: ADDRESSES.v3Quoter,
+          abi: V3_QUOTER_ABI,
+          functionName: "quoteExactInputSingle",
+          args: [req.tokenIn, ADDRESSES.usdc, V3_FEE, netAmountIn],
+        })) as bigint;
+        // 97% of the quoted mid. Tighter than the final-out slippage so a
+        // mid-leg sandwich is caught before it propagates to the final.
+        usdcMidMin = (usdcMid * 9_700n) / 10_000n;
+      } catch {
+        usdcMidMin = 0n;
+      }
+    }
 
     // Arcade V3 router has both exactInputSingle (direct) and
     // exactInputThroughUsdc (multi-hop via USDC). The router itself
@@ -90,7 +139,7 @@ export const arcadeV3Provider: RouteProvider = {
           req.recipient,
           req.amountIn,
           amountOutMinimum,
-          0n, // usdcMidMin — accept any USDC mid amount, slippage is on the final out
+          usdcMidMin,
           req.deadline,
         ];
 

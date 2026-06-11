@@ -8,7 +8,23 @@ import { WagmiProvider } from "wagmi";
 import { wagmiConfig } from "@/lib/wagmi";
 
 export function Providers({ children }: { children: ReactNode }) {
-  const [queryClient] = useState(() => new QueryClient());
+  // Audit 2026-06-11 UX-H-1: refetchOnWindowFocus so balances, positions
+  // and pool reads refresh when the user comes back to the tab. Without
+  // this every wagmi useReadContract relied on its own polling interval
+  // (typically 30s) and the user could see a stale MAX after a 5-min
+  // tab-away, then click swap and revert. Bridge history was the only
+  // surface that already listened to visibilitychange; this lifts the
+  // refresh to every wagmi query at once.
+  const [queryClient] = useState(
+    () =>
+      new QueryClient({
+        defaultOptions: {
+          queries: {
+            refetchOnWindowFocus: true,
+          },
+        },
+      }),
+  );
 
   return (
     <WagmiProvider config={wagmiConfig}>

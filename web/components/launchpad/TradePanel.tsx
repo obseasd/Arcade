@@ -140,7 +140,18 @@ export function TradePanel({ token, symbol, migrated, image, onTradeSuccess }: P
         functionName: fn,
         args: args as unknown as readonly [`0x${string}`, bigint, bigint],
       });
-      if (publicClient) await publicClient.waitForTransactionReceipt({ hash });
+      // Audit 2026-06-11 UX-C-1: receipt.status check. waitForTransactionReceipt
+      // returns a receipt for both success and revert; without this gate a
+      // reverted tx still cleared the form, pushed a green toast, and wrote
+      // a buy/sell entry to the activity feed.
+      if (publicClient) {
+        const receipt = await publicClient.waitForTransactionReceipt({ hash });
+        if (receipt.status !== "success") {
+          throw new Error(
+            `${side === "buy" ? "Buy" : "Sell"} reverted on-chain (tx ${hash.slice(0, 10)}…). Common causes: slippage too tight, deadline passed, pool ratio moved between read and exec.`,
+          );
+        }
+      }
       setTx({ status: "idle" });
       setAmount("");
       usdcBalance.refetch();

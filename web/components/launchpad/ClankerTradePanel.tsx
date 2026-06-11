@@ -129,7 +129,17 @@ export function ClankerTradePanel({ token, symbol, pool, image, onTradeSuccess }
         functionName: "exactInputSingle",
         args,
       });
-      if (publicClient) await publicClient.waitForTransactionReceipt({ hash });
+      // Audit 2026-06-11 UX-C-2: receipt.status check. Without this gate
+      // a reverted CLANKER_V3 buy/sell (anti-sniper skim slippage,
+      // pool ratio drift) still cleared the form and pushed a green toast.
+      if (publicClient) {
+        const receipt = await publicClient.waitForTransactionReceipt({ hash });
+        if (receipt.status !== "success") {
+          throw new Error(
+            `${side === "buy" ? "Buy" : "Sell"} reverted on-chain (tx ${hash.slice(0, 10)}…). Common causes: anti-sniper skim moved the effective amount, slippage too tight, deadline passed.`,
+          );
+        }
+      }
       setTx({ status: "idle" });
       setAmount("");
       usdcBalance.refetch();

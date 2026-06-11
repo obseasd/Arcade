@@ -12,6 +12,12 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 interface IArcadeV3Locker {
     function updateRecipient(uint256 positionId, uint256 index, address newRecipient) external;
     function updateAdmin(uint256 positionId, uint256 index, address newAdmin) external;
+    function rotateSlot(
+        uint256 positionId,
+        uint256 index,
+        address newRecipient,
+        address newAdmin
+    ) external;
     function withdrawPending(address token) external returns (uint256 amount);
 }
 
@@ -495,12 +501,14 @@ contract ArcadeTwitterEscrowV3 is Ownable2Step, Pausable, ReentrancyGuard {
         // F-6: rotation is best-effort. If the locker reverts (slot already
         // rotated, locker upgraded, etc), the user STILL gets their tokens.
         // Backend can retry rotation out-of-band by reading the event.
-        try IArcadeV3Locker(LOCKER).updateRecipient(positionId, slotIndex, recipient) {
-            // ok
-        } catch (bytes memory reason) {
-            emit RotationFailed(positionId, slotIndex, reason);
-        }
-        try IArcadeV3Locker(LOCKER).updateAdmin(positionId, slotIndex, recipient) {
+        //
+        // Audit 2026-06-11 CONTRACT-2: use the locker's atomic `rotateSlot`
+        // so the L-4 invariant `(recipient == esc) <=> (admin == esc)`
+        // applies only to the FINAL state. The prior two-step path
+        // updateRecipient + updateAdmin would pass through an asymmetric
+        // intermediate state and revert ESCROW_PAIR, leaving the slot
+        // stranded (recipient still == escrow → all future fees stuck).
+        try IArcadeV3Locker(LOCKER).rotateSlot(positionId, slotIndex, recipient, recipient) {
             // ok
         } catch (bytes memory reason) {
             emit RotationFailed(positionId, slotIndex, reason);
@@ -701,6 +709,22 @@ contract ArcadeTwitterEscrowV3 is Ownable2Step, Pausable, ReentrancyGuard {
             balances[positionId][slotIndex][clankerToken] = 0;
             creditedTotal[clankerToken] -= clanker;
             IERC20(clankerToken).safeTransfer(to, clanker);
+        }
+
+        // Audit 2026-06-11 contract #10: rotate the locker recipient to
+        // `to` so future collectFees from leftover positions don't strand
+        // additional fees in the escrow's address (which has no slot
+        // attribution for the now-claimed slot). Without this, the owner
+        // would have to keep calling pullFromLocker per-token forever.
+        // Best-effort via rotateSlot atomic — both recipient and admin
+        // flip together so the L-4 invariant on the final state passes.
+        // Caught in a try/catch so a locker that doesn't ship rotateSlot
+        // yet (gen 8) doesn't brick the forfeit; the owner can still call
+        // rotateLockerAdmin/rotateLockerRecipient manually.
+        try IArcadeV3Locker(LOCKER).rotateSlot(positionId, slotIndex, to, to) {
+            // ok
+        } catch (bytes memory reason) {
+            emit RotationFailed(positionId, slotIndex, reason);
         }
 
         emit Forfeited(positionId, slotIndex, to, pairedToken, paired, clankerToken, clanker);

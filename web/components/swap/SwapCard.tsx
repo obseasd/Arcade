@@ -15,6 +15,7 @@ import { QuickButton } from "@/components/swap/QuickButton";
 import { useApproveIfNeeded } from "@/lib/hooks/useApproveIfNeeded";
 import { useV2Tokens } from "@/lib/hooks/useV2Tokens";
 import { useV3Tokens } from "@/lib/hooks/useV3Tokens";
+import { useLaunchpadCurveTokens } from "@/lib/hooks/useLaunchpadCurveTokens";
 import { useUsdValue } from "@/lib/hooks/useTokenUsdPrice";
 import { useSwapRoute } from "@/lib/hooks/useSwapRoute";
 import { pushToast } from "@/lib/toast";
@@ -66,19 +67,28 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
   const publicClient = usePublicClient();
   const { tokens: v2Tokens } = useV2Tokens();
   const { tokens: v3Tokens, isV3Token, feeOf } = useV3Tokens();
+  // Audit 2026-06-11 bug #5: surface PUMP-mode pre-graduation tokens in
+  // the dropdown so users can discover & navigate to them from the swap
+  // surface. They don't trade on AMMs (no V2 pair, no V3 pool) so the
+  // SwapCard renders a "Trade on bonding curve" CTA that deep-links to
+  // /launchpad/<addr> rather than attempting an aggregator quote. Dedup
+  // by address so a token that graduates mid-session keeps its V2 entry
+  // (which carries decimals + name from the actual ERC20) and drops the
+  // curve placeholder.
+  const { tokens: curveTokens } = useLaunchpadCurveTokens();
   const { writeContractAsync } = useWriteContract();
 
   const allTokens: TokenOption[] = useMemo(() => {
     const seen = new Set<string>();
     const out: TokenOption[] = [];
-    for (const t of [USDC_TOKEN, ...v2Tokens, ...v3Tokens]) {
+    for (const t of [USDC_TOKEN, ...v2Tokens, ...v3Tokens, ...curveTokens]) {
       const k = t.address.toLowerCase();
       if (seen.has(k)) continue;
       seen.add(k);
       out.push(t);
     }
     return out;
-  }, [v2Tokens, v3Tokens]);
+  }, [v2Tokens, v3Tokens, curveTokens]);
 
   const [tokenIn, setTokenIn] = useState<TokenOption>(USDC_TOKEN);
   const [tokenOut, setTokenOut] = useState<TokenOption | null>(null);
@@ -137,6 +147,18 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
   const v3SingleHop = isV3Swap && !v3DoubleHop && (isUsdcIn || isUsdcOut);
   // V3<->V2 (non-USDC) can't route in one router call - flag as unsupported.
   const v3Unsupported = isV3Swap && !v3DoubleHop && !v3SingleHop;
+  // Audit 2026-06-11 bug #5: when either side of the swap is a PUMP-mode
+  // pre-graduation token, there is no AMM path — the token trades on the
+  // bonding curve via `launchpad.buy/sell`. Surface a CTA that deep-links
+  // to /launchpad/<addr> instead of attempting to quote against the
+  // aggregator (which will return null for every provider).
+  const curveSide: TokenOption | null =
+    tokenIn.via === "launchpad-curve"
+      ? tokenIn
+      : tokenOut?.via === "launchpad-curve"
+        ? tokenOut
+        : null;
+  const isLaunchpadCurveSwap = curveSide !== null;
 
   // Forward-quote ratio cache: captured every time an in->out quote returns
   // a non-zero result so we can back-derive amountIn when the user types
@@ -234,7 +256,7 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
   // (post-migration royalty) because the migrated quoter has its own
   // accounting that the generic V2 provider doesn't reproduce.
   const aggregatorEnabled =
-    !route.useLaunchpadRouter && !v3Unsupported && decimalsKnown && amountInRaw > 0n && !!tokenOut && !!account;
+    !route.useLaunchpadRouter && !v3Unsupported && !isLaunchpadCurveSwap && decimalsKnown && amountInRaw > 0n && !!tokenOut && !!account;
   const routeQuotes = useRouteQuotes({
     tokenIn: tokenIn.address,
     tokenOut: tokenOut?.address,
@@ -458,6 +480,10 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
     !!account &&
     !!tokenOut &&
     !v3Unsupported &&
+    // Audit 2026-06-11 bug #5: curve-only tokens have no aggregator path,
+    // so the Swap button stays disabled and the user is steered to the
+    // launchpad page via the CTA above.
+    !isLaunchpadCurveSwap &&
     // Audit high [4]/[8]: never sign with unknown decimals — the entire
     // amount/min math would be off by a factor of 10^(realDec - 18).
     decimalsKnown &&
@@ -566,11 +592,29 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
         // are charged on each leg whose token is a migrated launchpad token.
         // Only exact-in is supported; the effect above forces lastEdited="in".
         // Deadline param added in audit fixes (Medium #6).
+        // Audit 2026-06-11 contract #10: derive a usdcMidMin floor from
+        // the quoter's totalRoyaltyUsdc so the new launchpad MID_SLIPPAGE
+        // gate has something to enforce. Royalty is 60 bps per migrated
+        // leg, so usdcMid_pre_royalty = totalRoyalty / (0.006 * legs).
+        // Floor at 97 % of that to leave room for honest movement while
+        // catching a mid-leg sandwich. Falls back to 0n if the quote
+        // shape is unexpected.
+        let usdcMidMinForRoute = 0n;
+        if (quoteMigratedOut.data) {
+          const totalRoyaltyUsdc = (quoteMigratedOut.data as readonly bigint[])[1];
+          if (totalRoyaltyUsdc > 0n) {
+            const migratedLegs = (route.inMigrated ? 1n : 0n) + (route.outMigrated ? 1n : 0n);
+            if (migratedLegs > 0n) {
+              const usdcMidEstimate = (totalRoyaltyUsdc * 10_000n) / (60n * migratedLegs);
+              usdcMidMinForRoute = (usdcMidEstimate * 9_700n) / 10_000n;
+            }
+          }
+        }
         hash = await writeContractAsync({
           address: ADDRESSES.launchpad,
           abi: LAUNCHPAD_ABI,
           functionName: "swapMigratedRoute",
-          args: [tokenIn.address, tokenOut.address, finalAmountIn, minOut, deadline],
+          args: [tokenIn.address, tokenOut.address, finalAmountIn, minOut, usdcMidMinForRoute, deadline],
         });
       } else if (exactIn) {
         hash = await writeContractAsync({
@@ -751,6 +795,28 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
       {/* V4 tokens trade on a separate pool the V2/V3 aggregator can't
           reach yet - nudge the user to the V4 swap panel instead. */}
       <V4RoutingNotice tokenIn={tokenIn.address} tokenOut={tokenOut?.address} />
+
+      {/* Audit 2026-06-11 bug #5: PUMP-mode pre-grad tokens trade on the
+          bonding curve only. Surface a CTA that takes the user to the
+          dedicated launchpad detail page where TradePanel handles the
+          curve buy/sell. No quote, no aggregator, just navigation. */}
+      {isLaunchpadCurveSwap && curveSide && (
+        <div className="mt-3 rounded-xl border border-amber-400/30 bg-amber-400/10 p-3 text-xs text-amber-200">
+          <div className="font-semibold text-amber-100">
+            {curveSide.symbol ?? "Token"} trades on the bonding curve.
+          </div>
+          <div className="mt-1 text-amber-200/80">
+            This token hasn&apos;t graduated yet, so it has no V2/V3 pool. Trade it
+            from the launchpad page.
+          </div>
+          <a
+            href={`/launchpad/${curveSide.address}`}
+            className="mt-2 inline-flex items-center gap-1 rounded-lg bg-amber-400/20 px-3 py-1.5 font-semibold text-amber-100 hover:bg-amber-400/30"
+          >
+            Open launchpad →
+          </a>
+        </div>
+      )}
 
       {/* Cross-protocol (V3<->V2) routes can't execute in one tx. */}
       {v3Unsupported && (
