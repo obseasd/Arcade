@@ -15,12 +15,21 @@ export function Providers({ children }: { children: ReactNode }) {
   // tab-away, then click swap and revert. Bridge history was the only
   // surface that already listened to visibilitychange; this lifts the
   // refresh to every wagmi query at once.
+  // Audit 2026-06-11 v2 V2-F-05 + Perf P0-5: pair refetchOnWindowFocus
+  // with a 30s staleTime so a tab-refocus doesn't immediately re-fire 30+
+  // wagmi useReadContract queries (every Arc RPC read + every aggregator
+  // quote across 4 providers). Without the stale-time, alt-tabbing into
+  // the SwapConfirmModal mid-sign could shift the displayed quote between
+  // user-eyeball-read and wallet-sign. 30s mirrors the existing polling
+  // intervals on balance hooks so the window-focus refresh aligns with
+  // the cadence the rest of the app already uses.
   const [queryClient] = useState(
     () =>
       new QueryClient({
         defaultOptions: {
           queries: {
             refetchOnWindowFocus: true,
+            staleTime: 30_000,
           },
         },
       }),

@@ -110,9 +110,15 @@ export const arcadeV3Provider: RouteProvider = {
           functionName: "quoteExactInputSingle",
           args: [req.tokenIn, ADDRESSES.usdc, V3_FEE, netAmountIn],
         })) as bigint;
-        // 97% of the quoted mid. Tighter than the final-out slippage so a
-        // mid-leg sandwich is caught before it propagates to the final.
-        usdcMidMin = (usdcMid * 9_700n) / 10_000n;
+        // Audit 2026-06-11 v2 ADVR-3: scale the mid-leg floor to the user's
+        // slippage tolerance. Hardcoded 97% (3% mid tolerance) confused
+        // users who'd set 5%+ slippage on volatile pairs — the final-out
+        // gate would allow the move but the mid-leg would revert. With
+        // `(10_000 - slippageBps) / 10_000` the mid floor equals the final
+        // tolerance, so any sandwich that fits inside the user's slippage
+        // budget passes both gates symmetrically.
+        const tolerance = 10_000n - BigInt(req.slippageBps);
+        usdcMidMin = (usdcMid * tolerance) / 10_000n;
       } catch {
         usdcMidMin = 0n;
       }

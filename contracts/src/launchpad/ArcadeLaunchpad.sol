@@ -372,11 +372,20 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
             s, tokenAddr, rs, opts.fee, opts.creatorBuyUsdc, lpSupply, opts.poolType, opts.legacyMcapUsdc
         );
 
-        // The creator's launch buy executes inside `_launchClankerV3` before
-        // this point. Arming the snipe config here means the creator pays no
-        // tax on their own opening buy (it ran with `currentSnipeBps == 0`).
-        // External buyers landing in the same block but AFTER this tx returns
-        // are taxed normally because the config is now set; this is intended.
+        // Audit 2026-06-11 v2 E-02: the audit recommended arming snipe
+        // BEFORE the creator's buy to close the creator-grabs-deepest-
+        // tick-tax-free loophole, but that ordering breaks the creator-
+        // buy's 25% slippage check (CSEC-013) whenever snipeStartBps
+        // exceeds 25%. The creator's buy is computed assuming `slot0`
+        // sqrt and a pool with full LP; a 50% skim during the buy would
+        // halve the effective sqrtIn, blow the slippage band, and revert
+        // the entire launch. Deferred to a gen 10 redesign that either
+        // (a) widens the creator-buy slippage tolerance dynamically when
+        // a snipe is configured, or (b) applies a smaller "creator self-
+        // tax" cap distinct from the public snipeStartBps. Status quo:
+        // creator's own buy is untaxed, external buyers in the same
+        // block see the armed rate when they hit this contract after
+        // our tx returns.
         if (opts.snipeStartBps > 0 && opts.snipeDecaySeconds > 0) {
             snipeConfig[tokenAddr] = SnipeConfig(opts.snipeStartBps, opts.snipeDecaySeconds);
         }

@@ -4,6 +4,7 @@ import { useCallback } from "react";
 import { Address, Hex, maxUint160 } from "viem";
 import {
     useAccount,
+    useChainId,
     usePublicClient,
     useReadContract,
     useSignTypedData,
@@ -53,11 +54,21 @@ const PERMIT_TYPES = {
     ],
 } as const;
 
-const PERMIT_DOMAIN = {
-    name: "Permit2",
-    chainId: arcTestnet.id,
-    verifyingContract: PERMIT2_ADDRESS,
-} as const;
+// Audit 2026-06-11 v2 W-3: build the EIP-712 domain from the wallet's
+// connected chain at sign time, not from a module-load-time constant.
+// Hardcoding `arcTestnet.id` here meant a wallet briefly on another chain
+// (post-bridge return, OAuth reconnect race) signed a payload that the
+// on-chain `permit()` then rejected with an opaque "InvalidSigner"
+// revert. By reading the live chainId we either sign correctly OR refuse
+// to sign at all when the connected chain doesn't match Arc — see the
+// guard at the top of the `useSignPermit2` callback.
+function buildPermitDomain(chainId: number) {
+    return {
+        name: "Permit2",
+        chainId,
+        verifyingContract: PERMIT2_ADDRESS,
+    } as const;
+}
 
 /**
  * Tracks the ERC20.allowance the user has given to Permit2 on a token.
@@ -128,6 +139,7 @@ export function usePermit2AllowanceFor(
  */
 export function useSignPermit2() {
     const { address: account } = useAccount();
+    const chainId = useChainId();
     const publicClient = usePublicClient();
     const { signTypedDataAsync } = useSignTypedData();
     return useCallback(
@@ -142,6 +154,17 @@ export function useSignPermit2() {
             ttlSeconds?: number;
         }): Promise<{ permit: Permit2PermitSingle; signature: Hex }> => {
             if (!account || !publicClient) throw new Error("wallet not ready");
+            // Audit 2026-06-11 v2 W-3: refuse to sign with a non-Arc chainId.
+            // If we signed anyway the wallet would happily produce a valid
+            // EIP-712 signature against the other chain's domain, the
+            // user's swap tx would then revert opaquely at `permit()`
+            // (signer mismatch), and the user would have wasted gas + had
+            // their session interrupted. Better to fail loudly here.
+            if (chainId !== arcTestnet.id) {
+                throw new Error(
+                    `Wrong network — please switch to Arc Testnet to sign Permit2 (got chain ${chainId}).`,
+                );
+            }
             // Audit CRIT-3: read the Permit2 nonce FRESH at sign time. The
             // wagmi cache held by usePermit2AllowanceFor does not auto-refetch
             // on block, so a 2nd swap right after the 1st would sign with
@@ -181,7 +204,7 @@ export function useSignPermit2() {
                 sigDeadline,
             };
             const signature = (await signTypedDataAsync({
-                domain: PERMIT_DOMAIN,
+                domain: buildPermitDomain(chainId),
                 types: PERMIT_TYPES,
                 primaryType: "PermitSingle",
                 message: {
@@ -192,7 +215,7 @@ export function useSignPermit2() {
             })) as Hex;
             return { permit, signature };
         },
-        [account, publicClient, signTypedDataAsync],
+        [account, chainId, publicClient, signTypedDataAsync],
     );
 }
 

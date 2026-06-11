@@ -28,6 +28,17 @@ const nextConfig = {
           },
           { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
           { key: "X-Content-Type-Options", value: "nosniff" },
+          // Audit 2026-06-11 v2: HSTS forces every browser that's loaded
+          // arcade.trading ONCE over HTTPS to refuse plain-HTTP for the
+          // next 2 years. Defends against a MITM (coffee-shop wifi, ISP
+          // intercept) downgrading the connection and stealing the OAuth
+          // state cookie. `preload` qualifies for browser-vendor preload
+          // lists (instant protection on first visit — submit at
+          // hstspreload.org after rollout).
+          {
+            key: "Strict-Transport-Security",
+            value: "max-age=63072000; includeSubDomains; preload",
+          },
         ],
       },
     ];

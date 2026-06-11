@@ -128,6 +128,17 @@ contract ArcadeTwitterEscrowV3 is Ownable2Step, Pausable, ReentrancyGuard {
     ///         `rescue` to refuse touching user-earmarked balances.
     mapping(address token => uint256) public creditedTotal;
 
+    /// @notice Audit 2026-06-11 v2 G9-3: pull-payment ledger for
+    ///         `forfeitStaleClaim` payouts whose `safeTransfer` reverted
+    ///         (token blacklist, FoT pause, contract-recipient revert).
+    ///         The recipient (or contract owner via rescue) can later call
+    ///         `withdrawForfeitFailure(token)` to recover. Without this
+    ///         ledger, a reverting second-leg safeTransfer used to roll
+    ///         back the first-leg state mutation while the first-leg
+    ///         transfer had already succeeded — leading to a re-pay on
+    ///         owner retry.
+    mapping(address token => mapping(address recipient => uint256)) public pendingForfeit;
+
     /// @notice Timestamp of the last `creditSlot` call for each
     ///         (positionId, slotIndex). Anchors the FORFEIT_DELAY window
     ///         for `forfeitStaleClaim`. 0 means never credited.
@@ -192,6 +203,17 @@ contract ArcadeTwitterEscrowV3 is Ownable2Step, Pausable, ReentrancyGuard {
         uint256 pairedAmount,
         address clankerToken,
         uint256 clankerAmount
+    );
+    /// @notice Audit 2026-06-11 v2 G9-3: emitted when a `forfeitStaleClaim`
+    ///         safeTransfer reverts. The amount is stashed in
+    ///         `pendingForfeit[token][recipient]` for later pull-payment
+    ///         recovery via `withdrawForfeitFailure(token)`.
+    event ForfeitTransferFailed(
+        uint256 indexed positionId,
+        uint256 indexed slotIndex,
+        address indexed token,
+        address to,
+        uint256 amount
     );
 
     // ====================== Errors ======================
@@ -492,26 +514,38 @@ contract ArcadeTwitterEscrowV3 is Ownable2Step, Pausable, ReentrancyGuard {
             creditedTotal[clankerToken] -= actualClanker;
         }
 
-        // Interactions: transfers first (CEI), then locker rotation in try/catch.
-        if (actualPaired > 0) IERC20(pairedToken).safeTransfer(recipient, actualPaired);
-        if (actualClanker > 0 && pairedToken != clankerToken) {
-            IERC20(clankerToken).safeTransfer(recipient, actualClanker);
-        }
-
+        // Interactions, in order:
+        //   1. Locker rotation FIRST (audit 2026-06-11 v2 G9-4). Prior
+        //      ordering ran the safeTransfers first; for an ERC-777-style
+        //      token, the recipient's `tokensReceived` hook would execute
+        //      while the locker slot still had `(recipient, admin) ==
+        //      (escrow, escrow)`. A re-entrant `collectFees` call on the
+        //      locker would route fresh fees into the escrow under the
+        //      ABANDONED slot, where they'd strand. By rotating BEFORE
+        //      transferring, the slot is fully owned by `recipient` (not
+        //      escrow) for the duration of the hook — re-entrant
+        //      collectFees pays `recipient` directly. CEI is preserved
+        //      because the locker call is a pure ownership flip with no
+        //      value movement.
+        //
+        //   2. Token transfers (paired then clanker).
+        //
         // F-6: rotation is best-effort. If the locker reverts (slot already
         // rotated, locker upgraded, etc), the user STILL gets their tokens.
         // Backend can retry rotation out-of-band by reading the event.
         //
         // Audit 2026-06-11 CONTRACT-2: use the locker's atomic `rotateSlot`
         // so the L-4 invariant `(recipient == esc) <=> (admin == esc)`
-        // applies only to the FINAL state. The prior two-step path
-        // updateRecipient + updateAdmin would pass through an asymmetric
-        // intermediate state and revert ESCROW_PAIR, leaving the slot
-        // stranded (recipient still == escrow → all future fees stuck).
+        // applies only to the FINAL state.
         try IArcadeV3Locker(LOCKER).rotateSlot(positionId, slotIndex, recipient, recipient) {
             // ok
         } catch (bytes memory reason) {
             emit RotationFailed(positionId, slotIndex, reason);
+        }
+
+        if (actualPaired > 0) IERC20(pairedToken).safeTransfer(recipient, actualPaired);
+        if (actualClanker > 0 && pairedToken != clankerToken) {
+            IERC20(clankerToken).safeTransfer(recipient, actualClanker);
         }
 
         emit Claimed(positionId, slotIndex, recipient, pairedToken, actualPaired, clankerToken, actualClanker);
@@ -700,15 +734,37 @@ contract ArcadeTwitterEscrowV3 is Ownable2Step, Pausable, ReentrancyGuard {
 
         claimed[positionId][slotIndex] = true;
 
+        // Audit 2026-06-11 v2 G9-3: book balance + creditedTotal updates
+        // BEFORE the safeTransfer so a transfer revert can't roll back the
+        // accounting we just sealed via `claimed = true`. Pull-payment
+        // entries for the unpayable token go to `pendingForfeit` so the
+        // owner can re-target them via `withdrawForfeitFailure`. The
+        // alternative (per-transfer try/catch around the existing pattern)
+        // was rejected because a partial revert would leave one token
+        // already delivered to `to` AND the second token recoverable on
+        // retry, which double-pays the same forfeit.
         if (paired > 0) {
             balances[positionId][slotIndex][pairedToken] = 0;
             creditedTotal[pairedToken] -= paired;
-            IERC20(pairedToken).safeTransfer(to, paired);
+            // try/catch on safeTransfer: catches revert from the token
+            // (blacklist, FoT pause, etc) and stashes the amount in a
+            // pull-payment ledger keyed by (forfeitId, token, to).
+            try this._safeTransferGuarded(pairedToken, to, paired) {
+                // ok
+            } catch {
+                pendingForfeit[pairedToken][to] += paired;
+                emit ForfeitTransferFailed(positionId, slotIndex, pairedToken, to, paired);
+            }
         }
         if (clanker > 0) {
             balances[positionId][slotIndex][clankerToken] = 0;
             creditedTotal[clankerToken] -= clanker;
-            IERC20(clankerToken).safeTransfer(to, clanker);
+            try this._safeTransferGuarded(clankerToken, to, clanker) {
+                // ok
+            } catch {
+                pendingForfeit[clankerToken][to] += clanker;
+                emit ForfeitTransferFailed(positionId, slotIndex, clankerToken, to, clanker);
+            }
         }
 
         // Audit 2026-06-11 contract #10: rotate the locker recipient to
@@ -741,6 +797,31 @@ contract ArcadeTwitterEscrowV3 is Ownable2Step, Pausable, ReentrancyGuard {
         if (LOCKER == address(0)) revert LockerNotSet();
         if (token == address(0)) revert ZeroAddress();
         amount = IArcadeV3Locker(LOCKER).withdrawPending(token);
+    }
+
+    /// @notice Audit 2026-06-11 v2 G9-3: try/catch helper. Solidity's
+    ///         try/catch only works on EXTERNAL calls, so we wrap the
+    ///         OpenZeppelin SafeERC20.safeTransfer in an external view of
+    ///         this same contract (callable only by self). A revert
+    ///         inside this function propagates as a catchable failure to
+    ///         the calling `forfeitStaleClaim`, which then stashes the
+    ///         amount in `pendingForfeit` instead of reverting the whole
+    ///         forfeit.
+    function _safeTransferGuarded(address token, address to, uint256 amount) external {
+        require(msg.sender == address(this), "ONLY_SELF");
+        IERC20(token).safeTransfer(to, amount);
+    }
+
+    /// @notice Audit 2026-06-11 v2 G9-3: pull-payment recovery for
+    ///         forfeit transfers that reverted. The recipient who would
+    ///         have received the forfeit (either the user or whoever the
+    ///         owner pointed `to` at) calls this to drain their stashed
+    ///         balance for a given token.
+    function withdrawForfeitFailure(address token) external returns (uint256 amount) {
+        amount = pendingForfeit[token][msg.sender];
+        if (amount == 0) revert NothingToClaim();
+        pendingForfeit[token][msg.sender] = 0;
+        IERC20(token).safeTransfer(msg.sender, amount);
     }
 
     /// @notice M-12: owner-callable locker admin rotation. If the in-claim

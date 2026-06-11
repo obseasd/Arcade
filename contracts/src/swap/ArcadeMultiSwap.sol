@@ -263,27 +263,40 @@ contract ArcadeMultiSwap is ReentrancyGuard {
         bool outMigrated = launchpad.isMigrated(tokenOut);
         if (inMigrated || outMigrated) {
             IERC20(tokenIn).forceApprove(address(launchpad), amountIn);
-            // Audit 2026-06-11 contract #10: MultiSwap previously deferred
-            // all slippage to the outer minTotalOut and called the
-            // migrated route with usdcMidMin == 0 (mirroring the prior
-            // amountOutMinimum == 0). With the launchpad now enforcing a
-            // mid-leg floor we keep passing 0 here only because the
-            // MultiSwap basket math doesn't know the per-leg expected
-            // mid; the caller controls the floor via the V3 multiSwap
-            // tighter checks. The per-leg `0` is therefore intentional —
-            // BUT we now bracket the swap with a balance delta sanity
-            // check so a sandwich on this leg can't push the basket
-            // total below minTotalOut by exploiting other-leg headroom.
+            // Audit 2026-06-11 v2 G9-1: thread a real `usdcMidMin` floor
+            // into the migrated route. Prior `0n` neutered the launchpad's
+            // new MidSlippage defence for every MultiSwap caller. We
+            // quote inline to discover the expected mid, then floor at
+            // 95% (basket flows tolerate slightly wider mid drift than a
+            // direct user swap because the outer minTotalOut still gates
+            // the basket as a whole).
+            //
+            // Formula matches ArcadeLaunchpad's CSEC-018 invariant
+            // (MIGRATED_ROYALTY_BPS = 30, applied to original usdcMid
+            // before any deduction). For N migrated legs:
+            //   totalRoyalty = usdcMid * 30 * N / 10_000
+            //   usdcMid      = totalRoyalty * 10_000 / (30 * N)
+            (, uint256 totalRoyaltyUsdc) = launchpad.quoteSwapMigratedRoute(
+                tokenIn, tokenOut, amountIn
+            );
+            uint256 migratedLegs = (inMigrated ? 1 : 0) + (outMigrated ? 1 : 0);
+            uint256 usdcMidMin = 0;
+            if (migratedLegs > 0 && totalRoyaltyUsdc > 0) {
+                uint256 usdcMidEstimate = (totalRoyaltyUsdc * 10_000) / (30 * migratedLegs);
+                usdcMidMin = (usdcMidEstimate * 9_500) / 10_000;
+            }
+            // Audit 2026-06-11 v2 G9-2: switch the balance-delta sanity
+            // check from `==` to `>=`. The strict equality was DoS-grief-
+            // able by a 1-wei USDC donation to this contract (anyone
+            // can `USDC.transfer(multiswap, 1)` and brick the migrated
+            // route). The realistic threat — USDC drained TO somewhere —
+            // is still caught because `balAfter >= balBefore` only
+            // tolerates incoming transfers. Combined with `nonReentrant`
+            // this is sufficient.
             uint256 balBefore = IERC20(USDC).balanceOf(address(this));
-            uint256 out = launchpad.swapMigratedRoute(tokenIn, tokenOut, amountIn, 0, 0, deadline);
+            uint256 out = launchpad.swapMigratedRoute(tokenIn, tokenOut, amountIn, 0, usdcMidMin, deadline);
             uint256 balAfter = IERC20(USDC).balanceOf(address(this));
-            // Belt-and-suspenders: this leg should never move our USDC
-            // balance because the output token is non-USDC (migrated
-            // route both ends are launchpad tokens, mid USDC is internal
-            // to the launchpad). If it does, something off-pattern is
-            // happening and we want to revert rather than silently
-            // accept.
-            require(balAfter == balBefore, "BAL_DRIFT");
+            require(balAfter >= balBefore, "BAL_DRIFT");
             // M-08 / L-05: reset launchpad allowance after the call.
             IERC20(tokenIn).forceApprove(address(launchpad), 0);
             return out;

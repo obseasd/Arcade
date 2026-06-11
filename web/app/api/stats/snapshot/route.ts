@@ -15,13 +15,16 @@ import { rateLimit } from "@/lib/apiGuard";
  */
 export const revalidate = 300;
 
-// Audit 2026-06-11 API-5: per-IP rate limit so a cache-busting query
-// (`?_=...`) can't defeat the 5-minute ISR cache and force a fresh
-// getAggregateStats RPC scan on every hit. 30 req/min/IP is well above
-// honest polling (footer counter polls once every 5 min) but well below
-// the threshold where a sustained burst would flood Arc RPC.
+// Audit 2026-06-11 API-5 + v2 V2-F-04: tight per-IP rate limit so a
+// cache-busting query (`?_=...`) cannot defeat the 5-minute ISR cache
+// and force a fresh getAggregateStats RPC scan on every hit. Each cold
+// call fans out to ~700 parallel `eth_getLogs` requests across Arc's
+// public RPC, so an unbounded budget is a DoS vector. 5 req/min is well
+// above honest polling (footer counter polls at most once every 5 min)
+// but well below the threshold where a sustained burst could flood Arc
+// RPC. Tightened from 30 to 5 per the v2 audit.
 export async function GET(req: NextRequest) {
-    const rl = rateLimit(req, "stats-snapshot", 30, 60_000);
+    const rl = rateLimit(req, "stats-snapshot", 5, 60_000);
     if (rl) return rl;
     const snapshot = await getAggregateStats();
     // bigint cannot serialize directly; stringify for transport.

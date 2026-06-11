@@ -10,6 +10,7 @@ import { ROUTER_ABI } from "@/lib/abis/dex";
 import { LAUNCHPAD_ABI } from "@/lib/abis/launchpad";
 import { V3_QUOTER_ABI, V3_ROUTER_ABI } from "@/lib/abis/v3";
 import { ADDRESSES, USDC_DECIMALS } from "@/lib/constants";
+import { arcTestnet } from "@/lib/chains";
 import { TransactionSettings } from "@/components/ui/TransactionSettings";
 import { QuickButton } from "@/components/swap/QuickButton";
 import { useApproveIfNeeded } from "@/lib/hooks/useApproveIfNeeded";
@@ -568,6 +569,13 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
           functionName: activeRoute.executor.functionName,
           args: execArgs,
           value: activeRoute.executor.value,
+          // Audit 2026-06-11 v2 W-4: pin chainId so a wallet that's
+          // briefly on another chain (post-bridge return, OAuth race)
+          // doesn't sign a swap against an address that's a contract on
+          // Arc but a plain EOA on Sepolia. The wallet UI will surface
+          // the chain mismatch immediately instead of letting the user
+          // sign a tx that burns gas on a non-contract.
+          chainId: arcTestnet.id,
         });
       } else if (isV3Swap) {
         // CLANKER_V3 token: trade on the V3 pool via our V3 router. Exact-in
@@ -577,15 +585,20 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
           address: ADDRESSES.v3Router,
           abi: V3_ROUTER_ABI,
           functionName: v3DoubleHop ? "exactInputThroughUsdc" : "exactInputSingle",
-          // Audit low [5]: the V3 router's exactInputThroughUsdc now takes
-          // a usdcMidMin so the mid-leg slippage is bounded independently
-          // of the final amountOutMinimum. We pass 0 for now (no extra
-          // bound) on the front-end; backend sandwich defence sits in the
-          // amountOutMinimum + USDC blocklist. Tightening this to a real
-          // mid-quote derived from the V3 quoter is the next iteration.
-          args: v3DoubleHop
-            ? [tokenIn.address, tokenOut.address, v3Fee, account, finalAmountIn, minOut, 0n, deadline]
+          // Audit 2026-06-11 v2 ARCH-1 fix: pull the mid-leg floor from
+          // the aggregator's arcadeV3Provider when going double-hop. The
+          // provider already computes a usdcMidMin using the user's
+          // slippage tolerance (ROUTING-2 + ADVR-3); duplicating the
+          // logic here would drift over time. Use the executor's signed
+          // args verbatim — the provider built them.
+          args: v3DoubleHop && activeRoute
+            ? (activeRoute.executor.args as unknown as readonly [
+                `0x${string}`, `0x${string}`, number, `0x${string}`, bigint, bigint, bigint, bigint
+              ])
             : [tokenIn.address, tokenOut.address, v3Fee, account, finalAmountIn, minOut, deadline],
+          // Audit 2026-06-11 v2 W-4: pin chainId. See the universal
+          // router branch above for rationale.
+          chainId: arcTestnet.id,
         });
       } else if (route.useLaunchpadRouter) {
         // Multi-hop through the launchpad's router so post-migration royalties
@@ -594,27 +607,48 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
         // Deadline param added in audit fixes (Medium #6).
         // Audit 2026-06-11 contract #10: derive a usdcMidMin floor from
         // the quoter's totalRoyaltyUsdc so the new launchpad MID_SLIPPAGE
-        // gate has something to enforce. Royalty is 60 bps per migrated
-        // leg, so usdcMid_pre_royalty = totalRoyalty / (0.006 * legs).
-        // Floor at 97 % of that to leave room for honest movement while
-        // catching a mid-leg sandwich. Falls back to 0n if the quote
-        // shape is unexpected.
+        // gate has something to enforce.
+        //
+        // Audit 2026-06-11 v2 G9-5 fix: MIGRATED_ROYALTY_BPS is 30
+        // (not 60 — see ArcadeLaunchpad.sol:85). Total royalty across N
+        // migrated legs is `usdcMid_original * 30 * N / 10_000`, so
+        // `usdcMid_original = totalRoyalty * 10_000 / (30 * N)`. The
+        // prior coefficient `60n * migratedLegs` was off by 2x, leaving
+        // the floor at ~48% of the real mid — half the protection.
+        //
+        // Audit 2026-06-11 v2 ADVR-3 fix: scale the floor with the user's
+        // slippage tolerance instead of hardcoding 97%. A user on a thin
+        // pair who set slippage to 5% should get the same 5% tolerance
+        // on the mid leg, not a tighter 3%.
         let usdcMidMinForRoute = 0n;
         if (quoteMigratedOut.data) {
           const totalRoyaltyUsdc = (quoteMigratedOut.data as readonly bigint[])[1];
           if (totalRoyaltyUsdc > 0n) {
             const migratedLegs = (route.inMigrated ? 1n : 0n) + (route.outMigrated ? 1n : 0n);
             if (migratedLegs > 0n) {
-              const usdcMidEstimate = (totalRoyaltyUsdc * 10_000n) / (60n * migratedLegs);
-              usdcMidMinForRoute = (usdcMidEstimate * 9_700n) / 10_000n;
+              const usdcMidEstimate = (totalRoyaltyUsdc * 10_000n) / (30n * migratedLegs);
+              const tolerance = 10_000n - BigInt(slippageBps);
+              usdcMidMinForRoute = (usdcMidEstimate * tolerance) / 10_000n;
             }
           }
+        }
+        // G9-5 fix (cont): refuse to sign a swap whose mid-leg floor would
+        // collapse to 0 (quote race, single-side-non-migrated edge). The
+        // contract-side `revert MidSlippage()` would otherwise be inert
+        // and the swap exposes the user to the exact mid-leg sandwich
+        // the gate was added to close.
+        if (usdcMidMinForRoute === 0n) {
+          throw new Error(
+            "Cannot compute a mid-leg slippage floor for the migrated route — please refresh the quote and try again.",
+          );
         }
         hash = await writeContractAsync({
           address: ADDRESSES.launchpad,
           abi: LAUNCHPAD_ABI,
           functionName: "swapMigratedRoute",
           args: [tokenIn.address, tokenOut.address, finalAmountIn, minOut, usdcMidMinForRoute, deadline],
+          // Audit 2026-06-11 v2 W-4: pin chainId (see UR branch).
+          chainId: arcTestnet.id,
         });
       } else if (exactIn) {
         hash = await writeContractAsync({
@@ -622,6 +656,8 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
           abi: ROUTER_ABI,
           functionName: "swapExactTokensForTokens",
           args: [finalAmountIn, minOut, path, account, deadline],
+          // Audit 2026-06-11 v2 W-4: pin chainId (see UR branch).
+          chainId: arcTestnet.id,
         });
       } else {
         hash = await writeContractAsync({
@@ -629,6 +665,8 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
           abi: ROUTER_ABI,
           functionName: "swapTokensForExactTokens",
           args: [finalAmountOut, maxIn, path, account, deadline],
+          // Audit 2026-06-11 v2 W-4: pin chainId (see UR branch).
+          chainId: arcTestnet.id,
         });
       }
       // Audit high [26]: viem's waitForTransactionReceipt returns a

@@ -15,13 +15,16 @@ import {ArcadeTwitterEscrowV3} from "../src/launchpad/ArcadeTwitterEscrowV3.sol"
 contract MockLocker {
     bool public shouldRevertRecipient;
     bool public shouldRevertAdmin;
+    bool public shouldRevertRotate;
     uint256 public lastPositionId;
     uint256 public lastSlotIndex;
     address public lastRecipient;
     address public lastAdmin;
+    uint256 public rotateSlotCallCount;
 
     function setRevertRecipient(bool v) external { shouldRevertRecipient = v; }
     function setRevertAdmin(bool v) external { shouldRevertAdmin = v; }
+    function setRevertRotate(bool v) external { shouldRevertRotate = v; }
 
     function updateRecipient(uint256 positionId, uint256 index, address newRecipient) external {
         if (shouldRevertRecipient) revert("recipient rotation failed");
@@ -34,6 +37,29 @@ contract MockLocker {
         if (shouldRevertAdmin) revert("admin rotation failed");
         lastPositionId = positionId;
         lastSlotIndex = index;
+        lastAdmin = newAdmin;
+    }
+
+    /// @dev Audit 2026-06-11 v2 CRIT-1 fix: the production locker exposes
+    ///      `rotateSlot(positionId, index, newRecipient, newAdmin)` as an
+    ///      atomic setter (audit CONTRACT-2). The escrow's `claimByTwitter`
+    ///      and `forfeitStaleClaim` now call THIS function, not the two-
+    ///      step `updateRecipient` + `updateAdmin` path. Without this
+    ///      method on the mock, every escrow test that ran through the
+    ///      success path silently took the `catch` branch in the escrow,
+    ///      emitted `RotationFailed`, and reported green — meaning the
+    ///      canonical claim path was NEVER verified in CI.
+    function rotateSlot(
+        uint256 positionId,
+        uint256 index,
+        address newRecipient,
+        address newAdmin
+    ) external {
+        if (shouldRevertRotate) revert("rotate failed");
+        rotateSlotCallCount += 1;
+        lastPositionId = positionId;
+        lastSlotIndex = index;
+        lastRecipient = newRecipient;
         lastAdmin = newAdmin;
     }
 }
@@ -840,7 +866,11 @@ contract MockLockerWithWithdraw {
         }
     }
 
-    // Minimal updateRecipient / updateAdmin stubs to satisfy the interface.
+    // Minimal updateRecipient / updateAdmin / rotateSlot stubs to satisfy
+    // the IArcadeV3Locker interface. Audit 2026-06-11 v2 CRIT-1: rotateSlot
+    // was missing here too — every call from the escrow silently took the
+    // catch path.
     function updateRecipient(uint256, uint256, address) external pure {}
     function updateAdmin(uint256, uint256, address) external pure {}
+    function rotateSlot(uint256, uint256, address, address) external pure {}
 }

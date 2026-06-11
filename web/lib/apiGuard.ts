@@ -76,15 +76,14 @@ export function rateLimit(
   windowMs: number,
 ): NextResponse | null {
   const ip = clientIp(req);
-  // rate-limit-per-ip-shared-NAT-collision: blend in a stable hash of
-  // the User-Agent so two devices behind the same CGNAT / corporate
-  // proxy aren't sharing the same token bucket. Doesn't defeat an
-  // attacker (they control the header), but pulls the false-positive
-  // rate for legitimate shared NAT users way down.
-  const ua = req.headers.get("user-agent") ?? "";
-  let uaHash = 0;
-  for (let i = 0; i < ua.length; i++) uaHash = ((uaHash << 5) - uaHash + ua.charCodeAt(i)) | 0;
-  const bucketKey = `${key}:${ip}:${uaHash}`;
+  // Audit 2026-06-11 v2 V2-F-03 fix: drop the User-Agent hash from the
+  // bucket key. The morning's "shared-NAT collision" rationale held for
+  // benign user collisions but the agent-controlled UA also let any
+  // attacker multiply their per-IP budget by simply rotating
+  // `User-Agent` between requests. We accept the false-positive rate on
+  // CGNAT users (rare on a Web3 dApp where each user usually has their
+  // own residential IP) in exchange for closing the bypass.
+  const bucketKey = `${key}:${ip}`;
   const now = Date.now();
   // Lazy prune when the map grows large. Walking the map is O(n) but only
   // fires on cap-hit, not per-request, so amortised cost is fine.

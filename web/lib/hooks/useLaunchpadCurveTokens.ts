@@ -18,13 +18,29 @@ import { useLaunchpadTokens } from "./useLaunchpadTokens";
  * launchpad detail page rather than attempting to route through the
  * regular AMM aggregator (which has no path).
  */
+/**
+ * Launchpad modes that trade on the bonding curve (no V2/V3 pool until
+ * graduation). Audit 2026-06-11 v2 ADVR-5: the prior `mode === 0` filter
+ * hard-coded only PUMP; any future curve-style mode would silently drop
+ * from the swap dropdown. Centralising the list here means a new mode
+ * gets discovered by adding one number, with explicit code-review of
+ * the routing implication. CLANKER_V3 (mode 2) launches immediately
+ * single-sided into a V3 pool and is NOT a curve token.
+ *
+ * Known modes:
+ *   0 = PUMP (bonding curve, USDC-paired)
+ *   1 = CLANKER (bonding curve, USDC-paired with creator-2 split)
+ *   2 = CLANKER_V3 (locked single-sided V3 launch, NOT a curve token)
+ */
+const CURVE_MODES = new Set<number>([0, 1]);
+
 export interface CurveTokenOption {
   address: Address;
   symbol?: string;
   name?: string;
   decimals: number;
-  /** Always 0 (PUMP). */
-  mode: 0;
+  /** 0 = PUMP, 1 = CLANKER. New curve modes get appended to CURVE_MODES. */
+  mode: number;
   /** Always false (pre-grad). */
   migrated: false;
   /** Marker the SwapCard uses to recognise the curve route. */
@@ -39,7 +55,7 @@ export function useLaunchpadCurveTokens(): {
   const curveTokens = useMemo(
     () =>
       tokens
-        .filter((t) => t.mode === 0 && !t.migrated)
+        .filter((t) => CURVE_MODES.has(t.mode) && !t.migrated)
         .map<CurveTokenOption>((t) => ({
           address: t.address,
           symbol: t.symbol,
@@ -49,7 +65,7 @@ export function useLaunchpadCurveTokens(): {
           // decimals() read on a freshly-created token doesn't drop the
           // entry from the dropdown.
           decimals: 18,
-          mode: 0,
+          mode: t.mode,
           migrated: false,
           via: "launchpad-curve",
         })),

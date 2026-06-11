@@ -372,8 +372,11 @@ contract ArcadeV3MigrationTest is Test {
     }
 
     function test_creatorBuy_notTaxedByOwnSniper() public {
-        // A creator who sets BOTH a creator buy and an anti-sniper tax must not
+        // A creator who sets BOTH a creator buy and an anti-sniper tax does NOT
         // tax their own launch buy (snipe is armed only after the buy).
+        // Audit 2026-06-11 v2 E-02 acknowledges this is a tradeoff: arming
+        // the snipe before the creator buy would break the 25% slippage
+        // check on launches with snipeStartBps > 25%. Deferred to gen 10.
         IArcadeV3Locker.Recipient[] memory rs = _defaultRecipients();
         bytes memory opts =
             abi.encode(ArcadeLaunchpad.ClankerOptions(FEE, 5_000e6, 0, 0, 0, address(0), 5_000, 3600, 0, 0));

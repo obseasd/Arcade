@@ -92,6 +92,13 @@ export async function POST(req: NextRequest) {
     const rawName = typeof body.name === "string" ? body.name.slice(0, 80) : "";
     const knownName = ALLOWED_NAME_PREFIXES.some((p) => rawName.startsWith(p));
     const name = knownName ? rawName : "ui.unknown";
+    // Audit 2026-06-11 v2 ADVR-2: sanitize body.data so a same-origin XSS
+    // can't stuff arbitrary JSON into the operator's Sentry dashboard via
+    // `extra`. We allow a SHORT list of known telemetry keys with their
+    // expected primitive shapes; everything else is silently dropped.
+    // The keys map to the trackSwap / trackBridge / trackClaim /
+    // trackProviderTiming shapes in `lib/telemetry.ts`.
+    const data = sanitizeTelemetryData(body.data);
     if (level === "info" && Math.random() > SAMPLE_RATE) {
         return NextResponse.json({ ok: true, sampled: false });
     }
@@ -103,7 +110,7 @@ export async function POST(req: NextRequest) {
         level,
         message: name,
         platform: "javascript",
-        extra: body.data,
+        extra: data,
         release: process.env.NEXT_PUBLIC_GIT_SHA ?? "dev",
     };
     try {
@@ -121,4 +128,47 @@ export async function POST(req: NextRequest) {
         // Sentry down or rate-limited — degrade silently.
     }
     return NextResponse.json({ ok: true });
+}
+
+// Audit 2026-06-11 v2 ADVR-2: whitelist the telemetry payload shape so a
+// cross-origin or XSS attacker can't stuff arbitrary keys into Sentry's
+// `extra` field. Only the keys the trackSwap / trackBridge / trackClaim
+// / trackProviderTiming functions actually emit (lib/telemetry.ts) are
+// passed through; values are coerced to the expected primitive.
+const ALLOWED_DATA_KEYS = new Set([
+    "provider",
+    "tokenIn",
+    "tokenOut",
+    "amountInUsd",
+    "success",
+    "txHash",
+    "account",
+    "chainId",
+    "errorClass",
+    "srcChain",
+    "dstChain",
+    "amount",
+    "burnTxHash",
+    "mintTxHash",
+    "stage",
+    "slotIndex",
+    "tokenAddress",
+    "recipient",
+    "durationMs",
+    "kind",
+]);
+
+function sanitizeTelemetryData(raw: unknown): Record<string, unknown> | undefined {
+    if (!raw || typeof raw !== "object") return undefined;
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(raw)) {
+        if (!ALLOWED_DATA_KEYS.has(k)) continue;
+        // Per-key shape gate. Strings capped at 80 chars (same as `name`)
+        // so a 4 KB body still can't stuff a single key.
+        if (typeof v === "string") out[k] = v.slice(0, 80);
+        else if (typeof v === "number" && Number.isFinite(v)) out[k] = v;
+        else if (typeof v === "boolean") out[k] = v;
+        // Drop arrays / objects / functions / undefined silently.
+    }
+    return out;
 }
