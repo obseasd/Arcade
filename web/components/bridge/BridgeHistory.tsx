@@ -243,19 +243,18 @@ function Row({
         <span className="text-arc-text-faint">→</span>
         <ChainIcon chainId={entry.dstChainId} size={16} />
       </div>
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-1.5 truncate text-sm font-medium tabular-nums">
+      <div className="flex min-w-0 flex-1 items-center justify-between gap-3">
+        <div className="flex items-center gap-1.5 truncate font-medium tabular-nums">
           {/* USDC glyph in front of the amount, matching how the Activity
-              tab AmountCell renders its leading token logo. CCTP only
-              bridges USDC right now so the symbol is hardcoded; if/when
-              we add native-token bridges, derive the symbol from
-              entry.token instead. */}
+              tab AmountCell renders its leading token logo. */}
           <TokenIcon symbol="USDC" size={16} />
           {amount} <span className="text-arc-text-muted">USDC</span>
         </div>
-        <div className="truncate text-[10px] text-arc-text-faint">
-          {src?.name ?? "?"} → {dst?.name ?? "?"} · {ago}
-        </div>
+        {/* Drop the "Avalanche Fuji → Arc Testnet" subtitle - the source
+            and destination are already conveyed by the two ChainIcons
+            on the left, so repeating the chain names was noise. Just
+            push the relative timestamp inline next to the amount. */}
+        <span className="shrink-0 text-[10px] text-arc-text-faint">{ago}</span>
       </div>
       <StatusBadge status={entry.status} attestationReady={entry.attestationReady} />
       {/* Audit Bridge H-3: Retry button on failed rows so the user has
