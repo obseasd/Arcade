@@ -1,0 +1,70 @@
+name: compounder scan
+
+# POST /api/compounder/cron every 5 minutes. The handler walks every
+# auto-managed V3 LP position in Postgres, reads pendingFees from the
+# Compounder contract, and triggers compound() / pushFees() via the
+# operator wallet when a position is past its cooldown and over its
+# threshold.
+#
+# Cadence rationale: 5 minutes matches the on-chain per-position
+# cooldown so a single keeper tick can act on any position whose
+# cooldown just expired without us having to track sub-minute deltas.
+# Hourly would leave fees sitting on chain longer; minute-grain would
+# burn GitHub Actions minutes for no real benefit.
+#
+# Required secrets:
+#   COMPOUNDER_CRON_URL    : Full URL e.g.
+#                            https://arcade.trading/api/compounder/cron
+#                            (must match the production deployment;
+#                            preview URLs would scan positions but
+#                            consume the same Vercel function budget).
+#   COMPOUNDER_CRON_SECRET : Bearer secret matching Vercel env
+#                            COMPOUNDER_CRON_SECRET. Generate with
+#                            `openssl rand -hex 32`. Rotate together.
+#
+# Vercel-side env vars required for the route to act:
+#   NEXT_PUBLIC_AUTO_COMPOUNDER_ADDRESS = <deployed Compounder>
+#   COMPOUNDER_CRON_SECRET              = <same hex as above>
+#   COMPOUNDER_OPERATOR_PRIVATE_KEY     = <hot wallet 0x...>
+#
+# Manual trigger: Actions tab → "compounder scan" → Run workflow.
+
+on:
+  schedule:
+    # Every 5 minutes. cron format: m h dom mon dow.
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}
+
+# Cancel an in-flight run if a new one starts. compound()/pushFees()
+# are idempotent at the contract level (cooldown blocks a duplicate)
+# but back-to-back HTTP retries waste Vercel function budget.
+concurrency:
+  group: compounder-scan
+  cancel-in-progress: true
+
+jobs:
+  scan:
+    name: POST /api/compounder/cron
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: fire scan
+        env:
+          COMPOUNDER_CRON_URL: ${{ secrets.COMPOUNDER_CRON_URL }}
+          COMPOUNDER_CRON_SECRET: ${{ secrets.COMPOUNDER_CRON_SECRET }}
+        # --fail-with-body makes curl non-zero on >=400 so a failed run
+        # turns the workflow red. --max-time gives the Vercel function
+        # its 60s budget plus network slack.
+        run: |
+          if [ -z "$COMPOUNDER_CRON_URL" ] || [ -z "$COMPOUNDER_CRON_SECRET" ]; then
+            echo "Missing COMPOUNDER_CRON_URL or COMPOUNDER_CRON_SECRET repo secret"
+            exit 1
+          fi
+          curl --fail-with-body \
+               --max-time 90 \
+               --retry 2 \
+               --retry-delay 5 \
+               -X POST \
+               -H "Authorization: Bearer $COMPOUNDER_CRON_SECRET" \
+               -H "Content-Type: application/json" \
+               "$COMPOUNDER_CRON_URL"

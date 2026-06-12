@@ -50,6 +50,11 @@ export const ADDRESSES = {
   seedEth: safeAddress(process.env.NEXT_PUBLIC_SEED_ETH_ADDRESS),
   /** ArcadeTwitterEscrow: holds Clanker LP fees attributed to a Twitter @handle. */
   twitterEscrow: safeAddress(process.env.NEXT_PUBLIC_TWITTER_ESCROW_ADDRESS),
+  /** ArcadeAutoCompounder: V3 LP custody vault that auto-collects fees and
+   *  either pushes them to the depositor wallet (RECEIVE mode) or
+   *  re-deposits them into the position (COMPOUND mode). Optional — the
+   *  Auto-management section on /positions is hidden when zeroAddress. */
+  autoCompounder: safeAddress(process.env.NEXT_PUBLIC_AUTO_COMPOUNDER_ADDRESS),
   // --- Uniswap V4 prototype (ArcadeV4Launchpad + ArcadeAntiSniperHook) ---
   // Original 2-step (createLaunch then initializePool) flow, behind
   // NEXT_PUBLIC_V4_ENABLED. Superseded by the ArcadeHook production stack

@@ -16,6 +16,7 @@ import { CreatePoolModal } from "@/components/pool/CreatePoolModal";
 import { MyPositions } from "@/components/pool/MyPositions";
 import { BurnedPositions } from "@/components/pool/BurnedPositions";
 import { V3Positions } from "@/components/pool/V3Positions";
+import { AutoCompounderPanel } from "@/components/pool/AutoCompounderPanel";
 import { ClaimAllFeesModal } from "@/components/pool/ClaimAllFeesModal";
 import { ADDRESSES, USDC_DECIMALS } from "@/lib/constants";
 import { useV2Tokens } from "@/lib/hooks/useV2Tokens";
@@ -269,12 +270,15 @@ function PositionsInner() {
         />
       )}
       {tab === "concentrated" && (
-        <V3Positions
-          key={refreshKey}
-          search={search}
-          rangeFilter={rangeFilter}
-          onCountChange={setV3Count}
-        />
+        <>
+          <V3Positions
+            key={refreshKey}
+            search={search}
+            rangeFilter={rangeFilter}
+            onCountChange={setV3Count}
+          />
+          <AutoCompounderPanel />
+        </>
       )}
       {tab === "burned" && <BurnedPositions />}
 

@@ -1,0 +1,627 @@
+"use client";
+
+import { Sparkles, Plus, Power, RefreshCw, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useAccount, useReadContract, useReadContracts, useWriteContract } from "wagmi";
+import { Address, isAddress } from "viem";
+
+import { ADDRESSES } from "@/lib/constants";
+import { V3_NPM_ABI } from "@/lib/abis/v3-npm";
+import {
+    AUTO_COMPOUNDER_ABI,
+    modeLabelFromId,
+    type CompounderModeId,
+} from "@/lib/abis/autoCompounder";
+import { Modal } from "@/components/ui/Modal";
+import { pushToast } from "@/lib/toast";
+import { cn, formatUSDC } from "@/lib/utils";
+
+// Minimal ERC-721 approve fragment — V3_NPM_ABI in this repo only
+// surfaces the V3-specific methods (mint / increaseLiquidity / etc.)
+// and the ERC-721 surface is the canonical OpenZeppelin one. The
+// argument shape is identical across every OZ release we use, so
+// keeping it inline avoids a coupling on the NPM ABI table.
+const ERC721_APPROVE_ABI = [
+    {
+        type: "function",
+        name: "approve",
+        stateMutability: "nonpayable",
+        inputs: [
+            { name: "to", type: "address" },
+            { name: "tokenId", type: "uint256" },
+        ],
+        outputs: [],
+    },
+] as const;
+
+/**
+ * /positions Auto-management section.
+ *
+ * Fetches the user's currently-managed positions from
+ * /api/compounder/positions and renders one card per position with
+ * mode badge + pending fees + cooldown countdown. A CTA opens a modal
+ * that lists every V3 NFT the connected wallet owns and lets the user
+ * pick one, choose a mode, set a threshold, and one-click enable
+ * (approve + depositPosition wrapped behind the same UI).
+ *
+ * The panel hides itself entirely when the compounder address is not
+ * yet configured on the frontend — the feature flag is implicit via
+ * ADDRESSES.autoCompounder == zeroAddress.
+ */
+
+type ManagedPosition = {
+    tokenId: string;
+    ownerAddress: string;
+    mode: "NORMAL" | "RECEIVE" | "COMPOUND";
+    minFeeMicros: string;
+    maxSlippageBps: number;
+    lastActionAt: string | null;
+    depositedAt: string;
+    withdrawnAt: string | null;
+    token0Address: string | null;
+    token1Address: string | null;
+    feeTier: number | null;
+    tickLower: number | null;
+    tickUpper: number | null;
+};
+
+const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
+
+export function AutoCompounderPanel() {
+    const { address: account } = useAccount();
+    const enabled = ADDRESSES.autoCompounder !== ZERO_ADDRESS;
+
+    const [positions, setPositions] = useState<ManagedPosition[]>([]);
+    const [loading, setLoading] = useState(false);
+    const [modalOpen, setModalOpen] = useState(false);
+
+    const refresh = useCallback(async () => {
+        if (!account || !enabled) {
+            setPositions([]);
+            return;
+        }
+        setLoading(true);
+        try {
+            const res = await fetch(`/api/compounder/positions?owner=${account}`);
+            const data = (await res.json()) as { positions?: ManagedPosition[] };
+            setPositions(data.positions ?? []);
+        } catch {
+            setPositions([]);
+        } finally {
+            setLoading(false);
+        }
+    }, [account, enabled]);
+
+    useEffect(() => {
+        void refresh();
+    }, [refresh]);
+
+    if (!enabled) return null;
+
+    return (
+        <section className="mt-10">
+            <div className="mb-4 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                    <Sparkles className="h-5 w-5 text-sky-400" />
+                    <h2 className="text-lg font-semibold text-arc-text">
+                        Auto-management
+                    </h2>
+                    <span className="rounded-full border border-arc-border bg-arc-surface px-2 py-0.5 text-[10px] uppercase tracking-wider text-arc-text-faint">
+                        Beta
+                    </span>
+                </div>
+                <button
+                    onClick={() => void refresh()}
+                    className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-arc-border text-arc-text-muted transition-colors hover:bg-arc-surface-2 hover:text-arc-text"
+                    aria-label="Refresh auto-management positions"
+                >
+                    <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
+                </button>
+            </div>
+
+            <p className="mb-6 text-sm text-arc-text-muted">
+                Deposit a V3 LP NFT to either auto-receive fees in your wallet or
+                auto-compound them back into the position. The keeper triggers
+                on-chain once a position is over its threshold and past the
+                5-minute cooldown. Protocol fee is 1% on collected fees only.
+            </p>
+
+            {account && positions.length > 0 ? (
+                <div className="grid gap-3 sm:grid-cols-2">
+                    {positions.map((p) => (
+                        <ManagedPositionCard
+                            key={p.tokenId}
+                            position={p}
+                            onChanged={refresh}
+                        />
+                    ))}
+                </div>
+            ) : (
+                <div className="rounded-2xl border border-dashed border-arc-border bg-arc-bg-elevated/40 p-6 text-center text-sm text-arc-text-muted">
+                    {account
+                        ? "No auto-managed positions yet. Deposit one below."
+                        : "Connect a wallet to see your auto-managed positions."}
+                </div>
+            )}
+
+            {account && (
+                <div className="mt-4">
+                    <button
+                        onClick={() => setModalOpen(true)}
+                        className="arc-button-secondary inline-flex items-center gap-2 px-4 py-2 text-sm"
+                    >
+                        <Plus className="h-4 w-4" /> Deposit a position
+                    </button>
+                </div>
+            )}
+
+            {modalOpen && (
+                <DepositModal
+                    onClose={() => setModalOpen(false)}
+                    onDeposited={() => {
+                        setModalOpen(false);
+                        void refresh();
+                    }}
+                />
+            )}
+        </section>
+    );
+}
+
+// -------------------------------------------------------------------
+// Managed position card
+// -------------------------------------------------------------------
+
+function ManagedPositionCard({
+    position,
+    onChanged,
+}: {
+    position: ManagedPosition;
+    onChanged: () => void;
+}) {
+    const tokenId = BigInt(position.tokenId);
+    const { writeContractAsync } = useWriteContract();
+    const [busy, setBusy] = useState(false);
+
+    const pendingQ = useReadContract({
+        address: ADDRESSES.autoCompounder,
+        abi: AUTO_COMPOUNDER_ABI,
+        functionName: "pendingFees",
+        args: [tokenId],
+        query: { refetchInterval: 60_000 },
+    });
+    const nextAtQ = useReadContract({
+        address: ADDRESSES.autoCompounder,
+        abi: AUTO_COMPOUNDER_ABI,
+        functionName: "nextActionAvailableAt",
+        args: [tokenId],
+        query: { refetchInterval: 60_000 },
+    });
+
+    const pending = pendingQ.data as readonly [bigint, bigint] | undefined;
+    const nextAt = (nextAtQ.data as bigint | undefined) ?? 0n;
+    const nowSec = BigInt(Math.floor(Date.now() / 1000));
+    const cooldownActive = nextAt > nowSec;
+    const cooldownLeft = cooldownActive ? Number(nextAt - nowSec) : 0;
+
+    const withdraw = useCallback(async () => {
+        setBusy(true);
+        try {
+            await writeContractAsync({
+                address: ADDRESSES.autoCompounder,
+                abi: AUTO_COMPOUNDER_ABI,
+                functionName: "withdrawPosition",
+                args: [tokenId],
+            });
+            await fetch("/api/compounder/positions", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ action: "withdraw", tokenId: position.tokenId }),
+            });
+            pushToast({
+                kind: "info",
+                title: "Position withdrawn",
+                message: "Auto-management ended. NFT returned to your wallet.",
+            });
+            onChanged();
+        } catch (err) {
+            pushToast({
+                kind: "error",
+                title: "Withdraw failed",
+                message: err instanceof Error ? err.message : "Unknown error",
+            });
+        } finally {
+            setBusy(false);
+        }
+    }, [onChanged, position.tokenId, tokenId, writeContractAsync]);
+
+    return (
+        <div className="arc-card p-5">
+            <div className="mb-3 flex items-center justify-between">
+                <div>
+                    <div className="text-xs uppercase tracking-wider text-arc-text-faint">
+                        Position #{position.tokenId}
+                    </div>
+                    <div className="mt-1 inline-flex items-center gap-2">
+                        <ModeBadge mode={position.mode} />
+                        {cooldownActive ? (
+                            <span className="text-[10px] text-arc-text-faint">
+                                Cooldown: {formatCountdown(cooldownLeft)}
+                            </span>
+                        ) : (
+                            <span className="text-[10px] text-arc-success">Ready</span>
+                        )}
+                    </div>
+                </div>
+                <button
+                    onClick={withdraw}
+                    disabled={busy}
+                    className="inline-flex items-center gap-1 rounded-lg border border-arc-border px-3 py-1.5 text-xs text-arc-text-muted transition-colors hover:bg-arc-surface-2 hover:text-arc-text disabled:opacity-50"
+                >
+                    <Power className="h-3 w-3" /> Stop
+                </button>
+            </div>
+
+            <dl className="grid grid-cols-2 gap-3 text-xs">
+                <div>
+                    <dt className="text-arc-text-faint">Threshold</dt>
+                    <dd className="mt-1 font-medium tabular-nums text-arc-text">
+                        {formatUSDC(BigInt(position.minFeeMicros))} USDC
+                    </dd>
+                </div>
+                <div>
+                    <dt className="text-arc-text-faint">Slippage</dt>
+                    <dd className="mt-1 font-medium tabular-nums text-arc-text">
+                        {(position.maxSlippageBps / 100).toFixed(2)}%
+                    </dd>
+                </div>
+                <div>
+                    <dt className="text-arc-text-faint">Pending fees</dt>
+                    <dd className="mt-1 font-medium tabular-nums text-arc-text">
+                        {pending
+                            ? `${pending[0].toString()} / ${pending[1].toString()}`
+                            : "…"}
+                    </dd>
+                </div>
+                <div>
+                    <dt className="text-arc-text-faint">Last action</dt>
+                    <dd className="mt-1 font-medium tabular-nums text-arc-text">
+                        {position.lastActionAt
+                            ? new Date(position.lastActionAt).toLocaleString()
+                            : "Never"}
+                    </dd>
+                </div>
+            </dl>
+        </div>
+    );
+}
+
+function ModeBadge({ mode }: { mode: ManagedPosition["mode"] }) {
+    const config: Record<ManagedPosition["mode"], { label: string; cls: string }> = {
+        NORMAL: { label: "Normal", cls: "bg-arc-surface-2 text-arc-text-muted" },
+        RECEIVE: { label: "Auto-receive", cls: "bg-sky-400/10 text-sky-400" },
+        COMPOUND: { label: "Auto-compound", cls: "bg-arc-success/10 text-arc-success" },
+    };
+    const { label, cls } = config[mode];
+    return (
+        <span
+            className={cn(
+                "inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider",
+                cls,
+            )}
+        >
+            {label}
+        </span>
+    );
+}
+
+function formatCountdown(seconds: number): string {
+    if (seconds <= 0) return "ready";
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    return `${m}m ${s.toString().padStart(2, "0")}s`;
+}
+
+// -------------------------------------------------------------------
+// Deposit modal
+// -------------------------------------------------------------------
+
+function DepositModal({
+    onClose,
+    onDeposited,
+}: {
+    onClose: () => void;
+    onDeposited: () => void;
+}) {
+    const { address: account } = useAccount();
+    const { writeContractAsync } = useWriteContract();
+
+    const [tokenIdInput, setTokenIdInput] = useState("");
+    const [mode, setMode] = useState<CompounderModeId>(1); // default RECEIVE
+    const [thresholdUsdc, setThresholdUsdc] = useState("0.10");
+    const [slippagePct, setSlippagePct] = useState("0.50");
+    const [busy, setBusy] = useState(false);
+    const [step, setStep] = useState<"idle" | "approving" | "depositing">("idle");
+
+    // List the user's V3 NFTs as a selector so they don't have to type the
+    // tokenId from memory. Reads balanceOf -> tokenOfOwnerByIndex(0..N-1).
+    const balanceQ = useReadContract({
+        address: ADDRESSES.v3PositionManager,
+        abi: V3_NPM_ABI,
+        functionName: "balanceOf",
+        args: account ? [account] : undefined,
+        query: { enabled: !!account },
+    });
+    const count = Number((balanceQ.data as bigint | undefined) ?? 0n);
+    const tokenIdsQ = useReadContracts({
+        contracts: account
+            ? Array.from({ length: count }, (_, i) => ({
+                  address: ADDRESSES.v3PositionManager,
+                  abi: V3_NPM_ABI,
+                  functionName: "tokenOfOwnerByIndex" as const,
+                  args: [account, BigInt(i)] as const,
+              }))
+            : [],
+        query: { enabled: !!account && count > 0 },
+    });
+    const userTokenIds = useMemo(
+        () =>
+            (tokenIdsQ.data ?? [])
+                .map((c) => (c.status === "success" ? (c.result as bigint) : undefined))
+                .filter((x): x is bigint => x !== undefined)
+                .map((b) => b.toString()),
+        [tokenIdsQ.data],
+    );
+
+    const tokenIdToUse = tokenIdInput || userTokenIds[0] || "";
+    const thresholdMicros = useMemo(() => {
+        const parsed = Number(thresholdUsdc);
+        if (!Number.isFinite(parsed) || parsed < 0) return 0n;
+        return BigInt(Math.floor(parsed * 1_000_000));
+    }, [thresholdUsdc]);
+    const slippageBps = useMemo(() => {
+        const parsed = Number(slippagePct);
+        if (!Number.isFinite(parsed) || parsed < 0) return 50;
+        return Math.min(10_000, Math.floor(parsed * 100));
+    }, [slippagePct]);
+
+    const deposit = useCallback(async () => {
+        if (!account) return;
+        if (!tokenIdToUse || !/^\d+$/.test(tokenIdToUse)) {
+            pushToast({
+                kind: "error",
+                title: "Invalid token ID",
+                message: "Pick a position or enter a numeric token id.",
+            });
+            return;
+        }
+        if (!isAddress(ADDRESSES.autoCompounder, { strict: false })) {
+            pushToast({
+                kind: "error",
+                title: "Compounder address not configured",
+                message: "NEXT_PUBLIC_AUTO_COMPOUNDER_ADDRESS is not set.",
+            });
+            return;
+        }
+        setBusy(true);
+        try {
+            // Step 1: approve NPM. We use approve(tokenId) so the
+            // Compounder's safeTransferFrom inside depositPosition
+            // pulls the NFT atomically. setApprovalForAll would
+            // also work but is broader than needed.
+            setStep("approving");
+            await writeContractAsync({
+                address: ADDRESSES.v3PositionManager,
+                abi: ERC721_APPROVE_ABI,
+                functionName: "approve",
+                args: [ADDRESSES.autoCompounder as Address, BigInt(tokenIdToUse)],
+            });
+
+            // Step 2: depositPosition on the Compounder.
+            setStep("depositing");
+            await writeContractAsync({
+                address: ADDRESSES.autoCompounder,
+                abi: AUTO_COMPOUNDER_ABI,
+                functionName: "depositPosition",
+                args: [
+                    BigInt(tokenIdToUse),
+                    mode,
+                    thresholdMicros,
+                    slippageBps,
+                ],
+            });
+
+            // Step 3: mirror to DB so the cron picks it up immediately
+            // (the scanner queries the DB, not the chain).
+            await fetch("/api/compounder/positions", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    action: "upsert",
+                    tokenId: tokenIdToUse,
+                    ownerAddress: account,
+                    mode: modeLabelFromId(mode),
+                    minFeeMicros: thresholdMicros.toString(),
+                    maxSlippageBps: slippageBps,
+                }),
+            });
+
+            pushToast({
+                kind: "info",
+                title: "Position under auto-management",
+                message: `Token #${tokenIdToUse} is now ${modeLabelFromId(mode).toLowerCase()}.`,
+            });
+            onDeposited();
+        } catch (err) {
+            pushToast({
+                kind: "error",
+                title: "Deposit failed",
+                message: err instanceof Error ? err.message : "Unknown error",
+            });
+        } finally {
+            setBusy(false);
+            setStep("idle");
+        }
+    }, [
+        account,
+        mode,
+        onDeposited,
+        slippageBps,
+        thresholdMicros,
+        tokenIdToUse,
+        writeContractAsync,
+    ]);
+
+    return (
+        <Modal open onClose={busy ? () => {} : onClose}>
+            <div className="space-y-5 p-5">
+                <div className="flex items-center justify-between">
+                    <h3 className="text-lg font-semibold text-arc-text">
+                        Deposit V3 LP into auto-management
+                    </h3>
+                    <button
+                        type="button"
+                        onClick={busy ? undefined : onClose}
+                        disabled={busy}
+                        aria-label="Close"
+                        className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-arc-text-muted hover:bg-arc-surface-2 hover:text-arc-text disabled:opacity-50"
+                    >
+                        <X className="h-4 w-4" />
+                    </button>
+                </div>
+                <div>
+                    <label className="mb-2 block text-xs uppercase tracking-wider text-arc-text-muted">
+                        Position
+                    </label>
+                    {userTokenIds.length > 0 ? (
+                        <select
+                            value={tokenIdInput || userTokenIds[0]}
+                            onChange={(e) => setTokenIdInput(e.target.value)}
+                            disabled={busy}
+                            className="w-full rounded-xl border border-arc-border bg-arc-bg p-3 text-sm text-arc-text outline-none focus:border-arc-primary"
+                        >
+                            {userTokenIds.map((id) => (
+                                <option key={id} value={id}>
+                                    Token #{id}
+                                </option>
+                            ))}
+                        </select>
+                    ) : (
+                        <input
+                            type="text"
+                            inputMode="numeric"
+                            placeholder="Token ID"
+                            value={tokenIdInput}
+                            onChange={(e) =>
+                                setTokenIdInput(e.target.value.replace(/[^\d]/g, ""))
+                            }
+                            disabled={busy}
+                            className="w-full rounded-xl border border-arc-border bg-arc-bg p-3 text-sm text-arc-text outline-none focus:border-arc-primary"
+                        />
+                    )}
+                </div>
+
+                <div>
+                    <label className="mb-2 block text-xs uppercase tracking-wider text-arc-text-muted">
+                        Mode
+                    </label>
+                    <div className="grid grid-cols-3 gap-2">
+                        {(
+                            [
+                                { id: 0, title: "Normal", body: "Tracked, no actions." },
+                                { id: 1, title: "Auto-receive", body: "Push fees to wallet." },
+                                { id: 2, title: "Auto-compound", body: "Reinvest into position." },
+                            ] as const
+                        ).map((opt) => {
+                            const active = mode === opt.id;
+                            return (
+                                <button
+                                    key={opt.id}
+                                    type="button"
+                                    onClick={() => setMode(opt.id as CompounderModeId)}
+                                    disabled={busy}
+                                    className={cn(
+                                        "rounded-xl border p-3 text-left text-xs transition-colors",
+                                        active
+                                            ? "border-sky-400 bg-sky-400/5"
+                                            : "border-arc-border bg-arc-bg hover:border-arc-border-strong",
+                                    )}
+                                >
+                                    <div className="font-semibold text-arc-text">
+                                        {opt.title}
+                                    </div>
+                                    <div className="mt-1 text-[10px] text-arc-text-muted">
+                                        {opt.body}
+                                    </div>
+                                </button>
+                            );
+                        })}
+                    </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                    <div>
+                        <label className="mb-2 block text-xs uppercase tracking-wider text-arc-text-muted">
+                            Threshold (USDC)
+                        </label>
+                        <input
+                            type="text"
+                            inputMode="decimal"
+                            value={thresholdUsdc}
+                            onChange={(e) => setThresholdUsdc(e.target.value)}
+                            disabled={busy}
+                            className="w-full rounded-xl border border-arc-border bg-arc-bg p-3 text-sm text-arc-text outline-none focus:border-arc-primary"
+                        />
+                        <p className="mt-1 text-[10px] text-arc-text-faint">
+                            Trigger when pending fees ≥ this amount.
+                        </p>
+                    </div>
+                    <div>
+                        <label className="mb-2 block text-xs uppercase tracking-wider text-arc-text-muted">
+                            Slippage (%)
+                        </label>
+                        <input
+                            type="text"
+                            inputMode="decimal"
+                            value={slippagePct}
+                            onChange={(e) => setSlippagePct(e.target.value)}
+                            disabled={busy}
+                            className="w-full rounded-xl border border-arc-border bg-arc-bg p-3 text-sm text-arc-text outline-none focus:border-arc-primary"
+                        />
+                        <p className="mt-1 text-[10px] text-arc-text-faint">
+                            Compound mode only. 0.50% is conservative.
+                        </p>
+                    </div>
+                </div>
+
+                <div className="rounded-xl border border-arc-border bg-arc-bg p-3 text-[11px] leading-relaxed text-arc-text-muted">
+                    Deposit requires two signatures: (1) approve the
+                    Compounder to take the NFT, (2) call depositPosition.
+                    You can withdraw the NFT at any time. Protocol fee is
+                    1% on the fees collected by the keeper.
+                </div>
+
+                <div className="flex justify-end gap-2">
+                    <button
+                        onClick={onClose}
+                        disabled={busy}
+                        className="rounded-xl border border-arc-border px-4 py-2 text-sm text-arc-text-muted hover:bg-arc-surface-2"
+                    >
+                        Cancel
+                    </button>
+                    <button
+                        onClick={() => void deposit()}
+                        disabled={busy || !account || !tokenIdToUse}
+                        className="arc-button-primary px-5 py-2 text-sm"
+                    >
+                        {step === "approving"
+                            ? "Approving…"
+                            : step === "depositing"
+                            ? "Depositing…"
+                            : "Enable auto-management"}
+                    </button>
+                </div>
+            </div>
+        </Modal>
+    );
+}
