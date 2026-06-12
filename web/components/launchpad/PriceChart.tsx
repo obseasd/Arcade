@@ -36,21 +36,6 @@ export function PriceChart({ token, mode, pool }: Props) {
   const volumeSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
   const [timeframe, setTimeframe] = useState<Timeframe>("1m");
   const [metric, setMetric] = useState<"price" | "mcap">("price");
-  // Scale mode toggle. PriceScaleMode in lightweight-charts:
-  //   0 = Normal (linear)
-  //   1 = Logarithmic - broken on the curve's micro-price range:
-  //       autoScale fails to find sensible bounds when the price delta
-  //       between candles is in the 1e-9 ballpark, so log mode renders
-  //       everything as a flat line at "0" with a phantom negative
-  //       axis. Disabled until we can clamp the price scale min/max
-  //       manually.
-  //   2 = Percentage - what we want here. Renders every candle relative
-  //       to the first visible one. A 10-USDC buy reads as +0.4% and a
-  //       50-USDC buy reads as +2.0%, so the 10-USDC body is exactly
-  //       1/5 the 50-USDC body and stays pixel-visible regardless of
-  //       absolute price. User flips back to linear (mode 0) for the
-  //       post-graduation case where absolute prices matter more.
-  const [percentScale, setPercentScale] = useState<boolean>(true);
 
   const { candles, isLoading } = useTokenCandles({
     token,
@@ -138,64 +123,24 @@ export function PriceChart({ token, mode, pool }: Props) {
   useEffect(() => {
     if (!candleSeriesRef.current || !volumeSeriesRef.current) return;
     const scale = metric === "mcap" ? SUPPLY : 1;
-    // Force candle color from the trade side when close == open exactly.
-    // Bonding-curve trades of $1-$10 against a $10M virtual reserve round
-    // through Q64.64 division to identical post-trade prices, so a buy +
-    // sell pair on a tiny token look like green dojis everywhere (no
-    // body, default up color). Coloring small buys green and small sells
-    // red regardless of the price tie matches what the user expects to
-    // see in transactions tab. When close != open we trust the price
-    // direction and let lightweight-charts use the default up/down
-    // palette - we only override the doji case.
-    const candleData: CandlestickData[] = candles.map((c) => {
-      const isDoji = c.open === c.close;
-      const sideColor =
-        c.lastTradeIsBuy === true
-          ? "#22c55e"
-          : c.lastTradeIsBuy === false
-            ? "#ef4444"
-            : undefined;
-      return {
-        time: c.time as Time,
-        open: c.open * scale,
-        high: c.high * scale,
-        low: c.low * scale,
-        close: c.close * scale,
-        ...(isDoji && sideColor
-          ? {
-              color: sideColor,
-              borderColor: sideColor,
-              wickColor: sideColor,
-            }
-          : {}),
-      };
-    });
+    const candleData: CandlestickData[] = candles.map((c) => ({
+      time: c.time as Time,
+      open: c.open * scale,
+      high: c.high * scale,
+      low: c.low * scale,
+      close: c.close * scale,
+    }));
     const volumeData: HistogramData[] = candles.map((c) => ({
       time: c.time as Time,
       value: c.volume,
       color: c.close >= c.open ? "rgba(34, 197, 94, 0.4)" : "rgba(239, 68, 68, 0.4)",
     }));
-    // Auto-pick precision from the actual data range. A fixed precision
-    // of 12 made micro-cap prices (5e-6 USDC/token) read fine but a
-    // freshly-graduated token at 0.01 USDC/token displayed as
-    // 0.010000000000 with 9 trailing zeros. Market cap mode keeps 0
-    // precision (whole dollars). Price mode picks the lowest precision
-    // that resolves to a non-zero leading digit on the maximum
-    // observed value - capped at 12 for the curve's nano-prices.
-    const maxAbs = candleData.reduce(
-      (m, c) => Math.max(m, Math.abs(c.high), Math.abs(c.low)),
-      0,
-    );
-    const pricePrecision =
-      maxAbs === 0
-        ? 6
-        : Math.min(12, Math.max(2, Math.ceil(-Math.log10(maxAbs)) + 4));
-    const priceMinMove = Math.pow(10, -pricePrecision);
+    // Switch axis precision based on metric (micro-cap prices vs $ market caps).
     candleSeriesRef.current.applyOptions({
       priceFormat:
         metric === "mcap"
           ? { type: "price", precision: 0, minMove: 1 }
-          : { type: "price", precision: pricePrecision, minMove: priceMinMove },
+          : { type: "price", precision: 12, minMove: 0.000000000001 },
     });
     candleSeriesRef.current.setData(candleData);
     volumeSeriesRef.current.setData(volumeData);
@@ -205,25 +150,15 @@ export function PriceChart({ token, mode, pool }: Props) {
       // the price range — needed when only the data values change (price ↔
       // market cap switch).
       const ps = chartRef.current.priceScale("right");
-      // Push scale mode in the same applyOptions sweep. mode 2 =
-      // Percentage scales relative to the first visible candle so a
-      // 50-USDC buy (+2%) reads ~5x the height of a 10-USDC buy (+0.4%)
-      // regardless of absolute price. mode 0 = Normal (linear) for the
-      // post-graduation case where absolute prices matter.
-      ps.applyOptions({ mode: percentScale ? 2 : 0, autoScale: false });
+      ps.applyOptions({ autoScale: false });
       ps.applyOptions({ autoScale: true });
-      // With only 1-2 candles, scrollToRealTime + rightOffset 10 can park
-      // the lone candle off-screen left while the right edge shows empty
-      // bars (the "1m chart looks blank after fresh trades" symptom).
-      // fitContent on small datasets gives the user something to look at;
-      // bigger histories keep the TradingView-style right-offset.
-      if (candles.length <= 3) {
-        chartRef.current.timeScale().fitContent();
-      } else {
-        chartRef.current.timeScale().scrollToRealTime();
-      }
+      // Scroll to the most recent candle so the rightOffset shows empty space
+      // on the right (TradingView style). We avoid fitContent() because it
+      // would override our barSpacing/rightOffset to cram all bars into the
+      // chart width.
+      chartRef.current.timeScale().scrollToRealTime();
     }
-  }, [candles, metric, percentScale]);
+  }, [candles, metric]);
 
   return (
     <div>
@@ -244,38 +179,21 @@ export function PriceChart({ token, mode, pool }: Props) {
             </button>
           ))}
         </div>
-        <div className="flex items-center gap-2">
-          {/* Linear / Percentage scale toggle. Percentage is default on
-              a curve because equal-% moves should read as equal pixel
-              heights; linear is sometimes more readable post-graduation
-              when absolute prices matter. */}
-          <button
-            type="button"
-            onClick={() => setPercentScale((v) => !v)}
-            className={cn(
-              "rounded-md border border-arc-border px-2 py-1 text-arc-text-muted transition-colors hover:text-arc-text",
-              percentScale && "bg-arc-surface-2 text-arc-text",
-            )}
-            title={percentScale ? "Switch to absolute price scale" : "Switch to percentage scale"}
-          >
-            {percentScale ? "%" : "$"}
-          </button>
-          <div className="flex items-center gap-1">
-            {(["1s", "1m", "5m", "1h", "1d"] as Timeframe[]).map((tf) => (
-              <button type="button"
-                key={tf}
-                onClick={() => setTimeframe(tf)}
-                className={cn(
-                  "rounded-md px-2 py-1 transition-colors",
-                  timeframe === tf
-                    ? "bg-arc-primary text-white"
-                    : "text-arc-text-muted hover:bg-arc-surface-2 hover:text-arc-text",
-                )}
-              >
-                {tf}
-              </button>
-            ))}
-          </div>
+        <div className="flex items-center gap-1">
+          {(["1s", "1m", "5m", "1h", "1d"] as Timeframe[]).map((tf) => (
+            <button type="button"
+              key={tf}
+              onClick={() => setTimeframe(tf)}
+              className={cn(
+                "rounded-md px-2 py-1 transition-colors",
+                timeframe === tf
+                  ? "bg-arc-primary text-white"
+                  : "text-arc-text-muted hover:bg-arc-surface-2 hover:text-arc-text",
+              )}
+            >
+              {tf}
+            </button>
+          ))}
         </div>
       </div>
       <div ref={containerRef} className="relative h-80 w-full">
