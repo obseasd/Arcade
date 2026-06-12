@@ -45,6 +45,7 @@ import { VaultClaimPanel } from "@/components/pool/VaultClaimPanel";
 import { CreatePoolModal } from "@/components/pool/CreatePoolModal";
 import { Modal } from "@/components/ui/Modal";
 import { TokenIcon } from "@/components/ui/TokenIcon";
+import { ChainIcon } from "@/components/ui/ChainIcon";
 import type { TokenOption } from "@/components/ui/TokenSelectModal";
 import { ReceiveModal } from "@/components/wallet/ReceiveModal";
 import { SendModal } from "@/components/wallet/SendModal";
@@ -1204,6 +1205,13 @@ interface UnifiedActivityItem {
      *  - "transaction"  : "TRANSACTION" caption + short txHash (swaps - the
      *                     swap counterparty is the AMM pool which is noise) */
     addressColumnKind?: "to-from" | "address-only" | "transaction";
+    /** EVM chainId where the action actually happened. Used to render a
+     *  small chain badge in the corner of the AmountCell logo (Rabby-
+     *  style) so the user can tell at a glance "this bridge left from
+     *  Avalanche", "this claim landed on Arc". Bridge-sent uses the
+     *  source chain; bridge-claimed / Twitter claim / swap / launch all
+     *  use Arc (5042002). Undefined skips the badge. */
+    chainId?: number;
 }
 
 type ActivityTypeFilter =
@@ -1510,7 +1518,7 @@ function ActivityRowFull({ item }: { item: UnifiedActivityItem }) {
                 </div>
             </td>
             <td className="px-3 py-3.5">
-                <AmountCell value={item.value} />
+                <AmountCell value={item.value} chainId={item.chainId} />
             </td>
             <td className="px-3 py-3.5">
                 {item.addressColumnKind === "transaction" && item.txHash ? (
@@ -1586,7 +1594,7 @@ function ActivityRowFull({ item }: { item: UnifiedActivityItem }) {
  *  or an empty action). USD only resolves for USDC since that's the
  *  only token we have a known 1:1 fiat peg for client-side; everything
  *  else hides the USD line until the indexer ships prices. */
-function AmountCell({ value }: { value: string }) {
+function AmountCell({ value, chainId }: { value: string; chainId?: number }) {
     // Tighter "amount ticker" parse than the first cut: integer part
     // either bare digits or comma-grouped thousand triplets, optional
     // fractional part, optional leading minus for refunds, ticker is a
@@ -1623,10 +1631,19 @@ function AmountCell({ value }: { value: string }) {
     // single-token amount (e.g. Add-liquidity "100 USDC + 25000 ETH")
     // keep the same height as rows with a logo. When no ticker is
     // detected the slot is transparent.
+    // When chainId is provided AND we render a token logo, overlay a
+    // 14px chain badge on the bottom-right corner of the token logo
+    // (Rabby-style). The chain badge tells the user where the action
+    // happened: bridges show the burn chain, claims/swaps show Arc.
     return (
         <div className="flex items-center gap-2.5">
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center">
+            <div className="relative flex h-8 w-8 shrink-0 items-center justify-center">
                 {ticker && <TokenIcon symbol={ticker} size={32} />}
+                {ticker && chainId !== undefined && (
+                    <div className="absolute -bottom-1 -right-1 rounded-full bg-arc-bg-elevated p-[1px] ring-1 ring-arc-bg">
+                        <ChainIcon chainId={chainId} size={14} />
+                    </div>
+                )}
             </div>
             <div className="flex min-w-0 flex-col">
                 <span className="truncate text-base font-medium text-arc-text">
@@ -1853,6 +1870,8 @@ function bridgeToUnified(b: HistoryEntry): UnifiedActivityItem[] {
             counterpartyDirection: "to",
             txHash: b.burnTxHash,
             explorerUrl: b.burnTxHash ? `https://testnet.arcscan.app/tx/${b.burnTxHash}` : undefined,
+            // The burn tx lives on the source chain.
+            chainId: b.srcChainId,
         },
     ];
     // Minted bridge = a second on-chain action (the dst-chain mint) the user
@@ -1874,6 +1893,8 @@ function bridgeToUnified(b: HistoryEntry): UnifiedActivityItem[] {
             addressColumnKind: "address-only",
             txHash: b.mintTxHash,
             explorerUrl: b.mintTxHash ? `https://testnet.arcscan.app/tx/${b.mintTxHash}` : undefined,
+            // The mint tx lives on the destination chain (usually Arc).
+            chainId: b.dstChainId,
         });
     }
     return out;
@@ -1889,6 +1910,8 @@ function claimToUnified(c: PendingTwitterClaim): UnifiedActivityItem {
         type: "Twitter claim",
         label: ready ? "Claim ready" : "Claim authorized",
         value: `@${c.handle}`,
+        // Twitter claims always settle on Arc (the escrow contract).
+        chainId: 5_042_002,
     };
 }
 
@@ -1924,6 +1947,10 @@ function appToUnified(a: ActivityEntry): UnifiedActivityItem {
         counterpartyDirection: a.type === "send" ? "to" : undefined,
         txHash: a.txHash,
         explorerUrl: a.txHash ? `https://testnet.arcscan.app/tx/${a.txHash}` : undefined,
+        // All app activity lives on Arc - the launchpad, V2/V3 routers,
+        // multiswap, locker, sends are all Arc contracts. Hardcoding
+        // is fine until we go multi-chain.
+        chainId: 5_042_002,
     };
 }
 

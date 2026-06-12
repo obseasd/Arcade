@@ -13,6 +13,7 @@ import {
 } from "@/lib/bridgeHistory";
 import { fetchAttestation, getCctpChain } from "@/lib/cctp";
 import { ChainIcon } from "@/components/ui/ChainIcon";
+import { TokenIcon } from "@/components/ui/TokenIcon";
 import { formatAgo, formatUSDC, cn } from "@/lib/utils";
 
 /**
@@ -243,7 +244,13 @@ function Row({
         <ChainIcon chainId={entry.dstChainId} size={16} />
       </div>
       <div className="min-w-0 flex-1">
-        <div className="truncate text-sm font-medium tabular-nums">
+        <div className="flex items-center gap-1.5 truncate text-sm font-medium tabular-nums">
+          {/* USDC glyph in front of the amount, matching how the Activity
+              tab AmountCell renders its leading token logo. CCTP only
+              bridges USDC right now so the symbol is hardcoded; if/when
+              we add native-token bridges, derive the symbol from
+              entry.token instead. */}
+          <TokenIcon symbol="USDC" size={16} />
           {amount} <span className="text-arc-text-muted">USDC</span>
         </div>
         <div className="truncate text-[10px] text-arc-text-faint">
