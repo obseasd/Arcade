@@ -135,12 +135,27 @@ export function PriceChart({ token, mode, pool }: Props) {
       value: c.volume,
       color: c.close >= c.open ? "rgba(34, 197, 94, 0.4)" : "rgba(239, 68, 68, 0.4)",
     }));
-    // Switch axis precision based on metric (micro-cap prices vs $ market caps).
+    // Auto-pick precision from the actual data range. A fixed precision
+    // of 12 made micro-cap prices (5e-6 USDC/token) read fine but a
+    // freshly-graduated token at 0.01 USDC/token displayed as
+    // 0.010000000000 with 9 trailing zeros. Market cap mode keeps 0
+    // precision (whole dollars). Price mode picks the lowest precision
+    // that resolves to a non-zero leading digit on the maximum
+    // observed value - capped at 12 for the curve's nano-prices.
+    const maxAbs = candleData.reduce(
+      (m, c) => Math.max(m, Math.abs(c.high), Math.abs(c.low)),
+      0,
+    );
+    const pricePrecision =
+      maxAbs === 0
+        ? 6
+        : Math.min(12, Math.max(2, Math.ceil(-Math.log10(maxAbs)) + 4));
+    const priceMinMove = Math.pow(10, -pricePrecision);
     candleSeriesRef.current.applyOptions({
       priceFormat:
         metric === "mcap"
           ? { type: "price", precision: 0, minMove: 1 }
-          : { type: "price", precision: 12, minMove: 0.000000000001 },
+          : { type: "price", precision: pricePrecision, minMove: priceMinMove },
     });
     candleSeriesRef.current.setData(candleData);
     volumeSeriesRef.current.setData(volumeData);
@@ -152,11 +167,16 @@ export function PriceChart({ token, mode, pool }: Props) {
       const ps = chartRef.current.priceScale("right");
       ps.applyOptions({ autoScale: false });
       ps.applyOptions({ autoScale: true });
-      // Scroll to the most recent candle so the rightOffset shows empty space
-      // on the right (TradingView style). We avoid fitContent() because it
-      // would override our barSpacing/rightOffset to cram all bars into the
-      // chart width.
-      chartRef.current.timeScale().scrollToRealTime();
+      // With only 1-2 candles, scrollToRealTime + rightOffset 10 can park
+      // the lone candle off-screen left while the right edge shows empty
+      // bars (the "1m chart looks blank after fresh trades" symptom).
+      // fitContent on small datasets gives the user something to look at;
+      // bigger histories keep the TradingView-style right-offset.
+      if (candles.length <= 3) {
+        chartRef.current.timeScale().fitContent();
+      } else {
+        chartRef.current.timeScale().scrollToRealTime();
+      }
     }
   }, [candles, metric]);
 

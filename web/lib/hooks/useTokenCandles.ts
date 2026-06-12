@@ -84,7 +84,13 @@ export function useTokenCandles(args: {
   const tradesKey = useMemo(
     () => [
       "arcade",
-      "token-trades-candles",
+      // v2: bumped after the 1e12 decimal scale fix in onCurveLog +
+      // fetchTrades. Without bumping, existing browser caches keep the
+      // pre-fix (wei/wei) values forever via TanStack Query persistence
+      // and the chart shows a mix of old tiny values + new properly-
+      // scaled values, producing flat dojis at near-zero levels. Bump
+      // again if the price encoding changes.
+      "token-trades-candles-v2",
       token?.toLowerCase() ?? null,
       mode ?? null,
       pool?.toLowerCase() ?? null,
