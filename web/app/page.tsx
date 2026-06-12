@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { motion, type Variants } from "framer-motion";
+import { motion, useReducedMotion, type Variants } from "framer-motion";
 import {
   ArrowRight,
   ChevronDown,
@@ -14,25 +14,44 @@ import {
 /* Shared easing: fast start, long satin tail. */
 const EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
 
-const fadeUp: Variants = {
-  hidden: { opacity: 0, y: 28 },
-  visible: (i: number) => ({
-    opacity: 1,
-    y: 0,
-    transition: { delay: i * 0.15, duration: 0.6, ease: EASE },
-  }),
-};
-
-/* Feature cards: parent staggers children once they scroll into view. */
-const cardGroup: Variants = {
-  hidden: {},
-  visible: { transition: { staggerChildren: 0.14 } },
-};
-
-const cardItem: Variants = {
-  hidden: { opacity: 0, y: 24 },
-  visible: { opacity: 1, y: 0, transition: { duration: 0.55, ease: EASE } },
-};
+/* Variants are factories rather than constants so the page can swap to a
+ * no-op animation when the OS / browser reports prefers-reduced-motion.
+ * WCAG 2.3.3 (Animation from Interactions) requires that motion is
+ * either user-disablable or under 5 s and non-essential. react-doctor
+ * flagged the previous always-on motion as accessibility-failing. */
+function makeVariants(reduceMotion: boolean | null) {
+  if (reduceMotion) {
+    return {
+      fadeUp: {
+        hidden: { opacity: 1, y: 0 },
+        visible: () => ({ opacity: 1, y: 0, transition: { duration: 0 } }),
+      } satisfies Variants,
+      cardGroup: { hidden: {}, visible: {} } satisfies Variants,
+      cardItem: {
+        hidden: { opacity: 1, y: 0 },
+        visible: { opacity: 1, y: 0, transition: { duration: 0 } },
+      } satisfies Variants,
+    };
+  }
+  return {
+    fadeUp: {
+      hidden: { opacity: 0, y: 28 },
+      visible: (i: number) => ({
+        opacity: 1,
+        y: 0,
+        transition: { delay: i * 0.15, duration: 0.6, ease: EASE },
+      }),
+    } satisfies Variants,
+    cardGroup: {
+      hidden: {},
+      visible: { transition: { staggerChildren: 0.14 } },
+    } satisfies Variants,
+    cardItem: {
+      hidden: { opacity: 0, y: 24 },
+      visible: { opacity: 1, y: 0, transition: { duration: 0.55, ease: EASE } },
+    } satisfies Variants,
+  };
+}
 
 /* Inline heading icon: sits on the text baseline inside a soft chip so the
    glyph reads as punctuation, not clipart. */
@@ -48,6 +67,24 @@ function HeadingIcon({ children }: { children: React.ReactNode }) {
 }
 
 export default function Home() {
+  // Respect OS-level prefers-reduced-motion. Pulls the user pref via
+  // CSS media query; null until the page mounts then resolves to bool.
+  const reduceMotion = useReducedMotion();
+  const { fadeUp, cardGroup, cardItem } = makeVariants(reduceMotion);
+  return (
+    <HomeInner fadeUp={fadeUp} cardGroup={cardGroup} cardItem={cardItem} />
+  );
+}
+
+function HomeInner({
+  fadeUp,
+  cardGroup,
+  cardItem,
+}: {
+  fadeUp: Variants;
+  cardGroup: Variants;
+  cardItem: Variants;
+}) {
   return (
     <div className="relative w-full overflow-x-clip">
       <HeroBackdrop />
@@ -183,16 +220,19 @@ export default function Home() {
           icon={<Coins className="h-5 w-5" />}
           title="USDC-native trading"
           body="Every pool is quoted in USDC and every fee settles in USDC. No wrapper, no FX leg, no volatile gas token to manage."
+          variant={cardItem}
         />
         <FeatureCard
           icon={<Rocket className="h-5 w-5" />}
           title="Fair-launch issuance"
           body="Launch a token on a USDC-denominated bonding curve. On graduation it migrates atomically into an AMM pool, no presale, no team allocation."
+          variant={cardItem}
         />
         <FeatureCard
           icon={<Lock className="h-5 w-5" />}
           title="Locked-LP fee streams"
           body="Provide liquidity to any pool and earn 0.25% of every trade. Graduated tokens lock their LP forever and stream creator fees automatically."
+          variant={cardItem}
         />
       </motion.section>
     </div>
@@ -216,14 +256,16 @@ function FeatureCard({
   icon,
   title,
   body,
+  variant,
 }: {
   icon: React.ReactNode;
   title: string;
   body: string;
+  variant: Variants;
 }) {
   return (
     <motion.div
-      variants={cardItem}
+      variants={variant}
       whileHover={{ y: -4 }}
       transition={{ duration: 0.25, ease: EASE }}
       className="arc-card group p-6"
