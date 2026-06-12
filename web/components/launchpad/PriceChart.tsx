@@ -36,6 +36,15 @@ export function PriceChart({ token, mode, pool }: Props) {
   const volumeSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
   const [timeframe, setTimeframe] = useState<Timeframe>("1m");
   const [metric, setMetric] = useState<"price" | "mcap">("price");
+  // Log scale by default for the curve's micro-price range. A 10-USDC
+  // buy on a 5K-USDC virtual reserve moves price by ~0.4% and a 50-USDC
+  // buy by ~2% - on a linear scale the 50-USDC candle's autoScale
+  // expands the Y range enough that the 10-USDC body falls below pixel
+  // resolution. Log keeps equal-percentage moves at equal screen
+  // heights, matching how the user perceives "this trade was 5x bigger
+  // than the previous one". User can flip back to linear via the
+  // toggle next to the timeframe pills.
+  const [logScale, setLogScale] = useState<boolean>(true);
 
   const { candles, isLoading } = useTokenCandles({
     token,
@@ -190,7 +199,12 @@ export function PriceChart({ token, mode, pool }: Props) {
       // the price range — needed when only the data values change (price ↔
       // market cap switch).
       const ps = chartRef.current.priceScale("right");
-      ps.applyOptions({ autoScale: false });
+      // Push scale mode in the same applyOptions sweep. lightweight-charts'
+      // PriceScaleMode enum: 0 = Normal, 1 = Logarithmic, 2 = Percentage,
+      // 3 = IndexedTo100. Log keeps equal-percentage moves at equal pixel
+      // heights, which is what users expect on a micro-price curve where a
+      // 50-USDC buy and a 10-USDC buy both deserve visible bodies.
+      ps.applyOptions({ mode: logScale ? 1 : 0, autoScale: false });
       ps.applyOptions({ autoScale: true });
       // With only 1-2 candles, scrollToRealTime + rightOffset 10 can park
       // the lone candle off-screen left while the right edge shows empty
@@ -203,7 +217,7 @@ export function PriceChart({ token, mode, pool }: Props) {
         chartRef.current.timeScale().scrollToRealTime();
       }
     }
-  }, [candles, metric]);
+  }, [candles, metric, logScale]);
 
   return (
     <div>
@@ -224,21 +238,38 @@ export function PriceChart({ token, mode, pool }: Props) {
             </button>
           ))}
         </div>
-        <div className="flex items-center gap-1">
-          {(["1s", "1m", "5m", "1h", "1d"] as Timeframe[]).map((tf) => (
-            <button type="button"
-              key={tf}
-              onClick={() => setTimeframe(tf)}
-              className={cn(
-                "rounded-md px-2 py-1 transition-colors",
-                timeframe === tf
-                  ? "bg-arc-primary text-white"
-                  : "text-arc-text-muted hover:bg-arc-surface-2 hover:text-arc-text",
-              )}
-            >
-              {tf}
-            </button>
-          ))}
+        <div className="flex items-center gap-2">
+          {/* Linear / Log scale toggle. Log is the default on a curve
+              because equal-% moves should read as equal pixel heights,
+              but linear is sometimes more readable post-graduation when
+              prices stop being micro. */}
+          <button
+            type="button"
+            onClick={() => setLogScale((v) => !v)}
+            className={cn(
+              "rounded-md border border-arc-border px-2 py-1 text-arc-text-muted transition-colors hover:text-arc-text",
+              logScale && "bg-arc-surface-2 text-arc-text",
+            )}
+            title={logScale ? "Switch to linear scale" : "Switch to log scale"}
+          >
+            {logScale ? "Log" : "Lin"}
+          </button>
+          <div className="flex items-center gap-1">
+            {(["1s", "1m", "5m", "1h", "1d"] as Timeframe[]).map((tf) => (
+              <button type="button"
+                key={tf}
+                onClick={() => setTimeframe(tf)}
+                className={cn(
+                  "rounded-md px-2 py-1 transition-colors",
+                  timeframe === tf
+                    ? "bg-arc-primary text-white"
+                    : "text-arc-text-muted hover:bg-arc-surface-2 hover:text-arc-text",
+                )}
+              >
+                {tf}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
       <div ref={containerRef} className="relative h-80 w-full">
