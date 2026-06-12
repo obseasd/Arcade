@@ -1,4 +1,4 @@
-import { ArrowLeft, Coins, Repeat, Rocket, Users } from "lucide-react";
+import { ArrowLeft, BarChart3, Coins, Repeat, Rocket, Users } from "lucide-react";
 import Link from "next/link";
 import { formatUsdcGas, getAggregateStats } from "@/lib/stats";
 
@@ -61,7 +61,7 @@ export default async function StatsPage() {
                 </div>
             </section>
 
-            <section className="mb-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <section className="mb-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
                 <MetricCard
                     icon={<Repeat className="h-5 w-5" />}
                     label="Transactions routed"
@@ -85,6 +85,12 @@ export default async function StatsPage() {
                             ? `Includes ${snap.v4HookLaunches.toLocaleString("en-US")} on the V4 ArcadeHook.`
                             : undefined
                     }
+                />
+                <MetricCard
+                    icon={<BarChart3 className="h-5 w-5" />}
+                    label="USDC volume routed"
+                    value={formatUsdcGas(snap.volumeUsdcMicros)}
+                    note="Cumulative sum of every launchpad Buy + Sell across all generations."
                 />
                 <MetricCard
                     icon={<Coins className="h-5 w-5" />}
@@ -143,7 +149,11 @@ function MetricCard({
 }) {
     return (
         <div className="arc-card p-5">
-            <div className="mb-3 inline-flex h-10 w-10 items-center justify-center rounded-xl bg-arc-primary-soft text-arc-primary">
+            {/* Sky-400 to match the Send/Receive shortcuts in the header
+                wallet widget - the deeper arc-primary palette read as the
+                same flat navy as the card itself and the icons disappeared.
+                bg-sky-400/10 mirrors the HeaderWalletWidget rest state. */}
+            <div className="mb-3 inline-flex h-10 w-10 items-center justify-center rounded-xl bg-sky-400/10 text-sky-400">
                 {icon}
             </div>
             <div className="text-[10px] uppercase tracking-wider text-arc-text-muted">

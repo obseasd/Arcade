@@ -24,6 +24,9 @@ export interface StatsSnapshot {
     v4TokensLaunched: number;
     /** TokenLaunched events on the production ArcadeHook (V4 Phase 2). */
     v4HookLaunches: number;
+    /** Cumulative USDC volume across all launchpad Buy + Sell events, in
+     *  6-decimal raw units (divide by 1e6 for display dollars). */
+    volumeUsdcMicros: bigint;
     /** Estimated cumulative USDC gas paid through Arcade contracts. */
     estimatedUsdcGasMicros: bigint;
     /** Block at which this snapshot was taken. */
@@ -47,6 +50,9 @@ const ARC_RPC = process.env.NEXT_PUBLIC_ARC_RPC_URL ?? "https://rpc.testnet.arc.
  * call; we're well under that with 8 generations * 5 contracts each.
  */
 const PREDECESSOR_CONTRACTS: Address[] = [
+    // gen 8 (2026-06-11, audit v2 + cooldown-fix prep deploy)
+    "0xD863e3475E00550FBe0Abf4F1127B673E65C86a4", // launchpad
+    "0xc7321283D18C4cABcD5Eda4489845336A9F5c3ed", // twitter escrow
     // gen 7 (2026-06-09, audit-3 batch)
     "0x62aC6A355D092267a93a1Ffb13B7D1c121A5c0e8",
     "0xD63609d130698489603AC07dFDa338D958765808",
@@ -188,6 +194,7 @@ export async function getAggregateStats(): Promise<StatsSnapshot> {
     // launchpad. Sum across the current launchpad + every prior generation so
     // the cumulative count keeps growing past a redeploy.
     const PRIOR_LAUNCHPADS: Address[] = [
+        "0xD863e3475E00550FBe0Abf4F1127B673E65C86a4", // gen 8 (2026-06-11)
         "0x62aC6A355D092267a93a1Ffb13B7D1c121A5c0e8", // gen 7
         "0xB15282e3a0c67989013c7bdc6cd6f4Fa0CdbaAd6", // gen 6
         "0xF441D73C69f00bf2A11019024A80D46a06bE2BdC", // gen 5
@@ -198,6 +205,18 @@ export async function getAggregateStats(): Promise<StatsSnapshot> {
         ...PRIOR_LAUNCHPADS.map((a) => countLaunchpadEvents(client, a, fromBlock, head)),
     ]);
     const tokensLaunched = launchpadCounts.reduce((a, b) => a + b, 0);
+
+    // Cumulative volume: sum every Buy.usdcIn + every Sell.usdcOut across
+    // the current launchpad AND every prior generation. Adds a meaningful
+    // "how much value flowed through Arcade" number to the dashboard
+    // instead of leaving volume hidden until the indexer ships. Failures
+    // per window are silently dropped (0) so a single flaky RPC range
+    // doesn't tank the whole page - the truncated flag picks it up.
+    const volumeResults = await Promise.all([
+        sumLaunchpadVolume(client, ADDRESSES.launchpad, fromBlock, head),
+        ...PRIOR_LAUNCHPADS.map((a) => sumLaunchpadVolume(client, a, fromBlock, head)),
+    ]);
+    const volumeUsdcMicros = volumeResults.reduce((acc, n) => acc + n, 0n);
     const v4TokensLaunched = ADDRESSES.v4Launchpad
         ? await countLaunchpadEvents(client, ADDRESSES.v4Launchpad, fromBlock, head)
         : 0;
@@ -215,6 +234,7 @@ export async function getAggregateStats(): Promise<StatsSnapshot> {
         tokensLaunched,
         v4TokensLaunched,
         v4HookLaunches,
+        volumeUsdcMicros,
         estimatedUsdcGasMicros,
         asOfBlock: head,
         asOfIso: new Date().toISOString(),
@@ -313,8 +333,78 @@ async function countLaunchpadEvents(
 }
 
 /**
- * USDC gas estimate, formatted for display. Returns "$X,XXX.XX" with no
- * trailing zeros beyond cents.
+ * Sum every Buy(usdcIn) + Sell(usdcOut) on a launchpad in 6-decimal raw
+ * units. We index Buy / Sell topics specifically rather than scanning all
+ * logs because a launchpad emits many event shapes (TokenCreated,
+ * TokenMigrated, RoyaltyPaid, ...) and we only want the USDC amounts that
+ * represent real trading flow. Returns 0 on RPC failure rather than
+ * throwing so a flaky window doesn't tank the whole snapshot.
+ *
+ * Event layouts (from contracts/src/launchpad/ArcadeLaunchpad.sol):
+ *   Buy (token indexed, buyer indexed, usdcIn, tokensOut, newPriceQ64)
+ *   Sell(token indexed, seller indexed, tokensIn, usdcOut, newPriceQ64)
+ * Data layout: 3 unindexed uint256, each 32 bytes. For Buy the FIRST data
+ * slot is usdcIn; for Sell the SECOND data slot is usdcOut.
+ */
+async function sumLaunchpadVolume(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    client: any,
+    address: Address | undefined,
+    fromBlock: bigint,
+    head: bigint,
+): Promise<bigint> {
+    if (!address) return 0n;
+    // keccak256("Buy(address,address,uint256,uint256,uint256)")
+    const BUY_TOPIC =
+        "0xfc5c39e94d05fae6a3a91da11b7b94f5b29d4d9fa45a13b18d8c1d27f7e74948" as `0x${string}`;
+    // keccak256("Sell(address,address,uint256,uint256,uint256)")
+    const SELL_TOPIC =
+        "0xb33d2162aead99dab59e77a7e6266de8b8932b95c1571d83ed4d3a8c1c6f3b16" as `0x${string}`;
+    const windows: Array<{ from: bigint; to: bigint }> = [];
+    for (let from = fromBlock; from <= head; from += BLOCK_WINDOW) {
+        const to = from + BLOCK_WINDOW - 1n > head ? head : from + BLOCK_WINDOW - 1n;
+        windows.push({ from, to });
+    }
+    const sums = await Promise.all(
+        windows.map(async ({ from, to }) => {
+            try {
+                const logs = await client.getLogs({
+                    address,
+                    fromBlock: from,
+                    toBlock: to,
+                    // viem accepts a single array of topics where each slot
+                    // becomes a "topics[i] in [...]" constraint. We OR Buy
+                    // OR Sell in slot 0.
+                    topics: [[BUY_TOPIC, SELL_TOPIC]],
+                });
+                let acc = 0n;
+                for (const log of logs) {
+                    const data = (log as { data?: string }).data ?? "0x";
+                    // data is 0x + 3*32 bytes = 192 hex chars after 0x.
+                    if (data.length < 2 + 192) continue;
+                    const isBuy = (log as { topics: readonly string[] }).topics[0] === BUY_TOPIC;
+                    // Buy: usdcIn = first uint256 (offset 0..64 hex chars after 0x)
+                    // Sell: usdcOut = second uint256 (offset 64..128)
+                    const slotStart = isBuy ? 2 : 2 + 64;
+                    const slotEnd = slotStart + 64;
+                    try {
+                        acc += BigInt("0x" + data.slice(slotStart, slotEnd));
+                    } catch {
+                        // malformed slot, skip
+                    }
+                }
+                return acc;
+            } catch {
+                return 0n;
+            }
+        }),
+    );
+    return sums.reduce((a, b) => a + b, 0n);
+}
+
+/**
+ * Format a 6-decimal raw USDC amount as a display dollar string.
+ * Used for both the gas-paid hero number and the cumulative-volume card.
  */
 export function formatUsdcGas(micros: bigint): string {
     const whole = micros / 1_000_000n;

@@ -55,18 +55,6 @@
     will-change: transform;
   }
 
-  /* Landing hero backdrop: hairline blue grid that fades out radially so
-     it only reads behind the heading block. Pure CSS (two repeating
-     linear-gradients + a radial mask) - no SVG asset, no extra DOM. */
-  .arc-hero-grid {
-    background-image:
-      linear-gradient(to right, rgba(82, 130, 170, 0.07) 1px, transparent 1px),
-      linear-gradient(to bottom, rgba(82, 130, 170, 0.07) 1px, transparent 1px);
-    background-size: 56px 56px;
-    -webkit-mask-image: radial-gradient(ellipse 70% 55% at 50% 32%, black 30%, transparent 75%);
-    mask-image: radial-gradient(ellipse 70% 55% at 50% 32%, black 30%, transparent 75%);
-  }
-
   /* Button glow - same gradient as the active-nav page underline glow.
      Rendered with z-index above the parent card so it isn't clipped by the
      card's stacking context. */
