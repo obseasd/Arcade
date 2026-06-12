@@ -21,6 +21,15 @@ export interface Candle {
   close: number;
   /** USDC volume in raw 6-dec units (formatted as Number for display). */
   volume: number;
+  /** Last trade's side in this bucket. Used by the chart to color
+   *  flat/doji candles - small trades on a high-virtual-reserve curve
+   *  often emit identical post-trade priceQ64 values for buy + sell,
+   *  so close == open and lightweight-charts defaults to green. Forcing
+   *  the color from the trade side keeps sells visually red even when
+   *  the price didn't measurably move. Undefined for V3 Swap-derived
+   *  candles where the buy/sell distinction comes from amount0 sign
+   *  (handled inline at fetch time). */
+  lastTradeIsBuy?: boolean;
 }
 
 export type Timeframe = "1s" | "1m" | "5m" | "1h" | "1d";
@@ -449,12 +458,14 @@ function bucketize(trades: Trade[], bucketSize: number, initialPrice?: number): 
         low: Math.min(open, t.price),
         close: t.price,
         volume: t.volumeUsdc,
+        lastTradeIsBuy: t.isBuy,
       };
     } else {
       currentCandle.high = Math.max(currentCandle.high, t.price);
       currentCandle.low = Math.min(currentCandle.low, t.price);
       currentCandle.close = t.price;
       currentCandle.volume += t.volumeUsdc;
+      if (t.isBuy !== undefined) currentCandle.lastTradeIsBuy = t.isBuy;
     }
   }
   if (currentCandle !== null) candles.push(currentCandle);

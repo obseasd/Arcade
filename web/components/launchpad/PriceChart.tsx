@@ -123,13 +123,38 @@ export function PriceChart({ token, mode, pool }: Props) {
   useEffect(() => {
     if (!candleSeriesRef.current || !volumeSeriesRef.current) return;
     const scale = metric === "mcap" ? SUPPLY : 1;
-    const candleData: CandlestickData[] = candles.map((c) => ({
-      time: c.time as Time,
-      open: c.open * scale,
-      high: c.high * scale,
-      low: c.low * scale,
-      close: c.close * scale,
-    }));
+    // Force candle color from the trade side when close == open exactly.
+    // Bonding-curve trades of $1-$10 against a $10M virtual reserve round
+    // through Q64.64 division to identical post-trade prices, so a buy +
+    // sell pair on a tiny token look like green dojis everywhere (no
+    // body, default up color). Coloring small buys green and small sells
+    // red regardless of the price tie matches what the user expects to
+    // see in transactions tab. When close != open we trust the price
+    // direction and let lightweight-charts use the default up/down
+    // palette - we only override the doji case.
+    const candleData: CandlestickData[] = candles.map((c) => {
+      const isDoji = c.open === c.close;
+      const sideColor =
+        c.lastTradeIsBuy === true
+          ? "#22c55e"
+          : c.lastTradeIsBuy === false
+            ? "#ef4444"
+            : undefined;
+      return {
+        time: c.time as Time,
+        open: c.open * scale,
+        high: c.high * scale,
+        low: c.low * scale,
+        close: c.close * scale,
+        ...(isDoji && sideColor
+          ? {
+              color: sideColor,
+              borderColor: sideColor,
+              wickColor: sideColor,
+            }
+          : {}),
+      };
+    });
     const volumeData: HistogramData[] = candles.map((c) => ({
       time: c.time as Time,
       value: c.volume,
