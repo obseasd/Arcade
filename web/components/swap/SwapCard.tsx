@@ -966,7 +966,18 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
             (inUsd.usd !== undefined &&
             finalAmountOut > 0n &&
             decimalsOut !== undefined
-              ? inUsd.usd / (Number(finalAmountOut) / Math.pow(10, decimalsOut))
+              ? // Multiply inUsd by (1 - fee) before dividing by output
+                // tokens so the per-token USD price reflects the pool
+                // mid-price, not the post-fee execution rate. Without
+                // this the route panel reads "$1.00" on a 1-USDC swap
+                // with 1% fee because spot = inUsd / out exactly cancels
+                // back to inUsd at display time. External routes
+                // (Synthra/UnitFlow) bake their own fee into the quoted
+                // amountOut so we only apply the correction on Arcade-
+                // internal routes.
+                (inUsd.usd *
+                  (isExternalRoute ? 1 : 1 - Number(feePips) / 1_000_000)) /
+                (Number(finalAmountOut) / Math.pow(10, decimalsOut))
               : undefined)
           }
         />
