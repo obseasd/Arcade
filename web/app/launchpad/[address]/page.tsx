@@ -259,7 +259,11 @@ export default function TokenDetailPage() {
                   )}
                 </div>
                 <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-arc-text-muted">
-                  <span>{token} · created by</span>
+                  {/* Show full address on lg+ and a truncated form on
+                      mobile so a 42-char hex doesn't push the layout
+                      sideways on a 375px viewport. */}
+                  <span className="break-all sm:hidden">{formatAddress(token)} · created by</span>
+                  <span className="hidden break-all sm:inline">{token} · created by</span>
                   <a
                     href={`https://testnet.arcscan.app/address/${state.creator}`}
                     target="_blank"
@@ -415,8 +419,11 @@ export default function TokenDetailPage() {
 
         {/* Right: trade panel. CLANKER_V3 tokens trade through the V3 router on
             their locked single-sided pool; bonding-curve modes use the curve until
-            migration, then the V2 router. */}
-        <div className="space-y-6">
+            migration, then the V2 router.
+            order-first on mobile so the trade panel appears BEFORE the
+            chart + activity feed - users on a 375px viewport should be
+            able to buy/sell without scrolling past 2 screens of analytics. */}
+        <div className="order-first space-y-6 lg:order-none">
           {isClanker ? (
             <ClankerTradePanel
               token={token}

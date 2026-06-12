@@ -1125,9 +1125,10 @@ function ChainBox({
         </button>
       </div>
 
-      {/* Amount */}
+      {/* Amount. text-3xl on mobile so 6+ digit amounts don't overflow
+          the card; bump to text-4xl from sm: where the card is wider. */}
       {readOnlyAmount ? (
-        <div className="text-4xl font-medium leading-tight tabular-nums text-arc-text">
+        <div className="truncate text-3xl font-medium leading-tight tabular-nums text-arc-text sm:text-4xl">
           {amount || "0.0"}
         </div>
       ) : (
@@ -1143,13 +1144,15 @@ function ChainBox({
             if (parts.length > 2) return;
             onAmountChange?.(v);
           }}
-          className="arc-input w-full bg-transparent text-4xl font-medium leading-tight"
+          className="arc-input w-full truncate bg-transparent text-3xl font-medium leading-tight sm:text-4xl"
           aria-label="Amount"
         />
       )}
 
-      {/* Footer: USD value + (HALF/MAX or recipient) */}
-      <div className="mt-2 flex items-center justify-between text-xs">
+      {/* Footer: USD value + (HALF/MAX or recipient).
+          flex-wrap so a long recipient pill ("to 0xAbCd...1234") + balance
+          + HALF/MAX don't overflow the 343px usable card-interior at 375px. */}
+      <div className="mt-2 flex flex-wrap items-center justify-between gap-y-1 text-xs">
         <div className="flex items-center gap-2 text-arc-text-muted">
           <span>{usdLabel}</span>
           {recipientLabel &&

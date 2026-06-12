@@ -385,6 +385,15 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
   // USD values
   const inUsd = useUsdValue(tokenIn.address, finalAmountIn, decimalsIn);
   const outUsd = useUsdValue(tokenOut?.address, finalAmountOut, decimalsOut);
+  // The fallback in useUsdValue derives spotUsdPerToken from the trade
+  // ratio when no USDC pool exists for tokenOut, which then makes
+  // outUsd.usd == inUsd.usd - the fee is invisible in the "$X" hint.
+  // Subtract the AMM fee here so the For-side USD reads as the real
+  // value the user gets, not the pre-fee theoretical. Only applied when
+  // we had to fall back to the trade-derived spot (i.e. when there's no
+  // independent reserve-based price) AND the fee is set by an
+  // Arcade-internal route - external routes (Synthra/UnitFlow) already
+  // bake their fee into the quoted amount + their own price oracle.
 
   // Fee depends on the route. Normalize everything to PIPS (1_000_000 = 100%):
   //   - V2 fee 0.30% = 3_000 pips
@@ -806,7 +815,21 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
         }}
         onTokenClick={() => setPickerOpen("out")}
         balanceRaw={balOutRaw}
-        usdValue={outUsd.usd}
+        usdValue={
+          // outUsd.usd from the trade-ratio fallback equals inUsd.usd
+          // exactly because spotUsdPerToken = inUsd / outAmount. Subtract
+          // the AMM fee so the displayed value reflects what the user
+          // actually receives (~$1.98 on a 2-USDC swap with 1% fee).
+          // outUsd.isAvailable means we had a reserve-based price (not
+          // the trade-derived one); skip the correction in that case
+          // because the reserve oracle isn't biased by the fee.
+          !outUsd.isAvailable &&
+          inUsd.usd !== undefined &&
+          !isExternalRoute &&
+          feePips > 0n
+            ? inUsd.usd * (1 - Number(feePips) / 1_000_000)
+            : outUsd.usd
+        }
         lossPct={lossPct}
         feeLabel={
           // External routes (Synthra / UnitFlow) carry their own LP fee
@@ -867,8 +890,8 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
           (Synthra V3 / UnitFlow V3) right under the swap button, so
           repeating the "via Arcade V3" caption would be wrong and noisy. */}
       {!isExternalRoute && finalAmountIn > 0n && finalAmountOut > 0n && tokenOut && (
-        <div className="mt-4 flex items-center justify-between text-xs">
-          <div className="flex items-center gap-1.5 text-arc-text-muted">
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-y-1 text-xs">
+          <div className="flex flex-wrap items-center gap-1.5 gap-y-1 text-arc-text-muted">
             <Image src="/route.png" alt="" width={14} height={14} className="h-3.5 w-3.5 opacity-75" />
             <span>via</span>
             <span className="font-medium text-arc-text">{isV3Swap ? "Arcade V3" : "Arcade V2"}</span>
@@ -1136,14 +1159,16 @@ function TokenBox({
           if (parts.length > 2) return;
           onAmountChange(v);
         }}
-        className="arc-input w-full bg-transparent text-3xl font-medium leading-tight sm:text-4xl"
+        className="arc-input w-full truncate bg-transparent text-2xl font-medium leading-tight sm:text-4xl"
         aria-label="Amount"
       />
 
-      {/* Footer: USD + balance | HALF/MAX or fee */}
-      <div className="mt-3 flex items-center justify-between text-xs">
-        <div className="flex items-center gap-2 text-arc-text-muted">
-          {usdLabel && <span>{usdLabel}</span>}
+      {/* Footer: USD + balance | HALF/MAX or fee.
+          flex-wrap so a long fee label ("Fee 1.0% (0.123456 TOKEN)")
+          doesn't push HALF/MAX off-screen on a 375px viewport. */}
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-y-1 text-xs">
+        <div className="flex min-w-0 items-center gap-2 text-arc-text-muted">
+          {usdLabel && <span className="truncate">{usdLabel}</span>}
           {lossPct !== undefined && (
             <span className={cn("tabular-nums", lossClass)}>
               ({lossPct >= 0 ? "+" : ""}
@@ -1151,7 +1176,7 @@ function TokenBox({
             </span>
           )}
           {showHalfMax && token && (
-            <span className="text-arc-text-faint">
+            <span className="truncate text-arc-text-faint">
               {balLabel} {token.symbol}
             </span>
           )}

@@ -231,8 +231,16 @@ export function useTokenCandles(args: {
       for (const log of logs) {
         const priceQ64 = log.args?.newPriceQ64 as bigint | undefined;
         if (!priceQ64) continue;
+        // newPriceQ64 is raw-USDC-units / raw-token-units in Q64 fixed
+        // point. The 10^12 scale brings it from wei/wei to human
+        // USDC-per-token: tokens have 18 decimals, USDC has 6, so 1
+        // USDC/token = 10^6 / 10^18 = 10^-12 raw. Without this the
+        // chart Y axis reads 5e-18 instead of 5e-6 and labels look
+        // like "0.000000000000" everywhere - cosmetic but it made the
+        // chart unreadable. CURVE_TOKEN_DECIMALS is hardcoded 18 in
+        // the launchpad (see LAUNCHPAD_TOKEN_DECIMALS in constants).
         const priceE24 = (priceQ64 * 10n ** 24n) >> 64n;
-        const price = Number(priceE24) / 1e24;
+        const price = (Number(priceE24) / 1e24) * 1e12;
         const isBuy = "usdcIn" in (log.args as any);
         const volumeUsdc =
           Number(isBuy ? log.args.usdcIn : log.args.usdcOut) / 1e6;

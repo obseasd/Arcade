@@ -41,10 +41,14 @@ export function Navbar() {
             alt="Arcade"
             width={48}
             height={48}
-            className="h-12 w-12 object-contain"
+            className="h-10 w-10 object-contain sm:h-12 sm:w-12"
             priority
           />
-          <span className="font-display text-2xl font-semibold tracking-tight text-white">Arcade</span>
+          {/* Hide the "Arcade" wordmark below sm so the navbar fits next
+              to the wallet widget on a 375px viewport without horizontal
+              scroll. The logo glyph alone is brand-sufficient at that
+              size. */}
+          <span className="hidden font-display text-2xl font-semibold tracking-tight text-white sm:inline">Arcade</span>
         </Link>
 
         {/* Center: nav with active highlight (desktop only) */}

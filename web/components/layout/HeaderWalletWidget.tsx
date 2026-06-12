@@ -180,7 +180,11 @@ export function HeaderWalletWidget() {
                             style={{ height: "52px", minHeight: "52px" }}
                             className="flex items-stretch overflow-hidden rounded-2xl border border-arc-gray/20 bg-black/15 backdrop-blur-xl"
                         >
-                            <div className="flex items-center gap-2 px-3">
+                            {/* Hide the USDC balance chip below sm so the
+                                navbar fits on a 375px viewport - the user
+                                can still see balance after tapping the
+                                wallet chip. The divider hides too. */}
+                            <div className="hidden items-center gap-2 px-3 sm:flex">
                                 <TokenIcon symbol="USDC" size={22} />
                                 <div className="flex flex-col leading-tight">
                                     <span className="text-xs font-semibold text-arc-text">{amountWhole}</span>
@@ -188,7 +192,7 @@ export function HeaderWalletWidget() {
                                 </div>
                             </div>
 
-                            <div className="my-2 w-0.5 rounded-full bg-arc-gray/60" />
+                            <div className="my-2 hidden w-0.5 rounded-full bg-arc-gray/60 sm:block" />
 
                             <button type="button"
                                 onClick={() => setMenuOpen((v) => !v)}
@@ -210,7 +214,7 @@ export function HeaderWalletWidget() {
 
                         {/* Wallet panel (Uniswap-style) */}
                         {menuOpen && (
-                            <div className="absolute right-0 top-[58px] z-50 w-[360px] overflow-hidden rounded-2xl border border-arc-gray/20 bg-black/40 shadow-arc-card backdrop-blur-2xl">
+                            <div className="absolute right-0 top-[58px] z-50 w-[calc(100vw-2rem)] max-w-[360px] overflow-hidden rounded-2xl border border-arc-gray/20 bg-black/40 shadow-arc-card backdrop-blur-2xl sm:w-[360px]">
                                 {/* Top row: avatar + address (left) | LP-sim + power (right) */}
                                 <div className="flex items-start justify-between gap-3 p-4">
                                     <button type="button"

@@ -87,7 +87,7 @@ export function TokenCard({ token, curveSupply, priority }: Props) {
           <div className="mt-0.5 text-xs text-arc-text-muted">
             by {formatAddress(token.creator)} · {age}
           </div>
-          <div className="mt-2 flex items-center gap-2">
+          <div className="mt-2 flex flex-wrap items-center gap-2 gap-y-1">
             {isFeatured && (
               <span className="inline-flex items-center gap-1 rounded-full border border-arc-cta-hover/40 bg-arc-cta-hover/20 px-2 py-0.5 text-[10px] font-medium text-arc-text">
                 <Star className="h-2.5 w-2.5 fill-current" /> Featured
