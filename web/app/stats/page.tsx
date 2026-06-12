@@ -1,6 +1,11 @@
 import { ArrowLeft, BarChart3, Coins, Repeat, Rocket, Users } from "lucide-react";
 import Link from "next/link";
-import { formatUsdcGas, getAggregateStats } from "@/lib/stats";
+import { formatUsdcGas, getAggregateStats, type StatsSnapshot } from "@/lib/stats";
+import {
+    getLatestPersistedSnapshot,
+    getSnapshotHistory,
+    insertSnapshot,
+} from "@/lib/statsPersistence";
 
 export const metadata = {
     title: "Stats",
@@ -11,19 +16,49 @@ export const metadata = {
 /**
  * Public activity dashboard.
  *
- * Designed to be the canonical place Circle / Arc team / partners look up
- * Arcade's USDC-gas footprint, transaction throughput, and token issuance
- * rate. Numbers are server-rendered with a 5-minute ISR cache so the page
- * is fast and the underlying RPC scan does not hit on every visit.
+ * Read order:
+ *   1. Latest persisted snapshot from Postgres (canonical, hourly cron).
+ *   2. Live RPC scan as a one-shot fallback when the DB is empty.
  *
- * MVP estimation: until we ship a real indexer (Ponder), the USDC gas
+ * The persisted path lets the page survive contract redeploys: even if
+ * the live RPC scan can only see the last MAX_TOTAL_BLOCKS of history,
+ * the persistent row keeps the cumulative numbers monotonically growing.
+ * The fallback path bootstraps the DB on first attach so the page never
+ * shows zeros while we wait for the next hourly cron tick.
+ *
+ * MVP estimation: until a real indexer (Ponder) lands, the USDC gas
  * number is an estimate (txCount * average gas cost). We surface this
  * disclosure inline so the dashboard never overstates reality.
  */
 export const revalidate = 300;
 
+const HISTORY_WINDOW_DAYS = 30;
+const HISTORY_WINDOW_MS = HISTORY_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+
 export default async function StatsPage() {
-    const snap = await getAggregateStats();
+    const persisted = await getLatestPersistedSnapshot();
+    let snap: StatsSnapshot;
+    let usingPersisted = false;
+    if (persisted) {
+        snap = persisted;
+        usingPersisted = true;
+    } else {
+        snap = await getAggregateStats();
+        // Fire-and-forget bootstrap of the first row so the next render
+        // hits the fast path. Failures are non-fatal; the cron will
+        // retry hourly anyway.
+        void insertSnapshot(snap, "fallback").catch(() => {});
+    }
+
+    // History window for the delta + sparkline. Empty when the DB isn't
+    // configured yet — the rest of the page renders without it.
+    const sinceIso = new Date(Date.now() - HISTORY_WINDOW_MS).toISOString();
+    const history = usingPersisted ? await getSnapshotHistory(sinceIso, 720) : [];
+    const oldest = history[0];
+    const deltaVolume = oldest
+        ? snap.volumeUsdcMicros - oldest.volumeUsdcMicros
+        : null;
+    const deltaTxs = oldest ? snap.txCount - oldest.txCount : null;
 
     return (
         <div className="mx-auto max-w-5xl px-4 py-10 sm:px-6 sm:py-14">
@@ -66,6 +101,11 @@ export default async function StatsPage() {
                     icon={<Repeat className="h-5 w-5" />}
                     label="Transactions routed"
                     value={snap.txCount.toLocaleString("en-US")}
+                    delta={
+                        deltaTxs !== null && deltaTxs > 0
+                            ? `+${deltaTxs.toLocaleString("en-US")} / ${HISTORY_WINDOW_DAYS}d`
+                            : undefined
+                    }
                 />
                 <MetricCard
                     icon={<Users className="h-5 w-5" />}
@@ -90,6 +130,11 @@ export default async function StatsPage() {
                     icon={<BarChart3 className="h-5 w-5" />}
                     label="USDC volume routed"
                     value={formatUsdcGas(snap.volumeUsdcMicros)}
+                    delta={
+                        deltaVolume !== null && deltaVolume > 0n
+                            ? `+${formatUsdcGas(deltaVolume)} / ${HISTORY_WINDOW_DAYS}d`
+                            : undefined
+                    }
                     note="Cumulative sum of every launchpad Buy + Sell across all generations."
                 />
                 <MetricCard
@@ -104,9 +149,18 @@ export default async function StatsPage() {
                 <h2 className="text-base font-semibold text-arc-text">Methodology</h2>
                 <ul className="mt-4 list-disc space-y-2 pl-5">
                     <li>
+                        Snapshots are persisted hourly to Postgres so the
+                        time-series and cumulative totals survive every
+                        contract redeploy. {usingPersisted
+                            ? "This page is reading the latest persisted row."
+                            : "Postgres is not yet attached; this page is rendering a one-shot live RPC scan and seeding the first row."}
+                    </li>
+                    <li>
                         Transaction and wallet counts come from a server-side
                         eth_getLogs scan of every Arcade contract on Arc testnet
-                        (chainId 5042002), chunked in 50,000-block windows.
+                        (chainId 5042002), chunked in 50,000-block windows. Every
+                        prior-generation contract address is included so the
+                        cumulative count keeps growing past a fresh deploy.
                     </li>
                     <li>
                         USDC gas paid is an estimate: transaction count multiplied
@@ -141,11 +195,13 @@ function MetricCard({
     label,
     value,
     note,
+    delta,
 }: {
     icon: React.ReactNode;
     label: string;
     value: string;
     note?: string;
+    delta?: string;
 }) {
     return (
         <div className="arc-card p-5">
@@ -160,6 +216,11 @@ function MetricCard({
                 {label}
             </div>
             <div className="mt-1 text-2xl font-semibold tabular-nums">{value}</div>
+            {delta && (
+                <div className="mt-1 text-[10px] font-medium tabular-nums text-arc-success">
+                    {delta}
+                </div>
+            )}
             {note && <div className="mt-2 text-[10px] text-arc-text-faint">{note}</div>}
         </div>
     );

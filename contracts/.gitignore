@@ -14,3 +14,12 @@ docs/
 
 # Dotenv file
 .env
+
+# Foundry libraries accidentally installed at the contracts root (canonical
+# path is contracts/lib/, NOT contracts/). Both forge-std and openzeppelin
+# are normally pulled as submodules into contracts/lib/ — these top-level
+# copies are leftover from a stray `forge install` run and would otherwise
+# add 50+ MB of vendored library code to the repo. If you need to update
+# the canonical submodules, do it under contracts/lib/.
+/forge-std/
+/openzeppelin-contracts/

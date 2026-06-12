@@ -1,0 +1,68 @@
+name: stats hourly snapshot
+
+# Triggers a /api/stats/cron POST every hour. The handler runs the live
+# RPC scan against Arc, then writes the result into Vercel Postgres so
+# the /stats page time-series survives any future contract redeploy.
+#
+# Why GitHub Actions and not Vercel Cron: the Hobby plan caps at 2 cron
+# jobs per project and we want a hard hourly cadence (24 runs/day).
+# GitHub Actions on a private repo gives us 2000 minutes/month free.
+# The cron job runs ~30s end-to-end, so a hourly schedule consumes
+# ~12h/month = 720 min — well within the free budget.
+#
+# Required secrets (Settings → Secrets and variables → Actions):
+#   STATS_CRON_URL    : Full URL of the cron endpoint, e.g.
+#                       https://arcade.trading/api/stats/cron
+#                       (production URL; preview deploys do not run cron)
+#   STATS_CRON_SECRET : Bearer secret matching Vercel env STATS_CRON_SECRET.
+#                       Generate with `openssl rand -hex 32`. Rotate in
+#                       both places together.
+#
+# Manual trigger: Actions tab → "stats hourly snapshot" → Run workflow.
+# Useful right after a Postgres attach to backfill the first row.
+
+on:
+  schedule:
+    # Top of every hour, UTC. cron uses POSIX 5-field syntax: m h dom mon dow.
+    # Hourly cadence is intentionally low resolution — the /stats page only
+    # surfaces minute-grain numbers anyway and hourly leaves plenty of
+    # headroom under the GH Actions monthly minute budget.
+    - cron: "0 * * * *"
+  workflow_dispatch: {}
+
+# Cancel an in-flight run if a new one starts. The scan is idempotent
+# (each row stands alone, ordered by snapshot_at) so we never miss data,
+# but we do not want overlapping runs piling up if Vercel is slow.
+concurrency:
+  group: stats-snapshot
+  cancel-in-progress: true
+
+jobs:
+  snapshot:
+    name: POST /api/stats/cron
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: fire snapshot
+        env:
+          STATS_CRON_URL: ${{ secrets.STATS_CRON_URL }}
+          STATS_CRON_SECRET: ${{ secrets.STATS_CRON_SECRET }}
+        # `--fail-with-body` makes curl return non-zero on >=400 so the
+        # workflow turns red and GitHub emails the repo owner. The body
+        # is still printed for debugging.
+        # `--max-time 90` gives the Vercel function its 60s budget plus
+        # network. Cap is well under the 5-minute job timeout so a hung
+        # request still bubbles up as a failure.
+        run: |
+          if [ -z "$STATS_CRON_URL" ] || [ -z "$STATS_CRON_SECRET" ]; then
+            echo "Missing STATS_CRON_URL or STATS_CRON_SECRET repo secret"
+            exit 1
+          fi
+          curl --fail-with-body \
+               --max-time 90 \
+               --retry 2 \
+               --retry-delay 10 \
+               -X POST \
+               -H "Authorization: Bearer $STATS_CRON_SECRET" \
+               -H "Content-Type: application/json" \
+               "$STATS_CRON_URL"

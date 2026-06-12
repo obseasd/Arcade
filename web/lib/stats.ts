@@ -1,5 +1,6 @@
 import { Address, createPublicClient, http } from "viem";
 import { ADDRESSES } from "./constants";
+import { getLaunchpadAddressList } from "./launchpadGenerations";
 
 /**
  * Snapshot of Arcade activity metrics surfaced on /stats.
@@ -190,32 +191,27 @@ export async function getAggregateStats(): Promise<StatsSnapshot> {
     const estimatedUsdcGasMicros =
         (BigInt(seenTxs.size) * AVG_TX_GAS_USED * AVG_GAS_PRICE_WEI) / GAS_TO_USDC_DIVISOR;
 
-    // Token counts: best-effort via the well-known TokenCreated topic on the
-    // launchpad. Sum across the current launchpad + every prior generation so
-    // the cumulative count keeps growing past a redeploy.
-    const PRIOR_LAUNCHPADS: Address[] = [
-        "0xD863e3475E00550FBe0Abf4F1127B673E65C86a4", // gen 8 (2026-06-11)
-        "0x62aC6A355D092267a93a1Ffb13B7D1c121A5c0e8", // gen 7
-        "0xB15282e3a0c67989013c7bdc6cd6f4Fa0CdbaAd6", // gen 6
-        "0xF441D73C69f00bf2A11019024A80D46a06bE2BdC", // gen 5
-        "0xb621925D1aa0f1c2BeC6612Add5290F04F6c3168", // gen 4
-    ];
-    const launchpadCounts = await Promise.all([
-        countLaunchpadEvents(client, ADDRESSES.launchpad, fromBlock, head),
-        ...PRIOR_LAUNCHPADS.map((a) => countLaunchpadEvents(client, a, fromBlock, head)),
-    ]);
+    // Token counts: best-effort via the well-known TokenCreated topic on
+    // each launchpad. Sum across every generation in the shared
+    // generations list so the cumulative count keeps growing past a
+    // redeploy. Source of truth is lib/launchpadGenerations.ts — adding
+    // a new generation there propagates to both this scan AND the
+    // client-side useLaunchpadTokens hook in one edit.
+    const allLaunchpads = getLaunchpadAddressList();
+    const launchpadCounts = await Promise.all(
+        allLaunchpads.map((a) => countLaunchpadEvents(client, a, fromBlock, head)),
+    );
     const tokensLaunched = launchpadCounts.reduce((a, b) => a + b, 0);
 
     // Cumulative volume: sum every Buy.usdcIn + every Sell.usdcOut across
-    // the current launchpad AND every prior generation. Adds a meaningful
-    // "how much value flowed through Arcade" number to the dashboard
-    // instead of leaving volume hidden until the indexer ships. Failures
-    // per window are silently dropped (0) so a single flaky RPC range
-    // doesn't tank the whole page - the truncated flag picks it up.
-    const volumeResults = await Promise.all([
-        sumLaunchpadVolume(client, ADDRESSES.launchpad, fromBlock, head),
-        ...PRIOR_LAUNCHPADS.map((a) => sumLaunchpadVolume(client, a, fromBlock, head)),
-    ]);
+    // every launchpad generation. Adds a meaningful "how much value
+    // flowed through Arcade" number to the dashboard instead of leaving
+    // volume hidden until the indexer ships. Failures per window are
+    // silently dropped (0) so a single flaky RPC range doesn't tank the
+    // whole page — the truncated flag picks it up.
+    const volumeResults = await Promise.all(
+        allLaunchpads.map((a) => sumLaunchpadVolume(client, a, fromBlock, head)),
+    );
     const volumeUsdcMicros = volumeResults.reduce((acc, n) => acc + n, 0n);
     const v4TokensLaunched = ADDRESSES.v4Launchpad
         ? await countLaunchpadEvents(client, ADDRESSES.v4Launchpad, fromBlock, head)
