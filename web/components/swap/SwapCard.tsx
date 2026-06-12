@@ -360,25 +360,39 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
   // arcTestnet chain config). Single eth_call instead of two parallel
   // RPC roundtrips — meaningful on Arc's public RPC. Falls back to
   // independent calls on chains without multicall3 (anvil local).
-  const balances = useReadContracts({
-    contracts: [
-      {
-        address: tokenIn.address,
-        abi: erc20Abi,
-        functionName: "balanceOf",
-        args: account ? [account] : undefined,
-      },
-      {
-        address: tokenOut?.address,
-        abi: erc20Abi,
-        functionName: "balanceOf",
-        args: account ? [account] : undefined,
-      },
-    ],
-    query: { enabled: !!account && !!tokenIn.address && !!tokenOut },
+  // Audit 2026-06-12: split balanceIn / balanceOut into independent
+  // useReadContract calls. The previous useReadContracts batch gated
+  // the WHOLE fetch on `!!tokenOut`, so the From-side balance read
+  // out of the user's wallet got skipped any time the user landed on
+  // /swap without a tokenOut auto-picked (e.g. fresh deploy with no
+  // launchpad v2Tokens yet). User reported header showed 364 USDC
+  // but the swap card read 0 USDC.
+  // Independent reads also let the From balance still refresh after a
+  // failed quote (tokenOut still null) so the user can see their
+  // balance update from background activity even before they pick the
+  // To token.
+  const balanceInQ = useReadContract({
+    address: tokenIn.address,
+    abi: erc20Abi,
+    functionName: "balanceOf",
+    args: account ? [account] : undefined,
+    query: { enabled: !!account && !!tokenIn.address },
   });
-  const balanceIn = { data: balances.data?.[0]?.result as bigint | undefined, refetch: balances.refetch };
-  const balanceOut = { data: balances.data?.[1]?.result as bigint | undefined, refetch: balances.refetch };
+  const balanceOutQ = useReadContract({
+    address: tokenOut?.address,
+    abi: erc20Abi,
+    functionName: "balanceOf",
+    args: account ? [account] : undefined,
+    query: { enabled: !!account && !!tokenOut?.address },
+  });
+  const balanceIn = {
+    data: balanceInQ.data as bigint | undefined,
+    refetch: balanceInQ.refetch,
+  };
+  const balanceOut = {
+    data: balanceOutQ.data as bigint | undefined,
+    refetch: balanceOutQ.refetch,
+  };
   const balInRaw = balanceIn.data ?? 0n;
   const balOutRaw = balanceOut.data ?? 0n;
 
