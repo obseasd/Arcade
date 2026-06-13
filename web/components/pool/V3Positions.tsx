@@ -5,7 +5,10 @@ import { PlusIcon, SliderIcon } from "@/components/ui/MaskIcon";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Address, erc20Abi, formatUnits } from "viem";
-import { useAccount, useReadContract, useReadContracts } from "wagmi";
+import { useAccount, useReadContract, useReadContracts, useWriteContract } from "wagmi";
+
+import { AUTO_COMPOUNDER_ABI } from "@/lib/abis/autoCompounder";
+import { pushToast } from "@/lib/toast";
 
 import { V3_FACTORY_ABI, V3_NPM_ABI, V3_POOL_ABI } from "@/lib/abis/v3-npm";
 import { ADDRESSES, USDC_DECIMALS } from "@/lib/constants";
@@ -48,34 +51,100 @@ export function V3Positions({
     onCountChange?: (n: number) => void;
 }) {
     const { address: account } = useAccount();
+    const { writeContractAsync } = useWriteContract();
     const npmEnabled = ADDRESSES.v3PositionManager !== "0x0000000000000000000000000000000000000000";
     const compounderEnabled =
         ADDRESSES.autoCompounder !== "0x0000000000000000000000000000000000000000";
 
-    // Count of positions the user has deposited into the Compounder
-    // contract. Those positions are owned by the Compounder, not by the
-    // user, so NPM.balanceOf returns zero for them — that previously
-    // made the "no positions yet" empty state misleading whenever the
-    // user's only positions were under auto-management. We surface the
-    // count next to the empty / non-empty states so the user can find
-    // their positions without scrolling blindly.
-    const [managedCount, setManagedCount] = useState<number>(0);
-    const refreshManagedCount = useCallback(async () => {
+    // Auto-managed positions. The NFTs are owned by the Compounder
+    // contract, not the user's wallet, so NPM.balanceOf returns zero
+    // for them. We fetch the list out of /api/compounder/positions,
+    // append the tokenIds to the on-chain positions read below, and
+    // tag each resulting row with the mode + total-claimed pair the
+    // V3 card uses to swap "Unclaimed fees" for "Total claimed" and
+    // wire the Stop button. The standalone AutoCompounderPanel becomes
+    // a thin deposit CTA — every actual card now lives in this list
+    // so the user sees their whole V3 surface in one place.
+    interface ManagedPositionMeta {
+        tokenId: bigint;
+        mode: "NORMAL" | "RECEIVE" | "COMPOUND";
+        totalClaimedUsdc?: number;
+    }
+    const [managedMetas, setManagedMetas] = useState<ManagedPositionMeta[]>([]);
+    const [stoppingTokenId, setStoppingTokenId] = useState<string | null>(null);
+    const refreshManaged = useCallback(async () => {
         if (!account || !compounderEnabled) {
-            setManagedCount(0);
+            setManagedMetas([]);
             return;
         }
         try {
             const res = await fetch(`/api/compounder/positions?owner=${account}`);
-            const data = (await res.json()) as { positions?: unknown[] };
-            setManagedCount(Array.isArray(data.positions) ? data.positions.length : 0);
+            const data = (await res.json()) as {
+                positions?: { tokenId: string; mode: string; totalClaimedUsdc?: number }[];
+            };
+            const rows = Array.isArray(data.positions) ? data.positions : [];
+            setManagedMetas(
+                rows
+                    .filter(
+                        (r) =>
+                            r.mode === "NORMAL" ||
+                            r.mode === "RECEIVE" ||
+                            r.mode === "COMPOUND",
+                    )
+                    .map((r) => ({
+                        tokenId: BigInt(r.tokenId),
+                        mode: r.mode as ManagedPositionMeta["mode"],
+                        totalClaimedUsdc: r.totalClaimedUsdc,
+                    })),
+            );
         } catch {
-            setManagedCount(0);
+            setManagedMetas([]);
         }
     }, [account, compounderEnabled]);
     useEffect(() => {
-        void refreshManagedCount();
-    }, [refreshManagedCount]);
+        void refreshManaged();
+    }, [refreshManaged]);
+
+    const managedCount = managedMetas.length;
+    const managedByTokenId = useMemo(() => {
+        const m = new Map<string, ManagedPositionMeta>();
+        for (const meta of managedMetas) m.set(meta.tokenId.toString(), meta);
+        return m;
+    }, [managedMetas]);
+
+    const stopManagement = useCallback(
+        async (tokenIdStr: string) => {
+            setStoppingTokenId(tokenIdStr);
+            try {
+                await writeContractAsync({
+                    address: ADDRESSES.autoCompounder,
+                    abi: AUTO_COMPOUNDER_ABI,
+                    functionName: "withdrawPosition",
+                    args: [BigInt(tokenIdStr)],
+                });
+                await fetch("/api/compounder/positions", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ action: "withdraw", tokenId: tokenIdStr }),
+                });
+                pushToast({
+                    kind: "info",
+                    title: "Auto-management stopped",
+                    message: `NFT #${tokenIdStr} returned to your wallet.`,
+                });
+                await refreshManaged();
+            } catch (err) {
+                pushToast({
+                    kind: "error",
+                    title: "Withdraw failed",
+                    message: err instanceof Error ? err.message : "Unknown error",
+                });
+            } finally {
+                setStoppingTokenId(null);
+            }
+        },
+        [refreshManaged, writeContractAsync],
+    );
 
     const balanceQ = useReadContract({
         address: ADDRESSES.v3PositionManager,
@@ -98,13 +167,39 @@ export function V3Positions({
             : [],
         query: { enabled: !!account && npmEnabled && count > 0 },
     });
-    const tokenIds = useMemo(
+    // Wallet-owned token ids (NFT lives directly in the user's wallet).
+    const walletTokenIds = useMemo(
         () =>
             (tokenIdsQ.data ?? [])
                 .map((c) => (c.status === "success" ? (c.result as bigint) : undefined))
                 .filter((x): x is bigint => x !== undefined),
         [tokenIdsQ.data],
     );
+
+    // Full token-id list (wallet + managed). Managed token ids come from
+    // /api/compounder/positions because the NFTs are owned by the
+    // Compounder contract, not the user wallet — NPM.balanceOf does not
+    // see them, but the NPM.positions(tokenId) read still works since
+    // the position state is keyed by tokenId not owner. Each card's
+    // managed prop is wired below by looking the tokenId up in
+    // managedByTokenId.
+    const tokenIds = useMemo(() => {
+        const seen = new Set<string>();
+        const out: bigint[] = [];
+        for (const id of walletTokenIds) {
+            const k = id.toString();
+            if (seen.has(k)) continue;
+            seen.add(k);
+            out.push(id);
+        }
+        for (const meta of managedMetas) {
+            const k = meta.tokenId.toString();
+            if (seen.has(k)) continue;
+            seen.add(k);
+            out.push(meta.tokenId);
+        }
+        return out;
+    }, [walletTokenIds, managedMetas]);
 
     // For each tokenId, read positions(tokenId) to get the full state.
     const positionsQ = useReadContracts({
@@ -347,19 +442,33 @@ export function V3Positions({
         // swap layout the user pointed at; previously the cards rendered in
         // a tall single-column stack.
         <div className="grid grid-cols-1 gap-3 lg:grid-cols-2 2xl:grid-cols-3">
-            {filtered.map(({ p, i }) => (
-                <V3PositionRow
-                    key={p.tokenId.toString()}
-                    position={p}
-                    tokenInfo={tokenInfo}
-                    poolAddress={poolAddrs[i]}
-                    slot0={
-                        poolAddrs[i]
-                            ? slot0ByPool.get(poolAddrs[i]!.toLowerCase())
-                            : undefined
-                    }
-                />
-            ))}
+            {filtered.map(({ p, i }) => {
+                const tokenIdStr = p.tokenId.toString();
+                const meta = managedByTokenId.get(tokenIdStr);
+                return (
+                    <V3PositionRow
+                        key={tokenIdStr}
+                        position={p}
+                        tokenInfo={tokenInfo}
+                        poolAddress={poolAddrs[i]}
+                        slot0={
+                            poolAddrs[i]
+                                ? slot0ByPool.get(poolAddrs[i]!.toLowerCase())
+                                : undefined
+                        }
+                        managed={
+                            meta
+                                ? {
+                                      mode: meta.mode,
+                                      totalClaimedUsdc: meta.totalClaimedUsdc,
+                                      onStop: () => stopManagement(tokenIdStr),
+                                      stopBusy: stoppingTokenId === tokenIdStr,
+                                  }
+                                : undefined
+                        }
+                    />
+                );
+            })}
         </div>
     );
 }
@@ -379,6 +488,21 @@ interface V3PositionRowProps {
     tokenInfo: Record<string, { symbol: string; decimals: number }>;
     poolAddress: Address | undefined;
     slot0: { sqrtPriceX96: bigint; tick: number } | undefined;
+    /** When set, the card swaps its "Unclaimed fees" + "Manage / Add
+     *  Liquidity" footer for the auto-management variant: a mode badge
+     *  next to the in-range chip, a "Total claimed" row that sums every
+     *  Compounded / FeesPushed event in compounder_events, and a Stop
+     *  button that withdraws the NFT from the Compounder back to the
+     *  user. The NFT is owned by the Compounder while managed, so the
+     *  caller is responsible for handing in the correct (token0/1/fee/
+     *  tickLower/tickUpper/liquidity) snapshot read off NPM.positions
+     *  via the Compounder's view path. */
+    managed?: {
+        mode: "RECEIVE" | "COMPOUND" | "NORMAL";
+        totalClaimedUsdc?: number;
+        onStop: () => void | Promise<void>;
+        stopBusy?: boolean;
+    };
 }
 
 function V3PositionRow({
@@ -386,6 +510,7 @@ function V3PositionRow({
     tokenInfo,
     poolAddress,
     slot0,
+    managed,
 }: V3PositionRowProps) {
     const t0Info = tokenInfo[p.token0.toLowerCase()] ?? { symbol: "?", decimals: 18 };
     const t1Info = tokenInfo[p.token1.toLowerCase()] ?? { symbol: "?", decimals: 18 };
@@ -507,6 +632,21 @@ function V3PositionRow({
                                 />
                                 {!slot0 ? "…" : inRange ? "In range" : "Out of range"}
                             </span>
+                            {managed && managed.mode !== "NORMAL" && (
+                                <span
+                                    className={cn(
+                                        "inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider",
+                                        managed.mode === "COMPOUND"
+                                            ? "bg-arc-success/10 text-arc-success"
+                                            : "bg-sky-400/10 text-sky-400",
+                                    )}
+                                >
+                                    <Sparkles className="h-2.5 w-2.5" />
+                                    {managed.mode === "COMPOUND"
+                                        ? "Auto-compound"
+                                        : "Auto-receive"}
+                                </span>
+                            )}
                         </div>
                     </div>
                 </div>
@@ -616,54 +756,78 @@ function V3PositionRow({
                 />
             </div>
 
-            {/* Unclaimed fees row. Token symbols rendered as <TokenIcon>
-                circles instead of the prior "0 USDC / 0 ETH" text so the
-                row stays compact on narrower grid widths. */}
-            <div className="mt-3 flex items-center justify-between gap-2 rounded-xl border border-arc-border bg-white/[0.015] p-3 text-xs">
-                <span className="text-arc-text-muted">Unclaimed fees</span>
-                <span className="inline-flex items-center gap-3 tabular-nums">
-                    <span className="inline-flex items-center gap-1.5">
-                        {formatTok(p.tokensOwed0, t0Info.decimals)}
-                        <TokenIcon symbol={t0Info.symbol} size={14} />
+            {/* Footer row: managed positions show "Total claimed" (sum of
+                every Compounded / FeesPushed event, USDC-quoted), normal
+                positions show the live "Unclaimed fees" pair. Token
+                symbols render as <TokenIcon> circles in both variants so
+                the row stays compact on narrower grid widths. */}
+            {managed ? (
+                <div className="mt-3 flex items-center justify-between gap-2 rounded-xl border border-arc-border bg-white/[0.015] p-3 text-xs">
+                    <span className="text-arc-text-muted">Total claimed</span>
+                    <span className="inline-flex items-center gap-1.5 tabular-nums font-semibold text-arc-text">
+                        {managed.totalClaimedUsdc !== undefined
+                            ? fmtUsd(managed.totalClaimedUsdc)
+                            : "—"}
+                        <TokenIcon symbol="USDC" size={14} />
                     </span>
-                    <span className="text-arc-text-faint">/</span>
-                    <span className="inline-flex items-center gap-1.5">
-                        {formatTok(p.tokensOwed1, t1Info.decimals)}
-                        <TokenIcon symbol={t1Info.symbol} size={14} />
+                </div>
+            ) : (
+                <div className="mt-3 flex items-center justify-between gap-2 rounded-xl border border-arc-border bg-white/[0.015] p-3 text-xs">
+                    <span className="text-arc-text-muted">Unclaimed fees</span>
+                    <span className="inline-flex items-center gap-3 tabular-nums">
+                        <span className="inline-flex items-center gap-1.5">
+                            {formatTok(p.tokensOwed0, t0Info.decimals)}
+                            <TokenIcon symbol={t0Info.symbol} size={14} />
+                        </span>
+                        <span className="text-arc-text-faint">/</span>
+                        <span className="inline-flex items-center gap-1.5">
+                            {formatTok(p.tokensOwed1, t1Info.decimals)}
+                            <TokenIcon symbol={t1Info.symbol} size={14} />
+                        </span>
                     </span>
-                </span>
-            </div>
+                </div>
+            )}
 
-            {/* Bottom action bar: Manage + Add Liq. Manage routes to the
-                pool detail page for now since the in-app decrease/collect/
-                burn UI lands in a follow-up commit; the Open pool link is
-                the closest existing target. */}
-            <div className="mt-4 grid grid-cols-2 gap-2">
-                {poolAddress ? (
-                    <Link
-                        href={`/pool/${poolAddress}`}
-                        className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-arc-border bg-white/[0.04] px-3 py-2.5 text-sm font-semibold text-arc-text transition-colors hover:bg-white/[0.08]"
-                    >
-                        <SliderIcon size={14} />
-                        Manage
-                    </Link>
-                ) : (
-                    <button type="button"
-                        disabled
-                        className="inline-flex cursor-not-allowed items-center justify-center gap-1.5 rounded-xl border border-arc-border bg-white/[0.04] px-3 py-2.5 text-sm font-semibold text-arc-text-faint"
-                    >
-                        <SliderIcon size={14} />
-                        Manage
-                    </button>
-                )}
-                <Link
-                    href={`/positions/add?type=v3&t0=${p.token0}&t1=${p.token1}&fee=${p.fee / 100}`}
-                    className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-arc-cta px-3 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-arc-cta-hover"
+            {/* Bottom action bar. Managed positions get a single Stop
+                button that hands the NFT back; normal positions keep the
+                Manage + Add Liquidity pair. */}
+            {managed ? (
+                <button
+                    type="button"
+                    onClick={() => void managed.onStop()}
+                    disabled={managed.stopBusy}
+                    className="mt-4 inline-flex w-full items-center justify-center gap-1.5 rounded-xl border border-arc-border bg-white/[0.04] px-3 py-2.5 text-sm font-semibold text-arc-text transition-colors hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                    <PlusIcon size={14} className="bg-white" />
-                    Add Liquidity
-                </Link>
-            </div>
+                    {managed.stopBusy ? "Stopping…" : "Stop auto-management"}
+                </button>
+            ) : (
+                <div className="mt-4 grid grid-cols-2 gap-2">
+                    {poolAddress ? (
+                        <Link
+                            href={`/pool/${poolAddress}`}
+                            className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-arc-border bg-white/[0.04] px-3 py-2.5 text-sm font-semibold text-arc-text transition-colors hover:bg-white/[0.08]"
+                        >
+                            <SliderIcon size={14} />
+                            Manage
+                        </Link>
+                    ) : (
+                        <button type="button"
+                            disabled
+                            className="inline-flex cursor-not-allowed items-center justify-center gap-1.5 rounded-xl border border-arc-border bg-white/[0.04] px-3 py-2.5 text-sm font-semibold text-arc-text-faint"
+                        >
+                            <SliderIcon size={14} />
+                            Manage
+                        </button>
+                    )}
+                    <Link
+                        href={`/positions/add?type=v3&t0=${p.token0}&t1=${p.token1}&fee=${p.fee / 100}`}
+                        className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-arc-cta px-3 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-arc-cta-hover"
+                    >
+                        <PlusIcon size={14} className="bg-white" />
+                        Add Liquidity
+                    </Link>
+                </div>
+            )}
         </div>
     );
 }

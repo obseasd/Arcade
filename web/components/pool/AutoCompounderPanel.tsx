@@ -98,54 +98,28 @@ export function AutoCompounderPanel() {
 
     if (!enabled) return null;
 
+    // V3Positions now hosts the cards for every position (wallet-owned
+    // AND custody-held by the Compounder) since the card design was
+    // unified — managed positions get the same USDC/ETH 0.3% / In range
+    // / Reserve / MIN/CURRENT/MAX layout with a mode badge in the
+    // header and "Total claimed" replacing "Unclaimed fees" at the
+    // bottom. This component is now just the standalone "Deposit a
+    // position" CTA + modal that surfaces below the position list.
+    void positions;
+    void loading;
+    void refresh;
+
     return (
-        <section className="mt-10">
-            <div className="mb-4 flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                    <Sparkles className="h-5 w-5 text-sky-400" />
-                    <h2 className="text-lg font-semibold text-arc-text">
-                        Auto-management
-                    </h2>
-                    <span className="rounded-full border border-arc-border bg-arc-surface px-2 py-0.5 text-[10px] uppercase tracking-wider text-arc-text-faint">
-                        Beta
-                    </span>
-                </div>
-                <button
-                    onClick={() => void refresh()}
-                    className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-arc-border text-arc-text-muted transition-colors hover:bg-arc-surface-2 hover:text-arc-text"
-                    aria-label="Refresh auto-management positions"
-                >
-                    <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
-                </button>
-            </div>
-
-            <p className="mb-6 text-sm text-arc-text-muted">
-                Deposit a V3 LP NFT to either auto-receive fees in your wallet or
-                auto-compound them back into the position. The keeper triggers
-                on-chain once a position is over its threshold and past the
-                5-minute cooldown. Protocol fee is 1% on collected fees only.
-            </p>
-
-            {account && positions.length > 0 ? (
-                <div className="grid gap-3 sm:grid-cols-2">
-                    {positions.map((p) => (
-                        <ManagedPositionCard
-                            key={p.tokenId}
-                            position={p}
-                            onChanged={refresh}
-                        />
-                    ))}
-                </div>
-            ) : (
-                <div className="rounded-2xl border border-dashed border-arc-border bg-arc-bg-elevated/40 p-6 text-center text-sm text-arc-text-muted">
-                    {account
-                        ? "No auto-managed positions yet. Deposit one below."
-                        : "Connect a wallet to see your auto-managed positions."}
-                </div>
-            )}
-
+        <section className="mt-6">
             {account && (
-                <div className="mt-4">
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-dashed border-arc-border bg-arc-bg-elevated/40 p-4">
+                    <div className="flex items-center gap-2 text-sm text-arc-text-muted">
+                        <Sparkles className="h-4 w-4 text-sky-400" />
+                        <span>
+                            Want a position auto-claimed or auto-compounded by the
+                            keeper? Deposit it into the Compounder vault.
+                        </span>
+                    </div>
                     <button
                         onClick={() => setModalOpen(true)}
                         className="arc-button-secondary inline-flex items-center gap-2 px-4 py-2 text-sm"
@@ -160,7 +134,6 @@ export function AutoCompounderPanel() {
                     onClose={() => setModalOpen(false)}
                     onDeposited={() => {
                         setModalOpen(false);
-                        void refresh();
                     }}
                 />
             )}

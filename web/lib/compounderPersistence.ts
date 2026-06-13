@@ -130,6 +130,37 @@ export async function getPositionsForOwner(
     }
 }
 
+/** Per-tokenId sum of compound + push-fees event values, in 6-decimal
+ *  USDC micros. The cron writes `usd_value_micros` on every
+ *  Compounded / FeesPushed event so this is a simple SUM(); the
+ *  dashboard surfaces it as the "Total claimed" line on the position
+ *  card. Returns a map keyed by tokenId for fast lookup. */
+export async function getTotalClaimedByTokenForOwner(
+    ownerAddress: string,
+): Promise<Map<string, bigint>> {
+    const out = new Map<string, bigint>();
+    if (!isDbConfigured()) return out;
+    try {
+        const sql = getSql();
+        const rows = (await sql`
+            SELECT e.token_id::text AS token_id,
+                   COALESCE(SUM(e.usd_value_micros), 0)::text AS total
+              FROM compounder_events e
+              JOIN compounder_positions p ON p.token_id = e.token_id
+             WHERE p.owner_address = ${ownerAddress.toLowerCase()}
+               AND e.event_type IN ('Compounded', 'FeesPushed')
+             GROUP BY e.token_id
+        `) as unknown as { token_id: string; total: string }[];
+        for (const row of rows) {
+            out.set(row.token_id, BigInt(row.total));
+        }
+        return out;
+    } catch (err) {
+        console.warn("[compounder] getTotalClaimedByTokenForOwner failed:", err);
+        return out;
+    }
+}
+
 export async function getPosition(
     tokenId: string,
 ): Promise<CompounderPosition | null> {

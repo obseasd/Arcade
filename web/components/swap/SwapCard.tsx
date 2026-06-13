@@ -487,18 +487,23 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
     ? `${formatTokenAmount(minOut, decimalsOut, 6)} ${symOut}`
     : `${formatTokenAmount(maxIn, decimalsIn, 6)} ${symIn}`;
 
-  // External routes (Synthra / UnitFlow / XyloNet) come from the
-  // aggregator's parallel fan-out. When one of them has already returned
-  // a non-zero quote, the swap is ready to execute — even if a legacy
-  // Arcade V3 / V2 quoter is still in-flight. Showing "Fetching price…"
-  // for an extra 5 s while Synthra has already priced the trade was the
-  // bug the user reported on the routes panel screenshot.
-  const externalReady = isExternalRoute && !!activeRoute && activeRoute.amountOut > 0n;
-  // Audit A-1: quoteV3.isFetching dropped — the legacy V3 quoter was
-  // removed in favour of arcadeV3Provider's quote. routeQuotes.loading
-  // covers the new pipeline.
+  // Aggregator routes (Synthra / UnitFlow / XyloNet AND arcade-v3 since
+  // Fix C made it the unified V3 fan-out across all 4 fee tiers). When
+  // any of them has already returned a non-zero quote, the swap is
+  // ready to execute and we should NOT keep showing "Fetching price…"
+  // because of a stalled V2 quote (the V2 quoter retries 3× before
+  // giving up when no V2 pair exists, which is the dominant case for
+  // V3-only pools like USDC/SeedETH and USDC/cirBTC).
+  //
+  // Note: arcade-v2 is intentionally NOT in the ready set because a
+  // valid arcade-v2 quote means the V2 path IS the right answer; the
+  // V2-quote fetching state below carries the truth in that case.
+  const aggregatorReady =
+    !!activeRoute &&
+    activeRoute.amountOut > 0n &&
+    activeRoute.provider !== "arcade-v2";
   const fetching =
-    !externalReady &&
+    !aggregatorReady &&
     (quoteOut.isFetching || quoteIn.isFetching || quoteMigratedOut.isFetching);
   const canSwap =
     !!account &&

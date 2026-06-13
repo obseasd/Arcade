@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { isAddress } from "viem";
 import {
     getPositionsForOwner,
+    getTotalClaimedByTokenForOwner,
     upsertPosition,
     markWithdrawn,
     type CompounderMode,
@@ -40,8 +41,25 @@ export async function GET(req: NextRequest) {
         );
     }
 
-    const rows = await getPositionsForOwner(owner);
-    return NextResponse.json({ positions: rows });
+    const [rows, claimedByToken] = await Promise.all([
+        getPositionsForOwner(owner),
+        getTotalClaimedByTokenForOwner(owner),
+    ]);
+    // Decorate each position with totalClaimedUsdc so the dashboard's
+    // "Total claimed" row renders without a follow-up round trip. The
+    // value is the cumulative USDC-equivalent of every Compounded /
+    // FeesPushed event the cron has recorded for this tokenId, in
+    // human dollars (NUMERIC micros divided by 1e6).
+    const decorated = rows.map((row) => {
+        const micros = claimedByToken.get(row.tokenId);
+        return {
+            ...row,
+            totalClaimedUsdc: micros !== undefined
+                ? Number(micros) / 1_000_000
+                : 0,
+        };
+    });
+    return NextResponse.json({ positions: decorated });
 }
 
 export async function POST(req: NextRequest) {
