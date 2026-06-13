@@ -285,11 +285,27 @@ async function onTxSubmitted(ctx: SubmittedContext): Promise<void> {
     if (receipt.status === "success") {
         ctx.summary.triggered++;
         await stampLastAction(ctx.position.tokenId, nowIso);
+        // Audit H2 fix: compute the USDC-equivalent of fee0 + fee1 via
+        // the V3 quoter so the dashboard's "Total claimed" headline is
+        // a live number instead of the dead 0 the column shipped with
+        // for every event ever written. The same quoter the swap UI
+        // uses handles arbitrary V3 fee tiers (see arcadeV3Provider),
+        // and the failure mode is intentionally permissive: any
+        // quoting error contributes 0 to the sum so the metric
+        // undercounts honestly rather than refusing to write the row.
+        const usdValueMicros = await quoteUsdcValueForPair(
+            ctx.publicClient,
+            ctx.position.token0Address,
+            ctx.position.token1Address,
+            ctx.fee0,
+            ctx.fee1,
+        );
         await insertEvent({
             tokenId: ctx.position.tokenId,
             eventType: ctx.kind === "compound" ? "Compounded" : "FeesPushed",
             amount0: ctx.fee0.toString(),
             amount1: ctx.fee1.toString(),
+            usdValueMicros: usdValueMicros.toString(),
             txHash: ctx.hash,
             blockNumber: receipt.blockNumber.toString(),
         });
@@ -301,4 +317,91 @@ async function onTxSubmitted(ctx: SubmittedContext): Promise<void> {
             blockNumber: receipt.blockNumber.toString(),
         });
     }
+}
+
+// Minimal V3 quoter ABI used to price each fee leg in USDC. We do not
+// import the full V3 ABI module here because the cron route stays
+// node-runtime-only and the route-handler bundle should not pull the
+// whole client-side router into the serverless package.
+const QUOTER_ABI = [
+    {
+        type: "function",
+        name: "quoteExactInputSingle",
+        stateMutability: "nonpayable",
+        inputs: [
+            { name: "tokenIn", type: "address" },
+            { name: "tokenOut", type: "address" },
+            { name: "fee", type: "uint24" },
+            { name: "amountIn", type: "uint256" },
+        ],
+        outputs: [{ name: "amountOut", type: "uint256" }],
+    },
+] as const;
+
+const V3_FEE_TIERS = [100, 500, 3000, 10000] as const;
+
+/** Return the USDC-equivalent micros of (amount0 of token0) + (amount1
+ *  of token1). When a leg's input token IS USDC, no quote is needed —
+ *  the amount maps 1:1 into the sum. For non-USDC legs we fan out the
+ *  arcade-v3 quoter across every standard fee tier and take the
+ *  highest non-zero quote. A leg that has no quotable route at any
+ *  tier contributes 0; the row is still written so the UI never sees
+ *  a missing event but the headline metric undercounts honestly. */
+async function quoteUsdcValueForPair(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    publicClient: any,
+    token0Address: string | null,
+    token1Address: string | null,
+    fee0: bigint,
+    fee1: bigint,
+): Promise<bigint> {
+    const usdc = ADDRESSES.usdc as Address;
+    if (!usdc || usdc === "0x0000000000000000000000000000000000000000") return 0n;
+    const quoter = ADDRESSES.v3Quoter as Address;
+    if (!quoter || quoter === "0x0000000000000000000000000000000000000000") return 0n;
+
+    const leg0Micros = await quoteLegToUsdc(
+        publicClient,
+        quoter,
+        usdc,
+        token0Address as Address | null,
+        fee0,
+    );
+    const leg1Micros = await quoteLegToUsdc(
+        publicClient,
+        quoter,
+        usdc,
+        token1Address as Address | null,
+        fee1,
+    );
+    return leg0Micros + leg1Micros;
+}
+
+async function quoteLegToUsdc(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    publicClient: any,
+    quoter: Address,
+    usdc: Address,
+    token: Address | null,
+    amount: bigint,
+): Promise<bigint> {
+    if (amount === 0n) return 0n;
+    if (!token || token === "0x0000000000000000000000000000000000000000") return 0n;
+    if (token.toLowerCase() === usdc.toLowerCase()) return amount;
+    let best = 0n;
+    for (const tier of V3_FEE_TIERS) {
+        try {
+            const out = (await publicClient.readContract({
+                address: quoter,
+                abi: QUOTER_ABI,
+                functionName: "quoteExactInputSingle",
+                args: [token, usdc, tier, amount],
+            })) as bigint;
+            if (out > best) best = out;
+        } catch {
+            // Pool not deployed at this tier OR liquidity exhausted —
+            // both treat as a non-result and move on.
+        }
+    }
+    return best;
 }

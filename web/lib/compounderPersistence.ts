@@ -257,7 +257,16 @@ export async function upsertPosition(input: {
                 ${input.tickUpper ?? null}
             )
             ON CONFLICT (token_id) DO UPDATE SET
-                owner_address    = EXCLUDED.owner_address,
+                -- Audit C2 anchor: owner_address is intentionally NOT
+                -- re-set on conflict so a malicious upsert that
+                -- somehow slips past the route-level on-chain
+                -- depositor check cannot rewrite ownership to a fresh
+                -- attacker address. The route still enforces the
+                -- check; this is defence in depth. Re-deposit after a
+                -- withdraw goes through depositPosition on chain
+                -- which the contract guards itself (NOT_OWNER),
+                -- and the new row created on first deposit
+                -- has the correct owner_address baked in via INSERT.
                 mode             = EXCLUDED.mode,
                 min_fee_micros   = EXCLUDED.min_fee_micros,
                 max_slippage_bps = EXCLUDED.max_slippage_bps,

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { isAddress } from "viem";
+import { createPublicClient, http, isAddress, type Address } from "viem";
 import {
     getPositionsForOwner,
     getTotalClaimedByTokenForOwner,
@@ -7,6 +7,8 @@ import {
     markWithdrawn,
     type CompounderMode,
 } from "@/lib/compounderPersistence";
+import { AUTO_COMPOUNDER_ABI } from "@/lib/abis/autoCompounder";
+import { ADDRESSES } from "@/lib/constants";
 import { rateLimit } from "@/lib/apiGuard";
 
 /**
@@ -18,16 +20,73 @@ import { rateLimit } from "@/lib/apiGuard";
  *                      frontend after the corresponding on-chain tx
  *                      lands so the DB stays in lockstep with state.
  *
- * Trust model: this route is NOT the source of truth for who owns a
- * position — the on-chain Compounder contract is. The client could
- * lie about the owner_address and we accept it because mis-reporting
- * only ever surfaces phantom rows on a wallet that doesn't really own
- * the position; the cron scanner verifies eligibility against the
- * actual contract before spending operator gas. The trade-off keeps
- * the route stateless (no signature checks, no nonce dance) which is
- * critical for the Lepton-week demo cadence.
+ * Audit C2 fix: every write path now verifies on-chain ownership
+ * before touching the DB. The previous version trusted the caller's
+ * claimed `ownerAddress` and a 20-req/min in-memory rate limit, which
+ * let any anonymous caller (a) reassign `owner_address` on someone
+ * else's position via the ON CONFLICT clause and (b) soft-delete
+ * (`withdrawn_at = NOW()`) any position they could guess the tokenId
+ * of — a trivially exploited platform-wide DoS against the keeper
+ * scanner. The fix reads the on-chain `Compounder.configs(tokenId)`
+ * depositor field over the live Arc RPC and rejects every write that
+ * does not match the position's recorded owner. This puts the
+ * authorisation gate where the truth lives (the contract) and stays
+ * stateless server-side — no per-user nonce, no EIP-712 dance, no
+ * additional dependency.
  */
 export const dynamic = "force-dynamic";
+
+const ARC_CHAIN = {
+    id: 5042002,
+    name: "Arc Testnet",
+    network: "arc-testnet",
+    nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 6 },
+    rpcUrls: {
+        default: { http: ["https://rpc.testnet.arc.network"] },
+        public: { http: ["https://rpc.testnet.arc.network"] },
+    },
+} as const;
+
+/** Returns the on-chain depositor address (i.e. who owns the auto-
+ *  management slot for this tokenId), or null if the position is not
+ *  currently held by the Compounder. The null case covers (a) a fresh
+ *  tokenId never deposited and (b) a withdrawn one, both of which must
+ *  be rejected by the write paths. */
+async function readDepositor(tokenId: string): Promise<Address | null> {
+    const compounderAddress = ADDRESSES.autoCompounder as Address;
+    if (!isAddress(compounderAddress, { strict: false })) return null;
+    if (compounderAddress === "0x0000000000000000000000000000000000000000") {
+        return null;
+    }
+    try {
+        const client = createPublicClient({
+            chain: ARC_CHAIN,
+            transport: http(),
+        });
+        const cfg = (await client.readContract({
+            address: compounderAddress,
+            abi: AUTO_COMPOUNDER_ABI,
+            functionName: "configs",
+            args: [BigInt(tokenId)],
+        })) as readonly [Address, number, number, bigint, bigint];
+        // Tuple shape from ArcadeAutoCompounder.PositionConfig:
+        //   [0] depositor (address)
+        //   [1] mode (uint8)
+        //   [2] maxSlippageBps (uint16)
+        //   [3] lastActionAt (uint64)
+        //   [4] minFeeMicros (uint64)
+        const depositor = cfg[0];
+        if (
+            !depositor ||
+            depositor === "0x0000000000000000000000000000000000000000"
+        ) {
+            return null;
+        }
+        return depositor;
+    } catch {
+        return null;
+    }
+}
 
 export async function GET(req: NextRequest) {
     const rl = rateLimit(req, "compounder-positions-get", 30, 60_000);
@@ -49,8 +108,8 @@ export async function GET(req: NextRequest) {
     // dashboard's "Total claimed" row renders without a follow-up
     // round trip:
     //   - totalClaimedAmount0 / totalClaimedAmount1: raw token units
-    //     (NUMERIC strings to preserve precision across the wire);
-    //     the frontend formats them with each token's own decimals.
+    //     (NUMERIC strings to preserve precision); the frontend formats
+    //     them with each token's own decimals.
     //   - totalClaimedUsdc: human-dollar headline derived from the
     //     usd_value_micros column the cron writes per event.
     const decorated = rows.map((row) => {
@@ -94,7 +153,43 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: "Missing tokenId" }, { status: 400 });
     }
 
+    // Audit C2 anchor: every write path resolves the canonical
+    // depositor on chain BEFORE touching the DB. Withdraw is allowed
+    // when the position is no longer held by the Compounder (the
+    // on-chain withdrawPosition deleted the config — depositor reads
+    // as zero — so the DB row stamp is the mirror of a tx that
+    // already executed). Upsert always requires the on-chain
+    // depositor to match the claimed owner, which closes both the
+    // owner-overwrite and the withdraw-anyones-position attacks.
+    const onChainDepositor = await readDepositor(body.tokenId);
+
     if (body.action === "withdraw") {
+        // The frontend calls withdraw RIGHT AFTER submitting the
+        // on-chain withdrawPosition tx. By the time the DB mirror
+        // happens, the contract has either deleted the config
+        // (depositor reads as zero) or the tx hasn't mined yet
+        // (depositor still points at the caller). We accept both
+        // cases — anyone CAN withdraw their own position; nobody
+        // CAN withdraw someone else's because the contract refuses
+        // any caller who isn't the recorded depositor.
+        if (onChainDepositor !== null) {
+            // Position is still custodied — only the recorded
+            // depositor may stamp `withdrawn_at`. Without this gate a
+            // griefer could DoS the cron by enumerating tokenIds and
+            // posting withdraws en masse, even though the on-chain
+            // NFT never moved.
+            if (
+                !body.ownerAddress ||
+                !isAddress(body.ownerAddress, { strict: false }) ||
+                body.ownerAddress.toLowerCase() !==
+                    onChainDepositor.toLowerCase()
+            ) {
+                return NextResponse.json(
+                    { error: "Not the position depositor" },
+                    { status: 403 },
+                );
+            }
+        }
         const ok = await markWithdrawn(body.tokenId);
         return NextResponse.json({ ok });
     }
@@ -120,6 +215,22 @@ export async function POST(req: NextRequest) {
             return NextResponse.json(
                 { error: "maxSlippageBps out of range" },
                 { status: 400 },
+            );
+        }
+        // The on-chain depositor MUST be defined (position is held
+        // by the Compounder) AND match the claimed ownerAddress.
+        // Without this gate the API previously let any caller flip
+        // `owner_address` via the ON CONFLICT clause and reassign
+        // ownership rows for other users — full off-chain ownership
+        // takeover even though the NFT custody stayed honest.
+        if (
+            onChainDepositor === null ||
+            body.ownerAddress.toLowerCase() !==
+                onChainDepositor.toLowerCase()
+        ) {
+            return NextResponse.json(
+                { error: "Not the position depositor" },
+                { status: 403 },
             );
         }
         const ok = await upsertPosition({

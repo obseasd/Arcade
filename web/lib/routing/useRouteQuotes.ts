@@ -177,14 +177,21 @@ export function useRouteQuotes(args: UseRouteQuotesArgs): UseRouteQuotesResult {
         "synthra-v3": 3,
         "unitflow-v3": 4,
       };
+      // Audit M4 fix: strict total order. The previous comparator
+      // bucketed each pair to ~1 bp of the larger amount and used the
+      // provider rank inside the bucket. That works for a single
+      // pair (a, b) but violates transitivity across a triple
+      // (a, b, c) where (a, b) and (b, c) both fall inside a bucket
+      // but (a, c) does not — TimSort is stable so the result still
+      // sorts but the "best" route the UI auto-picks can be wrong.
+      // Bucketing was an attempt at a "essentially tied" UX, and the
+      // strict order with an exact-tie tiebreak achieves the same
+      // intent (provider-rank breaks the tie when amounts are equal)
+      // without the math hole. The 1-bp UI affordance, if we want it
+      // back, belongs as a render-side badge on the route panel — not
+      // baked into the sort key.
       good.sort((a, b) => {
         if (a.amountOut === b.amountOut) {
-          return (providerRank[a.provider] ?? 99) - (providerRank[b.provider] ?? 99);
-        }
-        // Bucket relative to the larger amountOut to ~1 bp (1e-4).
-        const max = a.amountOut > b.amountOut ? a.amountOut : b.amountOut;
-        const diff = a.amountOut > b.amountOut ? a.amountOut - b.amountOut : b.amountOut - a.amountOut;
-        if (diff * 10_000n < max) {
           return (providerRank[a.provider] ?? 99) - (providerRank[b.provider] ?? 99);
         }
         return b.amountOut > a.amountOut ? 1 : -1;
