@@ -1,9 +1,18 @@
 "use client";
 
-import { ArrowUpDown, Info, Lock, Plus } from "lucide-react";
+import { ArrowUpDown, Info, Lock, Plus, Sparkles } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
-import { Address, erc20Abi, formatUnits, parseUnits, zeroAddress } from "viem";
+import {
+    Address,
+    encodeAbiParameters,
+    erc20Abi,
+    formatUnits,
+    keccak256,
+    parseUnits,
+    toBytes,
+    zeroAddress,
+} from "viem";
 import { useAccount, usePublicClient, useReadContract, useWriteContract } from "wagmi";
 
 import {
@@ -12,12 +21,42 @@ import {
     V3_POOL_ABI,
 } from "@/lib/abis/v3-npm";
 import { V3_ZAP_ABI } from "@/lib/abis/v3-zap";
+import { modeLabelFromId, type CompounderModeId } from "@/lib/abis/autoCompounder";
 import { ADDRESSES } from "@/lib/constants";
 import { arcTestnet } from "@/lib/chains";
 import { useApproveIfNeeded } from "@/lib/hooks/useApproveIfNeeded";
 import { pushToast } from "@/lib/toast";
 import { TokenIcon } from "@/components/ui/TokenIcon";
 import { ZapBreakdownPanel } from "@/components/pool/ZapBreakdownPanel";
+
+// ERC-721 safeTransferFrom(address, address, uint256, bytes) — V3_NPM_ABI
+// only carries the V3-specific methods; the ERC-721 surface is added
+// inline so the auto-management hand-off can use the data-bearing
+// overload without expanding the canonical NPM ABI table.
+const ERC721_SAFE_TRANSFER_FROM_DATA_ABI = [
+    {
+        type: "function",
+        name: "safeTransferFrom",
+        stateMutability: "nonpayable",
+        inputs: [
+            { name: "from", type: "address" },
+            { name: "to", type: "address" },
+            { name: "tokenId", type: "uint256" },
+            { name: "data", type: "bytes" },
+        ],
+        outputs: [],
+    },
+] as const;
+
+// Pre-hashed Transfer signature so receipt-log parsing avoids a
+// keccak round trip per mint. ERC-721 emits Transfer(from, to,
+// tokenId) where all three params are indexed; we pull tokenId from
+// topics[3] when topics[1] (from) is the zero address (= mint).
+const ERC721_TRANSFER_TOPIC = keccak256(
+    toBytes("Transfer(address,address,uint256)"),
+);
+const ZERO_TOPIC =
+    "0x0000000000000000000000000000000000000000000000000000000000000000" as const;
 import {
     defaultTickSpacingForFee,
     encodeSqrtPriceX96,
@@ -326,6 +365,28 @@ export function V3AddLiquidity({
     );
 
     const [submitting, setSubmitting] = useState(false);
+
+    // Auto-management settings. When the user picks a non-NORMAL mode,
+    // we run an extra safeTransferFrom into the Compounder right after
+    // mint, encoding (mode, threshold, slippage) in the data payload so
+    // the Compounder's onERC721Received writes the position config in
+    // the same hop. The whole block is gated behind ADDRESSES.autoCompounder
+    // being set — without it the section never renders and the legacy
+    // mint path is the only one that runs.
+    const autoCompounderEnabled = ADDRESSES.autoCompounder !== zeroAddress;
+    const [autoMode, setAutoMode] = useState<CompounderModeId>(0);
+    const [autoThresholdUsdc, setAutoThresholdUsdc] = useState("0.10");
+    const [autoSlippagePct, setAutoSlippagePct] = useState("0.50");
+    const autoThresholdMicros = useMemo(() => {
+        const parsed = Number(autoThresholdUsdc);
+        if (!Number.isFinite(parsed) || parsed < 0) return 0n;
+        return BigInt(Math.floor(parsed * 1_000_000));
+    }, [autoThresholdUsdc]);
+    const autoSlippageBps = useMemo(() => {
+        const parsed = Number(autoSlippagePct);
+        if (!Number.isFinite(parsed) || parsed < 0) return 50;
+        return Math.min(10_000, Math.floor(parsed * 100));
+    }, [autoSlippagePct]);
 
     // V3 zap quote for the pre-sign breakdown panel. Pulls the contract's
     // own closed-form math via the new quoteZap view helper (audit
@@ -842,12 +903,117 @@ export function V3AddLiquidity({
             // surfaces a real error instead of firing a success toast for a
             // tx that didn't do anything. Same pattern for the V2 and zap
             // submit paths.
+            let mintedTokenId: bigint | null = null;
             if (publicClient) {
                 const receipt = await publicClient.waitForTransactionReceipt({ hash });
                 if (receipt.status !== "success") {
                     throw new Error(
                         `Mint reverted on-chain (tx ${hash.slice(0, 10)}…). Common causes: slippage too tight, tick spacing mismatch, balances too low. Bump slippage in Settings or widen the range.`,
                     );
+                }
+                // Parse the ERC-721 Transfer (from = address(0) = mint) log
+                // off the receipt to discover the minted tokenId. We do this
+                // unconditionally because both the "post-mint hand-off" path
+                // below AND a future analytics tile need the tokenId.
+                const npmLower = ADDRESSES.v3PositionManager.toLowerCase();
+                const transferLog = receipt.logs.find(
+                    (log) =>
+                        log.address.toLowerCase() === npmLower &&
+                        log.topics[0] === ERC721_TRANSFER_TOPIC &&
+                        log.topics[1] === ZERO_TOPIC,
+                );
+                if (transferLog && transferLog.topics[3]) {
+                    mintedTokenId = BigInt(transferLog.topics[3]);
+                }
+            }
+
+            // Auto-management hand-off. If the user picked RECEIVE or
+            // COMPOUND, transfer the freshly-minted NFT into the Compounder
+            // with abi.encode(mode, threshold, slippage) as the payload.
+            // The Compounder's onERC721Received decodes that and stores the
+            // config in the same hop, so the user signs one extra tx (not
+            // two: no separate approve + depositPosition dance).
+            // Failures here surface a non-fatal toast and route the user to
+            // /positions with the NFT still in their wallet — they can
+            // retry the deposit from the AutoCompounderPanel.
+            if (
+                autoCompounderEnabled &&
+                autoMode !== 0 &&
+                mintedTokenId !== null &&
+                account &&
+                publicClient
+            ) {
+                try {
+                    const encodedData = encodeAbiParameters(
+                        [
+                            { type: "uint8" },
+                            { type: "uint64" },
+                            { type: "uint16" },
+                        ],
+                        [autoMode, autoThresholdMicros, autoSlippageBps],
+                    );
+                    const transferHash = await writeContractAsync({
+                        address: ADDRESSES.v3PositionManager,
+                        abi: ERC721_SAFE_TRANSFER_FROM_DATA_ABI,
+                        functionName: "safeTransferFrom",
+                        args: [
+                            account,
+                            ADDRESSES.autoCompounder as Address,
+                            mintedTokenId,
+                            encodedData,
+                        ],
+                    });
+                    const transferReceipt = await publicClient.waitForTransactionReceipt({
+                        hash: transferHash,
+                    });
+                    if (transferReceipt.status !== "success") {
+                        throw new Error(
+                            "safeTransferFrom into Compounder reverted on-chain. NFT stays in your wallet — deposit it from the Auto-management section.",
+                        );
+                    }
+                    // Mirror to the DB so the cron scanner picks the position
+                    // up immediately. A 500 here is non-fatal (the on-chain
+                    // truth wins) but does block /stats deltas + the
+                    // dashboard until the next manual refresh, so we log
+                    // rather than swallow silently.
+                    try {
+                        await fetch("/api/compounder/positions", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                                action: "upsert",
+                                tokenId: mintedTokenId.toString(),
+                                ownerAddress: account,
+                                mode: modeLabelFromId(autoMode),
+                                minFeeMicros: autoThresholdMicros.toString(),
+                                maxSlippageBps: autoSlippageBps,
+                                token0Address: t0.address,
+                                token1Address: t1.address,
+                                feeTier: feePip,
+                                tickLower,
+                                tickUpper,
+                            }),
+                        });
+                    } catch (mirrorErr) {
+                        // eslint-disable-next-line no-console
+                        console.warn("[V3 mint] auto-mgmt DB mirror failed:", mirrorErr);
+                    }
+                    pushToast({
+                        kind: "info",
+                        title: "Auto-management enabled",
+                        message: `Position #${mintedTokenId.toString()} is now ${modeLabelFromId(autoMode).toLowerCase()}.`,
+                    });
+                } catch (autoErr: unknown) {
+                    // eslint-disable-next-line no-console
+                    console.warn("[V3 mint] auto-mgmt hand-off failed:", autoErr);
+                    pushToast({
+                        kind: "error",
+                        title: "Auto-management hand-off failed",
+                        message:
+                            autoErr instanceof Error
+                                ? autoErr.message
+                                : "Mint succeeded but auto-management was not enabled. Deposit the position manually from /positions.",
+                    });
                 }
             }
 
@@ -1168,6 +1334,108 @@ export function V3AddLiquidity({
                 />
             )}
 
+            {/* Auto-management opt-in. Rendered only when the Compounder
+                address is wired and we're in Dual Token mode — Single
+                Asset goes through the Zap which keeps the NFT inside the
+                Zap helper, not the user. Picking RECEIVE / COMPOUND
+                triggers a follow-up safeTransferFrom right after mint;
+                user signs one extra tx, no separate approve. */}
+            {autoCompounderEnabled && mode === "dual" && (
+                <div className="rounded-2xl border border-arc-border bg-white/[0.015] p-4">
+                    <div className="mb-3 flex items-center gap-2">
+                        <Sparkles className="h-4 w-4 text-sky-400" />
+                        <span className="text-sm font-semibold text-arc-text">
+                            Auto-management
+                        </span>
+                        <span className="rounded-full border border-arc-border bg-arc-surface px-2 py-0.5 text-[10px] uppercase tracking-wider text-arc-text-faint">
+                            Optional
+                        </span>
+                    </div>
+                    <div className="grid grid-cols-3 gap-2">
+                        {(
+                            [
+                                {
+                                    id: 0,
+                                    title: "Manual",
+                                    body: "NFT stays in your wallet.",
+                                },
+                                {
+                                    id: 1,
+                                    title: "Auto-receive",
+                                    body: "Push fees to your wallet.",
+                                },
+                                {
+                                    id: 2,
+                                    title: "Auto-compound",
+                                    body: "Reinvest fees into the position.",
+                                },
+                            ] as const
+                        ).map((opt) => {
+                            const active = autoMode === opt.id;
+                            return (
+                                <button
+                                    key={opt.id}
+                                    type="button"
+                                    onClick={() => setAutoMode(opt.id as CompounderModeId)}
+                                    disabled={submitting}
+                                    className={cn(
+                                        "rounded-xl border p-3 text-left text-xs transition-colors",
+                                        active
+                                            ? "border-sky-400 bg-sky-400/5"
+                                            : "border-arc-border bg-arc-bg hover:border-arc-border-strong",
+                                    )}
+                                >
+                                    <div className="font-semibold text-arc-text">
+                                        {opt.title}
+                                    </div>
+                                    <div className="mt-1 text-[10px] text-arc-text-muted">
+                                        {opt.body}
+                                    </div>
+                                </button>
+                            );
+                        })}
+                    </div>
+                    {autoMode !== 0 && (
+                        <>
+                            <div className="mt-3 grid grid-cols-2 gap-3">
+                                <div>
+                                    <label className="mb-1 block text-[10px] uppercase tracking-wider text-arc-text-muted">
+                                        Threshold (USDC)
+                                    </label>
+                                    <input
+                                        type="text"
+                                        inputMode="decimal"
+                                        value={autoThresholdUsdc}
+                                        onChange={(e) => setAutoThresholdUsdc(e.target.value)}
+                                        disabled={submitting}
+                                        className="w-full rounded-xl border border-arc-border bg-arc-bg p-2.5 text-sm text-arc-text outline-none focus:border-arc-primary"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="mb-1 block text-[10px] uppercase tracking-wider text-arc-text-muted">
+                                        Slippage (%)
+                                    </label>
+                                    <input
+                                        type="text"
+                                        inputMode="decimal"
+                                        value={autoSlippagePct}
+                                        onChange={(e) => setAutoSlippagePct(e.target.value)}
+                                        disabled={submitting}
+                                        className="w-full rounded-xl border border-arc-border bg-arc-bg p-2.5 text-sm text-arc-text outline-none focus:border-arc-primary"
+                                    />
+                                </div>
+                            </div>
+                            <p className="mt-2 text-[10px] text-arc-text-faint">
+                                The keeper triggers on-chain when fees ≥
+                                threshold and the 5-min cooldown has elapsed.
+                                Protocol fee is 1% on collected fees only.
+                                You can withdraw the NFT anytime from /positions.
+                            </p>
+                        </>
+                    )}
+                </div>
+            )}
+
             <button type="button"
                 onClick={onSubmit}
                 disabled={!canSubmit}
@@ -1184,8 +1452,12 @@ export function V3AddLiquidity({
                       ? mode === "single"
                           ? "Zapping into pool…"
                           : hasPool
-                            ? "Minting position…"
-                            : "Initialising pool + minting…"
+                            ? autoMode !== 0
+                                ? "Minting + enabling auto-management…"
+                                : "Minting position…"
+                            : autoMode !== 0
+                                ? "Initialising pool + minting + auto-management…"
+                                : "Initialising pool + minting…"
                       : mode === "single"
                         ? !singleSideTyped
                             ? "Enter an amount"
