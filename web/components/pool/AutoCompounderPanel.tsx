@@ -109,6 +109,21 @@ export function AutoCompounderPanel() {
     void loading;
     void refresh;
 
+    // Audit I11 fix: read the on-chain pause flag and gate the deposit
+    // CTA when the contract is paused. Without this, a user signs the
+    // approve tx (paying gas) and then the safeTransferFrom inside
+    // depositPosition reverts at the whenNotPaused guard — burning
+    // their gas for a UX dead-end. The button stays visible (so the
+    // user knows the feature exists) but greys out + the helper text
+    // explains the state.
+    const pausedQ = useReadContract({
+        address: ADDRESSES.autoCompounder,
+        abi: AUTO_COMPOUNDER_ABI,
+        functionName: "paused",
+        query: { enabled, refetchInterval: 30_000 },
+    });
+    const contractPaused = pausedQ.data === true;
+
     return (
         <section className="mt-6">
             {account && (
@@ -116,13 +131,15 @@ export function AutoCompounderPanel() {
                     <div className="flex items-center gap-2 text-sm text-arc-text-muted">
                         <Sparkles className="h-4 w-4 text-sky-400" />
                         <span>
-                            Want a position auto-claimed or auto-compounded by the
-                            keeper? Deposit it into the Compounder vault.
+                            {contractPaused
+                                ? "Auto-management is paused while the team investigates an incident. New deposits are temporarily disabled; existing positions can still withdraw."
+                                : "Want a position auto-claimed or auto-compounded by the keeper? Deposit it into the Compounder vault."}
                         </span>
                     </div>
                     <button
                         onClick={() => setModalOpen(true)}
-                        className="arc-button-secondary inline-flex items-center gap-2 px-4 py-2 text-sm"
+                        disabled={contractPaused}
+                        className="arc-button-secondary inline-flex items-center gap-2 px-4 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-50"
                     >
                         <Plus className="h-4 w-4" /> Deposit a position
                     </button>
@@ -138,6 +155,46 @@ export function AutoCompounderPanel() {
                 />
             )}
         </section>
+    );
+}
+
+/**
+ * Audit I11 fix: live `protocolFeeBps()` reading. The deposit modal
+ * used to hard-code "Protocol fee is 1% on collected fees"; the
+ * disclosure diverged the moment the owner called
+ * setProtocolFeeBps(0) or setProtocolFeeBps(200). This sub-component
+ * reads the current bps off the chain so the disclosure always
+ * matches what the user will actually pay. Falls back to a
+ * placeholder when the read is in flight to avoid a "0%" flash.
+ */
+function FeeDisclosure() {
+    const feeQ = useReadContract({
+        address: ADDRESSES.autoCompounder,
+        abi: AUTO_COMPOUNDER_ABI,
+        functionName: "protocolFeeBps",
+        query: {
+            enabled: ADDRESSES.autoCompounder !== ZERO_ADDRESS,
+            // bps almost never changes — a 5-minute stale read is fine
+            // and avoids polling the RPC for a constant the cron
+            // already reads on every tick.
+            staleTime: 5 * 60 * 1000,
+        },
+    });
+    const bpsValue = feeQ.data;
+    const bpsNumber: number =
+        typeof bpsValue === "bigint"
+            ? Number(bpsValue)
+            : typeof bpsValue === "number"
+              ? bpsValue
+              : 100;
+    const pct = (bpsNumber / 100).toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
+    return (
+        <div className="rounded-xl border border-arc-border bg-arc-bg p-3 text-[11px] leading-relaxed text-arc-text-muted">
+            Protocol fee is{" "}
+            <span className="font-semibold text-arc-text">{pct}%</span>{" "}
+            on the fees the keeper collects. The contract caps the rate at
+            5% on-chain so a future owner cannot grow it past that ceiling.
+        </div>
     );
 }
 
@@ -567,11 +624,11 @@ function DepositModal({
                     </div>
                 </div>
 
+                <FeeDisclosure />
                 <div className="rounded-xl border border-arc-border bg-arc-bg p-3 text-[11px] leading-relaxed text-arc-text-muted">
                     Deposit requires two signatures: (1) approve the
                     Compounder to take the NFT, (2) call depositPosition.
-                    You can withdraw the NFT at any time. Protocol fee is
-                    1% on the fees collected by the keeper.
+                    You can withdraw the NFT at any time.
                 </div>
 
                 <div className="flex justify-end gap-2">

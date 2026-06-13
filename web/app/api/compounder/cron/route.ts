@@ -74,10 +74,43 @@ const ARC_CHAIN = {
     network: "arc-testnet",
     nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 6 },
     rpcUrls: {
-        default: { http: ["https://rpc.testnet.arc.network"] },
-        public: { http: ["https://rpc.testnet.arc.network"] },
+        // Audit I8 fix: fallback RPC list so a single endpoint's
+        // outage does not break the whole sweep. viem's http
+        // transport with multiple URLs round-robins on failure;
+        // adding an explicit thirdweb fallback gives us a second
+        // path if rpc.testnet.arc.network goes down (the documented
+        // Arc behaviour during prior outages was empty-getLogs +
+        // 504s, both of which propagate cleanly through the
+        // fallback).
+        default: {
+            http: [
+                "https://rpc.testnet.arc.network",
+                "https://5042002.rpc.thirdweb.com",
+            ],
+        },
+        public: {
+            http: [
+                "https://rpc.testnet.arc.network",
+                "https://5042002.rpc.thirdweb.com",
+            ],
+        },
     },
 } as const;
+
+/// Audit I8 fix: hard ceiling on gas price. Without one, an Arc fee
+/// spike (a launchpad surge or a real mainnet incident) drains the
+/// operator wallet over a single sweep. 100 gwei is well over the
+/// observed Arc steady-state (~20 gwei) and covers the historical
+/// p99 we have data for; the cron skips a tick rather than overpay.
+const MAX_FEE_PER_GAS_WEI = 100_000_000_000n; // 100 gwei
+
+/// Audit I8 fix: warn-and-skip threshold for the operator's USDC gas
+/// balance. Sweeps that fall below this hand back a non-200 response
+/// to the cron caller so a GH Actions failure surfaces in the
+/// notifications inbox rather than burning the float to zero
+/// silently. 1 USDC ≈ 100 average compound calls on Arc, so the alert
+/// fires with comfortable headroom for an ops response.
+const MIN_OPERATOR_BALANCE_WEI = 1_000_000n; // 1 USDC (6 decimals)
 
 /** Run a promise under a hard timeout. Returns null on timeout (the
  *  caller is expected to treat null as "skip this leg / pool" and
@@ -157,6 +190,28 @@ export async function POST(req: NextRequest) {
         chain: ARC_CHAIN,
         transport: http(),
     });
+
+    // Audit I8 fix: low-balance circuit breaker. Read the operator's
+    // native gas balance once at the top of the sweep; if it's below
+    // MIN_OPERATOR_BALANCE_WEI, abort with a 503 so the GH Actions
+    // workflow surfaces the alarm in the notifications inbox. The
+    // sweep does NOT silently burn through the last few cents of
+    // float on partial work — the operator should be refilled before
+    // we keep going.
+    const operatorBalance = await publicClient.getBalance({
+        address: account.address,
+    });
+    if (operatorBalance < MIN_OPERATOR_BALANCE_WEI) {
+        return NextResponse.json(
+            {
+                ran: false,
+                reason: "Operator balance below threshold — refill USDC",
+                balance: operatorBalance.toString(),
+                threshold: MIN_OPERATOR_BALANCE_WEI.toString(),
+            },
+            { status: 503 },
+        );
+    }
 
     const active = await getActivePositions();
     const work = active.slice(0, MAX_POSITIONS_PER_RUN);
@@ -239,6 +294,22 @@ async function handleOne(
         return;
     }
 
+    // Audit M1 + M2 fix: read the live protocol-fee bps and pass it
+    // through as the caller's accepted ceiling, plus pass an explicit
+    // UNIX deadline. Reading the bps once per position keeps the
+    // window between read and write within one block on Arc; any
+    // owner-front-run setProtocolFeeBps(higher) lands AFTER our
+    // submission and the require inside compound/pushFees rejects
+    // before any state change. A 5-minute deadline matches the cron
+    // cadence so a stuck mempool tx auto-expires before the next
+    // tick would have re-tried it.
+    const currentProtocolFeeBps = (await publicClient.readContract({
+        address: compounderAddress,
+        abi: AUTO_COMPOUNDER_ABI,
+        functionName: "protocolFeeBps",
+    })) as number;
+    const deadline = BigInt(Math.floor(Date.now() / 1000) + 5 * 60);
+
     const modeId = modeIdFromLabel(position.mode);
     if (modeId === 1 /* RECEIVE */) {
         // viem's default gas estimate already simulates so a stale
@@ -249,9 +320,10 @@ async function handleOne(
             address: compounderAddress,
             abi: AUTO_COMPOUNDER_ABI,
             functionName: "pushFees",
-            args: [tokenId],
+            args: [tokenId, currentProtocolFeeBps, deadline],
             chain: ARC_CHAIN,
             account,
+            maxFeePerGas: MAX_FEE_PER_GAS_WEI,
         });
         await onTxSubmitted({
             kind: "pushFees",
@@ -296,7 +368,11 @@ async function handleOne(
                     address: compounderAddress,
                     abi: AUTO_COMPOUNDER_ABI,
                     functionName: "compound",
-                    args: [tokenId, 0n, 0n],
+                    // Stage 2 ABI: pass open ceilings on the simulation
+                    // call (MAX_PROTOCOL_FEE_BPS + max deadline) so the
+                    // simulate doesn't trip the new guards before the
+                    // real call decides on the actual values.
+                    args: [tokenId, 0n, 0n, 500, deadline],
                     account,
                 })
                 .then((r) => r.result as CompoundSim)
@@ -322,9 +398,16 @@ async function handleOne(
             address: compounderAddress,
             abi: AUTO_COMPOUNDER_ABI,
             functionName: "compound",
-            args: [tokenId, amount0Min, amount1Min],
+            args: [
+                tokenId,
+                amount0Min,
+                amount1Min,
+                currentProtocolFeeBps,
+                deadline,
+            ],
             chain: ARC_CHAIN,
             account,
+            maxFeePerGas: MAX_FEE_PER_GAS_WEI,
         });
         await onTxSubmitted({
             kind: "compound",

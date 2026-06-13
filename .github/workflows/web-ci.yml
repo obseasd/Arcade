@@ -41,6 +41,22 @@ jobs:
       - name: typecheck (tsc --noEmit)
         run: npm run typecheck
 
+      # Audit I4 fix: ABI drift check. The frontend's manually
+      # transcribed AUTO_COMPOUNDER_ABI literal must remain a strict
+      # subset of the on-chain ArcadeAutoCompounder.sol artifact's ABI
+      # field. Drift breaks every wagmi read for the drifted function
+      # with no diagnostic at runtime; the check runs in a few ms and
+      # fails the PR loudly if it spots one. Skipped when the artifact
+      # is missing (e.g. the contract layer wasn't built in this job)
+      # so the check is a no-op in that case rather than a false alarm.
+      - name: abi drift (compounder TS literal vs out-v3 artifact)
+        run: |
+          if [ -f "../contracts/out-v3/ArcadeAutoCompounder.sol/ArcadeAutoCompounder.json" ]; then
+            node scripts/check-abi-drift.mjs
+          else
+            echo "[abi-drift] Artifact absent — skipping (contract layer not built in this job)."
+          fi
+
       - name: vitest run
         run: npm test
         # Audit A-7: 23 tests cover universalRouter encoders,

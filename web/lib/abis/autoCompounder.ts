@@ -63,6 +63,8 @@ export const AUTO_COMPOUNDER_ABI = [
             { name: "tokenId", type: "uint256" },
             { name: "amount0Min", type: "uint256" },
             { name: "amount1Min", type: "uint256" },
+            { name: "maxAcceptableProtocolFeeBps", type: "uint16" },
+            { name: "deadline", type: "uint256" },
         ],
         outputs: [
             { name: "liquidityAdded", type: "uint128" },
@@ -74,11 +76,36 @@ export const AUTO_COMPOUNDER_ABI = [
         type: "function",
         name: "pushFees",
         stateMutability: "nonpayable",
-        inputs: [{ name: "tokenId", type: "uint256" }],
+        inputs: [
+            { name: "tokenId", type: "uint256" },
+            { name: "maxAcceptableProtocolFeeBps", type: "uint16" },
+            { name: "deadline", type: "uint256" },
+        ],
         outputs: [
             { name: "amount0", type: "uint256" },
             { name: "amount1", type: "uint256" },
         ],
+    },
+    {
+        type: "function",
+        name: "acceptOwnership",
+        stateMutability: "nonpayable",
+        inputs: [],
+        outputs: [],
+    },
+    {
+        type: "function",
+        name: "pendingOwner",
+        stateMutability: "view",
+        inputs: [],
+        outputs: [{ name: "", type: "address" }],
+    },
+    {
+        type: "function",
+        name: "paused",
+        stateMutability: "view",
+        inputs: [],
+        outputs: [{ name: "", type: "bool" }],
     },
     {
         type: "function",

@@ -127,6 +127,15 @@ contract ArcadeAutoCompounder is IERC721ReceiverMin {
     ///         setProtocolFee, capped at 5%.
     address public owner;
 
+    /// @notice Audit I6 fix: two-step ownership handoff. transferOwnership
+    ///         now sets `pendingOwner`; the new owner must call
+    ///         `acceptOwnership` to take possession. Closes the fat-finger
+    ///         brick risk where transferOwnership(WRONG_ADDR) would leave
+    ///         the contract permanently un-admin'd. Mirrors the
+    ///         OpenZeppelin Ownable2Step pattern without dragging the OZ
+    ///         dep into the 0.7 layer.
+    address public pendingOwner;
+
     /// @notice Wallet authorised to call compound / pushFees on behalf of
     ///         users. Permissionless callers can also trigger but pay the
     ///         protocol fee on top of gas; the keeper has the same economic
@@ -152,6 +161,16 @@ contract ArcadeAutoCompounder is IERC721ReceiverMin {
     uint16 internal constant BPS_DENOMINATOR = 10_000;
     uint64 internal constant ACTION_COOLDOWN_SECONDS = 5 minutes;
     uint64 internal constant TX_DEADLINE_BUFFER_SECONDS = 60;
+
+    /// @dev Audit H2 fix: minimum acceptable `minFeeMicros` per
+    ///      position. Stops the dust-position DoS where an attacker
+    ///      deposits a thousand NFTs with `minFeeMicros = 1` and forces
+    ///      the keeper to burn gas on worthless compounds. The cron's
+    ///      sort change (commit d55ef36) helps but does not bound the
+    ///      worst case; this floor cuts the attack at its root.
+    ///      Conservative default: 1e6 micros == $1.00 USDC of fees
+    ///      before the position is even considered for triggering.
+    uint64 internal constant MIN_FEE_MICROS_FLOOR = 1_000_000;
 
     // Audit H1 fix: TWAP gate parameters. The window is intentionally
     // short (60 seconds) so the gate's reaction to genuine price
@@ -267,6 +286,11 @@ contract ArcadeAutoCompounder is IERC721ReceiverMin {
     event ProtocolFeeBpsSet(uint16 previous, uint16 next);
     event FeeRecipientSet(address indexed previous, address indexed next);
     event OwnerSet(address indexed previous, address indexed next);
+    /// @notice Audit I6 fix: ownership transfer is now two-step. This
+    ///         event fires when the owner proposes a new owner; the
+    ///         OwnerSet event still fires when that proposal is
+    ///         accepted, so a single subscriber can track both halves.
+    event OwnershipTransferStarted(address indexed previous, address indexed pending);
     event PausedSet(bool paused);
 
     // --------------------------------------------------------------------
@@ -397,12 +421,24 @@ contract ArcadeAutoCompounder is IERC721ReceiverMin {
     ///         depositor wallet. Reverts if (a) mode != RECEIVE, (b) the
     ///         5-minute cooldown is still active, or (c) the collected
     ///         total in either token is below the per-position threshold.
-    function pushFees(uint256 tokenId)
+    /// @param maxAcceptableProtocolFeeBps Audit M1 fix: caller-set ceiling
+    ///        on the protocol fee skim, prevents owner sandwich.
+    /// @param deadline Audit M2 fix: caller-supplied UNIX deadline.
+    function pushFees(
+        uint256 tokenId,
+        uint16 maxAcceptableProtocolFeeBps,
+        uint256 deadline
+    )
         external
         whenNotPaused
         nonReentrant
         returns (uint256 amount0, uint256 amount1)
     {
+        require(block.timestamp <= deadline, "DEADLINE_PASSED");
+        require(
+            protocolFeeBps <= maxAcceptableProtocolFeeBps,
+            "FEE_BPS_OVER_CAP"
+        );
         PositionConfig storage cfg = configs[tokenId];
         require(cfg.depositor != address(0), "NOT_DEPOSITED");
         require(cfg.mode == MODE_RECEIVE, "WRONG_MODE");
@@ -463,10 +499,23 @@ contract ArcadeAutoCompounder is IERC721ReceiverMin {
     ///        should derive this from configs[tokenId].maxSlippageBps
     ///        applied to a fresh quote so the on-chain check is current.
     /// @param amount1Min Same as amount0Min, for token1.
+    /// @param maxAcceptableProtocolFeeBps Audit M1 fix: the caller commits to
+    ///        a ceiling on the protocol fee that will be skimmed inside this
+    ///        call. If the owner front-runs with `setProtocolFeeBps(higher)`,
+    ///        the call reverts and the caller pays nothing. The cron should
+    ///        read `protocolFeeBps()` immediately before this call and pass
+    ///        that value (no buffer); a permissionless caller can pass a
+    ///        higher tolerance if they want to opt into a wider window.
+    /// @param deadline Audit M2 fix: caller-supplied UNIX deadline; the call
+    ///        reverts if `block.timestamp > deadline`. Closes the prior
+    ///        `block.timestamp + 60` tautology by making the gate meaningful
+    ///        for held / replayed txs.
     function compound(
         uint256 tokenId,
         uint256 amount0Min,
-        uint256 amount1Min
+        uint256 amount1Min,
+        uint16 maxAcceptableProtocolFeeBps,
+        uint256 deadline
     )
         external
         whenNotPaused
@@ -477,6 +526,11 @@ contract ArcadeAutoCompounder is IERC721ReceiverMin {
             uint256 amount1Used
         )
     {
+        require(block.timestamp <= deadline, "DEADLINE_PASSED");
+        require(
+            protocolFeeBps <= maxAcceptableProtocolFeeBps,
+            "FEE_BPS_OVER_CAP"
+        );
         PositionConfig storage cfg = configs[tokenId];
         require(cfg.depositor != address(0), "NOT_DEPOSITED");
         require(cfg.mode == MODE_COMPOUND, "WRONG_MODE");
@@ -665,6 +719,18 @@ contract ArcadeAutoCompounder is IERC721ReceiverMin {
     ) internal {
         require(mode <= MODE_COMPOUND, "BAD_MODE");
         require(maxSlippageBps <= BPS_DENOMINATOR, "BAD_SLIPPAGE");
+        // Audit H2 fix: enforce both gates on every config write —
+        // depositPosition, onERC721Received, AND setMode. Threshold
+        // floor stops the dust DoS; factory gate stops deposits of
+        // NFTs whose underlying pool was never deployed by the
+        // canonical Arcade V3 factory (the only NPM the Compounder
+        // can faithfully manage; a foreign-NPM NFT would also be
+        // refused at the first compound() because FACTORY.getPool
+        // returns address(0) for the foreign pool, but the deposit-
+        // time check gives a better error and saves the user the
+        // gas of an irreversible safeTransferFrom into a dead end).
+        require(minFeeMicros >= MIN_FEE_MICROS_FLOOR, "MIN_FEE_TOO_LOW");
+        _requireFactoryPool(tokenId);
         configs[tokenId] = PositionConfig({
             depositor: depositor,
             mode: mode,
@@ -672,6 +738,17 @@ contract ArcadeAutoCompounder is IERC721ReceiverMin {
             lastActionAt: 0,
             minFeeMicros: minFeeMicros
         });
+    }
+
+    /// @dev Audit H2 fix: assert the position's token pair has a pool
+    ///      deployed on the Arcade V3 factory. Foreign NPM NFTs would
+    ///      satisfy NPM.positions(tokenId) but their pool would not
+    ///      exist on our factory; this guard rejects them at deposit
+    ///      time so the user never custodies a position the contract
+    ///      cannot manage.
+    function _requireFactoryPool(uint256 tokenId) internal view {
+        (, , address t0, address t1, uint24 fee, , , , , , , ) = NPM.positions(tokenId);
+        require(FACTORY.getPool(t0, t1, fee) != address(0), "POOL_NOT_FOUND");
     }
 
     function _enforceCooldown(PositionConfig storage cfg) internal {
@@ -765,10 +842,27 @@ contract ArcadeAutoCompounder is IERC721ReceiverMin {
         feeRecipient = newRecipient;
     }
 
+    /// @notice Audit I6 fix: two-step ownership transfer. The previous
+    ///         single-step implementation would brick the contract if
+    ///         the owner sent transferOwnership(WRONG_ADDR). The new
+    ///         flow stores the proposed owner in `pendingOwner`; the
+    ///         actual ownership change only happens when the proposed
+    ///         owner calls `acceptOwnership` themselves, which proves
+    ///         they hold the key. Cancellable: the current owner can
+    ///         call transferOwnership(address(this)) or any other
+    ///         non-zero address to overwrite the pending slot, OR
+    ///         transferOwnership(owner) to clear it cheaply.
     function transferOwnership(address newOwner) external onlyOwner {
         require(newOwner != address(0), "ZERO_OWNER");
-        emit OwnerSet(owner, newOwner);
-        owner = newOwner;
+        pendingOwner = newOwner;
+        emit OwnershipTransferStarted(owner, newOwner);
+    }
+
+    function acceptOwnership() external {
+        require(msg.sender == pendingOwner, "NOT_PENDING_OWNER");
+        emit OwnerSet(owner, pendingOwner);
+        owner = pendingOwner;
+        pendingOwner = address(0);
     }
 
     function setPaused(bool _paused) external onlyOwner {

@@ -1428,8 +1428,9 @@ export function V3AddLiquidity({
                             <p className="mt-2 text-[10px] text-arc-text-faint">
                                 The keeper triggers on-chain when fees ≥
                                 threshold and the 5-min cooldown has elapsed.
-                                Protocol fee is 1% on collected fees only.
-                                You can withdraw the NFT anytime from /positions.
+                                Protocol fee is capped at 5% on-chain
+                                (currently 1%). You can withdraw the NFT
+                                anytime from /positions.
                             </p>
                         </>
                     )}

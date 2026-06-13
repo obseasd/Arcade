@@ -247,17 +247,58 @@ contract ArcadeAutoCompounderTest {
         compounder.transferOwnership(address(0));
     }
 
-    function test_admin_transferOwnership_rotatesValue() public {
+    function test_admin_transferOwnership_setsPendingOnly() public {
+        // Audit I6 fix: transferOwnership now sets pendingOwner; the
+        // current owner stays in place until the proposed owner calls
+        // acceptOwnership. This test asserts the two-step shape.
         address newOwner = address(0x9999);
         vm.prank(owner);
         compounder.transferOwnership(newOwner);
-        assertEq(compounder.owner(), newOwner);
+        assertEq(compounder.owner(), owner); // unchanged
+        assertEq(compounder.pendingOwner(), newOwner);
     }
 
-    function test_admin_transferOwnership_oldOwnerLosesPower() public {
+    function test_admin_transferOwnership_oldOwnerKeepsPower() public {
+        // Critical invariant: until acceptOwnership lands, the old
+        // owner retains every admin power. This is the entire point
+        // of the two-step pattern — a fat-finger to a wrong-but-EOA
+        // address no longer bricks the contract.
         address newOwner = address(0x9999);
         vm.prank(owner);
         compounder.transferOwnership(newOwner);
+        vm.prank(owner);
+        compounder.setOperator(address(0xDEAD));
+        assertEq(compounder.operator(), address(0xDEAD));
+    }
+
+    function test_acceptOwnership_rejectsNonPending() public {
+        address newOwner = address(0x9999);
+        vm.prank(owner);
+        compounder.transferOwnership(newOwner);
+        // Random EOA cannot complete the handoff.
+        vm.prank(user);
+        vm.expectRevert(bytes("NOT_PENDING_OWNER"));
+        compounder.acceptOwnership();
+    }
+
+    function test_acceptOwnership_rejectsBeforeProposal() public {
+        // No transferOwnership called -> pendingOwner is zero.
+        // address(0) calling acceptOwnership matches zero, but
+        // msg.sender cannot be address(0) at the EVM level so this
+        // path is unreachable. Any non-zero caller hits NOT_PENDING_OWNER.
+        vm.prank(user);
+        vm.expectRevert(bytes("NOT_PENDING_OWNER"));
+        compounder.acceptOwnership();
+    }
+
+    function test_acceptOwnership_completesHandoff() public {
+        address newOwner = address(0x9999);
+        vm.prank(owner);
+        compounder.transferOwnership(newOwner);
+        vm.prank(newOwner);
+        compounder.acceptOwnership();
+        assertEq(compounder.owner(), newOwner);
+        assertEq(compounder.pendingOwner(), address(0));
         // Old owner is now powerless.
         vm.prank(owner);
         vm.expectRevert(bytes("NOT_OWNER"));
