@@ -341,7 +341,12 @@ async function binarySearchMaxAmount(
   effectiveAmountIn: bigint;
   amountOut: bigint;
 } | null> {
-  const TIERS_TO_TRY = [3000, V3_FEE] as const;
+  // Audit H4 fix: probe EVERY standard V3 fee tier in the fallback
+  // path so a stable pool deployed only at the 0.01% or 0.05% tier
+  // (the canonical case for those tiers) is not silently dropped.
+  // The non-existent-tier branches revert NO_POOL on the very first
+  // iteration and cost ~1 RPC each, same as the forward fan-out.
+  const TIERS_TO_TRY = ARCADE_V3_FEE_TIERS;
   let best: { tier: number; amount: bigint; out: bigint } | null = null;
 
   for (const tier of TIERS_TO_TRY) {

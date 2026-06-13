@@ -603,21 +603,47 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
         // CLANKER_V3 token: trade on the V3 pool via our V3 router. Exact-in
         // only (the effect above forces lastEdited="in"). Single hop if one
         // side is USDC, else 2-hop through USDC.
+        //
+        // Audit H3 + H4 fix: for arcade-v3 routes we ALWAYS use the
+        // provider's pre-built executor.args verbatim — single-hop AND
+        // double-hop. Rebuilding from finalAmountIn here was the
+        // partial-fill regression: when the provider clamped a
+        // pool-exhausting input down to `effectiveAmountIn`, the
+        // executor's args[4] already carried the clamped value but the
+        // single-hop branch threw that away and signed the user's typed
+        // amount, which the V3 pool then reverted because the typed
+        // amount was exactly the input that exhausted active-tick
+        // liquidity in the first place. Now both branches respect
+        // whatever the provider built — partial-fill works, multi-tier
+        // selection works, and the on-chain tx matches the quote shown
+        // in the UI 1:1.
+        const useProviderArgs =
+          isExternalRoute === false && activeRoute?.provider === "arcade-v3";
         hash = await writeContractAsync({
           address: ADDRESSES.v3Router,
           abi: V3_ROUTER_ABI,
           functionName: v3DoubleHop ? "exactInputThroughUsdc" : "exactInputSingle",
-          // Audit 2026-06-11 v2 ARCH-1 fix: pull the mid-leg floor from
-          // the aggregator's arcadeV3Provider when going double-hop. The
-          // provider already computes a usdcMidMin using the user's
-          // slippage tolerance (ROUTING-2 + ADVR-3); duplicating the
-          // logic here would drift over time. Use the executor's signed
-          // args verbatim — the provider built them.
-          args: v3DoubleHop && activeRoute
-            ? (activeRoute.executor.args as unknown as readonly [
-                `0x${string}`, `0x${string}`, number, `0x${string}`, bigint, bigint, bigint, bigint
-              ])
-            : [tokenIn.address, tokenOut.address, v3Fee, account, finalAmountIn, minOut, deadline],
+          args:
+            (v3DoubleHop || useProviderArgs) && activeRoute
+              ? (activeRoute.executor.args as unknown as readonly [
+                  `0x${string}`,
+                  `0x${string}`,
+                  number,
+                  `0x${string}`,
+                  bigint,
+                  bigint,
+                  bigint,
+                  bigint,
+                ])
+              : [
+                  tokenIn.address,
+                  tokenOut.address,
+                  v3Fee,
+                  account,
+                  finalAmountIn,
+                  minOut,
+                  deadline,
+                ],
           chainId: arcTestnet.id,
         });
       } else if (route.useLaunchpadRouter) {

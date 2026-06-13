@@ -75,7 +75,27 @@ export function SwapRoutes({
   }
 
   if (quotes.length === 0) {
-    return null;
+    // Empty state. The docstring promised a "single muted line" — the
+    // previous `return null` collapsed the column entirely, which made
+    // the user think the swap UI was broken whenever every provider
+    // came back null (e.g. a V3-classified token with no live pool,
+    // or a pair the aggregator does not yet cover). The muted line
+    // keeps the column height stable and gives an honest "no route"
+    // signal instead of an empty For field with no explanation.
+    return (
+      <div className="mt-3 space-y-1.5">
+        <div className="text-[11px] font-medium uppercase tracking-wide text-arc-text-faint">
+          Routes
+        </div>
+        <div className="rounded-xl border border-arc-border bg-white/[0.015] px-3 py-2.5 text-xs text-arc-text-muted">
+          No route found for this pair. Open a USDC pool via{" "}
+          <a href="/positions/add" className="text-arc-cta-hover hover:underline">
+            /positions/add
+          </a>
+          {" "}or pick a different output token.
+        </div>
+      </div>
+    );
   }
 
   const visible = quotes.slice(0, topN);
