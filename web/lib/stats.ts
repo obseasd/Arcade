@@ -110,10 +110,16 @@ const GAS_TO_USDC_DIVISOR = 10n ** 12n; // wei -> 6-decimal USDC ish
 // Block window per eth_getLogs call. Arc RPC empirically caps at 50-500k.
 // We use 50k to stay well inside the most restrictive endpoint.
 const BLOCK_WINDOW = 50_000n;
-// Hard cap on total blocks we scan in one snapshot so a cold page load
-// stays under ~10s even on a wide history. Set to ~1 month of blocks at
-// 0.5s blocktime (~5.2M blocks). Bumped if needed once we have the indexer.
-const MAX_TOTAL_BLOCKS = 5_000_000n;
+// Hard cap on total blocks we scan in one snapshot. Dropped from 5M to
+// 500k after the Arc public RPC started returning empty windows on
+// wide scans, which made every snapshot land with truncated=true and
+// every metric at zero. 500k blocks at ~0.5s block time covers about
+// the last 70 hours of activity — enough to keep the cron's hourly
+// deltas honest while leaving the older history to the Postgres
+// time-series that survives the rolling window. The Ponder indexer
+// roadmap replaces this scan entirely with a precise sum and lets us
+// raise (or drop) the cap freely.
+const MAX_TOTAL_BLOCKS = 500_000n;
 
 /**
  * Aggregate snapshot of activity across all tracked Arcade contracts. The
