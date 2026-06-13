@@ -7,7 +7,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Address, erc20Abi, formatUnits } from "viem";
 import { useAccount, useReadContract, useReadContracts, useWriteContract } from "wagmi";
 
-import { AUTO_COMPOUNDER_ABI } from "@/lib/abis/autoCompounder";
+import { AUTO_COMPOUNDER_ABI, modeLabelFromId, type CompounderModeId } from "@/lib/abis/autoCompounder";
+import { Modal } from "@/components/ui/Modal";
 import { pushToast } from "@/lib/toast";
 
 import { V3_FACTORY_ABI, V3_NPM_ABI, V3_POOL_ABI } from "@/lib/abis/v3-npm";
@@ -71,9 +72,14 @@ export function V3Positions({
         totalClaimedUsdc?: number;
         totalClaimedAmount0?: bigint;
         totalClaimedAmount1?: bigint;
+        minFeeMicros?: bigint;
+        maxSlippageBps?: number;
     }
     const [managedMetas, setManagedMetas] = useState<ManagedPositionMeta[]>([]);
     const [stoppingTokenId, setStoppingTokenId] = useState<string | null>(null);
+    const [settingsBusyTokenId, setSettingsBusyTokenId] = useState<string | null>(
+        null,
+    );
     const refreshManaged = useCallback(async () => {
         if (!account || !compounderEnabled) {
             setManagedMetas([]);
@@ -88,6 +94,8 @@ export function V3Positions({
                     totalClaimedUsdc?: number;
                     totalClaimedAmount0?: string;
                     totalClaimedAmount1?: string;
+                    minFeeMicros?: string;
+                    maxSlippageBps?: number;
                 }[];
             };
             const rows = Array.isArray(data.positions) ? data.positions : [];
@@ -113,6 +121,16 @@ export function V3Positions({
                         totalClaimedAmount1: r.totalClaimedAmount1
                             ? BigInt(r.totalClaimedAmount1)
                             : undefined,
+                        // Surface the on-chain config so the in-place
+                        // setMode modal can pre-fill the inputs with the
+                        // user's current threshold / slippage rather
+                        // than the global defaults — without these the
+                        // user would always see "0.10 USDC / 0.5%"
+                        // regardless of what they actually configured.
+                        minFeeMicros: r.minFeeMicros
+                            ? BigInt(r.minFeeMicros)
+                            : undefined,
+                        maxSlippageBps: r.maxSlippageBps,
                     })),
             );
         } catch {
@@ -177,6 +195,65 @@ export function V3Positions({
         // include them in the deps so a query re-mount produces a fresh
         // refetch handle in the next render.
         // eslint-disable-next-line react-hooks/exhaustive-deps
+        [refreshManaged, writeContractAsync],
+    );
+
+    const changeManagementSettings = useCallback(
+        async (
+            tokenIdStr: string,
+            ownerAddress: string,
+            next: {
+                mode: CompounderModeId;
+                minFeeMicros: bigint;
+                maxSlippageBps: number;
+            },
+        ) => {
+            setSettingsBusyTokenId(tokenIdStr);
+            try {
+                await writeContractAsync({
+                    address: ADDRESSES.autoCompounder,
+                    abi: AUTO_COMPOUNDER_ABI,
+                    functionName: "setMode",
+                    args: [
+                        BigInt(tokenIdStr),
+                        next.mode,
+                        next.minFeeMicros,
+                        next.maxSlippageBps,
+                    ],
+                });
+                // Mirror to the DB so the cron scanner picks the new
+                // settings on its very next tick instead of waiting for
+                // the event listener (which is the indexer roadmap).
+                await fetch("/api/compounder/positions", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        action: "upsert",
+                        tokenId: tokenIdStr,
+                        ownerAddress,
+                        mode: modeLabelFromId(next.mode),
+                        minFeeMicros: next.minFeeMicros.toString(),
+                        maxSlippageBps: next.maxSlippageBps,
+                    }),
+                });
+                pushToast({
+                    kind: "info",
+                    title: "Auto-management updated",
+                    message: `NFT #${tokenIdStr} is now ${modeLabelFromId(
+                        next.mode,
+                    ).toLowerCase()}.`,
+                });
+                await refreshManaged();
+            } catch (err) {
+                pushToast({
+                    kind: "error",
+                    title: "Settings update failed",
+                    message: err instanceof Error ? err.message : "Unknown error",
+                });
+            } finally {
+                setSettingsBusyTokenId(null);
+            }
+        },
         [refreshManaged, writeContractAsync],
     );
 
@@ -491,14 +568,24 @@ export function V3Positions({
                                 : undefined
                         }
                         managed={
-                            meta
+                            meta && account
                                 ? {
                                       mode: meta.mode,
                                       totalClaimedUsdc: meta.totalClaimedUsdc,
                                       totalClaimedAmount0: meta.totalClaimedAmount0,
                                       totalClaimedAmount1: meta.totalClaimedAmount1,
+                                      minFeeMicros: meta.minFeeMicros,
+                                      maxSlippageBps: meta.maxSlippageBps,
                                       onStop: () => stopManagement(tokenIdStr),
                                       stopBusy: stoppingTokenId === tokenIdStr,
+                                      onChangeSettings: (next) =>
+                                          changeManagementSettings(
+                                              tokenIdStr,
+                                              account,
+                                              next,
+                                          ),
+                                      settingsBusy:
+                                          settingsBusyTokenId === tokenIdStr,
                                   }
                                 : undefined
                         }
@@ -541,8 +628,16 @@ interface V3PositionRowProps {
          *  sees "1.23 USDC + 0.0005 ETH" instead of a flat USD number. */
         totalClaimedAmount0?: bigint;
         totalClaimedAmount1?: bigint;
+        minFeeMicros?: bigint;
+        maxSlippageBps?: number;
         onStop: () => void | Promise<void>;
+        onChangeSettings: (next: {
+            mode: 0 | 1 | 2;
+            minFeeMicros: bigint;
+            maxSlippageBps: number;
+        }) => void | Promise<void>;
         stopBusy?: boolean;
+        settingsBusy?: boolean;
     };
 }
 
@@ -855,14 +950,7 @@ function V3PositionRow({
                 button that hands the NFT back; normal positions keep the
                 Manage + Add Liquidity pair. */}
             {managed ? (
-                <button
-                    type="button"
-                    onClick={() => void managed.onStop()}
-                    disabled={managed.stopBusy}
-                    className="mt-4 inline-flex w-full items-center justify-center gap-1.5 rounded-xl border border-arc-border bg-white/[0.04] px-3 py-2.5 text-sm font-semibold text-arc-text transition-colors hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                    {managed.stopBusy ? "Stopping…" : "Stop auto-management"}
-                </button>
+                <ManagedActions managed={managed} />
             ) : (
                 <div className="mt-4 grid grid-cols-2 gap-2">
                     {poolAddress ? (
@@ -899,6 +987,253 @@ function fmtUsd(n: number): string {
     if (n === 0) return "$0";
     if (n < 0.01) return "<$0.01";
     return `$${n.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+}
+
+/**
+ * Bottom action bar on a managed position card. Two buttons side by
+ * side: Settings (opens the in-place setMode modal) + Stop (withdraws
+ * the NFT). Pulled into its own component so the local modal-open
+ * state stays scoped per card — opening Settings on position #2
+ * should not flip Settings on position #1.
+ */
+function ManagedActions({
+    managed,
+}: {
+    managed: NonNullable<V3PositionRowProps["managed"]>;
+}) {
+    const [open, setOpen] = useState(false);
+    return (
+        <>
+            <div className="mt-4 grid grid-cols-2 gap-2">
+                <button
+                    type="button"
+                    onClick={() => setOpen(true)}
+                    disabled={managed.settingsBusy}
+                    className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-arc-border bg-white/[0.04] px-3 py-2.5 text-sm font-semibold text-arc-text transition-colors hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                    {managed.settingsBusy ? "Saving…" : "Settings"}
+                </button>
+                <button
+                    type="button"
+                    onClick={() => void managed.onStop()}
+                    disabled={managed.stopBusy}
+                    className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-arc-border bg-white/[0.04] px-3 py-2.5 text-sm font-semibold text-arc-text transition-colors hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                    {managed.stopBusy ? "Stopping…" : "Stop"}
+                </button>
+            </div>
+            {open && (
+                <ManagedSettingsModal
+                    open
+                    onClose={() => setOpen(false)}
+                    initialMode={managed.mode}
+                    initialMinFeeMicros={managed.minFeeMicros ?? 100_000n}
+                    initialMaxSlippageBps={managed.maxSlippageBps ?? 50}
+                    busy={!!managed.settingsBusy}
+                    onSave={async (next) => {
+                        await managed.onChangeSettings({
+                            mode:
+                                next.mode === "RECEIVE"
+                                    ? 1
+                                    : next.mode === "COMPOUND"
+                                      ? 2
+                                      : 0,
+                            minFeeMicros: next.minFeeMicros,
+                            maxSlippageBps: next.maxSlippageBps,
+                        });
+                        setOpen(false);
+                    }}
+                />
+            )}
+        </>
+    );
+}
+
+/**
+ * In-place mode / threshold / slippage editor. Calls
+ * Compounder.setMode under the hood (handled in the V3Positions
+ * parent so the wagmi write hooks live next to the rest of the
+ * managed-position lifecycle).
+ *
+ * No withdraw + redeposit dance because the contract supports a
+ * direct update — keeps the position under continuous cron coverage
+ * and saves the user one signature plus a brief gap in which the
+ * keeper would miss a tick.
+ */
+function ManagedSettingsModal({
+    open,
+    onClose,
+    initialMode,
+    initialMinFeeMicros,
+    initialMaxSlippageBps,
+    busy,
+    onSave,
+}: {
+    open: boolean;
+    onClose: () => void;
+    initialMode: "NORMAL" | "RECEIVE" | "COMPOUND";
+    initialMinFeeMicros: bigint;
+    initialMaxSlippageBps: number;
+    busy: boolean;
+    onSave: (next: {
+        mode: "NORMAL" | "RECEIVE" | "COMPOUND";
+        minFeeMicros: bigint;
+        maxSlippageBps: number;
+    }) => void | Promise<void>;
+}) {
+    const [mode, setMode] = useState<"NORMAL" | "RECEIVE" | "COMPOUND">(initialMode);
+    const initialThresholdStr = useMemo(
+        () => (Number(initialMinFeeMicros) / 1_000_000).toFixed(2),
+        [initialMinFeeMicros],
+    );
+    const initialSlippageStr = useMemo(
+        () => (initialMaxSlippageBps / 100).toFixed(2),
+        [initialMaxSlippageBps],
+    );
+    const [thresholdUsdc, setThresholdUsdc] = useState(initialThresholdStr);
+    const [slippagePct, setSlippagePct] = useState(initialSlippageStr);
+
+    const thresholdMicros = useMemo(() => {
+        const parsed = Number(thresholdUsdc);
+        if (!Number.isFinite(parsed) || parsed < 0) return 0n;
+        return BigInt(Math.floor(parsed * 1_000_000));
+    }, [thresholdUsdc]);
+    const slippageBps = useMemo(() => {
+        const parsed = Number(slippagePct);
+        if (!Number.isFinite(parsed) || parsed < 0) return 50;
+        return Math.min(10_000, Math.floor(parsed * 100));
+    }, [slippagePct]);
+
+    if (!open) return null;
+    return (
+        <Modal open onClose={busy ? () => {} : onClose}>
+            <div className="space-y-5 p-5">
+                <div className="flex items-center justify-between">
+                    <h3 className="text-lg font-semibold text-arc-text">
+                        Auto-management settings
+                    </h3>
+                    <button
+                        type="button"
+                        onClick={busy ? undefined : onClose}
+                        disabled={busy}
+                        aria-label="Close"
+                        className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-arc-text-muted hover:bg-arc-surface-2 hover:text-arc-text disabled:opacity-50"
+                    >
+                        ✕
+                    </button>
+                </div>
+
+                <div>
+                    <label className="mb-2 block text-xs uppercase tracking-wider text-arc-text-muted">
+                        Mode
+                    </label>
+                    <div className="grid grid-cols-3 gap-2">
+                        {(
+                            [
+                                {
+                                    id: "NORMAL" as const,
+                                    title: "Normal",
+                                    body: "Tracked, no actions.",
+                                },
+                                {
+                                    id: "RECEIVE" as const,
+                                    title: "Auto-receive",
+                                    body: "Push fees to wallet.",
+                                },
+                                {
+                                    id: "COMPOUND" as const,
+                                    title: "Auto-compound",
+                                    body: "Reinvest into position.",
+                                },
+                            ] as const
+                        ).map((opt) => {
+                            const active = mode === opt.id;
+                            return (
+                                <button
+                                    key={opt.id}
+                                    type="button"
+                                    onClick={() => setMode(opt.id)}
+                                    disabled={busy}
+                                    className={cn(
+                                        "rounded-xl border p-3 text-left text-xs transition-colors",
+                                        active
+                                            ? "border-sky-400 bg-sky-400/5"
+                                            : "border-arc-border bg-arc-bg hover:border-arc-border-strong",
+                                    )}
+                                >
+                                    <div className="font-semibold text-arc-text">
+                                        {opt.title}
+                                    </div>
+                                    <div className="mt-1 text-[10px] text-arc-text-muted">
+                                        {opt.body}
+                                    </div>
+                                </button>
+                            );
+                        })}
+                    </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                    <div>
+                        <label className="mb-2 block text-xs uppercase tracking-wider text-arc-text-muted">
+                            Threshold (USDC)
+                        </label>
+                        <input
+                            type="text"
+                            inputMode="decimal"
+                            value={thresholdUsdc}
+                            onChange={(e) => setThresholdUsdc(e.target.value)}
+                            disabled={busy}
+                            className="w-full rounded-xl border border-arc-border bg-arc-bg p-3 text-sm text-arc-text outline-none focus:border-arc-primary"
+                        />
+                    </div>
+                    <div>
+                        <label className="mb-2 block text-xs uppercase tracking-wider text-arc-text-muted">
+                            Slippage (%)
+                        </label>
+                        <input
+                            type="text"
+                            inputMode="decimal"
+                            value={slippagePct}
+                            onChange={(e) => setSlippagePct(e.target.value)}
+                            disabled={busy}
+                            className="w-full rounded-xl border border-arc-border bg-arc-bg p-3 text-sm text-arc-text outline-none focus:border-arc-primary"
+                        />
+                    </div>
+                </div>
+
+                <div className="rounded-xl border border-arc-border bg-arc-bg p-3 text-[11px] leading-relaxed text-arc-text-muted">
+                    Changes are applied in-place via Compounder.setMode —
+                    the NFT stays in the vault and the keeper resumes
+                    with the new settings on the next 5-minute tick. No
+                    withdraw / redeposit needed.
+                </div>
+
+                <div className="flex justify-end gap-2">
+                    <button
+                        onClick={onClose}
+                        disabled={busy}
+                        className="rounded-xl border border-arc-border px-4 py-2 text-sm text-arc-text-muted hover:bg-arc-surface-2"
+                    >
+                        Cancel
+                    </button>
+                    <button
+                        onClick={() =>
+                            void onSave({
+                                mode,
+                                minFeeMicros: thresholdMicros,
+                                maxSlippageBps: slippageBps,
+                            })
+                        }
+                        disabled={busy}
+                        className="arc-button-primary px-5 py-2 text-sm"
+                    >
+                        {busy ? "Saving…" : "Save"}
+                    </button>
+                </div>
+            </div>
+        </Modal>
+    );
 }
 
 function PriceTile({
