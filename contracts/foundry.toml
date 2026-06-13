@@ -62,7 +62,7 @@ skip = [
 # for a renamed install (older forge versions do not support --rename).
 [profile.v3]
 src = "v3src"
-test = "v3src/_none"
+test = "v3test"
 script = "v3src/_none"
 out = "out-v3"
 libs = ["lib"]

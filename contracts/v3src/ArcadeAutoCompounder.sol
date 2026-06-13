@@ -20,6 +20,34 @@ interface IArcadeV3FactoryMin {
     function getPool(address tokenA, address tokenB, uint24 fee) external view returns (address);
 }
 
+/// @dev Minimal V3 pool surface for TWAP + cardinality bump. The full
+///      IUniswapV3Pool interface includes mint/swap/burn which we do
+///      not call, so inlining the three view + one write we need
+///      keeps the deployment bytecode smaller (this contract sits
+///      close to the EIP-170 limit already).
+interface IUniswapV3PoolMin {
+    function slot0()
+        external
+        view
+        returns (
+            uint160 sqrtPriceX96,
+            int24 tick,
+            uint16 observationIndex,
+            uint16 observationCardinality,
+            uint16 observationCardinalityNext,
+            uint8 feeProtocol,
+            bool unlocked
+        );
+    function observe(uint32[] calldata secondsAgos)
+        external
+        view
+        returns (
+            int56[] memory tickCumulatives,
+            uint160[] memory secondsPerLiquidityCumulativeX128s
+        );
+    function increaseObservationCardinalityNext(uint16 observationCardinalityNext) external;
+}
+
 /// @dev IERC721Receiver shape so safeTransferFrom into this contract is
 ///      accepted. Inlined to avoid an OZ-version coupling.
 interface IERC721ReceiverMin {
@@ -124,6 +152,19 @@ contract ArcadeAutoCompounder is IERC721ReceiverMin {
     uint16 internal constant BPS_DENOMINATOR = 10_000;
     uint64 internal constant ACTION_COOLDOWN_SECONDS = 5 minutes;
     uint64 internal constant TX_DEADLINE_BUFFER_SECONDS = 60;
+
+    // Audit H1 fix: TWAP gate parameters. The window is intentionally
+    // short (60 seconds) so the gate's reaction to genuine price
+    // movement is fast — the goal is to block sandwich attacks where
+    // the attacker tilts the pool, calls compound, and reverts the
+    // tilt in the same block. A 60-second TWAP averages a single
+    // block's manipulation down to ~1/12 of its impact on Arc (~5s
+    // blocks → 12 blocks per window), enough to fail the deviation
+    // gate under any honest slippage setting. The cardinality target
+    // is 60+ so the pool's observation array carries at least one full
+    // window of history.
+    uint32 internal constant TWAP_WINDOW_SECONDS = 60;
+    uint16 internal constant TARGET_OBSERVATION_CARDINALITY = 60;
 
     // Mode is encoded as uint8 (instead of a proper enum) so the
     // PositionConfig packs cleanly into two storage slots — frequent reads
@@ -279,6 +320,13 @@ contract ArcadeAutoCompounder is IERC721ReceiverMin {
         (uint8 mode, uint64 minFeeMicros, uint16 maxSlippageBps) =
             abi.decode(data, (uint8, uint64, uint16));
         _writeConfig(tokenId, from, mode, minFeeMicros, maxSlippageBps);
+        // Audit H1 fix: parallel of the cardinality bump in
+        // depositPosition. The safeTransferFrom-with-data deposit path
+        // (Integration A on the frontend) also needs the gate's TWAP
+        // window pre-warmed; without this call, a position deposited
+        // via the integrated mint flow would have an uninitialised
+        // observation slot and its first compound would revert.
+        _bumpObservationCardinality(tokenId);
         emit PositionDeposited(tokenId, from, mode, minFeeMicros, maxSlippageBps);
         return IERC721ReceiverMin.onERC721Received.selector;
     }
@@ -305,6 +353,11 @@ contract ArcadeAutoCompounder is IERC721ReceiverMin {
         // The NPM transfer fires onERC721Received with empty data; the
         // callback no-ops because the config is already set.
         NPM.safeTransferFrom(msg.sender, address(this), tokenId);
+        // Audit H1 fix: bump the pool's observation cardinality so the
+        // _enforceTwapGate read inside compound() always finds a fresh
+        // window of history. Cheap (one storage write per bump) and
+        // idempotent.
+        _bumpObservationCardinality(tokenId);
         emit PositionDeposited(tokenId, msg.sender, mode, minFeeMicros, maxSlippageBps);
     }
 
@@ -451,6 +504,16 @@ contract ArcadeAutoCompounder is IERC721ReceiverMin {
         uint256 amount1Min,
         CompoundLocals memory s
     ) internal {
+        // Audit H1 fix: TWAP-anchored price-deviation gate runs BEFORE
+        // any state-changing call. If the pool's spot price has drifted
+        // more than cfg.maxSlippageBps from its 60s TWAP, the compound
+        // reverts unconditionally — regardless of what mins the caller
+        // passed. This closes the permissionless-caller hole and makes
+        // cfg.maxSlippageBps a real on-chain enforcement (previously it
+        // was decorative; the cron's H1 commit derived mins off-chain
+        // but a direct attacker bypassed that).
+        _enforceTwapGate(tokenId, configs[tokenId].maxSlippageBps);
+
         (s.token0, s.token1) = _tokensOf(tokenId);
         (s.pf0, s.pf1) = _takeProtocolFee(s.token0, s.token1, s.fee0, s.fee1);
         s.net0 = s.fee0 - s.pf0;
@@ -509,6 +572,84 @@ contract ArcadeAutoCompounder is IERC721ReceiverMin {
         returns (address token0, address token1)
     {
         (, , token0, token1, , , , , , , , ) = NPM.positions(tokenId);
+    }
+
+    /// @dev Audit H1 fix: TWAP-anchored price-deviation gate. Reverts
+    ///      if the pool's spot price has drifted more than the
+    ///      depositor-configured slippage tolerance from its 60-second
+    ///      TWAP. The check is the contract-level MEV defence for
+    ///      compound() — a sandwicher would have to either hold the
+    ///      manipulation across the whole TWAP window (which is
+    ///      capital-inefficient at Arc block times) or settle for a
+    ///      tilt below the depositor's bps cap (in which case the
+    ///      attack profit is bounded by that same cap and is no longer
+    ///      free).
+    ///
+    ///      The pool's observation cardinality must be >= 2 for
+    ///      observe() to succeed. depositPosition + onERC721Received
+    ///      both bump cardinality to TARGET_OBSERVATION_CARDINALITY on
+    ///      first touch so a never-deposited pool's first compound
+    ///      finds the buffer pre-warmed. Pools touched out-of-band
+    ///      (an unrelated mint elsewhere bumped them already) skip the
+    ///      bump cheaply.
+    function _enforceTwapGate(uint256 tokenId, uint16 maxSlippageBps)
+        internal
+        view
+    {
+        (, , address t0, address t1, uint24 fee, , , , , , , ) = NPM.positions(tokenId);
+        address pool = FACTORY.getPool(t0, t1, fee);
+        require(pool != address(0), "NO_POOL");
+
+        // Spot tick from slot0.
+        (, int24 currentTick, , , , , ) = IUniswapV3PoolMin(pool).slot0();
+
+        // 60-second TWAP via the pool's observation oracle. The
+        // secondsAgos array is [TWAP_WINDOW_SECONDS, 0] which asks
+        // the pool for "the tick cumulative TWAP_WINDOW_SECONDS ago"
+        // and "the tick cumulative now". Their difference, divided
+        // by the window length, is the average tick over the window.
+        uint32[] memory secondsAgos = new uint32[](2);
+        secondsAgos[0] = TWAP_WINDOW_SECONDS;
+        secondsAgos[1] = 0;
+        (int56[] memory tickCumulatives, ) =
+            IUniswapV3PoolMin(pool).observe(secondsAgos);
+        int56 tickDelta = tickCumulatives[1] - tickCumulatives[0];
+        int24 twapTick = int24(tickDelta / int56(uint56(TWAP_WINDOW_SECONDS)));
+
+        // Tick distance in absolute value. Each tick is ~1 bp of
+        // price (the exact relationship is 1.0001^tick, so 1 tick =
+        // ~0.9999 bp; over the 1-1000 bp range users actually pick,
+        // the approximation is within 5% of the true sqrt-price
+        // distance). Using ticks directly avoids the gas + bytecode
+        // weight of a sqrtPriceX96 deviation calculation in 0.7.6.
+        int24 diff = currentTick > twapTick
+            ? currentTick - twapTick
+            : twapTick - currentTick;
+        require(uint24(diff) <= uint24(maxSlippageBps), "PRICE_DEVIATION");
+    }
+
+    /// @dev Audit H1 fix: bump the pool's observation cardinality to
+    ///      TARGET_OBSERVATION_CARDINALITY so the TWAP gate has at
+    ///      least one full window of history. Called from
+    ///      depositPosition and onERC721Received on every new deposit.
+    ///      Pools already at-or-above the target skip the call; pools
+    ///      below pay the one-time ~SSTORE-per-slot cost (~5-100k gas
+    ///      depending on starting cardinality). Idempotent and safe to
+    ///      double-call: the pool itself short-circuits on no-op.
+    function _bumpObservationCardinality(uint256 tokenId) internal {
+        (, , address t0, address t1, uint24 fee, , , , , , , ) = NPM.positions(tokenId);
+        address pool = FACTORY.getPool(t0, t1, fee);
+        if (pool == address(0)) return;
+        (, , , , uint16 nextCardinality, , ) = IUniswapV3PoolMin(pool).slot0();
+        if (nextCardinality >= TARGET_OBSERVATION_CARDINALITY) return;
+        // Wrap in try/catch defensively: a malicious pool could revert
+        // here to grief deposits, but the gate's failure mode is just
+        // that compound() reverts later — the user can still withdraw.
+        try
+            IUniswapV3PoolMin(pool).increaseObservationCardinalityNext(
+                TARGET_OBSERVATION_CARDINALITY
+            )
+        {} catch {}
     }
 
     // --------------------------------------------------------------------
