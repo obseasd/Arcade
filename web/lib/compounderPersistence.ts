@@ -130,29 +130,47 @@ export async function getPositionsForOwner(
     }
 }
 
-/** Per-tokenId sum of compound + push-fees event values, in 6-decimal
- *  USDC micros. The cron writes `usd_value_micros` on every
- *  Compounded / FeesPushed event so this is a simple SUM(); the
- *  dashboard surfaces it as the "Total claimed" line on the position
- *  card. Returns a map keyed by tokenId for fast lookup. */
+/** Per-tokenId aggregate of every Compounded / FeesPushed event
+ *  attributed to a position owned by `ownerAddress`. Returns separate
+ *  totals for amount0 and amount1 (raw token units, not USD) so the
+ *  position card can render "X USDC + Y ETH" with each side priced in
+ *  its own decimals, plus the USD-equivalent for the headline stat.
+ *  Single SQL aggregate keeps the round-trip cost flat regardless of
+ *  how many positions the user has under management. */
+export interface ClaimedTotals {
+    amount0: bigint;
+    amount1: bigint;
+    usdMicros: bigint;
+}
 export async function getTotalClaimedByTokenForOwner(
     ownerAddress: string,
-): Promise<Map<string, bigint>> {
-    const out = new Map<string, bigint>();
+): Promise<Map<string, ClaimedTotals>> {
+    const out = new Map<string, ClaimedTotals>();
     if (!isDbConfigured()) return out;
     try {
         const sql = getSql();
         const rows = (await sql`
             SELECT e.token_id::text AS token_id,
-                   COALESCE(SUM(e.usd_value_micros), 0)::text AS total
+                   COALESCE(SUM(e.amount0), 0)::text          AS total0,
+                   COALESCE(SUM(e.amount1), 0)::text          AS total1,
+                   COALESCE(SUM(e.usd_value_micros), 0)::text AS total_usd
               FROM compounder_events e
               JOIN compounder_positions p ON p.token_id = e.token_id
              WHERE p.owner_address = ${ownerAddress.toLowerCase()}
                AND e.event_type IN ('Compounded', 'FeesPushed')
              GROUP BY e.token_id
-        `) as unknown as { token_id: string; total: string }[];
+        `) as unknown as {
+            token_id: string;
+            total0: string;
+            total1: string;
+            total_usd: string;
+        }[];
         for (const row of rows) {
-            out.set(row.token_id, BigInt(row.total));
+            out.set(row.token_id, {
+                amount0: BigInt(row.total0),
+                amount1: BigInt(row.total1),
+                usdMicros: BigInt(row.total_usd),
+            });
         }
         return out;
     } catch (err) {

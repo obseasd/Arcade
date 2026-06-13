@@ -45,17 +45,22 @@ export async function GET(req: NextRequest) {
         getPositionsForOwner(owner),
         getTotalClaimedByTokenForOwner(owner),
     ]);
-    // Decorate each position with totalClaimedUsdc so the dashboard's
-    // "Total claimed" row renders without a follow-up round trip. The
-    // value is the cumulative USDC-equivalent of every Compounded /
-    // FeesPushed event the cron has recorded for this tokenId, in
-    // human dollars (NUMERIC micros divided by 1e6).
+    // Decorate each position with cumulative claim totals so the
+    // dashboard's "Total claimed" row renders without a follow-up
+    // round trip:
+    //   - totalClaimedAmount0 / totalClaimedAmount1: raw token units
+    //     (NUMERIC strings to preserve precision across the wire);
+    //     the frontend formats them with each token's own decimals.
+    //   - totalClaimedUsdc: human-dollar headline derived from the
+    //     usd_value_micros column the cron writes per event.
     const decorated = rows.map((row) => {
-        const micros = claimedByToken.get(row.tokenId);
+        const totals = claimedByToken.get(row.tokenId);
         return {
             ...row,
-            totalClaimedUsdc: micros !== undefined
-                ? Number(micros) / 1_000_000
+            totalClaimedAmount0: totals ? totals.amount0.toString() : "0",
+            totalClaimedAmount1: totals ? totals.amount1.toString() : "0",
+            totalClaimedUsdc: totals
+                ? Number(totals.usdMicros) / 1_000_000
                 : 0,
         };
     });

@@ -69,6 +69,8 @@ export function V3Positions({
         tokenId: bigint;
         mode: "NORMAL" | "RECEIVE" | "COMPOUND";
         totalClaimedUsdc?: number;
+        totalClaimedAmount0?: bigint;
+        totalClaimedAmount1?: bigint;
     }
     const [managedMetas, setManagedMetas] = useState<ManagedPositionMeta[]>([]);
     const [stoppingTokenId, setStoppingTokenId] = useState<string | null>(null);
@@ -80,7 +82,13 @@ export function V3Positions({
         try {
             const res = await fetch(`/api/compounder/positions?owner=${account}`);
             const data = (await res.json()) as {
-                positions?: { tokenId: string; mode: string; totalClaimedUsdc?: number }[];
+                positions?: {
+                    tokenId: string;
+                    mode: string;
+                    totalClaimedUsdc?: number;
+                    totalClaimedAmount0?: string;
+                    totalClaimedAmount1?: string;
+                }[];
             };
             const rows = Array.isArray(data.positions) ? data.positions : [];
             setManagedMetas(
@@ -95,6 +103,16 @@ export function V3Positions({
                         tokenId: BigInt(r.tokenId),
                         mode: r.mode as ManagedPositionMeta["mode"],
                         totalClaimedUsdc: r.totalClaimedUsdc,
+                        // The API serialises raw NUMERIC totals as
+                        // decimal strings to preserve precision; coerce
+                        // back into bigints so the formatTok helper down
+                        // in V3PositionRow can divide by 10^decimals.
+                        totalClaimedAmount0: r.totalClaimedAmount0
+                            ? BigInt(r.totalClaimedAmount0)
+                            : undefined,
+                        totalClaimedAmount1: r.totalClaimedAmount1
+                            ? BigInt(r.totalClaimedAmount1)
+                            : undefined,
                     })),
             );
         } catch {
@@ -132,7 +150,19 @@ export function V3Positions({
                     title: "Auto-management stopped",
                     message: `NFT #${tokenIdStr} returned to your wallet.`,
                 });
-                await refreshManaged();
+                // Withdraw moves the NFT from the Compounder back to the
+                // user, so refresh BOTH the managed list (the row now has
+                // withdrawn_at stamped) AND the wagmi caches that drive
+                // the wallet-side reads — without the NPM.balanceOf /
+                // tokenOfOwnerByIndex refetch, the card disappears
+                // briefly because the managed list dropped it and the
+                // wallet list has not yet noticed it.
+                await Promise.all([
+                    refreshManaged(),
+                    balanceQ.refetch(),
+                    tokenIdsQ.refetch(),
+                    positionsQ.refetch(),
+                ]);
             } catch (err) {
                 pushToast({
                     kind: "error",
@@ -143,6 +173,10 @@ export function V3Positions({
                 setStoppingTokenId(null);
             }
         },
+        // The refetch closures pull from the queries declared above; we
+        // include them in the deps so a query re-mount produces a fresh
+        // refetch handle in the next render.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
         [refreshManaged, writeContractAsync],
     );
 
@@ -461,6 +495,8 @@ export function V3Positions({
                                 ? {
                                       mode: meta.mode,
                                       totalClaimedUsdc: meta.totalClaimedUsdc,
+                                      totalClaimedAmount0: meta.totalClaimedAmount0,
+                                      totalClaimedAmount1: meta.totalClaimedAmount1,
                                       onStop: () => stopManagement(tokenIdStr),
                                       stopBusy: stoppingTokenId === tokenIdStr,
                                   }
@@ -500,6 +536,11 @@ interface V3PositionRowProps {
     managed?: {
         mode: "RECEIVE" | "COMPOUND" | "NORMAL";
         totalClaimedUsdc?: number;
+        /** Raw token0 sum over every Compounded / FeesPushed event,
+         *  formatted with t0Info.decimals at render time so the user
+         *  sees "1.23 USDC + 0.0005 ETH" instead of a flat USD number. */
+        totalClaimedAmount0?: bigint;
+        totalClaimedAmount1?: bigint;
         onStop: () => void | Promise<void>;
         stopBusy?: boolean;
     };
@@ -762,14 +803,36 @@ function V3PositionRow({
                 symbols render as <TokenIcon> circles in both variants so
                 the row stays compact on narrower grid widths. */}
             {managed ? (
-                <div className="mt-3 flex items-center justify-between gap-2 rounded-xl border border-arc-border bg-white/[0.015] p-3 text-xs">
-                    <span className="text-arc-text-muted">Total claimed</span>
-                    <span className="inline-flex items-center gap-1.5 tabular-nums font-semibold text-arc-text">
-                        {managed.totalClaimedUsdc !== undefined
-                            ? fmtUsd(managed.totalClaimedUsdc)
-                            : "—"}
-                        <TokenIcon symbol="USDC" size={14} />
-                    </span>
+                <div className="mt-3 rounded-xl border border-arc-border bg-white/[0.015] p-3 text-xs">
+                    <div className="flex items-center justify-between gap-2">
+                        <span className="text-arc-text-muted">Total claimed</span>
+                        <span className="tabular-nums font-semibold text-arc-text">
+                            {managed.totalClaimedUsdc !== undefined
+                                ? fmtUsd(managed.totalClaimedUsdc)
+                                : "—"}
+                        </span>
+                    </div>
+                    {/* Both raw token sums so the user sees what actually
+                        moved through the cron, not just the USD headline.
+                        Mirrors the "Unclaimed fees" pair shape so the two
+                        variants of the card stay visually consistent. */}
+                    <div className="mt-2 flex items-center justify-end gap-3 tabular-nums text-arc-text-muted">
+                        <span className="inline-flex items-center gap-1.5">
+                            {formatTok(
+                                managed.totalClaimedAmount0 ?? 0n,
+                                t0Info.decimals,
+                            )}
+                            <TokenIcon symbol={t0Info.symbol} size={14} />
+                        </span>
+                        <span className="text-arc-text-faint">/</span>
+                        <span className="inline-flex items-center gap-1.5">
+                            {formatTok(
+                                managed.totalClaimedAmount1 ?? 0n,
+                                t1Info.decimals,
+                            )}
+                            <TokenIcon symbol={t1Info.symbol} size={14} />
+                        </span>
+                    </div>
                 </div>
             ) : (
                 <div className="mt-3 flex items-center justify-between gap-2 rounded-xl border border-arc-border bg-white/[0.015] p-3 text-xs">
