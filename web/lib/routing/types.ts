@@ -76,6 +76,20 @@ export interface RouteQuote {
      *  after signing. */
     permitInputIndex: number;
   };
+  /** Partial-fill marker. Set when the user's typed amountIn would
+   *  exhaust the pool's active liquidity at the current tick, and the
+   *  provider clamped the input to the largest amount that still
+   *  returns a non-zero quote. The executor's `args` already reflect
+   *  the clamped amount (NOT the user's typed amount). SwapCard
+   *  surfaces this as a yellow warning above the Swap button so the
+   *  user understands the discrepancy between their input and what
+   *  the route will actually execute. */
+  partialFill?: {
+    /** What the user typed. Same as the `amountIn` field of the QuoteRequest. */
+    requestedAmountIn: bigint;
+    /** What the executor will actually consume. Always <= requestedAmountIn. */
+    effectiveAmountIn: bigint;
+  };
 }
 
 /**

@@ -128,7 +128,68 @@ export const arcadeV3Provider: RouteProvider = {
       const winners: TierQuote[] = perTier.filter(
         (q): q is TierQuote => q !== null,
       );
-      if (winners.length === 0) return null;
+
+      // Partial-fill fallback: when no tier returned a valid quote for
+      // the full amount, the pool exists but the user's input would
+      // exhaust the active liquidity at the current tick. Binary-search
+      // for the largest amount that still gets a non-zero quote so the
+      // SwapCard can render "Max swappable: X (you typed Y) — pool
+      // liquidity exhausted at higher input" instead of a confusing
+      // empty quote. We do the search on tier 3000 (0.3%) because:
+      //   - It's the standard non-launchpad tier most users mint at.
+      //   - Probing all 4 tiers in the binary search would 4x the RPC
+      //     fan-out for a rare branch.
+      // The launchpad CLANKER_V3 tier (V3_FEE = 1%) is also probed when
+      // the requested pair touches a launchpad token, which mirrors the
+      // legacy single-tier path the SwapCard relied on before Fix C.
+      if (winners.length === 0) {
+        const partial = await binarySearchMaxAmount(
+          publicClient,
+          req.tokenIn,
+          req.tokenOut,
+          snipeBps,
+          req.amountIn,
+        );
+        if (!partial) return null;
+
+        const amountOutMinimum =
+          (partial.amountOut * BigInt(10_000 - req.slippageBps)) / 10_000n;
+        const executor: RouteQuote["executor"] = {
+          router: ADDRESSES.v3Router,
+          abi: V3_ROUTER_ABI,
+          functionName: "exactInputSingle",
+          args: [
+            req.tokenIn,
+            req.tokenOut,
+            partial.tier,
+            req.recipient,
+            partial.effectiveAmountIn,
+            amountOutMinimum,
+            req.deadline,
+          ],
+        };
+        const tierLabel = `${(partial.tier / 10_000)
+          .toFixed(2)
+          .replace(/0+$/, "")
+          .replace(/\.$/, "")}% pool (max liquidity)`;
+        return {
+          provider: "arcade-v3",
+          amountOut: partial.amountOut,
+          fee: partial.tier,
+          pathLabel: tierLabel,
+          approval: {
+            token: req.tokenIn,
+            spender: ADDRESSES.v3Router,
+            amount: partial.effectiveAmountIn,
+          },
+          executor,
+          partialFill: {
+            requestedAmountIn: req.amountIn,
+            effectiveAmountIn: partial.effectiveAmountIn,
+          },
+        };
+      }
+
       winners.sort((a, b) => (b.amountOut > a.amountOut ? 1 : -1));
       const best: TierQuote = winners[0];
 
@@ -247,4 +308,87 @@ export const arcadeV3Provider: RouteProvider = {
 // gating; the auto-discovery fan-out above ignores this check.
 export function pairLooksV3(tokenIn: Address, tokenOut: Address, isV3Token: (a: Address) => boolean): boolean {
   return isV3Token(tokenIn) || isV3Token(tokenOut);
+}
+
+/**
+ * Probe the V3 pool's max swappable amount via a fixed-iteration
+ * binary search. Used as a fallback when the user's typed amountIn
+ * exceeds the pool's active liquidity at the current tick — the
+ * normal quote returns 0 (or reverts) because the swap would push
+ * the price past every initialised tick in the position's range, so
+ * the quoter has no defined output to return. The search lands on
+ * the largest amount that still produces a non-zero quote, which
+ * the SwapCard surfaces as "Max swappable: X (you typed Y)".
+ *
+ * We try tier 3000 first (the standard non-launchpad pool) and fall
+ * back to V3_FEE (1%, the CLANKER_V3 launchpad tier) so the same
+ * helper handles both routable surfaces without a separate code path.
+ *
+ * Iteration count is 14 — enough to land on a value within
+ * 2^-14 ≈ 0.006% of the true max, which is way below the slippage
+ * tolerances users actually set and well under the user-visible
+ * precision of the swap UI.
+ */
+async function binarySearchMaxAmount(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  publicClient: any,
+  tokenIn: Address,
+  tokenOut: Address,
+  snipeBps: bigint,
+  requestedAmountIn: bigint,
+): Promise<{
+  tier: number;
+  effectiveAmountIn: bigint;
+  amountOut: bigint;
+} | null> {
+  const TIERS_TO_TRY = [3000, V3_FEE] as const;
+  let best: { tier: number; amount: bigint; out: bigint } | null = null;
+
+  for (const tier of TIERS_TO_TRY) {
+    let lo = 0n;
+    let hi = requestedAmountIn;
+    let tierBestAmount = 0n;
+    let tierBestOut = 0n;
+
+    for (let i = 0; i < 14; i++) {
+      const mid = (lo + hi) / 2n;
+      if (mid === 0n) break;
+      const net = mid - (mid * snipeBps) / 10_000n;
+      try {
+        const out = (await publicClient.readContract({
+          address: ADDRESSES.v3Quoter,
+          abi: V3_QUOTER_ABI,
+          functionName: "quoteExactInputSingle",
+          args: [tokenIn, tokenOut, tier, net],
+        })) as bigint;
+        if (out > 0n) {
+          tierBestAmount = mid;
+          tierBestOut = out;
+          lo = mid + 1n;
+        } else {
+          hi = mid - 1n;
+        }
+      } catch {
+        // Quote reverted for this size; reduce the upper bound and
+        // continue. Quoter reverts on excessive input are the canonical
+        // "out of liquidity" signal so this branch is the hot path of
+        // the search.
+        hi = mid - 1n;
+      }
+      if (lo > hi) break;
+    }
+
+    if (tierBestOut > 0n) {
+      if (!best || tierBestOut > best.out) {
+        best = { tier, amount: tierBestAmount, out: tierBestOut };
+      }
+    }
+  }
+
+  if (!best) return null;
+  return {
+    tier: best.tier,
+    effectiveAmountIn: best.amount,
+    amountOut: best.out,
+  };
 }

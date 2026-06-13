@@ -904,6 +904,41 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
         </div>
       )}
 
+      {/* Partial-fill banner. Surfaces whenever the arcade-v3 provider
+          fell back to its binary-search path because the user's typed
+          amount would exhaust the pool's active liquidity. The Swap
+          will execute on `effectiveAmountIn`, NOT on the full typed
+          amount — the banner makes that explicit so the user does not
+          assume the "From" field reflects what the router will
+          actually consume. */}
+      {activeRoute?.partialFill &&
+        activeRoute.partialFill.effectiveAmountIn <
+          activeRoute.partialFill.requestedAmountIn && (
+          <div className="mt-3 rounded-xl border border-arc-warn/40 bg-arc-warn/10 p-3 text-xs text-arc-warn">
+            <div className="font-semibold">Pool liquidity exhausted</div>
+            <div className="mt-1 leading-relaxed text-arc-warn/90">
+              You typed{" "}
+              <span className="font-semibold tabular-nums">
+                {formatUnits(
+                  activeRoute.partialFill.requestedAmountIn,
+                  decimalsIn,
+                )}{" "}
+                {symIn}
+              </span>{" "}
+              but the pool can only absorb{" "}
+              <span className="font-semibold tabular-nums">
+                {formatUnits(
+                  activeRoute.partialFill.effectiveAmountIn,
+                  decimalsIn,
+                )}{" "}
+                {symIn}
+              </span>{" "}
+              at the current price. The swap will execute on that smaller
+              amount; the remainder stays in your wallet.
+            </div>
+          </div>
+        )}
+
       {/* Route + rate row (between For box and Swap button). Hidden on
           external routes — the SwapRoutes panel renders the route info
           (Synthra V3 / UnitFlow V3) right under the swap button, so
