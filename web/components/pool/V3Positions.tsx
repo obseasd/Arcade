@@ -1,9 +1,9 @@
 "use client";
 
-import { ArrowLeftRight, ExternalLink, Pencil } from "lucide-react";
+import { ArrowLeftRight, ExternalLink, Pencil, Sparkles } from "lucide-react";
 import { PlusIcon, SliderIcon } from "@/components/ui/MaskIcon";
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Address, erc20Abi, formatUnits } from "viem";
 import { useAccount, useReadContract, useReadContracts } from "wagmi";
 
@@ -49,6 +49,33 @@ export function V3Positions({
 }) {
     const { address: account } = useAccount();
     const npmEnabled = ADDRESSES.v3PositionManager !== "0x0000000000000000000000000000000000000000";
+    const compounderEnabled =
+        ADDRESSES.autoCompounder !== "0x0000000000000000000000000000000000000000";
+
+    // Count of positions the user has deposited into the Compounder
+    // contract. Those positions are owned by the Compounder, not by the
+    // user, so NPM.balanceOf returns zero for them — that previously
+    // made the "no positions yet" empty state misleading whenever the
+    // user's only positions were under auto-management. We surface the
+    // count next to the empty / non-empty states so the user can find
+    // their positions without scrolling blindly.
+    const [managedCount, setManagedCount] = useState<number>(0);
+    const refreshManagedCount = useCallback(async () => {
+        if (!account || !compounderEnabled) {
+            setManagedCount(0);
+            return;
+        }
+        try {
+            const res = await fetch(`/api/compounder/positions?owner=${account}`);
+            const data = (await res.json()) as { positions?: unknown[] };
+            setManagedCount(Array.isArray(data.positions) ? data.positions.length : 0);
+        } catch {
+            setManagedCount(0);
+        }
+    }, [account, compounderEnabled]);
+    useEffect(() => {
+        void refreshManagedCount();
+    }, [refreshManagedCount]);
 
     const balanceQ = useReadContract({
         address: ADDRESSES.v3PositionManager,
@@ -237,6 +264,25 @@ export function V3Positions({
         );
     }
     if (count === 0) {
+        // When the wallet holds zero NFTs directly BUT has positions
+        // under auto-management, the legacy "no positions yet" message
+        // reads as a bug. Surface the managed count + a deep-link to
+        // the panel below so the user can find their positions.
+        if (managedCount > 0) {
+            return (
+                <div className="arc-card flex flex-col items-center gap-3 p-8 text-center text-sm text-arc-text-muted">
+                    <Sparkles className="h-5 w-5 text-sky-400" />
+                    <div>
+                        You have{" "}
+                        <span className="font-semibold text-arc-text">{managedCount}</span>{" "}
+                        position{managedCount === 1 ? "" : "s"} under auto-management.
+                        Find them in the{" "}
+                        <span className="font-medium text-arc-text">Auto-management</span>{" "}
+                        section below.
+                    </div>
+                </div>
+            );
+        }
         return (
             emptyState ?? (
                 <div className="arc-card p-8 text-center text-sm text-arc-text-muted">
