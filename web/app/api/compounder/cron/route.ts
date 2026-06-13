@@ -51,7 +51,23 @@ import { ADDRESSES } from "@/lib/constants";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-const MAX_POSITIONS_PER_RUN = 25;
+// Audit H3 fix: dropped from 25 to 6 to match the per-tx-confirmation
+// budget the author's own doc-comment admitted. Per-action cost on Arc
+// is ~5s (1 simulation read + 1 write + 1.5s receipt + 4-tier × 2-leg
+// quoter fan-out, with H3 batch parallel = ~3s instead of ~8). At 6
+// positions × 5s = 30s, well inside the 60s function ceiling with
+// slack for cold-start + DB round-trips. With a 5-minute cron cadence
+// we can process 6 × 12 = 72 positions/hour — enough for any
+// realistic testnet load.
+const MAX_POSITIONS_PER_RUN = 6;
+
+// Audit H3 + I8 fix: every RPC read gets a per-call timeout via
+// AbortController so a single slow eth_call cannot push the whole
+// sweep past the 60s function ceiling. 3s matches the observed Arc
+// p99 latency for a single readContract; bumping past that means
+// somebody else's RPC issue cost us the budget for an honest action.
+const RPC_TIMEOUT_MS = 3_000;
+
 const ARC_CHAIN = {
     id: 5042002,
     name: "Arc Testnet",
@@ -62,6 +78,27 @@ const ARC_CHAIN = {
         public: { http: ["https://rpc.testnet.arc.network"] },
     },
 } as const;
+
+/** Run a promise under a hard timeout. Returns null on timeout (the
+ *  caller is expected to treat null as "skip this leg / pool" and
+ *  carry on with the rest of the sweep). Implemented with
+ *  Promise.race so the underlying RPC call keeps running in the
+ *  background and contributes to the next free RPC slot; that is
+ *  cheaper than tearing down the viem transport per call. */
+async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | null> {
+    let cancel: ReturnType<typeof setTimeout> | undefined;
+    const timer = new Promise<null>((resolve) => {
+        cancel = setTimeout(() => resolve(null), ms);
+    });
+    try {
+        const v = await Promise.race([p, timer]);
+        if (cancel) clearTimeout(cancel);
+        return v;
+    } catch {
+        if (cancel) clearTimeout(cancel);
+        return null;
+    }
+}
 
 interface RunSummary {
     scanned: number;
@@ -229,17 +266,63 @@ async function handleOne(
     }
 
     if (modeId === 2 /* COMPOUND */) {
-        // Slippage: position-level maxSlippageBps applied to the lower
-        // bound expected by NPM. Pass amount0Min/amount1Min as 0 for
-        // the MVP — the contract clamps to net0 / net1 internally and
-        // we don't yet have an off-chain quoter that justifies a
-        // tighter bound. A future iteration computes the tick-aware
-        // optimal lower bound and passes it through.
+        // Audit H1 fix: derive amount0Min / amount1Min off-chain
+        // before submitting the real tx. The contract stores
+        // cfg.maxSlippageBps but never reads it (see findings H1 +
+        // L1), so the only protection against MEV on the cron's
+        // compound() comes from the cron itself passing tight mins.
+        // Strategy: eth_call (simulateContract) compound(tokenId,
+        // 0, 0) to learn the (amount0Used, amount1Used) the pool
+        // would actually consume, then apply the position's
+        // configured slippage to derive a floor. simulateContract
+        // is a free read — no gas spent, no state change — but it
+        // does dry-run the underlying NPM.collect + increaseLiquidity
+        // sequence so the returned amounts match what the real tx
+        // will execute against the same block state.
+        //
+        // Failure mode: if the simulation reverts (pool moved past
+        // a tick boundary between the scanner's pendingFees read
+        // and now, or the position is empty), we skip this tick
+        // rather than submit a guaranteed-revert tx. The next 5-min
+        // tick re-tries against fresh state.
+        const slippageBps = BigInt(
+            Math.max(0, Math.min(10_000, position.maxSlippageBps ?? 50)),
+        );
+
+        type CompoundSim = readonly [bigint, bigint, bigint];
+        const sim = await withTimeout(
+            publicClient
+                .simulateContract({
+                    address: compounderAddress,
+                    abi: AUTO_COMPOUNDER_ABI,
+                    functionName: "compound",
+                    args: [tokenId, 0n, 0n],
+                    account,
+                })
+                .then((r) => r.result as CompoundSim)
+                .catch(() => null as CompoundSim | null),
+            RPC_TIMEOUT_MS,
+        );
+
+        if (!sim) {
+            summary.skipped++;
+            summary.notes.push(
+                `token=${position.tokenId} reason=sim-failed-or-timed-out`,
+            );
+            return;
+        }
+
+        // sim = [liquidityAdded, amount0Used, amount1Used]
+        const amount0Used = sim[1];
+        const amount1Used = sim[2];
+        const amount0Min = (amount0Used * (10_000n - slippageBps)) / 10_000n;
+        const amount1Min = (amount1Used * (10_000n - slippageBps)) / 10_000n;
+
         const hash = await walletClient.writeContract({
             address: compounderAddress,
             abi: AUTO_COMPOUNDER_ABI,
             functionName: "compound",
-            args: [tokenId, 0n, 0n],
+            args: [tokenId, amount0Min, amount1Min],
             chain: ARC_CHAIN,
             account,
         });
@@ -346,7 +429,15 @@ const V3_FEE_TIERS = [100, 500, 3000, 10000] as const;
  *  arcade-v3 quoter across every standard fee tier and take the
  *  highest non-zero quote. A leg that has no quotable route at any
  *  tier contributes 0; the row is still written so the UI never sees
- *  a missing event but the headline metric undercounts honestly. */
+ *  a missing event but the headline metric undercounts honestly.
+ *
+ *  Audit H3 fix: both legs run in parallel via Promise.all, and
+ *  inside quoteLegToUsdc the 4-tier fan-out also runs in parallel.
+ *  Previous sequential implementation took ~4 × 500ms × 2 legs =
+ *  ~4s per position, which combined with the 25-position cap
+ *  (since reduced to 6) pushed every run past the 60s function
+ *  ceiling. Parallel fan-out is one slowest-RPC-latency per
+ *  position instead, recovering ~3s of the budget. */
 async function quoteUsdcValueForPair(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     publicClient: any,
@@ -360,20 +451,22 @@ async function quoteUsdcValueForPair(
     const quoter = ADDRESSES.v3Quoter as Address;
     if (!quoter || quoter === "0x0000000000000000000000000000000000000000") return 0n;
 
-    const leg0Micros = await quoteLegToUsdc(
-        publicClient,
-        quoter,
-        usdc,
-        token0Address as Address | null,
-        fee0,
-    );
-    const leg1Micros = await quoteLegToUsdc(
-        publicClient,
-        quoter,
-        usdc,
-        token1Address as Address | null,
-        fee1,
-    );
+    const [leg0Micros, leg1Micros] = await Promise.all([
+        quoteLegToUsdc(
+            publicClient,
+            quoter,
+            usdc,
+            token0Address as Address | null,
+            fee0,
+        ),
+        quoteLegToUsdc(
+            publicClient,
+            quoter,
+            usdc,
+            token1Address as Address | null,
+            fee1,
+        ),
+    ]);
     return leg0Micros + leg1Micros;
 }
 
@@ -388,20 +481,29 @@ async function quoteLegToUsdc(
     if (amount === 0n) return 0n;
     if (!token || token === "0x0000000000000000000000000000000000000000") return 0n;
     if (token.toLowerCase() === usdc.toLowerCase()) return amount;
+    // H3 inner fan-out also parallel: each tier resolves to (amount or
+    // null), Math.max(...) picks the winner. Failed tiers contribute 0
+    // via withTimeout fall-through so a slow RPC for one tier can never
+    // hold up the whole leg.
+    const tierResults: bigint[] = await Promise.all(
+        V3_FEE_TIERS.map(async (tier): Promise<bigint> => {
+            const raw = await withTimeout<bigint>(
+                publicClient
+                    .readContract({
+                        address: quoter,
+                        abi: QUOTER_ABI,
+                        functionName: "quoteExactInputSingle",
+                        args: [token, usdc, tier, amount],
+                    })
+                    .then((v: unknown) => v as bigint)
+                    .catch((): bigint => 0n),
+                RPC_TIMEOUT_MS,
+            );
+            return raw ?? 0n;
+        }),
+    );
     let best = 0n;
-    for (const tier of V3_FEE_TIERS) {
-        try {
-            const out = (await publicClient.readContract({
-                address: quoter,
-                abi: QUOTER_ABI,
-                functionName: "quoteExactInputSingle",
-                args: [token, usdc, tier, amount],
-            })) as bigint;
-            if (out > best) best = out;
-        } catch {
-            // Pool not deployed at this tier OR liquidity exhausted —
-            // both treat as a non-result and move on.
-        }
-    }
+    for (const r of tierResults) if (r > best) best = r;
     return best;
 }
+

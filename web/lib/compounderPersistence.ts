@@ -199,12 +199,24 @@ export async function getActivePositions(): Promise<CompounderPosition[]> {
     if (!isDbConfigured()) return [];
     try {
         const sql = getSql();
+        // Audit H2 fix: sort by last_action_at ASC NULLS FIRST so the
+        // oldest-actioned positions get processed first on every tick.
+        // Previous `ORDER BY token_id ASC` was a denial-of-service
+        // surface: an attacker could mint dust positions at low token
+        // IDs to permanently starve every legitimate position at higher
+        // IDs out of the cron's slice(0, MAX_POSITIONS_PER_RUN). The
+        // rotation here is value-neutral — anyone whose position
+        // crossed its threshold and elapsed its cooldown gets serviced
+        // on a fair round-robin instead of a token-id race. Never-acted
+        // positions (NULL last_action_at) land at the top of the queue
+        // so a fresh deposit is not starved by a flood of older
+        // positions whose cooldown elapsed first.
         const rows = (await sql`
             SELECT *
             FROM compounder_positions
             WHERE withdrawn_at IS NULL
               AND mode <> 'NORMAL'
-            ORDER BY token_id ASC
+            ORDER BY last_action_at ASC NULLS FIRST, token_id ASC
         `) as unknown as RawPositionRow[];
         return rows.map(rowToPosition);
     } catch (err) {
@@ -498,6 +510,14 @@ export async function insertEvent(input: {
     if (!isDbConfigured()) return false;
     try {
         const sql = getSql();
+        // Audit I10 fix: idempotent insert. The migration
+        // 003_compounder_events_unique_txhash.sql adds a partial
+        // UNIQUE index on tx_hash where it's non-null. A retried
+        // cron POST that lands after the first response was lost in
+        // transit no longer double-counts — the duplicate quietly
+        // hits ON CONFLICT DO NOTHING. Pre-migration databases just
+        // get the new INSERT shape; the conflict clause is a no-op
+        // until the constraint exists.
         await sql`
             INSERT INTO compounder_events (
                 token_id,
@@ -520,6 +540,7 @@ export async function insertEvent(input: {
                 ${input.txHash ?? null},
                 ${input.blockNumber ?? null}::BIGINT
             )
+            ON CONFLICT DO NOTHING
         `;
         return true;
     } catch (err) {
