@@ -45,23 +45,46 @@ jobs:
     steps:
       - name: fire reconcile
         env:
-          # We reuse COMPOUNDER_CRON_URL but rewrite the path
-          # suffix from /cron to /reconcile so the same shared
-          # secret can authenticate both endpoints without
-          # operator confusion. If the operator later separates
-          # the URLs, swap this for a dedicated COMPOUNDER_RECONCILE_URL.
+          # Two ways to point this workflow at the right endpoint:
+          # (1) Set COMPOUNDER_RECONCILE_URL as a dedicated repo secret —
+          #     unambiguous, recommended.
+          # (2) Set only COMPOUNDER_CRON_URL — the workflow trims the
+          #     trailing /cron (and any trailing slash) and appends
+          #     /reconcile. Works for the canonical layout but fails
+          #     silently if the operator's secret has a typo, an
+          #     unexpected trailing slash, or a query string.
+          # The dedicated secret wins when both are set.
+          COMPOUNDER_RECONCILE_URL: ${{ secrets.COMPOUNDER_RECONCILE_URL }}
           COMPOUNDER_CRON_URL: ${{ secrets.COMPOUNDER_CRON_URL }}
           COMPOUNDER_CRON_SECRET: ${{ secrets.COMPOUNDER_CRON_SECRET }}
         run: |
-          if [ -z "$COMPOUNDER_CRON_URL" ] || [ -z "$COMPOUNDER_CRON_SECRET" ]; then
-            echo "Missing COMPOUNDER_CRON_URL or COMPOUNDER_CRON_SECRET repo secret"
+          if [ -z "$COMPOUNDER_CRON_SECRET" ]; then
+            echo "Missing COMPOUNDER_CRON_SECRET repo secret"
             exit 1
           fi
-          # Rewrite the path tail from /cron to /reconcile so a single
-          # repo secret powers both endpoints; the host/port/scheme
-          # stay identical so DNS surprises affect both endpoints the
-          # same way.
-          RECONCILE_URL="${COMPOUNDER_CRON_URL%/cron}/reconcile"
+
+          if [ -n "$COMPOUNDER_RECONCILE_URL" ]; then
+            RECONCILE_URL="$COMPOUNDER_RECONCILE_URL"
+          elif [ -n "$COMPOUNDER_CRON_URL" ]; then
+            # Robust rewrite: strip any trailing slashes first, then
+            # strip a trailing /cron (with or without further slashes),
+            # then append /reconcile. Handles "...cron", "...cron/",
+            # "...cron/?" and "...cron//" without producing double
+            # slashes in the final URL.
+            BASE="${COMPOUNDER_CRON_URL%%[?#]*}"
+            BASE="${BASE%/}"
+            BASE="${BASE%/cron}"
+            RECONCILE_URL="${BASE%/}/reconcile"
+          else
+            echo "Set either COMPOUNDER_RECONCILE_URL or COMPOUNDER_CRON_URL"
+            exit 1
+          fi
+
+          # Echo the path (NOT the secret) so a future 404 has a clear
+          # diagnostic trail in the workflow logs without leaking the
+          # bearer token.
+          echo "Reconcile URL: $RECONCILE_URL"
+
           curl --fail-with-body \
                --max-time 90 \
                --retry 2 \
