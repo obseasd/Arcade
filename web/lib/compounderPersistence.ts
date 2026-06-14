@@ -149,6 +149,20 @@ export async function getTotalClaimedByTokenForOwner(
     if (!isDbConfigured()) return out;
     try {
         const sql = getSql();
+        // Audit I10 sup fix: owner-history-aware attribution. An NPM
+        // NFT can be withdrawn + re-deposited by a different owner
+        // (the NFT trades freely between wallets), so a naive join on
+        // token_id alone attributes every prior life's events to the
+        // CURRENT owner. The corrected predicate uses COALESCE on
+        // chain_block_at -> block_at -> NOW() so events written before
+        // the migration 004 chain_block_at column still aggregate
+        // (they fall back to the legacy wall-clock timestamp).
+        //
+        // The interval (p.deposited_at <= event_ts < COALESCE(p.withdrawn_at, NOW()))
+        // is the canonical "this event happened during this owner's
+        // tenure of this token" predicate; the +1 second cushion on
+        // the upper bound handles same-block deposit + event
+        // ordering where chain_block_at could equal withdrawn_at.
         const rows = (await sql`
             SELECT e.token_id::text AS token_id,
                    COALESCE(SUM(e.amount0), 0)::text          AS total0,
@@ -158,6 +172,9 @@ export async function getTotalClaimedByTokenForOwner(
               JOIN compounder_positions p ON p.token_id = e.token_id
              WHERE p.owner_address = ${ownerAddress.toLowerCase()}
                AND e.event_type IN ('Compounded', 'FeesPushed')
+               AND COALESCE(e.chain_block_at, e.block_at) >= p.deposited_at
+               AND COALESCE(e.chain_block_at, e.block_at) <
+                   COALESCE(p.withdrawn_at + INTERVAL '1 second', NOW() + INTERVAL '1 day')
              GROUP BY e.token_id
         `) as unknown as {
             token_id: string;
@@ -506,6 +523,14 @@ export async function insertEvent(input: {
     usdValueMicros?: string;
     txHash?: string | null;
     blockNumber?: string | null;
+    /** Audit I10 sup fix: chain-authoritative block timestamp.
+     *  When provided, the row's chain_block_at column is populated
+     *  with the value the cron read from the receipt's block, so
+     *  dashboards aggregating by timestamp use the canonical chain
+     *  clock rather than the server wall clock the legacy block_at
+     *  default writes. ISO-8601 string for transport compatibility
+     *  with the route handler's serialisation. */
+    chainBlockAtIso?: string | null;
 }): Promise<boolean> {
     if (!isDbConfigured()) return false;
     try {
@@ -528,7 +553,8 @@ export async function insertEvent(input: {
                 protocol_fee1,
                 usd_value_micros,
                 tx_hash,
-                block_number
+                block_number,
+                chain_block_at
             ) VALUES (
                 ${input.tokenId}::BIGINT,
                 ${input.eventType},
@@ -538,7 +564,8 @@ export async function insertEvent(input: {
                 ${input.protocolFee1 ?? "0"}::NUMERIC,
                 ${input.usdValueMicros ?? "0"}::NUMERIC,
                 ${input.txHash ?? null},
-                ${input.blockNumber ?? null}::BIGINT
+                ${input.blockNumber ?? null}::BIGINT,
+                ${input.chainBlockAtIso ?? null}::TIMESTAMPTZ
             )
             ON CONFLICT DO NOTHING
         `;

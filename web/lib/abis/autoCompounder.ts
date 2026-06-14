@@ -152,6 +152,17 @@ export const AUTO_COMPOUNDER_ABI = [
     },
     {
         type: "event",
+        name: "ModeChanged",
+        inputs: [
+            { name: "tokenId", type: "uint256", indexed: true },
+            { name: "oldMode", type: "uint8", indexed: false },
+            { name: "newMode", type: "uint8", indexed: false },
+            { name: "minFeeMicros", type: "uint64", indexed: false },
+            { name: "maxSlippageBps", type: "uint16", indexed: false },
+        ],
+    },
+    {
+        type: "event",
         name: "Compounded",
         inputs: [
             { name: "tokenId", type: "uint256", indexed: true },

@@ -1,0 +1,72 @@
+name: compounder reconcile
+
+# POST /api/compounder/reconcile every hour. The handler scans the
+# last 50k blocks (~7h of headroom) of Compounder events and
+# reconciles them into the DB via the existing insertEvent /
+# upsertPosition / markWithdrawn helpers. ON CONFLICT DO NOTHING +
+# the UNIQUE(tx_hash) index from migration 003 keep the writes
+# idempotent, so an overlap with the keeper's 5-min cron is safe.
+#
+# Cadence rationale: hourly balances coverage against function-budget
+# cost. The keeper's 5-min cron writes events on its own happy path;
+# this worker catches the two failure modes the keeper misses —
+# a transient 503 between writeContract and insertEvent (silent gap)
+# and a direct on-chain interaction via Etherscan / safeTransferFrom
+# (the keeper never sees these). Hourly catches both within an SLA
+# the team can act on.
+#
+# Required secrets (same as compounder-scan):
+#   COMPOUNDER_CRON_URL    : Full URL, e.g.
+#                            https://www.arcade.trading/api/compounder/reconcile
+#                            (NOTE the /reconcile suffix; the secret
+#                            is the same as the main cron because the
+#                            domain is identical).
+#   COMPOUNDER_CRON_SECRET : Bearer secret matching Vercel env
+#                            COMPOUNDER_CRON_SECRET.
+
+on:
+  schedule:
+    # Top of every hour, UTC.
+    - cron: "0 * * * *"
+  workflow_dispatch: {}
+
+# Cancel an in-flight run if a new one starts. The scan is idempotent
+# so overlap is safe, but running two parallel sweeps wastes Vercel
+# function budget.
+concurrency:
+  group: compounder-reconcile
+  cancel-in-progress: true
+
+jobs:
+  reconcile:
+    name: POST /api/compounder/reconcile
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: fire reconcile
+        env:
+          # We reuse COMPOUNDER_CRON_URL but rewrite the path
+          # suffix from /cron to /reconcile so the same shared
+          # secret can authenticate both endpoints without
+          # operator confusion. If the operator later separates
+          # the URLs, swap this for a dedicated COMPOUNDER_RECONCILE_URL.
+          COMPOUNDER_CRON_URL: ${{ secrets.COMPOUNDER_CRON_URL }}
+          COMPOUNDER_CRON_SECRET: ${{ secrets.COMPOUNDER_CRON_SECRET }}
+        run: |
+          if [ -z "$COMPOUNDER_CRON_URL" ] || [ -z "$COMPOUNDER_CRON_SECRET" ]; then
+            echo "Missing COMPOUNDER_CRON_URL or COMPOUNDER_CRON_SECRET repo secret"
+            exit 1
+          fi
+          # Rewrite the path tail from /cron to /reconcile so a single
+          # repo secret powers both endpoints; the host/port/scheme
+          # stay identical so DNS surprises affect both endpoints the
+          # same way.
+          RECONCILE_URL="${COMPOUNDER_CRON_URL%/cron}/reconcile"
+          curl --fail-with-body \
+               --max-time 90 \
+               --retry 2 \
+               --retry-delay 10 \
+               -X POST \
+               -H "Authorization: Bearer $COMPOUNDER_CRON_SECRET" \
+               -H "Content-Type: application/json" \
+               "$RECONCILE_URL"

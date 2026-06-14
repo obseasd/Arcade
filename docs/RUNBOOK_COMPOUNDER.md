@@ -230,6 +230,59 @@ contract directly via Etherscan.
 
 ---
 
+## Scenario 6.5 — COMPOUNDER_CRON_SECRET rotation
+
+Audit I7 fix. Different from the operator key (Scenario 2) — this is
+the Bearer token between GH Actions and the Vercel cron endpoint.
+Compromise risk is moderate: a leaked secret lets an attacker submit
+arbitrary cron triggers, but the route still runs against the
+operator wallet's budget and against the keeper's own cooldown +
+threshold logic, so the worst case is wasted gas on positions the
+attacker chose to prioritise.
+
+**Trigger**: scheduled rotation (every 90 days minimum), suspected
+GH Actions secret leak (logs accidentally pasted in Discord, etc.),
+team member offboarded.
+
+**Procedure** (zero-downtime, ~5 min):
+
+1. Generate a new 32-byte hex secret OFF-CHAIN:
+   ```bash
+   openssl rand -hex 32
+   ```
+2. **Vercel first** — update `COMPOUNDER_CRON_SECRET` to the new
+   value (Settings → Environment Variables → edit → Save). Mark
+   sensitive ON.
+3. Redeploy Vercel from the dashboard so the new env reaches the
+   live function instance.
+4. Wait for Vercel to report ✅ Ready.
+5. **GitHub second** — update the `COMPOUNDER_CRON_SECRET` repo
+   secret to the same value. Settings → Secrets and variables →
+   Actions → Update.
+6. Trigger one manual cron run + one manual reconcile run via the
+   Actions tab. Both should return ✅.
+
+**Order rationale**: Vercel before GitHub. If GitHub had the new
+secret first, GH Actions would post the new token to a Vercel
+endpoint that still expects the old one and every workflow run
+would fail with 401 until Vercel caught up. The reverse window
+(Vercel knows the new token, GH still sends the old one) also
+fails — 401 — but the failure is BOUNDED by the GH Actions
+cadence (one missed tick per cron, vs. the indefinitely-failing
+state if GH was updated first and an operator forgot to redeploy
+Vercel).
+
+**Important**: both `/api/compounder/cron` AND
+`/api/compounder/reconcile` use this single secret. Update once;
+both endpoints flip atomically because they read the same env.
+
+**Failure mode**: if you skip the Vercel redeploy step, the new
+env var sits in storage but the live function still has the old
+one cached. Symptoms: GH Actions return 401 after the rotation
+even though both sides "look" updated. Force a redeploy.
+
+---
+
 ## Scenario 7 — Lost / fat-fingered transferOwnership
 
 **Trigger**: owner sent `transferOwnership(WRONG_ADDR)`. Now the

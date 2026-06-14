@@ -111,6 +111,23 @@ interface IERC721ReceiverMin {
  *         Written in =0.7.6 to share the canonical Uniswap V3 math and
  *         interfaces with the rest of the v3src/ stack (NPM, Locker,
  *         SwapRouter). Drop-in compatible with ArcadeV3PositionManager.
+ *
+ *         **Donations are unrecoverable.** Audit M5 fix — explicit
+ *         user warning. Both `pushFees` and `compound` source their
+ *         distribution amounts from the NPM.collect return values,
+ *         NOT from balanceOf(this). An ERC-20 sent directly to this
+ *         contract (by `transfer` from an EOA, by the rare token that
+ *         pushes tokens on a fallback handler, by the user accidentally
+ *         pasting the Compounder address into a withdraw flow, etc.)
+ *         lands in the contract's balance and stays there forever.
+ *         There is no `sweep` / `rescue` admin function and intentionally
+ *         so: any rescue path inevitably opens a same-block sandwich
+ *         against fee-distribution semantics (admin could skim
+ *         collected-but-not-yet-distributed fees) and the audit's
+ *         risk/reward analysis prefers documented loss over privileged
+ *         clawback. If you need to recover a donated balance, deploy
+ *         a new Compounder, migrate user positions, and accept the
+ *         donation as a one-time loss recorded for governance.
  */
 contract ArcadeAutoCompounder is IERC721ReceiverMin {
     // --------------------------------------------------------------------

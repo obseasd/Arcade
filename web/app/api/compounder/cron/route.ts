@@ -459,13 +459,33 @@ async function onTxSubmitted(ctx: SubmittedContext): Promise<void> {
         // and the failure mode is intentionally permissive: any
         // quoting error contributes 0 to the sum so the metric
         // undercounts honestly rather than refusing to write the row.
-        const usdValueMicros = await quoteUsdcValueForPair(
-            ctx.publicClient,
-            ctx.position.token0Address,
-            ctx.position.token1Address,
-            ctx.fee0,
-            ctx.fee1,
-        );
+        //
+        // Audit I10 sup fix: also read the block's chain-authoritative
+        // timestamp and pass it through to insertEvent so the
+        // dashboard's time-series aggregations bin by the canonical
+        // clock instead of the server wall clock. The read is wrapped
+        // in withTimeout so a slow RPC cannot push the receipt path
+        // past the function ceiling; failure falls back to NULL,
+        // which the SUM query handles via COALESCE.
+        const [usdValueMicros, chainBlockAtIso] = await Promise.all([
+            quoteUsdcValueForPair(
+                ctx.publicClient,
+                ctx.position.token0Address,
+                ctx.position.token1Address,
+                ctx.fee0,
+                ctx.fee1,
+            ),
+            withTimeout(
+                ctx.publicClient
+                    .getBlock({ blockNumber: receipt.blockNumber })
+                    .then(
+                        (b: { timestamp: bigint }) =>
+                            new Date(Number(b.timestamp) * 1000).toISOString() as string,
+                    )
+                    .catch((): string | null => null),
+                RPC_TIMEOUT_MS,
+            ).then((v) => (v as string | null) ?? null),
+        ]);
         await insertEvent({
             tokenId: ctx.position.tokenId,
             eventType: ctx.kind === "compound" ? "Compounded" : "FeesPushed",
@@ -474,6 +494,7 @@ async function onTxSubmitted(ctx: SubmittedContext): Promise<void> {
             usdValueMicros: usdValueMicros.toString(),
             txHash: ctx.hash,
             blockNumber: receipt.blockNumber.toString(),
+            chainBlockAtIso,
         });
     } else {
         ctx.summary.failed++;
