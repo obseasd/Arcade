@@ -30,7 +30,13 @@ export const metadata = {
  * number is an estimate (txCount * average gas cost). We surface this
  * disclosure inline so the dashboard never overstates reality.
  */
-export const revalidate = 300;
+// Was revalidate = 300 (5-minute ISR cache). Dropped to 30 s after the
+// 2026-06-14 stats fix shipped: a manual cron trigger persists a fresh
+// row but /stats kept serving the previous one for 5 minutes, which
+// made it look like the volume + gas math was still broken. Reads from
+// Postgres are cheap (one SELECT + one LIMIT 720) so a 30 s ceiling is
+// well inside the dashboard's expected freshness without adding load.
+export const revalidate = 30;
 
 const HISTORY_WINDOW_DAYS = 30;
 const HISTORY_WINDOW_MS = HISTORY_WINDOW_DAYS * 24 * 60 * 60 * 1000;
