@@ -898,20 +898,9 @@ function V3PositionRow({
                 symbols render as <TokenIcon> circles in both variants so
                 the row stays compact on narrower grid widths. */}
             {managed ? (
-                <div className="mt-3 rounded-xl border border-arc-border bg-white/[0.015] p-3 text-xs">
-                    <div className="flex items-center justify-between gap-2">
-                        <span className="text-arc-text-muted">Total claimed</span>
-                        <span className="tabular-nums font-semibold text-arc-text">
-                            {managed.totalClaimedUsdc !== undefined
-                                ? fmtUsd(managed.totalClaimedUsdc)
-                                : "—"}
-                        </span>
-                    </div>
-                    {/* Both raw token sums so the user sees what actually
-                        moved through the cron, not just the USD headline.
-                        Mirrors the "Unclaimed fees" pair shape so the two
-                        variants of the card stay visually consistent. */}
-                    <div className="mt-2 flex items-center justify-end gap-3 tabular-nums text-arc-text-muted">
+                <div className="mt-3 flex items-center justify-between gap-2 rounded-xl border border-arc-border bg-white/[0.015] p-3 text-xs">
+                    <span className="text-arc-text-muted">Total claimed</span>
+                    <span className="inline-flex items-center gap-3 tabular-nums">
                         <span className="inline-flex items-center gap-1.5">
                             {formatTok(
                                 managed.totalClaimedAmount0 ?? 0n,
@@ -927,7 +916,7 @@ function V3PositionRow({
                             )}
                             <TokenIcon symbol={t1Info.symbol} size={14} />
                         </span>
-                    </div>
+                    </span>
                 </div>
             ) : (
                 <div className="mt-3 flex items-center justify-between gap-2 rounded-xl border border-arc-border bg-white/[0.015] p-3 text-xs">

@@ -128,14 +128,16 @@ export function AutoCompounderPanel() {
         <section className="mt-6">
             {account && (
                 <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-dashed border-arc-border bg-arc-bg-elevated/40 p-4">
-                    <div className="flex items-center gap-2 text-sm text-arc-text-muted">
-                        <Sparkles className="h-4 w-4 text-sky-400" />
-                        <span>
-                            {contractPaused
-                                ? "Auto-management is paused while the team investigates an incident. New deposits are temporarily disabled; existing positions can still withdraw."
-                                : "Want a position auto-claimed or auto-compounded by the keeper? Deposit it into the Compounder vault."}
-                        </span>
-                    </div>
+                    {contractPaused ? (
+                        <div className="flex items-center gap-2 text-sm text-arc-text-muted">
+                            <Sparkles className="h-4 w-4 text-sky-400" />
+                            <span>
+                                Auto-management is paused while the team investigates an incident. New deposits are temporarily disabled; existing positions can still withdraw.
+                            </span>
+                        </div>
+                    ) : (
+                        <span /> /* spacer so the button stays right-aligned */
+                    )}
                     <button
                         onClick={() => setModalOpen(true)}
                         disabled={contractPaused}

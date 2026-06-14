@@ -1345,10 +1345,7 @@ export function V3AddLiquidity({
                     <div className="mb-3 flex items-center gap-2">
                         <Sparkles className="h-4 w-4 text-sky-400" />
                         <span className="text-sm font-semibold text-arc-text">
-                            Auto-management
-                        </span>
-                        <span className="rounded-full border border-arc-border bg-arc-surface px-2 py-0.5 text-[10px] uppercase tracking-wider text-arc-text-faint">
-                            Optional
+                            Fees
                         </span>
                     </div>
                     <div className="grid grid-cols-3 gap-2">
@@ -1382,7 +1379,7 @@ export function V3AddLiquidity({
                                         "rounded-xl border p-3 text-left text-xs transition-colors",
                                         active
                                             ? "border-sky-400 bg-sky-400/5"
-                                            : "border-arc-border bg-arc-bg hover:border-arc-border-strong",
+                                            : "border-arc-border bg-white/[0.015] hover:border-arc-border-strong",
                                     )}
                                 >
                                     <div className="font-semibold text-arc-text">
@@ -1396,43 +1393,34 @@ export function V3AddLiquidity({
                         })}
                     </div>
                     {autoMode !== 0 && (
-                        <>
-                            <div className="mt-3 grid grid-cols-2 gap-3">
-                                <div>
-                                    <label className="mb-1 block text-[10px] uppercase tracking-wider text-arc-text-muted">
-                                        Threshold (USDC)
-                                    </label>
-                                    <input
-                                        type="text"
-                                        inputMode="decimal"
-                                        value={autoThresholdUsdc}
-                                        onChange={(e) => setAutoThresholdUsdc(e.target.value)}
-                                        disabled={submitting}
-                                        className="w-full rounded-xl border border-arc-border bg-arc-bg p-2.5 text-sm text-arc-text outline-none focus:border-arc-primary"
-                                    />
-                                </div>
-                                <div>
-                                    <label className="mb-1 block text-[10px] uppercase tracking-wider text-arc-text-muted">
-                                        Slippage (%)
-                                    </label>
-                                    <input
-                                        type="text"
-                                        inputMode="decimal"
-                                        value={autoSlippagePct}
-                                        onChange={(e) => setAutoSlippagePct(e.target.value)}
-                                        disabled={submitting}
-                                        className="w-full rounded-xl border border-arc-border bg-arc-bg p-2.5 text-sm text-arc-text outline-none focus:border-arc-primary"
-                                    />
-                                </div>
+                        <div className="mt-3 grid grid-cols-2 gap-3">
+                            <div>
+                                <label className="mb-1 block text-[10px] uppercase tracking-wider text-arc-text-muted">
+                                    Threshold (USDC)
+                                </label>
+                                <input
+                                    type="text"
+                                    inputMode="decimal"
+                                    value={autoThresholdUsdc}
+                                    onChange={(e) => setAutoThresholdUsdc(e.target.value)}
+                                    disabled={submitting}
+                                    className="w-full rounded-xl border border-arc-border bg-white/[0.015] p-2.5 text-sm text-arc-text outline-none focus:border-arc-primary"
+                                />
                             </div>
-                            <p className="mt-2 text-[10px] text-arc-text-faint">
-                                The keeper triggers on-chain when fees ≥
-                                threshold and the 5-min cooldown has elapsed.
-                                Protocol fee is capped at 5% on-chain
-                                (currently 1%). You can withdraw the NFT
-                                anytime from /positions.
-                            </p>
-                        </>
+                            <div>
+                                <label className="mb-1 block text-[10px] uppercase tracking-wider text-arc-text-muted">
+                                    Slippage (%)
+                                </label>
+                                <input
+                                    type="text"
+                                    inputMode="decimal"
+                                    value={autoSlippagePct}
+                                    onChange={(e) => setAutoSlippagePct(e.target.value)}
+                                    disabled={submitting}
+                                    className="w-full rounded-xl border border-arc-border bg-white/[0.015] p-2.5 text-sm text-arc-text outline-none focus:border-arc-primary"
+                                />
+                            </div>
+                        </div>
                     )}
                 </div>
             )}
