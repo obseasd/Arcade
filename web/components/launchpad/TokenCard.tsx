@@ -23,11 +23,18 @@ interface Props {
 
 export function TokenCard({ token, curveSupply, priority }: Props) {
   const progress = curveSupply > 0n ? Number((token.tokensSold * 10_000n) / curveSupply) / 100 : 0;
-  // The list hook's bulk scan can be slow (multi-second on Arc RPC) so the
-  // image URL may not be populated yet. useTokenImage handles all 3 metadata
-  // shapes (inline data:, ipfs:// JSON, direct http URL) via a module-level
-  // cache so the same logo across many cards only fetches once.
-  const { image } = useTokenImage(token.address);
+  // The bulk launchpad scan has ALREADY discovered each token's
+  // metadataURI via useLaunchpadTokens' cross-generation TokenCreated
+  // walk. Pass that URI straight through to useTokenImage so the hook
+  // skips its own per-token getLogs scan entirely - that duplicate scan
+  // was the single biggest contributor to the cold-load RPC storm
+  // visible in Alchemy's "throughput limited" metric (24% rate). When
+  // token.metadataURI is empty (token registered but URI hasn't been
+  // discovered yet), the override is undefined and the hook falls back
+  // to its own scan; cards still resolve eventually, just one round
+  // trip slower.
+  const uriOverride = token.metadataURI || undefined;
+  const { image } = useTokenImage(token.address, uriOverride);
   const symbol = token.symbol ?? "?";
 
   // CLANKER_V3 = no bonding curve, locked single-sided V3 LP from birth.

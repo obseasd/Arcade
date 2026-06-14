@@ -9,15 +9,16 @@ const TOKEN_CREATED_EVT = parseAbiItem(
   "event TokenCreated(address indexed token, address indexed creator, uint8 mode, address creator2, uint16 creator2ShareBps, string name, string symbol, string metadataURI)",
 );
 
-// Bumped from 1k → 50k after the Alchemy switch. Public Arc RPC capped
-// getLogs at ~1-5k blocks per call, which forced this hook into 500
-// chunks/token. With 30+ tokens visible on /launchpad each firing its
-// own scan, that produced ~15,000 getLogs calls per cold render and
-// blew straight past Alchemy's 300 CU/s free-tier ceiling. 50k chunks
-// reduce per-token scans to ~10 windows, dropping the cold-load storm
-// 50x and letting metadataURI resolution actually finish under the
-// rate limit.
-const CHUNK = 50_000n;
+// 10k chunks match Alchemy's documented filtered-getLogs cap on free
+// tier. Used to be 1k (public-Arc safe) which forced 500 windows/token
+// and 15k calls per launchpad render. Even with this, the dominant
+// cost is that TokenCard calls useTokenImage(addr) which re-runs this
+// scan FOR EACH TOKEN even though useLaunchpadTokens already produced
+// a metadataURI per token. The /launchpad page now passes that URI
+// down (see TokenCard) so this duplicate scan only runs for orphan
+// callers (token detail page, etc.) where the parent doesn't have
+// the URI ready-to-hand.
+const CHUNK = 10_000n;
 const MAX_BACK = 500_000n;
 
 /**
@@ -30,7 +31,13 @@ const MAX_BACK = 500_000n;
  * URI share one scan + one cache entry. URIs are immutable post-launch, so
  * staleTime is Infinity - we never refetch.
  */
-export function useTokenMetadataURI(token: Address | undefined): {
+export function useTokenMetadataURI(
+  token: Address | undefined,
+  /** Override to disable the scan. Set to false from useTokenMetadata
+   *  when the caller passed an explicit metadataURIOverride - no point
+   *  burning a getLogs storm to re-derive what we already have. */
+  enabled: boolean = true,
+): {
   metadataURI: string | undefined;
   isLoading: boolean;
 } {
@@ -39,7 +46,7 @@ export function useTokenMetadataURI(token: Address | undefined): {
 
   const { data, isLoading, isFetching } = useQuery<string | undefined>({
     queryKey: ["arcade", "tokenMetadataURI", tokenKey],
-    enabled: !!publicClient && !!tokenKey,
+    enabled: enabled && !!publicClient && !!tokenKey,
     // URIs never change after the token is launched, so we want this in
     // cache forever. RQ defaults to a 5-minute stale window; Infinity
     // turns that off so the query never re-runs for the same token.

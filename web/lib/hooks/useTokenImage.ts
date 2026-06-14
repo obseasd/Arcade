@@ -71,11 +71,17 @@ async function resolveMetadata(
  * fetch. Since metadata JSONs at a given URI are immutable, staleTime is
  * Infinity.
  */
-export function useTokenMetadata(token: Address | undefined): {
+export function useTokenMetadata(
+  token: Address | undefined,
+  /** Skip the per-token getLogs scan when the URI is already known. */
+  metadataURIOverride?: string,
+): {
   metadata: TokenMetadata | undefined;
   isLoading: boolean;
 } {
-  const { metadataURI, isLoading: uriLoading } = useTokenMetadataURI(token);
+  const scanned = useTokenMetadataURI(token, !metadataURIOverride);
+  const metadataURI = metadataURIOverride ?? scanned.metadataURI;
+  const uriLoading = !metadataURIOverride && scanned.isLoading;
 
   const { data, isLoading, isFetching } = useQuery<TokenMetadata | null>({
     queryKey: ["arcade", "tokenMetadata", metadataURI],
@@ -108,11 +114,20 @@ export function useTokenMetadata(token: Address | undefined): {
  * resolvable is found. Builds on `useTokenMetadata` so the JSON fetch is
  * shared with any caller that also needs the description / socials.
  */
-export function useTokenImage(token: Address | undefined): {
+export function useTokenImage(
+  token: Address | undefined,
+  /** Optional metadataURI override. When the caller already has the
+   *  URI in hand (e.g. /launchpad receives one per token from the
+   *  useLaunchpadTokens cross-generation scan), pass it here so the
+   *  hook skips its own per-token getLogs scan and goes straight to
+   *  JSON resolution. This is the difference between 30 launchpad
+   *  cards firing 30 parallel metadataURI scans and 0. */
+  metadataURIOverride?: string,
+): {
   image: string | undefined;
   isLoading: boolean;
 } {
-  const { metadata, isLoading } = useTokenMetadata(token);
+  const { metadata, isLoading } = useTokenMetadata(token, metadataURIOverride);
   const image = metadata?.image ? resolveIpfs(metadata.image) : undefined;
   return { image, isLoading };
 }

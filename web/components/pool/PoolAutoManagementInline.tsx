@@ -331,34 +331,42 @@ function ManagedRowCard({
                 </div>
             </div>
 
-            <div className="mb-4 grid grid-cols-2 gap-3">
-                <div>
-                    <label className="mb-2 block text-xs uppercase tracking-wider text-arc-text-muted">
-                        Threshold (USDC)
-                    </label>
-                    <input
-                        type="text"
-                        inputMode="decimal"
-                        value={thresholdUsdc}
-                        onChange={(e) => setThresholdUsdc(e.target.value)}
-                        disabled={busy}
-                        className="w-full rounded-xl border border-arc-border bg-white/[0.015] p-3 text-sm text-arc-text outline-none focus:border-arc-primary"
-                    />
+            {/* Threshold + Slippage only matter when the keeper has work
+                to do. NORMAL mode is "tracked, no actions" so neither
+                input applies; rendering them empty would mislead the
+                user into thinking they control something. Hide both,
+                save the form field state so a switch back to RECEIVE /
+                COMPOUND re-uses the user's last values without a wipe. */}
+            {mode !== "NORMAL" && (
+                <div className="mb-4 grid grid-cols-2 gap-3">
+                    <div>
+                        <label className="mb-2 block text-xs uppercase tracking-wider text-arc-text-muted">
+                            Threshold (USDC)
+                        </label>
+                        <input
+                            type="text"
+                            inputMode="decimal"
+                            value={thresholdUsdc}
+                            onChange={(e) => setThresholdUsdc(e.target.value)}
+                            disabled={busy}
+                            className="w-full rounded-xl border border-arc-border bg-white/[0.015] p-3 text-sm text-arc-text outline-none focus:border-arc-primary"
+                        />
+                    </div>
+                    <div>
+                        <label className="mb-2 block text-xs uppercase tracking-wider text-arc-text-muted">
+                            Slippage (%)
+                        </label>
+                        <input
+                            type="text"
+                            inputMode="decimal"
+                            value={slippagePct}
+                            onChange={(e) => setSlippagePct(e.target.value)}
+                            disabled={busy}
+                            className="w-full rounded-xl border border-arc-border bg-white/[0.015] p-3 text-sm text-arc-text outline-none focus:border-arc-primary"
+                        />
+                    </div>
                 </div>
-                <div>
-                    <label className="mb-2 block text-xs uppercase tracking-wider text-arc-text-muted">
-                        Slippage (%)
-                    </label>
-                    <input
-                        type="text"
-                        inputMode="decimal"
-                        value={slippagePct}
-                        onChange={(e) => setSlippagePct(e.target.value)}
-                        disabled={busy}
-                        className="w-full rounded-xl border border-arc-border bg-white/[0.015] p-3 text-sm text-arc-text outline-none focus:border-arc-primary"
-                    />
-                </div>
-            </div>
+            )}
 
             <div className="flex items-center justify-end">
                 <button

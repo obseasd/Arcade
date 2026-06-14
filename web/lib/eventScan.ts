@@ -14,12 +14,18 @@
 
 import { Address } from "viem";
 
-/** Per-call block window for the official Arc RPC. Small + safe. */
-export const CHUNK_SMALL = 1_000n;
+/** Per-call block window. Pre-Alchemy this was 1k to stay inside the
+ *  Arc public RPC range cap. Post-Alchemy (which handles 10k filtered
+ *  ranges natively on free tier) the 1k size produced a 10x request-
+ *  count multiplier on every cold render and was the dominant cause
+ *  of the launchpad-image rate-limit storm visible in the Alchemy
+ *  metrics dashboard (24% throughput-limited, 52% success-rate).
+ *  10k matches Alchemy's documented free-tier filtered-getLogs cap. */
+export const CHUNK_SMALL = 10_000n;
 /** Mid-window for holders / candles where we walk wider history. */
-export const CHUNK_MEDIUM = 5_000n;
+export const CHUNK_MEDIUM = 10_000n;
 /** Largest window we attempt. Use only on the thirdweb proxy. */
-export const CHUNK_LARGE = 10_000n;
+export const CHUNK_LARGE = 50_000n;
 
 /** Default cap on how far back we walk total. ~5-7 days on a 1s-block chain. */
 export const MAX_BACK_BLOCKS = 500_000n;
