@@ -52,7 +52,25 @@ export default function LaunchpadIndexPage() {
   }, [v4HookTokens]);
 
   const filtered = useMemo(() => {
-    let list: LaunchpadTokenInfo[] = [...tokens];
+    // Drop tokens whose chain state never resolved before we render. The
+    // multi-generation address scan can surface a token id that lives on
+    // a prior generation whose state struct is no longer reachable (RPC
+    // miss, contract upgrade) — those render as "Unnamed / by 0x0..."
+    // cards that pollute the grid and break the search/sort UX for
+    // every user, not just the one whose cache went stale. Filter is
+    // permissive: a token only needs ONE valid signal (real reserve,
+    // tokens sold, non-zero creator, OR a resolved name+symbol) to
+    // survive, so any token whose ERC20 reads landed but whose state
+    // struct lagged still passes.
+    const ZERO_ADDR = "0x0000000000000000000000000000000000000000";
+    const survives = (t: LaunchpadTokenInfo): boolean => {
+      const hasCreator =
+        !!t.creator && t.creator.toLowerCase() !== ZERO_ADDR;
+      const hasActivity = t.realUsdcReserve > 0n || t.tokensSold > 0n;
+      const hasMeta = !!t.name && !!t.symbol;
+      return hasCreator || hasActivity || hasMeta;
+    };
+    let list: LaunchpadTokenInfo[] = tokens.filter(survives);
 
     // Filter
     if (filter === "new") {
