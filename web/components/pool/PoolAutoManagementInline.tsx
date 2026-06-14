@@ -82,6 +82,41 @@ async function readPositionPoolTuple(
     }
 }
 
+/** Read Compounder.configs(tokenId) so the panel can compare the form
+ *  state against ON-CHAIN truth, not against the API mirror (which can
+ *  drift). PositionConfig tuple shape:
+ *    [depositor (address), mode (uint8),
+ *     maxSlippageBps (uint16), lastActionAt (uint64),
+ *     minFeeMicros (uint64)]
+ *  Returns null on any error so a single dead row doesn't break the
+ *  panel render. */
+async function readPositionConfig(
+    tokenId: bigint,
+): Promise<
+    | { mode: Mode; maxSlippageBps: number; minFeeMicros: bigint }
+    | null
+> {
+    const compounder = ADDRESSES.autoCompounder as Address;
+    if (compounder === "0x0000000000000000000000000000000000000000") return null;
+    try {
+        const client = createPublicClient({ chain: arcTestnet, transport: http(RPC_URL) });
+        const result = (await client.readContract({
+            address: compounder,
+            abi: AUTO_COMPOUNDER_ABI,
+            functionName: "configs",
+            args: [tokenId],
+        })) as readonly unknown[];
+        const modeId = Number(result[1]);
+        const mode: Mode =
+            modeId === 1 ? "RECEIVE" : modeId === 2 ? "COMPOUND" : "NORMAL";
+        const maxSlippageBps = Number(result[2]);
+        const minFeeMicros = BigInt(result[4] as bigint);
+        return { mode, maxSlippageBps, minFeeMicros };
+    } catch {
+        return null;
+    }
+}
+
 export function PoolAutoManagementInline({
     poolToken0,
     poolToken1,
@@ -175,13 +210,35 @@ export function PoolAutoManagementInline({
                         resolvedFee = tuple.feePip;
                     }
                     if (!matchesPool(resolvedT0, resolvedT1, resolvedFee)) continue;
+                    // Overlay the on-chain configs(tokenId) tuple. The
+                    // API mirror can drift from chain (a setMode tx that
+                    // landed before the mirror call shipped, a reconcile
+                    // worker lag, etc.) and Save was getting stuck "not
+                    // dirty" because the form's initial state matched
+                    // the API instead of the truth. Reading configs()
+                    // costs one eth_call per row and gives us the
+                    // authoritative (mode, slippage, threshold) tuple
+                    // so dirty + the Save flow line up with chain.
+                    let onchainMode: Mode = p.mode as Mode;
+                    let onchainMinFee = p.minFeeMicros
+                        ? BigInt(p.minFeeMicros)
+                        : 100_000n;
+                    let onchainSlipBps = p.maxSlippageBps ?? 50;
+                    try {
+                        const cfg = await readPositionConfig(BigInt(p.tokenId));
+                        if (cfg) {
+                            onchainMode = cfg.mode;
+                            onchainMinFee = cfg.minFeeMicros;
+                            onchainSlipBps = cfg.maxSlippageBps;
+                        }
+                    } catch {
+                        // fall through to API values
+                    }
                     matched.push({
                         tokenId: BigInt(p.tokenId),
-                        mode: p.mode as Mode,
-                        minFeeMicros: p.minFeeMicros
-                            ? BigInt(p.minFeeMicros)
-                            : 100_000n,
-                        maxSlippageBps: p.maxSlippageBps ?? 50,
+                        mode: onchainMode,
+                        minFeeMicros: onchainMinFee,
+                        maxSlippageBps: onchainSlipBps,
                     });
                 }
                 if (!cancelled) setRows(matched);
