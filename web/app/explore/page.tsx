@@ -25,7 +25,7 @@ import {
     ResponsiveContainer,
     Tooltip as RechartsTooltip,
 } from "recharts";
-import { Address, formatUnits } from "viem";
+import { Address, erc20Abi, formatUnits, zeroAddress } from "viem";
 import { useReadContracts } from "wagmi";
 
 import { PAIR_ABI } from "@/lib/abis/dex";
@@ -156,6 +156,51 @@ export default function ExplorePage() {
         query: { enabled: v2Pairs.length > 0 },
     });
 
+    // Launchpad CLANKER_V3 pools were previously rendered with tvlUsdc=0n
+    // because the page only fetched USDC.balanceOf for the v3FactoryPools
+    // path (manually-created USDC/<token> pools). Launchpad-managed V3
+    // pools (USDC/CL, USDC/ETH-via-launchpad-mode) were therefore
+    // displayed with all dashes - TVL / sort order / dollar sums all
+    // blank. Multicall their underlying-pool addresses now and feed
+    // the result back into both the subRow.tvlUsdc and parent
+    // row.tvlUsdc so the column populates the same way the factory
+    // path does. Approximation: tvl = USDC.balanceOf(pool) * 2,
+    // matching useV3FactoryPools' convention for 50/50 weighted pools
+    // (over-counts for out-of-range positions + single-sided launches,
+    // which the indexer roadmap (Circle Grant Milestone 3) replaces
+    // with a precise figure).
+    const launchpadV3Pools = useMemo<
+        { token: Address; pool: Address }[]
+    >(() => {
+        const out: { token: Address; pool: Address }[] = [];
+        for (const t of v3Tokens) {
+            const pool = v3PoolOf(t.address);
+            if (!pool || pool === zeroAddress) continue;
+            out.push({ token: t.address, pool });
+        }
+        return out;
+    }, [v3Tokens, v3PoolOf]);
+    const launchpadV3BalQ = useReadContracts({
+        contracts: launchpadV3Pools.map((p) => ({
+            address: ADDRESSES.usdc,
+            abi: erc20Abi,
+            functionName: "balanceOf" as const,
+            args: [p.pool] as const,
+        })),
+        query: { enabled: launchpadV3Pools.length > 0 },
+    });
+    const launchpadV3TvlByToken = useMemo<Map<string, bigint>>(() => {
+        const m = new Map<string, bigint>();
+        if (!launchpadV3BalQ.data) return m;
+        for (let i = 0; i < launchpadV3Pools.length; i++) {
+            const r = launchpadV3BalQ.data[i];
+            if (r?.status !== "success") continue;
+            const bal = r.result as bigint;
+            m.set(launchpadV3Pools[i].token.toLowerCase(), bal * 2n);
+        }
+        return m;
+    }, [launchpadV3BalQ.data, launchpadV3Pools]);
+
     const tokenLookup = useMemo(() => {
         const m = new Map<string, { symbol: string; decimals: number }>();
         m.set(USDC_LOWER, { symbol: "USDC", decimals: USDC_DECIMALS });
@@ -281,13 +326,16 @@ export default function ExplorePage() {
             }
             const row = grouped.get(key)!;
             const launchpadPool = v3PoolOf(t.address);
+            const tvlUsdc =
+                launchpadV3TvlByToken.get(t.address.toLowerCase()) ?? 0n;
             row.subRows.push({
                 address: t.address,
                 poolAddress: launchpadPool ?? t.address,
                 version: "v3",
                 feeBps: Math.round(v3FeeOf(t.address) / 100),
-                tvlUsdc: 0n,
+                tvlUsdc,
             });
+            row.tvlUsdc += tvlUsdc;
         }
 
         // Manually-created V3 pools (factory.getPool enumeration). The same
@@ -344,7 +392,7 @@ export default function ExplorePage() {
             row.isIncentivized = isIncentivisedRow(row);
         }
         return out;
-    }, [v2Pairs, reservesQ.data, v3Tokens, v3FeeOf, v3PoolOf, v3FactoryPools, tokenLookup]);
+    }, [v2Pairs, reservesQ.data, v3Tokens, v3FeeOf, v3PoolOf, v3FactoryPools, tokenLookup, launchpadV3TvlByToken]);
 
     const filteredRows = useMemo(() => {
         let rows = allRows;
