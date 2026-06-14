@@ -296,12 +296,27 @@ function ManagedRowCard({
 
     const busy = saving || stopping;
 
+    // Detect any divergence from the on-chain config so the Save button
+    // can flag the user that the form has unsaved edits. Anything else
+    // would let the user click Save unnecessarily and burn gas on a no-op
+    // setMode tx.
+    const initialMode = row.mode;
+    const dirty =
+        mode !== initialMode ||
+        thresholdMicros !== row.minFeeMicros ||
+        slippageBps !== row.maxSlippageBps;
+
     return (
-        <div className="rounded-2xl border border-arc-border bg-arc-bg-elevated p-5">
+        <div className="rounded-2xl border border-arc-border bg-white/[0.015] p-5">
             <div className="mb-4 flex items-center justify-between">
                 <div className="text-sm text-arc-text-muted">
                     NFT #{row.tokenId.toString()}
                 </div>
+                {dirty && (
+                    <span className="rounded-full border border-sky-400/40 bg-sky-400/10 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-sky-400">
+                        Unsaved changes
+                    </span>
+                )}
             </div>
 
             <div className="mb-4">
@@ -379,10 +394,10 @@ function ManagedRowCard({
                 <button
                     type="button"
                     onClick={() => void handleSave()}
-                    disabled={busy}
-                    className="arc-button-primary px-5 py-2 text-sm"
+                    disabled={busy || !dirty}
+                    className="arc-button-primary px-5 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                    {saving ? "Saving…" : "Save"}
+                    {saving ? "Saving…" : dirty ? "Save changes" : "Save"}
                 </button>
             </div>
         </div>

@@ -243,7 +243,11 @@ export default function PoolDetailPage() {
                         Add Liquidity
                     </Link>
                     <Link
-                        href="/swap"
+                        href={
+                            token0 && token1
+                                ? `/swap?t0=${token0}&t1=${token1}`
+                                : "/swap"
+                        }
                         className="inline-flex items-center gap-1.5 rounded-xl border border-arc-border bg-sky-400/10 px-4 py-2 text-sm font-semibold text-sky-400 transition-colors hover:bg-sky-400/20"
                     >
                         <TrendingUp className="h-4 w-4" />

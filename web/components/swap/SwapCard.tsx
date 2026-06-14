@@ -2,6 +2,7 @@
 
 import { ArrowDownUp, ChevronDown } from "lucide-react";
 import Image from "next/image";
+import { useSearchParams } from "next/navigation";
 import { useRef } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { erc20Abi, formatUnits, parseUnits } from "viem";
@@ -91,6 +92,7 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
     return out;
   }, [v2Tokens, v3Tokens, curveTokens]);
 
+  const searchParams = useSearchParams();
   const [tokenIn, setTokenIn] = useState<TokenOption>(USDC_TOKEN);
   const [tokenOut, setTokenOut] = useState<TokenOption | null>(null);
   const [amountInStr, setAmountInStr] = useState("");
@@ -106,6 +108,31 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
   useEffect(() => {
     if (!tokenOut && v2Tokens.length > 0) setTokenOut(v2Tokens[0]);
   }, [v2Tokens, tokenOut]);
+
+  // Pool detail page deep-link: /swap?t0=0xUSDC&t1=0xETH (or any of
+  // t0/t1/tokenIn/tokenOut) pre-fills the swap pair so the Swap button
+  // on /pool/<address> lands the user on a ready-to-trade card. We
+  // resolve each address against the loaded token universe so the
+  // resulting TokenOption carries the correct symbol + decimals; if
+  // the address isn't in our list yet, we skip the prefill silently
+  // and the user can still pick the token by hand.
+  const prefillT0Param = searchParams.get("t0") ?? searchParams.get("tokenIn");
+  const prefillT1Param = searchParams.get("t1") ?? searchParams.get("tokenOut");
+  const prefillKey = `${prefillT0Param ?? ""}|${prefillT1Param ?? ""}`;
+  useEffect(() => {
+    if (!prefillT0Param && !prefillT1Param) return;
+    if (allTokens.length === 0) return;
+    const lookup = (addr: string | null): TokenOption | undefined => {
+      if (!addr) return undefined;
+      const lower = addr.toLowerCase();
+      return allTokens.find((t) => t.address.toLowerCase() === lower);
+    };
+    const inTok = lookup(prefillT0Param);
+    const outTok = lookup(prefillT1Param);
+    if (inTok) setTokenIn(inTok);
+    if (outTok) setTokenOut(outTok);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prefillKey, allTokens.length]);
 
   // Audit high [4]/[8]: a fallback of 18 here would mis-scale parseUnits /
   // formatUnits / minOut by up to 10^12 for any non-hardcoded 6-decimal

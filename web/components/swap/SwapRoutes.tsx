@@ -2,6 +2,7 @@
 
 import Image from "next/image";
 import { Check, Loader2 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { RouteQuote, PROVIDER_META, ProviderId } from "@/lib/routing/types";
 import { formatUnits } from "viem";
 import { cn } from "@/lib/utils";
@@ -60,7 +61,43 @@ export function SwapRoutes({
   usdPricePerOut,
   topN = 3,
 }: Props) {
+  // "No route found" used to flash for ~200ms between keystroke debounces:
+  // the parent's useRouteQuotes debounces amountIn for 250 ms, during which
+  // it's neither loading nor producing quotes. We suppress the empty-state
+  // message until quotes have been stable-empty AND loading has been false
+  // for 600 ms, long enough to span the debounce window.
+  const [showEmpty, setShowEmpty] = useState(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+    if (loading || quotes.length > 0) {
+      setShowEmpty(false);
+      return;
+    }
+    timerRef.current = setTimeout(() => setShowEmpty(true), 600);
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
+  }, [loading, quotes.length]);
+
   if (loading && quotes.length === 0) {
+    return (
+      <div className="mt-3 space-y-1.5">
+        <div className="text-[11px] font-medium uppercase tracking-wide text-arc-text-faint">
+          Routes
+        </div>
+        <div className="space-y-1.5">
+          <div className="h-12 animate-pulse rounded-xl bg-white/[0.03]" />
+          <div className="h-12 animate-pulse rounded-xl bg-white/[0.02]" />
+        </div>
+      </div>
+    );
+  }
+
+  if (quotes.length === 0 && !showEmpty) {
+    // Inter-debounce settle window. Render the skeleton instead of the
+    // "no route found" line so the column stays calm while quotes are
+    // mid-flight.
     return (
       <div className="mt-3 space-y-1.5">
         <div className="text-[11px] font-medium uppercase tracking-wide text-arc-text-faint">
