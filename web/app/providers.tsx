@@ -13,7 +13,13 @@ import { wagmiConfig } from "@/lib/wagmi";
 // entries get invalidated automatically on the next page load. Without
 // this, a query-key migration would silently feed stale serialised cache
 // rows into the new code shape.
-const CACHE_BUSTER = "arcade-rq-cache-v2";
+// v3 (2026-06-14): forced bump after the launchpad current-gen-only
+// filter shipped. Every persisted v2 cache row from before the filter
+// shows up as a "stale broken token" on the launchpad grid until the
+// query refetches; bumping the buster invalidates every v2 entry on
+// the very next page load so the new filter applies cleanly without
+// requiring users to manually clear localStorage.
+const CACHE_BUSTER = "arcade-rq-cache-v3";
 
 // Keep persisted entries for up to a week - covers the Lepton review
 // window comfortably while still letting genuinely stale data fall out of

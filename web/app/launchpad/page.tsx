@@ -7,6 +7,7 @@ import { PlusIcon } from "@/components/ui/MaskIcon";
 import { FEATURED_TOKENS, LAUNCHPAD_CURVE_SUPPLY, LAUNCHPAD_GRADUATION_USDC, LAUNCHPAD_TOTAL_SUPPLY, V4_ENABLED, V4_HOOK_ENABLED } from "@/lib/constants";
 import { ARCADE_HOOK_STATUS } from "@/lib/abis/arcadeHook";
 import { useLaunchpadTokens, LaunchpadTokenInfo } from "@/lib/hooks/useLaunchpadTokens";
+import { getLaunchpadGenerations } from "@/lib/launchpadGenerations";
 import { useV4LaunchpadTokens } from "@/lib/hooks/useV4LaunchpadTokens";
 import { useArcadeHookTokens, type ArcadeHookTokenInfo } from "@/lib/hooks/useArcadeHookTokens";
 import { useTokenImage } from "@/lib/hooks/useTokenImage";
@@ -52,25 +53,36 @@ export default function LaunchpadIndexPage() {
   }, [v4HookTokens]);
 
   const filtered = useMemo(() => {
-    // Drop tokens whose chain state never resolved before we render. The
-    // multi-generation address scan can surface a token id that lives on
-    // a prior generation whose state struct is no longer reachable (RPC
-    // miss, contract upgrade) — those render as "Unnamed / by 0x0..."
-    // cards that pollute the grid and break the search/sort UX for
-    // every user, not just the one whose cache went stale. Filter is
-    // permissive: a token only needs ONE valid signal (real reserve,
-    // tokens sold, non-zero creator, OR a resolved name+symbol) to
-    // survive, so any token whose ERC20 reads landed but whose state
-    // struct lagged still passes.
+    // HARD filter: the public /launchpad grid only ever surfaces tokens
+    // minted on the CURRENT-generation launchpad. Prior generations stay
+    // reachable via direct URL (the detail page still probes every
+    // generation) and via stats / portfolio surfaces, but they no longer
+    // pollute the discovery feed. The operator stance is that anyone who
+    // cares about a prior-gen token has a direct link to it; the public
+    // feed shows only tokens that can actually be bought right now on
+    // the live contract.
+    const currentLaunchpad = (
+      getLaunchpadGenerations().find((g) => g.isCurrent)?.address ?? ""
+    ).toLowerCase();
     const ZERO_ADDR = "0x0000000000000000000000000000000000000000";
-    const survives = (t: LaunchpadTokenInfo): boolean => {
+    const isCurrentGen = (t: LaunchpadTokenInfo): boolean => {
+      // The hook tags every token with `launchpad` (the contract that
+      // minted it). Compare to the current generation's address; the
+      // optional `generation` flag is a secondary signal for older
+      // hook revs that may still be on the page during a deploy.
+      const home = (
+        ((t as unknown as { launchpad?: string }).launchpad ?? "") +
+        ""
+      ).toLowerCase();
+      if (home && currentLaunchpad) return home === currentLaunchpad;
+      // Fallback: any token with a non-zero creator AND visible name
+      // is at least a current-gen candidate. Pure broken-state cards
+      // (creator = 0x0, no name) are always dropped.
       const hasCreator =
         !!t.creator && t.creator.toLowerCase() !== ZERO_ADDR;
-      const hasActivity = t.realUsdcReserve > 0n || t.tokensSold > 0n;
-      const hasMeta = !!t.name && !!t.symbol;
-      return hasCreator || hasActivity || hasMeta;
+      return hasCreator && !!t.name;
     };
-    let list: LaunchpadTokenInfo[] = tokens.filter(survives);
+    let list: LaunchpadTokenInfo[] = tokens.filter(isCurrentGen);
 
     // Filter
     if (filter === "new") {
