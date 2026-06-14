@@ -126,21 +126,17 @@ export function AutoCompounderPanel() {
 
     return (
         <section className="mt-6">
-            {account && (
+            {account && contractPaused && (
                 <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-dashed border-arc-border bg-arc-bg-elevated/40 p-4">
-                    {contractPaused ? (
-                        <div className="flex items-center gap-2 text-sm text-arc-text-muted">
-                            <Sparkles className="h-4 w-4 text-sky-400" />
-                            <span>
-                                Auto-management is paused while the team investigates an incident. New deposits are temporarily disabled; existing positions can still withdraw.
-                            </span>
-                        </div>
-                    ) : (
-                        <span /> /* spacer so the button stays right-aligned */
-                    )}
+                    <div className="flex items-center gap-2 text-sm text-arc-text-muted">
+                        <Sparkles className="h-4 w-4 text-sky-400" />
+                        <span>
+                            Auto-management is paused while the team investigates an incident. New deposits are temporarily disabled; existing positions can still withdraw.
+                        </span>
+                    </div>
                     <button
                         onClick={() => setModalOpen(true)}
-                        disabled={contractPaused}
+                        disabled
                         className="arc-button-secondary inline-flex items-center gap-2 px-4 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-50"
                     >
                         <Plus className="h-4 w-4" /> Deposit a position

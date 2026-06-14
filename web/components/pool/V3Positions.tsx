@@ -939,7 +939,10 @@ function V3PositionRow({
                 button that hands the NFT back; normal positions keep the
                 Manage + Add Liquidity pair. */}
             {managed ? (
-                <ManagedActions managed={managed} />
+                <ManagedActions
+                    managed={managed}
+                    addLiquidityHref={`/positions/add?type=v3&t0=${p.token0}&t1=${p.token1}&fee=${p.fee / 100}`}
+                />
             ) : (
                 <div className="mt-4 grid grid-cols-2 gap-2">
                     {poolAddress ? (
@@ -987,8 +990,10 @@ function fmtUsd(n: number): string {
  */
 function ManagedActions({
     managed,
+    addLiquidityHref,
 }: {
     managed: NonNullable<V3PositionRowProps["managed"]>;
+    addLiquidityHref: string;
 }) {
     const [open, setOpen] = useState(false);
     return (
@@ -1000,16 +1005,16 @@ function ManagedActions({
                     disabled={managed.settingsBusy}
                     className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-arc-border bg-white/[0.04] px-3 py-2.5 text-sm font-semibold text-arc-text transition-colors hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                    {managed.settingsBusy ? "Saving…" : "Settings"}
+                    <SliderIcon size={14} />
+                    {managed.settingsBusy ? "Saving…" : "Manage"}
                 </button>
-                <button
-                    type="button"
-                    onClick={() => void managed.onStop()}
-                    disabled={managed.stopBusy}
-                    className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-arc-border bg-white/[0.04] px-3 py-2.5 text-sm font-semibold text-arc-text transition-colors hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
+                <Link
+                    href={addLiquidityHref}
+                    className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-arc-cta px-3 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-arc-cta-hover"
                 >
-                    {managed.stopBusy ? "Stopping…" : "Stop"}
-                </button>
+                    <PlusIcon size={14} className="bg-white" />
+                    Add Liquidity
+                </Link>
             </div>
             {open && (
                 <ManagedSettingsModal
@@ -1019,6 +1024,11 @@ function ManagedActions({
                     initialMinFeeMicros={managed.minFeeMicros ?? 100_000n}
                     initialMaxSlippageBps={managed.maxSlippageBps ?? 50}
                     busy={!!managed.settingsBusy}
+                    stopBusy={!!managed.stopBusy}
+                    onStop={async () => {
+                        await managed.onStop();
+                        setOpen(false);
+                    }}
                     onSave={async (next) => {
                         await managed.onChangeSettings({
                             mode:
@@ -1056,6 +1066,8 @@ function ManagedSettingsModal({
     initialMinFeeMicros,
     initialMaxSlippageBps,
     busy,
+    stopBusy,
+    onStop,
     onSave,
 }: {
     open: boolean;
@@ -1064,6 +1076,8 @@ function ManagedSettingsModal({
     initialMinFeeMicros: bigint;
     initialMaxSlippageBps: number;
     busy: boolean;
+    stopBusy: boolean;
+    onStop: () => void | Promise<void>;
     onSave: (next: {
         mode: "NORMAL" | "RECEIVE" | "COMPOUND";
         minFeeMicros: bigint;
@@ -1147,7 +1161,7 @@ function ManagedSettingsModal({
                                         "rounded-xl border p-3 text-left text-xs transition-colors",
                                         active
                                             ? "border-sky-400 bg-sky-400/5"
-                                            : "border-arc-border bg-arc-bg hover:border-arc-border-strong",
+                                            : "border-arc-border bg-white/[0.015] hover:border-arc-border-strong",
                                     )}
                                 >
                                     <div className="font-semibold text-arc-text">
@@ -1173,7 +1187,7 @@ function ManagedSettingsModal({
                             value={thresholdUsdc}
                             onChange={(e) => setThresholdUsdc(e.target.value)}
                             disabled={busy}
-                            className="w-full rounded-xl border border-arc-border bg-arc-bg p-3 text-sm text-arc-text outline-none focus:border-arc-primary"
+                            className="w-full rounded-xl border border-arc-border bg-white/[0.015] p-3 text-sm text-arc-text outline-none focus:border-arc-primary"
                         />
                     </div>
                     <div>
@@ -1186,39 +1200,49 @@ function ManagedSettingsModal({
                             value={slippagePct}
                             onChange={(e) => setSlippagePct(e.target.value)}
                             disabled={busy}
-                            className="w-full rounded-xl border border-arc-border bg-arc-bg p-3 text-sm text-arc-text outline-none focus:border-arc-primary"
+                            className="w-full rounded-xl border border-arc-border bg-white/[0.015] p-3 text-sm text-arc-text outline-none focus:border-arc-primary"
                         />
                     </div>
                 </div>
 
-                <div className="rounded-xl border border-arc-border bg-arc-bg p-3 text-[11px] leading-relaxed text-arc-text-muted">
+                <div className="rounded-xl border border-arc-border bg-white/[0.015] p-3 text-[11px] leading-relaxed text-arc-text-muted">
                     Changes are applied in-place via Compounder.setMode —
                     the NFT stays in the vault and the keeper resumes
                     with the new settings on the next 5-minute tick. No
                     withdraw / redeposit needed.
                 </div>
 
-                <div className="flex justify-end gap-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
                     <button
-                        onClick={onClose}
-                        disabled={busy}
-                        className="rounded-xl border border-arc-border px-4 py-2 text-sm text-arc-text-muted hover:bg-arc-surface-2"
+                        type="button"
+                        onClick={() => void onStop()}
+                        disabled={busy || stopBusy}
+                        className="inline-flex items-center gap-1.5 rounded-xl border border-arc-warn/40 bg-arc-warn/10 px-4 py-2 text-sm font-semibold text-arc-warn transition-colors hover:bg-arc-warn/20 disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                        Cancel
+                        {stopBusy ? "Stopping…" : "Stop position"}
                     </button>
-                    <button
-                        onClick={() =>
-                            void onSave({
-                                mode,
-                                minFeeMicros: thresholdMicros,
-                                maxSlippageBps: slippageBps,
-                            })
-                        }
-                        disabled={busy}
-                        className="arc-button-primary px-5 py-2 text-sm"
-                    >
-                        {busy ? "Saving…" : "Save"}
-                    </button>
+                    <div className="flex items-center gap-2">
+                        <button
+                            onClick={onClose}
+                            disabled={busy || stopBusy}
+                            className="rounded-xl border border-arc-border px-4 py-2 text-sm text-arc-text-muted hover:bg-arc-surface-2"
+                        >
+                            Cancel
+                        </button>
+                        <button
+                            onClick={() =>
+                                void onSave({
+                                    mode,
+                                    minFeeMicros: thresholdMicros,
+                                    maxSlippageBps: slippageBps,
+                                })
+                            }
+                            disabled={busy || stopBusy}
+                            className="arc-button-primary px-5 py-2 text-sm"
+                        >
+                            {busy ? "Saving…" : "Save"}
+                        </button>
+                    </div>
                 </div>
             </div>
         </Modal>

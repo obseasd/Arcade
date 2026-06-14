@@ -885,6 +885,15 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
             ? `Fee ${feePctLabel} (${feeFormatted} ${tokenIn.symbol ?? "TOKEN"})`
             : undefined
         }
+        slippageLabel={
+          // Min received under current slippage tolerance. Shown only on
+          // exact-in trades — exact-out shows the max-sent on the From box
+          // (separate UI surface; the current pass kept the From box
+          // intentionally clean). Skip when no quote yet.
+          exactIn && tokenOut && finalAmountOut > 0n
+            ? `Min received ${formatTokenAmount(minOut, decimalsOut, 6)} ${symOut} (${(slippageBps / 100).toFixed(2)}% slippage)`
+            : undefined
+        }
       />
 
       {/* V4 tokens trade on a separate pool the V2/V3 aggregator can't
@@ -1173,6 +1182,9 @@ interface TokenBoxProps {
   lossPct?: number;
   /** Optional fee string shown in the bottom-right (typical for the "To" box). */
   feeLabel?: string;
+  /** Optional second row under USD/fee showing the slippage-protected
+   *  worst-case output ("Min received: 19.84 USDC · 0.50% slippage"). */
+  slippageLabel?: string;
 }
 
 function TokenBox({
@@ -1188,6 +1200,7 @@ function TokenBox({
   onMax,
   lossPct,
   feeLabel,
+  slippageLabel,
 }: TokenBoxProps) {
   const decimals = token?.decimals ?? 18;
   // formatToken now surfaces "<0.0001" for sub-0.0001 non-zero balances
@@ -1282,6 +1295,11 @@ function TokenBox({
           )}
         </div>
       </div>
+      {slippageLabel && (
+        <div className="mt-1 flex items-center justify-end text-[11px] text-arc-text-faint">
+          <span className="tabular-nums">{slippageLabel}</span>
+        </div>
+      )}
     </div>
   );
 }
