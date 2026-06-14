@@ -51,24 +51,26 @@ const RPC_TIMEOUT_MS = 3_000;
 const MAX_FEE_PER_GAS_WEI = 100_000_000_000n; // 100 gwei (audit I8 pattern)
 const MIN_OPERATOR_BALANCE_WEI = 1_000_000n; // 1 USDC
 
+// Dedicated provider URL via NEXT_PUBLIC_ARC_RPC_URL (Alchemy / thirdweb)
+// prepended to the fallback list so the auto-claim cron stops competing
+// with the rest of the app for public-RPC bandwidth.
+const ARC_RPC_LIST: readonly string[] = (() => {
+    const out: string[] = [];
+    const dedicated = process.env.NEXT_PUBLIC_ARC_RPC_URL;
+    if (dedicated) out.push(dedicated);
+    out.push("https://rpc.testnet.arc.network");
+    out.push("https://5042002.rpc.thirdweb.com");
+    return out;
+})();
+
 const ARC_CHAIN = {
     id: 5042002,
     name: "Arc Testnet",
     network: "arc-testnet",
     nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 6 },
     rpcUrls: {
-        default: {
-            http: [
-                "https://rpc.testnet.arc.network",
-                "https://5042002.rpc.thirdweb.com",
-            ],
-        },
-        public: {
-            http: [
-                "https://rpc.testnet.arc.network",
-                "https://5042002.rpc.thirdweb.com",
-            ],
-        },
+        default: { http: ARC_RPC_LIST },
+        public: { http: ARC_RPC_LIST },
     },
 } as const;
 

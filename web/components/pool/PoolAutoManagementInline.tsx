@@ -45,7 +45,11 @@ interface ManagedPositionRow {
     maxSlippageBps: number;
 }
 
-const RPC_URL = "https://rpc.testnet.arc.network";
+// Use the dedicated provider URL when one is configured via
+// NEXT_PUBLIC_ARC_RPC_URL (Alchemy / thirdweb) so this inline panel
+// shares the same low-rate-limit transport as the rest of the app.
+const RPC_URL =
+    process.env.NEXT_PUBLIC_ARC_RPC_URL ?? "https://rpc.testnet.arc.network";
 
 /** Read NPM.positions(tokenId) and pull the (token0, token1, fee) tuple
  *  the page needs to filter the managed-position list by pool. Returns

@@ -36,14 +36,21 @@ import { rateLimit } from "@/lib/apiGuard";
  */
 export const dynamic = "force-dynamic";
 
+// Dedicated provider URL via NEXT_PUBLIC_ARC_RPC_URL (Alchemy / thirdweb)
+// keeps the per-request configs() check off the rate-limited public RPC.
+const ARC_RPC_LIST: readonly string[] = [
+    process.env.NEXT_PUBLIC_ARC_RPC_URL,
+    "https://rpc.testnet.arc.network",
+].filter((u): u is string => !!u);
+
 const ARC_CHAIN = {
     id: 5042002,
     name: "Arc Testnet",
     network: "arc-testnet",
     nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 6 },
     rpcUrls: {
-        default: { http: ["https://rpc.testnet.arc.network"] },
-        public: { http: ["https://rpc.testnet.arc.network"] },
+        default: { http: ARC_RPC_LIST },
+        public: { http: ARC_RPC_LIST },
     },
 } as const;
 

@@ -68,6 +68,21 @@ const MAX_POSITIONS_PER_RUN = 6;
 // somebody else's RPC issue cost us the budget for an honest action.
 const RPC_TIMEOUT_MS = 3_000;
 
+// Arc RPC endpoint list. The dedicated provider URL (Alchemy / thirdweb
+// client-id) is prepended via NEXT_PUBLIC_ARC_RPC_URL so the cron stops
+// hammering the public rpc.testnet.arc.network endpoint into 429 land.
+// The rest of the list stays as fallbacks: viem's http transport with
+// multiple URLs round-robins on failure, so a single endpoint outage
+// does not break the whole sweep.
+const ARC_RPC_LIST: readonly string[] = (() => {
+    const out: string[] = [];
+    const dedicated = process.env.NEXT_PUBLIC_ARC_RPC_URL;
+    if (dedicated) out.push(dedicated);
+    out.push("https://rpc.testnet.arc.network");
+    out.push("https://5042002.rpc.thirdweb.com");
+    return out;
+})();
+
 const ARC_CHAIN = {
     id: 5042002,
     name: "Arc Testnet",
@@ -82,18 +97,8 @@ const ARC_CHAIN = {
         // Arc behaviour during prior outages was empty-getLogs +
         // 504s, both of which propagate cleanly through the
         // fallback).
-        default: {
-            http: [
-                "https://rpc.testnet.arc.network",
-                "https://5042002.rpc.thirdweb.com",
-            ],
-        },
-        public: {
-            http: [
-                "https://rpc.testnet.arc.network",
-                "https://5042002.rpc.thirdweb.com",
-            ],
-        },
+        default: { http: ARC_RPC_LIST },
+        public: { http: ARC_RPC_LIST },
     },
 } as const;
 
