@@ -51,8 +51,13 @@ export const wagmiConfig = getDefaultConfig({
     //   can't redirect wallet calls to an attacker-controlled host.
     //   Falls back to arcTestnet.rpcUrls.default.http[0] (the public
     //   rpc.testnet.arc.network) when unset or malformed.
+    // batch wait bumped 16 → 50 ms after the Alchemy switch revealed
+    // that bursty useReadContracts fan-outs still hit the 300 CU/s
+    // free-tier ceiling. 50 ms is below human perception (the UI feels
+    // identical) and packs noticeably more eth_calls into each batched
+    // JSON-RPC array, dropping the per-second HTTP request count.
     [arcTestnet.id]: http(resolveArcRpc(), {
-      batch: { wait: 16 },
+      batch: { wait: 50 },
     }),
     [anvilLocal.id]: http(anvilLocal.rpcUrls.default.http[0]),
     [sepolia.id]: http(),

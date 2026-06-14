@@ -9,7 +9,15 @@ const TOKEN_CREATED_EVT = parseAbiItem(
   "event TokenCreated(address indexed token, address indexed creator, uint8 mode, address creator2, uint16 creator2ShareBps, string name, string symbol, string metadataURI)",
 );
 
-const CHUNK = 1_000n;
+// Bumped from 1k → 50k after the Alchemy switch. Public Arc RPC capped
+// getLogs at ~1-5k blocks per call, which forced this hook into 500
+// chunks/token. With 30+ tokens visible on /launchpad each firing its
+// own scan, that produced ~15,000 getLogs calls per cold render and
+// blew straight past Alchemy's 300 CU/s free-tier ceiling. 50k chunks
+// reduce per-token scans to ~10 windows, dropping the cold-load storm
+// 50x and letting metadataURI resolution actually finish under the
+// rate limit.
+const CHUNK = 50_000n;
 const MAX_BACK = 500_000n;
 
 /**

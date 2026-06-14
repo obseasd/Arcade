@@ -475,11 +475,23 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
   // chaining on `activeRoute`, the probe stays idle until the first
   // round of quotes lands, halving the in-flight RPC pressure during
   // the typing storm.
+  // Additional gate: only fire the reference probe when the user's
+  // trade is BIG enough that depth-impact actually matters. A 0.001 ETH
+  // swap on a deep pool returns ~0% impact; the extra round of 5
+  // provider quotes is pure waste for the dominant small-trade case.
+  // We sample inUsd as a cheap proxy when available, else fall back to
+  // raw amount thresholds the active provider handles natively.
   const refProbeAmount = useMemo<bigint>(() => {
     if (amountInRaw < 100n) return 0n;
+    // Skip probe entirely when the USD value is small (< $10). Pool
+    // impact below that threshold is irrelevant to the user vs the RPC
+    // budget hit. inUsd may be undefined for ETH legs on Arc — fall
+    // through to the existing 1% probe in that case so the panel still
+    // surfaces a warning on whale trades against thin pools.
+    if (inUsd.usd !== undefined && inUsd.usd < 10) return 0n;
     const div100 = amountInRaw / 100n;
     return div100 > 0n ? div100 : 1n;
-  }, [amountInRaw]);
+  }, [amountInRaw, inUsd.usd]);
   const refQuotes = useRouteQuotes({
     tokenIn: tokenIn.address,
     tokenOut: tokenOut?.address,
