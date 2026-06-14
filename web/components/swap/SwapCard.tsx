@@ -224,6 +224,14 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
 
   // V2 router quotes - used for direct routes and as the input estimator for
   // multi-hop routes that DON'T touch a migrated launchpad token.
+  //
+  // retry: false on both V2 calls. The V2 router reverts when no pair
+  // exists for the requested path, which is the dominant outcome for
+  // USDC↔non-Arcade tokens (EURC, third-party stables). Default wagmi
+  // retries 3x with exponential backoff = ~6s of wasted RPC calls per
+  // keystroke + 3x the Alchemy CU debit per failed quote. Single-attempt
+  // is enough: the providers panel will surface the error once instead
+  // of spamming.
   const quoteOut = useReadContract({
     address: ADDRESSES.router,
     abi: ROUTER_ABI,
@@ -232,6 +240,7 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
     query: {
       enabled:
         !isV3Swap && !route.useLaunchpadRouter && lastEdited === "in" && amountInRaw > 0n && path.length >= 2,
+      retry: false,
     },
   });
   const quoteIn = useReadContract({
@@ -242,6 +251,7 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
     query: {
       enabled:
         !isV3Swap && !route.useLaunchpadRouter && lastEdited === "out" && amountOutRawTyped > 0n && path.length >= 2,
+      retry: false,
     },
   });
 
@@ -988,7 +998,14 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
           // inside the quote, so showing our Arcade V2 / V3 fee math here
           // would double-count and confuse the user. Only show the fee
           // hint on Arcade-routed swaps.
-          !isExternalRoute && feeRaw > 0n
+          //
+          // Gate on activeRoute as well: the fee figure assumes a known
+          // route's fee tier (0.3% for Arcade V2, dynamic for V3 by pool).
+          // Pre-route, "Fee 0.30%" is a stale guess that misleads when
+          // the eventual route ends up routing through a different fee
+          // tier or an external aggregator. Wait for the route to land,
+          // then render the real number.
+          !isExternalRoute && feeRaw > 0n && !!activeRoute && activeRoute.amountOut > 0n
             ? `Fee ${feePctLabel} (${feeFormatted} ${tokenIn.symbol ?? "TOKEN"})`
             : undefined
         }

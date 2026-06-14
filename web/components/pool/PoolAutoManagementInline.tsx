@@ -333,40 +333,49 @@ function ManagedRowCard({
 
             {/* Threshold + Slippage only matter when the keeper has work
                 to do. NORMAL mode is "tracked, no actions" so neither
-                input applies; rendering them empty would mislead the
-                user into thinking they control something. Hide both,
-                save the form field state so a switch back to RECEIVE /
-                COMPOUND re-uses the user's last values without a wipe. */}
-            {mode !== "NORMAL" && (
-                <div className="mb-4 grid grid-cols-2 gap-3">
-                    <div>
-                        <label className="mb-2 block text-xs uppercase tracking-wider text-arc-text-muted">
-                            Threshold (USDC)
-                        </label>
-                        <input
-                            type="text"
-                            inputMode="decimal"
-                            value={thresholdUsdc}
-                            onChange={(e) => setThresholdUsdc(e.target.value)}
-                            disabled={busy}
-                            className="w-full rounded-xl border border-arc-border bg-white/[0.015] p-3 text-sm text-arc-text outline-none focus:border-arc-primary"
-                        />
-                    </div>
-                    <div>
-                        <label className="mb-2 block text-xs uppercase tracking-wider text-arc-text-muted">
-                            Slippage (%)
-                        </label>
-                        <input
-                            type="text"
-                            inputMode="decimal"
-                            value={slippagePct}
-                            onChange={(e) => setSlippagePct(e.target.value)}
-                            disabled={busy}
-                            className="w-full rounded-xl border border-arc-border bg-white/[0.015] p-3 text-sm text-arc-text outline-none focus:border-arc-primary"
-                        />
-                    </div>
+                input applies. We render the row with visibility:hidden
+                instead of an unmount so the overall section height stays
+                the same when the user toggles between modes - prevents
+                the Save button from jumping up and down the page each
+                time the user picks a different mode. Form field state
+                is preserved across the visibility flip so a switch back
+                to RECEIVE / COMPOUND re-uses the user's last values. */}
+            <div
+                className="mb-4 grid grid-cols-2 gap-3"
+                style={{
+                    visibility: mode === "NORMAL" ? "hidden" : "visible",
+                }}
+                aria-hidden={mode === "NORMAL"}
+            >
+                <div>
+                    <label className="mb-2 block text-xs uppercase tracking-wider text-arc-text-muted">
+                        Threshold (USDC)
+                    </label>
+                    <input
+                        type="text"
+                        inputMode="decimal"
+                        value={thresholdUsdc}
+                        onChange={(e) => setThresholdUsdc(e.target.value)}
+                        disabled={busy || mode === "NORMAL"}
+                        tabIndex={mode === "NORMAL" ? -1 : 0}
+                        className="w-full rounded-xl border border-arc-border bg-white/[0.015] p-3 text-sm text-arc-text outline-none focus:border-arc-primary"
+                    />
                 </div>
-            )}
+                <div>
+                    <label className="mb-2 block text-xs uppercase tracking-wider text-arc-text-muted">
+                        Slippage (%)
+                    </label>
+                    <input
+                        type="text"
+                        inputMode="decimal"
+                        value={slippagePct}
+                        onChange={(e) => setSlippagePct(e.target.value)}
+                        disabled={busy || mode === "NORMAL"}
+                        tabIndex={mode === "NORMAL" ? -1 : 0}
+                        className="w-full rounded-xl border border-arc-border bg-white/[0.015] p-3 text-sm text-arc-text outline-none focus:border-arc-primary"
+                    />
+                </div>
+            </div>
 
             <div className="flex items-center justify-end">
                 <button
