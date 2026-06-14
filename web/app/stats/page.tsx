@@ -128,14 +128,14 @@ export default async function StatsPage() {
                 />
                 <MetricCard
                     icon={<BarChart3 className="h-5 w-5" />}
-                    label="USDC volume routed"
+                    label="Total volume routed"
                     value={formatUsdcGas(snap.volumeUsdcMicros)}
                     delta={
                         deltaVolume !== null && deltaVolume > 0n
                             ? `+${formatUsdcGas(deltaVolume)} / ${HISTORY_WINDOW_DAYS}d`
                             : undefined
                     }
-                    note="Cumulative sum of every launchpad Buy + Sell across all generations."
+                    note="Cumulative $ value of every Buy + Sell across the launchpad and the AMM, summed across all generations."
                 />
                 <MetricCard
                     icon={<Coins className="h-5 w-5" />}

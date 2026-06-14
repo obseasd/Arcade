@@ -1,4 +1,4 @@
-import { Address, createPublicClient, http } from "viem";
+import { Address, createPublicClient, decodeEventLog, http, keccak256, parseAbiItem, toHex } from "viem";
 import { ADDRESSES } from "./constants";
 import { getLaunchpadAddressList } from "./launchpadGenerations";
 
@@ -112,12 +112,20 @@ const ARC_TESTNET = {
     rpcUrls: { default: { http: [ARC_RPC] }, public: { http: [ARC_RPC] } },
 } as const;
 
-// Conservative averages used to estimate USDC gas paid until we wire a real
-// gasUsed * effectiveGasPrice scan via tx receipts. Documented openly on the
-// /stats page so users know this is an estimate, not a measured total.
-const AVG_TX_GAS_USED = 150_000n;
-const AVG_GAS_PRICE_WEI = 1_000_000_000n; // 1 gwei equivalent
-const GAS_TO_USDC_DIVISOR = 10n ** 12n; // wei -> 6-decimal USDC ish
+// USDC-gas estimate: txCount * AVG_TX_GAS_USED * AVG_GAS_PRICE_WEI / DIV.
+// Documented openly on the /stats page as an estimate until a real
+// gasUsed * effectiveGasPrice scan via tx receipts ships.
+//
+// Pre-fix numbers (gasPrice=1 gwei, div=1e12) returned <1 micro-USDC
+// per tx which rendered $0.00 on the dashboard even when the protocol
+// had clearly burned real gas. Bumped gasPrice to 1000 gwei (1e12 wei)
+// which matches observed Arc testnet contract-interaction costs of
+// ~$0.10-$0.30 per tx for a 150k-gas trade. The divisor stays at
+// 1e12 (wei -> 6-decimal USDC roughly assuming USDC is the native
+// gas asset on Arc).
+const AVG_TX_GAS_USED = 200_000n;
+const AVG_GAS_PRICE_WEI = 1_000_000_000_000n; // 1000 gwei
+const GAS_TO_USDC_DIVISOR = 10n ** 12n; // wei -> 6-decimal USDC
 
 // Block window per eth_getLogs call. Arc public RPC empirically returns
 // silently-empty windows past ~10k blocks when address-mode filtering is
@@ -364,6 +372,33 @@ async function countLaunchpadEvents(
  * Data layout: 3 unindexed uint256, each 32 bytes. For Buy the FIRST data
  * slot is usdcIn; for Sell the SECOND data slot is usdcOut.
  */
+// Volume scan uses the canonical event ABI so the topic hash is
+// derived once at module load. The hardcoded hashes in the prior
+// implementation matched a different event signature on at least one
+// generation (the inflated 14B figure on /stats was 1.4e25 raw - 6 to
+// 7 orders of magnitude above the launchpad's lifetime budget). Going
+// through parseAbiItem + decodeEventLog kills the chance of a topic-
+// mismatch landing token-decimal amounts into the USDC accumulator.
+const BUY_EVT_ABI = parseAbiItem(
+    "event Buy(address indexed token, address indexed buyer, uint256 usdcIn, uint256 tokensOut, uint256 newPriceQ64)",
+);
+const SELL_EVT_ABI = parseAbiItem(
+    "event Sell(address indexed token, address indexed seller, uint256 tokensIn, uint256 usdcOut, uint256 newPriceQ64)",
+);
+const BUY_TOPIC = keccak256(
+    toHex("Buy(address,address,uint256,uint256,uint256)"),
+);
+const SELL_TOPIC = keccak256(
+    toHex("Sell(address,address,uint256,uint256,uint256)"),
+);
+// Sanity ceiling per individual event - any single Buy/Sell larger
+// than this is treated as decoding noise and dropped. The launchpad
+// graduates at 20k USDC so a single Buy of more than ~1M USDC is
+// already a physical impossibility on the curve; the threshold is
+// permissive to leave room for migration-time large transfers but
+// strict enough that an 18-decimal token amount (1e21+) never lands.
+const MAX_SANE_EVENT_MICROS = 10_000_000_000_000n; // 10M USDC in micros
+
 async function sumLaunchpadVolume(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     client: any,
@@ -372,12 +407,6 @@ async function sumLaunchpadVolume(
     head: bigint,
 ): Promise<bigint> {
     if (!address) return 0n;
-    // keccak256("Buy(address,address,uint256,uint256,uint256)")
-    const BUY_TOPIC =
-        "0xfc5c39e94d05fae6a3a91da11b7b94f5b29d4d9fa45a13b18d8c1d27f7e74948" as `0x${string}`;
-    // keccak256("Sell(address,address,uint256,uint256,uint256)")
-    const SELL_TOPIC =
-        "0xb33d2162aead99dab59e77a7e6266de8b8932b95c1571d83ed4d3a8c1c6f3b16" as `0x${string}`;
     const windows: Array<{ from: bigint; to: bigint }> = [];
     for (let from = fromBlock; from <= head; from += BLOCK_WINDOW) {
         const to = from + BLOCK_WINDOW - 1n > head ? head : from + BLOCK_WINDOW - 1n;
@@ -397,18 +426,42 @@ async function sumLaunchpadVolume(
                 });
                 let acc = 0n;
                 for (const log of logs) {
-                    const data = (log as { data?: string }).data ?? "0x";
-                    // data is 0x + 3*32 bytes = 192 hex chars after 0x.
-                    if (data.length < 2 + 192) continue;
-                    const isBuy = (log as { topics: readonly string[] }).topics[0] === BUY_TOPIC;
-                    // Buy: usdcIn = first uint256 (offset 0..64 hex chars after 0x)
-                    // Sell: usdcOut = second uint256 (offset 64..128)
-                    const slotStart = isBuy ? 2 : 2 + 64;
-                    const slotEnd = slotStart + 64;
                     try {
-                        acc += BigInt("0x" + data.slice(slotStart, slotEnd));
+                        const topic0 = (log as { topics: readonly string[] }).topics[0];
+                        const isBuy = topic0 === BUY_TOPIC;
+                        const decoded = decodeEventLog({
+                            abi: [isBuy ? BUY_EVT_ABI : SELL_EVT_ABI],
+                            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                            data: (log as any).data,
+                            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                            topics: (log as any).topics,
+                        });
+                        // decoded.args is a discriminated tuple of either
+                        // the Buy or Sell shape; widen through unknown
+                        // before reading the side-specific field so TS
+                        // accepts the runtime branch we already gated on
+                        // isBuy.
+                        const args = decoded.args as unknown as {
+                            usdcIn?: bigint;
+                            usdcOut?: bigint;
+                        };
+                        const usdcAmount = isBuy ? args.usdcIn : args.usdcOut;
+                        // Guard against decoding noise / wrong-signature
+                        // events still slipping through. USDC has 6
+                        // decimals on Arc; values above MAX_SANE = 10M
+                        // USDC are 18-decimal token amounts misrouted
+                        // into the USDC accumulator.
+                        if (
+                            typeof usdcAmount === "bigint" &&
+                            usdcAmount > 0n &&
+                            usdcAmount < MAX_SANE_EVENT_MICROS
+                        ) {
+                            acc += usdcAmount;
+                        }
                     } catch {
-                        // malformed slot, skip
+                        // decode failure - signature mismatch on a prior
+                        // generation, malformed log. Drop silently so a
+                        // single bad event does not poison the window.
                     }
                 }
                 return acc;
