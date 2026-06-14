@@ -2,12 +2,13 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Address, createPublicClient, http } from "viem";
-import { useAccount, useWriteContract } from "wagmi";
+import { useAccount, usePublicClient, useWriteContract } from "wagmi";
 
-import { AUTO_COMPOUNDER_ABI } from "@/lib/abis/autoCompounder";
+import { AUTO_COMPOUNDER_ABI, modeLabelFromId } from "@/lib/abis/autoCompounder";
 import { V3_NPM_ABI } from "@/lib/abis/v3-npm";
 import { ADDRESSES } from "@/lib/constants";
 import { arcTestnet } from "@/lib/chains";
+import { pushToast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 
 /**
@@ -88,6 +89,7 @@ export function PoolAutoManagementInline({
 }: PoolAutoManagementInlineProps) {
     const { address: account } = useAccount();
     const { writeContractAsync } = useWriteContract();
+    const publicClient = usePublicClient();
     const compounderEnabled =
         ADDRESSES.autoCompounder !== "0x0000000000000000000000000000000000000000";
 
@@ -213,6 +215,8 @@ export function PoolAutoManagementInline({
                     row={row}
                     onSaved={bumpRefresh}
                     writeContractAsync={writeContractAsync}
+                    publicClient={publicClient}
+                    ownerAddress={account}
                 />
             ))}
         </section>
@@ -223,10 +227,14 @@ function ManagedRowCard({
     row,
     onSaved,
     writeContractAsync,
+    publicClient,
+    ownerAddress,
 }: {
     row: ManagedPositionRow;
     onSaved: () => void;
     writeContractAsync: ReturnType<typeof useWriteContract>["writeContractAsync"];
+    publicClient: ReturnType<typeof usePublicClient>;
+    ownerAddress: Address | undefined;
 }) {
     const [mode, setMode] = useState<Mode>(row.mode);
     const initialThresholdStr = useMemo(
@@ -269,21 +277,77 @@ function ManagedRowCard({
     const handleSave = useCallback(async () => {
         setSaving(true);
         try {
-            await writeContractAsync({
+            const hash = await writeContractAsync({
                 address: ADDRESSES.autoCompounder,
                 abi: AUTO_COMPOUNDER_ABI,
                 functionName: "setMode",
                 args: [row.tokenId, modeId, thresholdMicros, slippageBps],
             });
+            // Wait for the receipt before declaring success. Without this
+            // wait, the user sees a "Saved" toast the moment the wallet
+            // popup closes, but the chain state and our DB mirror are
+            // still mid-flight — a refresh in the next few seconds would
+            // surface the OLD mode and reset the form to its pre-edit
+            // values. The wait keeps the toast and the form state
+            // honest: success only fires once the chain has accepted
+            // the change.
+            if (publicClient) {
+                try {
+                    await publicClient.waitForTransactionReceipt({ hash });
+                } catch {
+                    // receipt-poll failure on testnet RPC is non-fatal —
+                    // the tx still landed; fall through to the DB mirror
+                    // + toast paths so the user can still see the
+                    // outcome.
+                }
+            }
+            // Mirror to /api/compounder/positions so the on-chain change
+            // appears in the next API read instantaneously. Without this
+            // mirror, the API still returns the pre-edit (mode, minFee,
+            // slippage) tuple from Postgres until the compounder cron
+            // event listener catches up — which on testnet runs at the
+            // 5-min cadence and made every refresh-after-Save show the
+            // OLD values.
+            if (ownerAddress) {
+                try {
+                    await fetch("/api/compounder/positions", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            action: "upsert",
+                            tokenId: row.tokenId.toString(),
+                            ownerAddress,
+                            mode: modeLabelFromId(modeId as 0 | 1 | 2),
+                            minFeeMicros: thresholdMicros.toString(),
+                            maxSlippageBps: slippageBps,
+                        }),
+                    });
+                } catch (mirrorErr) {
+                    // eslint-disable-next-line no-console
+                    console.warn("[pool-page] setMode DB mirror failed:", mirrorErr);
+                }
+            }
+            pushToast({
+                kind: "info",
+                title: "Auto-management updated",
+                message: `Mode ${modeLabelFromId(modeId as 0 | 1 | 2).toLowerCase()} · threshold ${(Number(thresholdMicros) / 1_000_000).toFixed(2)} USDC · slippage ${(slippageBps / 100).toFixed(2)}%.`,
+            });
             onSaved();
         } catch (err) {
             // eslint-disable-next-line no-console
             console.error("[pool-page] setMode failed:", err);
+            pushToast({
+                kind: "error",
+                title: "Update failed",
+                message: err instanceof Error ? err.message : "Unknown error",
+            });
         } finally {
             setSaving(false);
         }
     }, [
         writeContractAsync,
+        publicClient,
+        ownerAddress,
         row.tokenId,
         modeId,
         thresholdMicros,
