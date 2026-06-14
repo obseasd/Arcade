@@ -6,7 +6,18 @@ function pad32(hex: string): string {
 }
 
 // Build a valid CCTP V2 message body for testing.
-// Total min length: 124 bytes header + 4 + 32 + 32 = 192 bytes = 384 hex.
+// Header layout per Circle's CCTP V2 spec (TokenMessenger/MessageTransmitter):
+//   version(4) + sourceDomain(4) + destinationDomain(4) + nonce(bytes32)
+//   + sender(bytes32) + recipient(bytes32) + destinationCaller(bytes32)
+//   + minFinalityThreshold(4) + finalityThresholdExecuted(4) = 148 bytes
+// Body layout:
+//   bodyVersion(4) + burnToken(bytes32) + mintRecipient(bytes32) = 68 bytes
+// Total minimum: 148 + 68 = 216 bytes = 432 hex chars.
+//
+// The earlier 124-byte header layout shipped here was the CCTP V1 shape;
+// the parser implements V2 correctly, so the test build path needed
+// updating to match. Without the fix, every "well-formed message" assertion
+// hit the parser's CCTP_V2_MIN_MESSAGE_HEX gate and returned null.
 function buildMessage(opts: {
     version: number;
     sourceDomain: number;
@@ -15,13 +26,16 @@ function buildMessage(opts: {
     mintRecipient: string; // 32-byte hex without 0x
     bodyExtra?: string;
 }): `0x${string}` {
-    // header = 4 + 4 + 4 + 8 + 104 padding = 124 bytes
     const header =
-        opts.version.toString(16).padStart(8, "0") +
-        opts.sourceDomain.toString(16).padStart(8, "0") +
-        opts.destinationDomain.toString(16).padStart(8, "0") +
-        opts.nonce.toString(16).padStart(16, "0") +
-        "00".repeat(104);
+        opts.version.toString(16).padStart(8, "0") + // 4 bytes
+        opts.sourceDomain.toString(16).padStart(8, "0") + // 4 bytes
+        opts.destinationDomain.toString(16).padStart(8, "0") + // 4 bytes
+        opts.nonce.toString(16).padStart(64, "0") + // nonce as bytes32
+        "00".repeat(32) + // sender bytes32 placeholder
+        "00".repeat(32) + // recipient bytes32 placeholder
+        "00".repeat(32) + // destinationCaller bytes32 placeholder
+        "00000000" + // minFinalityThreshold
+        "00000000"; // finalityThresholdExecuted
     // body = 4 body-version + 32 burnToken + 32 mintRecipient (68 bytes min)
     const body =
         "00000000" +
