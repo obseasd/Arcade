@@ -236,7 +236,6 @@ function ManagedRowCard({
     const [thresholdUsdc, setThresholdUsdc] = useState(initialThresholdStr);
     const [slippagePct, setSlippagePct] = useState(initialSlippageStr);
     const [saving, setSaving] = useState(false);
-    const [stopping, setStopping] = useState(false);
 
     const thresholdMicros = useMemo(() => {
         const parsed = Number(thresholdUsdc);
@@ -276,25 +275,7 @@ function ManagedRowCard({
         onSaved,
     ]);
 
-    const handleStop = useCallback(async () => {
-        setStopping(true);
-        try {
-            await writeContractAsync({
-                address: ADDRESSES.autoCompounder,
-                abi: AUTO_COMPOUNDER_ABI,
-                functionName: "withdrawPosition",
-                args: [row.tokenId],
-            });
-            onSaved();
-        } catch (err) {
-            // eslint-disable-next-line no-console
-            console.error("[pool-page] withdrawPosition failed:", err);
-        } finally {
-            setStopping(false);
-        }
-    }, [writeContractAsync, row.tokenId, onSaved]);
-
-    const busy = saving || stopping;
+    const busy = saving;
 
     // Detect any divergence from the on-chain config so the Save button
     // can flag the user that the form has unsaved edits. Anything else
@@ -308,15 +289,8 @@ function ManagedRowCard({
 
     return (
         <div className="rounded-2xl border border-arc-border bg-white/[0.015] p-5">
-            <div className="mb-4 flex items-center justify-between">
-                <div className="text-sm text-arc-text-muted">
-                    NFT #{row.tokenId.toString()}
-                </div>
-                {dirty && (
-                    <span className="rounded-full border border-sky-400/40 bg-sky-400/10 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-sky-400">
-                        Unsaved changes
-                    </span>
-                )}
+            <div className="mb-4 text-sm text-arc-text-muted">
+                NFT #{row.tokenId.toString()}
             </div>
 
             <div className="mb-4">
@@ -382,15 +356,7 @@ function ManagedRowCard({
                 </div>
             </div>
 
-            <div className="flex flex-wrap items-center justify-between gap-2">
-                <button
-                    type="button"
-                    onClick={() => void handleStop()}
-                    disabled={busy}
-                    className="inline-flex items-center gap-1.5 rounded-xl border border-arc-warn/40 bg-arc-warn/10 px-4 py-2 text-sm font-semibold text-arc-warn transition-colors hover:bg-arc-warn/20 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                    {stopping ? "Stopping…" : "Stop position"}
-                </button>
+            <div className="flex items-center justify-end">
                 <button
                     type="button"
                     onClick={() => void handleSave()}

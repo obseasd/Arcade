@@ -107,9 +107,13 @@ const AVG_TX_GAS_USED = 150_000n;
 const AVG_GAS_PRICE_WEI = 1_000_000_000n; // 1 gwei equivalent
 const GAS_TO_USDC_DIVISOR = 10n ** 12n; // wei -> 6-decimal USDC ish
 
-// Block window per eth_getLogs call. Arc RPC empirically caps at 50-500k.
-// We use 50k to stay well inside the most restrictive endpoint.
-const BLOCK_WINDOW = 50_000n;
+// Block window per eth_getLogs call. Arc public RPC empirically returns
+// silently-empty windows past ~10k blocks when address-mode filtering is
+// combined with the cumulative predecessor-contract list (~50 addresses).
+// 5k keeps every call deep inside the cap so truncated=true stops landing
+// on every snapshot - the symptom we hit in stats_snapshots showing 0/0/0
+// across every cron tick.
+const BLOCK_WINDOW = 5_000n;
 // Hard cap on total blocks we scan in one snapshot. Dropped from 5M to
 // 500k after the Arc public RPC started returning empty windows on
 // wide scans, which made every snapshot land with truncated=true and
