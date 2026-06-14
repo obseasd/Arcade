@@ -6,10 +6,11 @@ import dynamic from "next/dynamic";
 import { useParams } from "next/navigation";
 import { useCallback, useMemo, useState } from "react";
 import { Address, erc20Abi, isAddress, parseAbiItem } from "viem";
-import { useReadContract } from "wagmi";
+import { useReadContract, useReadContracts } from "wagmi";
 import { LAUNCHPAD_ABI } from "@/lib/abis/launchpad";
 import { V3_POOL_ABI } from "@/lib/abis/v3";
 import { ADDRESSES, LAUNCHPAD_CURVE_SUPPLY, LAUNCHPAD_GRADUATION_USDC, LAUNCHPAD_TOTAL_SUPPLY } from "@/lib/constants";
+import { getLaunchpadGenerations } from "@/lib/launchpadGenerations";
 import { useClankerMcap } from "@/lib/hooks/useClankerMcap";
 import { useLaunchpadVolume } from "@/lib/hooks/useLaunchpadVolume";
 import { useTokenImage, useTokenMetadata } from "@/lib/hooks/useTokenImage";
@@ -51,13 +52,47 @@ export default function TokenDetailPage() {
   const token = addressParam as Address;
   const [refreshKey, setRefreshKey] = useState(0);
 
-  const tokenState = useReadContract({
-    address: ADDRESSES.launchpad,
-    abi: LAUNCHPAD_ABI,
-    functionName: "getTokenState",
-    args: isValid ? [token] : undefined,
-    query: { enabled: isValid },
+  // Probe getTokenState on EVERY launchpad generation, then pick the
+  // first one that returns a non-zero token (i.e. the generation that
+  // actually minted this token). Without this multi-gen probe, a token
+  // minted on a prior generation lands on the detail page and reads as
+  // "Token not found" because ADDRESSES.launchpad only ever points at
+  // the current generation. Also covers the race where a token has just
+  // been minted on the current generation but ADDRESSES.launchpad has
+  // not yet been bumped to that address.
+  const generations = useMemo(() => getLaunchpadGenerations(), []);
+  const stateProbe = useReadContracts({
+    contracts: generations.map((g) => ({
+      address: g.address,
+      abi: LAUNCHPAD_ABI,
+      functionName: "getTokenState" as const,
+      args: isValid ? [token] : undefined,
+    })),
+    query: { enabled: isValid && generations.length > 0 },
   });
+  const stateMatch = useMemo(() => {
+    if (!stateProbe.data) return null;
+    for (let i = 0; i < stateProbe.data.length; i++) {
+      const r = stateProbe.data[i];
+      if (r?.status !== "success") continue;
+      const s = r.result as { token?: Address } | undefined;
+      if (!s) continue;
+      if (s.token && s.token !== "0x0000000000000000000000000000000000000000") {
+        return { result: s, launchpad: generations[i].address };
+      }
+    }
+    return null;
+  }, [stateProbe.data, generations]);
+  const tokenStateLaunchpad = stateMatch?.launchpad ?? ADDRESSES.launchpad;
+  // Compatibility shim so the rest of the file (originally written
+  // against a useReadContract result) keeps working without a wider
+  // rewrite. refetch() rotates the whole probe so a stale read clears
+  // on a live update.
+  const tokenState = {
+    data: stateMatch?.result,
+    isLoading: stateProbe.isLoading,
+    refetch: stateProbe.refetch,
+  };
 
   const nameQ = useReadContract({
     address: isValid ? token : undefined,
@@ -72,7 +107,11 @@ export default function TokenDetailPage() {
     query: { enabled: isValid },
   });
   const mcapQ = useReadContract({
-    address: ADDRESSES.launchpad,
+    // Route marketCap to the launchpad that actually owns this token
+    // (matches the multi-gen probe above). Falls back to the current
+    // generation while the probe is in flight so the cold render still
+    // emits a valid call.
+    address: tokenStateLaunchpad,
     abi: LAUNCHPAD_ABI,
     functionName: "marketCap",
     args: isValid ? [token] : undefined,

@@ -38,7 +38,19 @@ export interface StatsSnapshot {
     truncated: boolean;
 }
 
-const ARC_RPC = process.env.NEXT_PUBLIC_ARC_RPC_URL ?? "https://rpc.testnet.arc.network";
+// Stats scan is dominated by eth_getLogs across 50+ predecessor
+// contracts over a 500k-block window. Alchemy free tier caps
+// eth_getLogs at 10 BLOCKS per call (the 2026-06-14 diagnostic) which
+// makes the scan unusable on Alchemy: every window returns
+// InvalidRequestRpcError and `truncated=true` lands on every cron
+// row, with all metrics stuck at 0.
+//
+// Use a server-side env override to point at a getLogs-friendly RPC
+// (Arc public, thirdweb, dedicated node) - falls back to the public
+// Arc RPC explicitly so we never accidentally run the stats scan on
+// Alchemy regardless of how NEXT_PUBLIC_ARC_RPC_URL is set.
+const ARC_RPC =
+    process.env.ARC_STATS_RPC_URL ?? "https://rpc.testnet.arc.network";
 
 /**
  * Predecessor contract addresses from every prior generation we want to keep
