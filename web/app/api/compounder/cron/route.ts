@@ -265,21 +265,24 @@ async function handleOne(
 ): Promise<void> {
     const tokenId = BigInt(position.tokenId);
 
-    // pendingFees + nextActionAvailableAt are cheap, parallelisable.
-    const [pending, nextAt] = await Promise.all([
-        publicClient.readContract({
-            address: compounderAddress,
-            abi: AUTO_COMPOUNDER_ABI,
-            functionName: "pendingFees",
-            args: [tokenId],
-        }),
-        publicClient.readContract({
-            address: compounderAddress,
-            abi: AUTO_COMPOUNDER_ABI,
-            functionName: "nextActionAvailableAt",
-            args: [tokenId],
-        }),
-    ]);
+    // Cooldown read stays cheap. The pendingFees pre-check was REMOVED
+    // because pendingFees() in the Compounder returns NPM.tokensOwed
+    // verbatim — and tokensOwed is only ever updated when the position
+    // is *touched* (mint/burn/collect/decreaseLiquidity). Pure swaps by
+    // other traders accumulate in feeGrowthInside but never land in
+    // tokensOwed, so the pre-check read 0 even when the real on-chain
+    // collect would sync several USDC. The downstream simulateContract
+    // on compound() / pushFees() already triggers a full collect under
+    // eth_call semantics and surfaces a BELOW_THRESHOLD revert if there
+    // truly isn't enough fee accumulation — moving the check there
+    // gives us the accurate sync-then-decide flow without an extra
+    // round-trip.
+    const nextAt = (await publicClient.readContract({
+        address: compounderAddress,
+        abi: AUTO_COMPOUNDER_ABI,
+        functionName: "nextActionAvailableAt",
+        args: [tokenId],
+    })) as bigint;
 
     const nowSec = BigInt(Math.floor(Date.now() / 1000));
     if (nextAt > nowSec) {
@@ -288,16 +291,12 @@ async function handleOne(
         return;
     }
 
-    const [fee0, fee1] = pending as readonly [bigint, bigint];
-    const best = fee0 > fee1 ? fee0 : fee1;
-    const threshold = BigInt(position.minFeeMicros);
-    if (best < threshold) {
-        summary.skipped++;
-        summary.notes.push(
-            `token=${position.tokenId} reason=below-threshold best=${best.toString()}`,
-        );
-        return;
-    }
+    // Surface the post-collect amounts in the summary so the
+    // "triggered" notes still carry the fee figure the contract acted
+    // on. Pulled from the simulation when available; falls back to the
+    // stale pendingFees just so the log line isn't empty.
+    let fee0 = 0n;
+    let fee1 = 0n;
 
     // Audit M1 + M2 fix: read the live protocol-fee bps and pass it
     // through as the caller's accepted ceiling, plus pass an explicit
@@ -317,10 +316,49 @@ async function handleOne(
 
     const modeId = modeIdFromLabel(position.mode);
     if (modeId === 1 /* RECEIVE */) {
-        // viem's default gas estimate already simulates so a stale
-        // pendingFees that would revert (e.g. a parallel manual claim
-        // emptied the position) surfaces as an estimate error before
-        // we burn the operator's gas.
+        // Simulate pushFees first. Same reasoning as the COMPOUND
+        // path: simulateContract triggers NPM.collect under eth_call
+        // semantics, which forces a fee sync via pool.burn(0) and
+        // returns the actual post-collect (amount0, amount1) the real
+        // tx would settle. A BELOW_THRESHOLD revert here means there
+        // genuinely aren't enough fees yet; we skip the on-chain tx
+        // and try again on the next tick.
+        type PushSim = readonly [bigint, bigint];
+        const sim = await withTimeout(
+            publicClient
+                .simulateContract({
+                    address: compounderAddress,
+                    abi: AUTO_COMPOUNDER_ABI,
+                    functionName: "pushFees",
+                    args: [tokenId, currentProtocolFeeBps, deadline],
+                    account,
+                })
+                .then((r) => r.result as PushSim)
+                .catch((err) => {
+                    const msg = err instanceof Error ? err.message : String(err);
+                    if (msg.includes("BELOW_THRESHOLD")) {
+                        return "below-threshold" as const;
+                    }
+                    return null;
+                }),
+            RPC_TIMEOUT_MS,
+        );
+        if (sim === "below-threshold") {
+            summary.skipped++;
+            summary.notes.push(
+                `token=${position.tokenId} reason=below-threshold-postsync`,
+            );
+            return;
+        }
+        if (!sim) {
+            summary.skipped++;
+            summary.notes.push(
+                `token=${position.tokenId} reason=push-sim-failed-or-timed-out`,
+            );
+            return;
+        }
+        fee0 = sim[0];
+        fee1 = sim[1];
         const hash = await walletClient.writeContract({
             address: compounderAddress,
             abi: AUTO_COMPOUNDER_ABI,
@@ -381,10 +419,23 @@ async function handleOne(
                     account,
                 })
                 .then((r) => r.result as CompoundSim)
-                .catch(() => null as CompoundSim | null),
+                .catch((err) => {
+                    const msg = err instanceof Error ? err.message : String(err);
+                    if (msg.includes("BELOW_THRESHOLD")) {
+                        return "below-threshold" as const;
+                    }
+                    return null;
+                }),
             RPC_TIMEOUT_MS,
         );
 
+        if (sim === "below-threshold") {
+            summary.skipped++;
+            summary.notes.push(
+                `token=${position.tokenId} reason=below-threshold-postsync`,
+            );
+            return;
+        }
         if (!sim) {
             summary.skipped++;
             summary.notes.push(
