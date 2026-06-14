@@ -1,29 +1,34 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Address } from "viem";
+import { Address, createPublicClient, http } from "viem";
 import { useAccount, useWriteContract } from "wagmi";
 
 import { AUTO_COMPOUNDER_ABI } from "@/lib/abis/autoCompounder";
+import { V3_NPM_ABI } from "@/lib/abis/v3-npm";
 import { ADDRESSES } from "@/lib/constants";
+import { arcTestnet } from "@/lib/chains";
 import { cn } from "@/lib/utils";
 
 /**
  * Inline replacement for the old in-modal "Manage" form on /positions.
  *
  * Renders the Mode / Threshold / Slippage controls + Save + Stop buttons
- * for every managed position the connected wallet has IN THIS POOL. The
- * "in this pool" filter comes from comparing (token0, token1, fee) DB
- * columns returned by /api/compounder/positions against the pool tuple
- * the page reads from on-chain.
+ * for every managed position the connected wallet has IN THIS POOL.
  *
- * No modal — the pool detail page is the surface where the user manages
- * the position end-to-end. The "Manage" button on the /positions card now
- * navigates here instead of opening a modal.
+ * Filter strategy:
+ *   1. Fast path - match (token0Address, token1Address, feeTier) from
+ *      the DB columns the /api/compounder/positions endpoint surfaces.
+ *      These columns are written by the V3 add-liquidity flow at deposit
+ *      time.
+ *   2. Fallback - any DB row missing those columns (older deposit, hand-
+ *      deposited via safeTransferFrom, manual API insert) is enriched by
+ *      a direct NPM.positions(tokenId) read against the chain, then
+ *      filtered the same way. Keeps the page useful for positions whose
+ *      DB row pre-dates the mirror writes.
  *
  * Soft-fails on every dependency: no account, no /api/compounder DB, no
- * managed positions in this pool — render nothing. The pool page stays
- * usable as the generic "swap + add liquidity" surface for everyone else.
+ * managed positions in this pool - render nothing.
  */
 export interface PoolAutoManagementInlineProps {
     poolToken0?: Address;
@@ -38,6 +43,38 @@ interface ManagedPositionRow {
     mode: Mode;
     minFeeMicros: bigint;
     maxSlippageBps: number;
+}
+
+const RPC_URL = "https://rpc.testnet.arc.network";
+
+/** Read NPM.positions(tokenId) and pull the (token0, token1, fee) tuple
+ *  the page needs to filter the managed-position list by pool. Returns
+ *  null on any error so a single bad position id doesn't drop the whole
+ *  panel. */
+async function readPositionPoolTuple(
+    tokenId: bigint,
+): Promise<{ token0: Address; token1: Address; feePip: number } | null> {
+    const npm = ADDRESSES.v3PositionManager as Address;
+    if (npm === "0x0000000000000000000000000000000000000000") return null;
+    try {
+        const client = createPublicClient({ chain: arcTestnet, transport: http(RPC_URL) });
+        const result = (await client.readContract({
+            address: npm,
+            abi: V3_NPM_ABI,
+            functionName: "positions",
+            args: [tokenId],
+        })) as readonly unknown[];
+        // NPM.positions tuple shape: [nonce, operator, token0, token1,
+        // fee, tickLower, tickUpper, liquidity, ...]. We only need indices
+        // 2, 3, 4.
+        const token0 = result[2] as Address;
+        const token1 = result[3] as Address;
+        const feePip = Number(result[4]);
+        if (!token0 || !token1 || !Number.isFinite(feePip)) return null;
+        return { token0, token1, feePip };
+    } catch {
+        return null;
+    }
 }
 
 export function PoolAutoManagementInline({
@@ -89,7 +126,30 @@ export function PoolAutoManagementInline({
                     : [];
                 const ourT0 = poolToken0.toLowerCase();
                 const ourT1 = poolToken1.toLowerCase();
+
+                const matchesPool = (
+                    t0: string | null | undefined,
+                    t1: string | null | undefined,
+                    feePip: number | null | undefined,
+                ): boolean => {
+                    if (!t0 || !t1 || feePip === null || feePip === undefined) {
+                        return false;
+                    }
+                    if (feePip !== poolFeePip) return false;
+                    const a = t0.toLowerCase();
+                    const b = t1.toLowerCase();
+                    return (
+                        (a === ourT0 && b === ourT1) ||
+                        (a === ourT1 && b === ourT0)
+                    );
+                };
+
                 const matched: ManagedPositionRow[] = [];
+                // Walk every candidate. Fast path: DB columns are populated
+                // → filter inline. Slow path: any column missing → fetch the
+                // tuple from NPM. The slow path is sequential to keep RPC
+                // pressure low; users rarely have more than 1-2 managed
+                // positions per pool so the cost is negligible.
                 for (const p of positions) {
                     if (
                         p.mode !== "NORMAL" &&
@@ -98,21 +158,17 @@ export function PoolAutoManagementInline({
                     ) {
                         continue;
                     }
-                    if (
-                        !p.token0Address ||
-                        !p.token1Address ||
-                        p.feeTier === null ||
-                        p.feeTier === undefined
-                    ) {
-                        continue;
+                    let resolvedT0 = p.token0Address ?? null;
+                    let resolvedT1 = p.token1Address ?? null;
+                    let resolvedFee = p.feeTier ?? null;
+                    if (!resolvedT0 || !resolvedT1 || resolvedFee === null) {
+                        const tuple = await readPositionPoolTuple(BigInt(p.tokenId));
+                        if (!tuple) continue;
+                        resolvedT0 = tuple.token0;
+                        resolvedT1 = tuple.token1;
+                        resolvedFee = tuple.feePip;
                     }
-                    if (p.feeTier !== poolFeePip) continue;
-                    const theirT0 = p.token0Address.toLowerCase();
-                    const theirT1 = p.token1Address.toLowerCase();
-                    const sameOrFlipped =
-                        (ourT0 === theirT0 && ourT1 === theirT1) ||
-                        (ourT0 === theirT1 && ourT1 === theirT0);
-                    if (!sameOrFlipped) continue;
+                    if (!matchesPool(resolvedT0, resolvedT1, resolvedFee)) continue;
                     matched.push({
                         tokenId: BigInt(p.tokenId),
                         mode: p.mode as Mode,
@@ -140,12 +196,7 @@ export function PoolAutoManagementInline({
     ]);
 
     if (!account || !compounderEnabled) return null;
-    if (rows.length === 0) {
-        // Use a silent return rather than a hint banner; the user arrives
-        // at /pool/<addr> for many reasons (swap, add liq, view chart)
-        // and a "no managed position here" banner would be noise.
-        return null;
-    }
+    if (rows.length === 0) return null;
 
     return (
         <section className="mt-4 space-y-3">

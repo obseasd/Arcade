@@ -3,7 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Address, parseAbiItem } from "viem";
 import { usePublicClient } from "wagmi";
-import { ADDRESSES } from "@/lib/constants";
+import { getLaunchpadAddressList } from "@/lib/launchpadGenerations";
 
 const TOKEN_CREATED_EVT = parseAbiItem(
   "event TokenCreated(address indexed token, address indexed creator, uint8 mode, address creator2, uint16 creator2ShareBps, string name, string symbol, string metadataURI)",
@@ -42,6 +42,18 @@ export function useTokenMetadataURI(token: Address | undefined): {
     queryFn: async ({ signal }) => {
       if (!publicClient || !token) return undefined;
       const latest = await publicClient.getBlockNumber();
+      // Walk backwards from head in CHUNK-sized windows. Each window
+      // queries ALL launchpad generations in one address-array getLogs
+      // call instead of the previous single-address version - tokens
+      // minted on an old launchpad (most of the Pump cards on screen
+      // right now were created on a prior generation) emit their
+      // TokenCreated event on THAT contract, not the current launchpad,
+      // so a current-launchpad-only scan returned no hit and the image
+      // fell back to the "?" placeholder. address-mode getLogs takes
+      // up to ~100 addresses; we're at 8 generations * 1 contract
+      // each = 8, well under the cap.
+      const launchpads = getLaunchpadAddressList();
+      if (launchpads.length === 0) return "";
       let end = latest;
       let walked = 0n;
       while (walked < MAX_BACK) {
@@ -49,7 +61,7 @@ export function useTokenMetadataURI(token: Address | undefined): {
         const start = end > CHUNK - 1n ? end - (CHUNK - 1n) : 0n;
         try {
           const logs = await publicClient.getLogs({
-            address: ADDRESSES.launchpad,
+            address: launchpads,
             event: TOKEN_CREATED_EVT,
             args: { token },
             fromBlock: start,

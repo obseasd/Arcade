@@ -441,8 +441,13 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
   // legs where the USD oracle isn't wired and lossPct is undefined — a
   // 2-ETH trade into a $40 pool would otherwise read as just "Fee 0.30%".
   //
-  // We DO NOT fire the probe under 100 wei input (math degenerate) or when
-  // the aggregator itself is disabled (launchpad curve, unsupported pair).
+  // Rate-limit gate: only fire the probe AFTER the main aggregator has
+  // a quote. Without this, every keystroke was firing 5 main-provider
+  // quotes + 5 reference-provider quotes in parallel, hammering Arc's
+  // public RPC into the 429 zone visible in the user's network tab. By
+  // chaining on `activeRoute`, the probe stays idle until the first
+  // round of quotes lands, halving the in-flight RPC pressure during
+  // the typing storm.
   const refProbeAmount = useMemo<bigint>(() => {
     if (amountInRaw < 100n) return 0n;
     const div100 = amountInRaw / 100n;
@@ -456,7 +461,11 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
     amountIn: refProbeAmount,
     recipient: account,
     slippageBps,
-    enabled: aggregatorEnabled && refProbeAmount > 0n,
+    enabled:
+      aggregatorEnabled &&
+      refProbeAmount > 0n &&
+      !!activeRoute &&
+      activeRoute.amountOut > 0n,
   });
   const priceImpactPct = useMemo<number | undefined>(() => {
     if (!activeRoute || activeRoute.amountOut === 0n) return undefined;
