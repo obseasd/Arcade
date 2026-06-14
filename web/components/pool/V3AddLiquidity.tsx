@@ -375,12 +375,32 @@ export function V3AddLiquidity({
     // mint path is the only one that runs.
     const autoCompounderEnabled = ADDRESSES.autoCompounder !== zeroAddress;
     const [autoMode, setAutoMode] = useState<CompounderModeId>(0);
-    const [autoThresholdUsdc, setAutoThresholdUsdc] = useState("0.10");
+    // ArcadeAutoCompounder enforces MIN_FEE_MICROS_FLOOR = 1_000_000
+    // (1 USDC). The previous default of "0.10" produced 100_000 micros
+    // and the on-chain depositPosition reverted with "MIN_FEE_TOO_LOW"
+    // immediately after the V3 mint, leaving the NFT in the wallet
+    // and surfacing a generic "safeTransferFrom reverted" toast that
+    // gave the user no way to recover. "1.00" lands exactly on the
+    // floor so even the no-edit happy path succeeds; the contract
+    // floor is mirrored as MIN_THRESHOLD_USDC below so the validator
+    // can also reject sub-floor user input client-side.
+    const [autoThresholdUsdc, setAutoThresholdUsdc] = useState("1.00");
     const [autoSlippagePct, setAutoSlippagePct] = useState("0.50");
+    const MIN_THRESHOLD_USDC = 1.0;
+    const autoThresholdBelowFloor = useMemo(() => {
+        const parsed = Number(autoThresholdUsdc);
+        if (!Number.isFinite(parsed)) return false;
+        return parsed < MIN_THRESHOLD_USDC;
+    }, [autoThresholdUsdc]);
     const autoThresholdMicros = useMemo(() => {
         const parsed = Number(autoThresholdUsdc);
         if (!Number.isFinite(parsed) || parsed < 0) return 0n;
-        return BigInt(Math.floor(parsed * 1_000_000));
+        const micros = BigInt(Math.floor(parsed * 1_000_000));
+        // Clamp to the contract floor so a stray sub-floor input doesn't
+        // reach the on-chain encode path. Pairs with the visible warning
+        // below so the user sees the bump rather than silently sending a
+        // different value than what they typed.
+        return micros < 1_000_000n ? 1_000_000n : micros;
     }, [autoThresholdUsdc]);
     const autoSlippageBps = useMemo(() => {
         const parsed = Number(autoSlippagePct);
@@ -1420,6 +1440,17 @@ export function V3AddLiquidity({
                                     className="w-full rounded-xl border border-arc-border bg-white/[0.015] p-2.5 text-sm text-arc-text outline-none focus:border-arc-primary"
                                 />
                             </div>
+                        </div>
+                    )}
+                    {/* Floor warning. The Compounder contract reverts with
+                        MIN_FEE_TOO_LOW on any deposit whose threshold is
+                        under 1 USDC; without this hint the user's first
+                        try fails immediately after the V3 mint and the
+                        toast surfaces a generic "safeTransferFrom
+                        reverted" error. */}
+                    {autoMode !== 0 && autoThresholdBelowFloor && (
+                        <div className="mt-2 rounded-lg border border-arc-warn/40 bg-arc-warn/10 px-3 py-2 text-[11px] text-arc-warn">
+                            Threshold must be at least 1.00 USDC. The contract floor will round this up automatically on deposit.
                         </div>
                     )}
                 </div>

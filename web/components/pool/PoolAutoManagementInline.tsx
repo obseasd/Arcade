@@ -241,10 +241,22 @@ function ManagedRowCard({
     const [slippagePct, setSlippagePct] = useState(initialSlippageStr);
     const [saving, setSaving] = useState(false);
 
+    // ArcadeAutoCompounder.setMode enforces MIN_FEE_MICROS_FLOOR =
+    // 1_000_000 (1 USDC). Anything below would revert with
+    // "MIN_FEE_TOO_LOW". Clamp + warn in the UI so the user sees the
+    // bump explicitly rather than having setMode revert with a
+    // generic error.
+    const MIN_THRESHOLD_USDC = 1.0;
+    const thresholdBelowFloor = useMemo(() => {
+        const parsed = Number(thresholdUsdc);
+        if (!Number.isFinite(parsed)) return false;
+        return parsed < MIN_THRESHOLD_USDC;
+    }, [thresholdUsdc]);
     const thresholdMicros = useMemo(() => {
         const parsed = Number(thresholdUsdc);
         if (!Number.isFinite(parsed) || parsed < 0) return 0n;
-        return BigInt(Math.floor(parsed * 1_000_000));
+        const micros = BigInt(Math.floor(parsed * 1_000_000));
+        return micros < 1_000_000n ? 1_000_000n : micros;
     }, [thresholdUsdc]);
     const slippageBps = useMemo(() => {
         const parsed = Number(slippagePct);
@@ -376,6 +388,12 @@ function ManagedRowCard({
                     />
                 </div>
             </div>
+
+            {mode !== "NORMAL" && thresholdBelowFloor && (
+                <div className="mb-3 rounded-lg border border-arc-warn/40 bg-arc-warn/10 px-3 py-2 text-[11px] text-arc-warn">
+                    Threshold must be at least 1.00 USDC. The contract floor will round this up automatically on save.
+                </div>
+            )}
 
             <div className="flex items-center justify-end">
                 <button
