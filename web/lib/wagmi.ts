@@ -1,5 +1,5 @@
 import { getDefaultConfig } from "@rainbow-me/rainbowkit";
-import { http } from "wagmi";
+import { http, fallback } from "wagmi";
 import { mainnet } from "wagmi/chains";
 import {
   arcTestnet,
@@ -56,9 +56,31 @@ export const wagmiConfig = getDefaultConfig({
     // free-tier ceiling. 50 ms is below human perception (the UI feels
     // identical) and packs noticeably more eth_calls into each batched
     // JSON-RPC array, dropping the per-second HTTP request count.
-    [arcTestnet.id]: http(resolveArcRpc(), {
-      batch: { wait: 50 },
-    }),
+    // Multi-transport fallback:
+    //   1. Alchemy (NEXT_PUBLIC_ARC_RPC_URL) - high throughput for
+    //      eth_call / eth_getBalance / multicall reads.
+    //   2. Arc public RPC - takes over the moment Alchemy returns
+    //      InvalidRequestRpcError (Alchemy free tier on Arc testnet
+    //      caps eth_getLogs at 10 BLOCKS per call, which makes any
+    //      meaningful event scan impossible; the public RPC accepts
+    //      multi-thousand-block ranges).
+    //   3. thirdweb proxy - third fallback for cumulative outages.
+    //
+    // viem's fallback() rotates on any RPC error from the higher-
+    // priority transport, so a single call that Alchemy refuses
+    // (10-block cap on getLogs) automatically retries on Arc public
+    // without the user seeing anything. This is the ONLY way to keep
+    // launchpad image metadata scanning while staying on Alchemy for
+    // the cheap reads. retryCount: 0 on each leg so we don't multiply
+    // out the failure latency before rotating.
+    [arcTestnet.id]: fallback(
+      [
+        http(resolveArcRpc(), { batch: { wait: 50 }, retryCount: 0 }),
+        http("https://rpc.testnet.arc.network", { batch: { wait: 50 }, retryCount: 0 }),
+        http("https://5042002.rpc.thirdweb.com", { batch: { wait: 50 }, retryCount: 0 }),
+      ],
+      { rank: false },
+    ),
     [anvilLocal.id]: http(anvilLocal.rpcUrls.default.http[0]),
     [sepolia.id]: http(),
     [baseSepolia.id]: http(),
