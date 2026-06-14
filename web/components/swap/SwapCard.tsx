@@ -1168,6 +1168,7 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
           tx={tx}
           inputUsd={inUsd.usd}
           outputUsd={outUsd.usd}
+          priceImpactPct={priceImpactPct}
           protocolLabel={
             // When an external route wins, the confirm screen has to
             // reflect that — otherwise the user signs a Synthra tx but

@@ -14,6 +14,7 @@ import { arcTestnet } from "@/lib/chains";
 import { TokenIcon } from "@/components/ui/TokenIcon";
 import { tickToPriceWithDecimals } from "@/lib/v3-math";
 import { cn, formatAddress, formatUsd } from "@/lib/utils";
+import { PoolAutoManagementInline } from "@/components/pool/PoolAutoManagementInline";
 
 const USDC_LOWER = ADDRESSES.usdc.toLowerCase();
 
@@ -403,6 +404,20 @@ export default function PoolDetailPage() {
                     )}
                 </div>
             </div>
+
+            {/* Inline Auto-management section. Renders only when the
+                connected wallet has a managed V3 position whose
+                (token0, token1, fee) tuple matches this pool. The
+                component handles the API fetch + the on-chain
+                setMode / withdrawPosition writes itself, so the pool
+                page stays declarative. Hidden entirely for V2 pairs. */}
+            {isV3 && (
+                <PoolAutoManagementInline
+                    poolToken0={token0}
+                    poolToken1={token1}
+                    poolFeePip={v3Fee || undefined}
+                />
+            )}
 
         </div>
     );

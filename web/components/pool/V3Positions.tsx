@@ -8,7 +8,6 @@ import { Address, erc20Abi, formatUnits } from "viem";
 import { useAccount, useReadContract, useReadContracts, useWriteContract } from "wagmi";
 
 import { AUTO_COMPOUNDER_ABI, modeLabelFromId, type CompounderModeId } from "@/lib/abis/autoCompounder";
-import { Modal } from "@/components/ui/Modal";
 import { pushToast } from "@/lib/toast";
 
 import { V3_FACTORY_ABI, V3_NPM_ABI, V3_POOL_ABI } from "@/lib/abis/v3-npm";
@@ -941,6 +940,7 @@ function V3PositionRow({
             {managed ? (
                 <ManagedActions
                     managed={managed}
+                    managePoolHref={poolAddress ? `/pool/${poolAddress}` : "/positions"}
                     addLiquidityHref={`/positions/add?type=v3&t0=${p.token0}&t1=${p.token1}&fee=${p.fee / 100}`}
                 />
             ) : (
@@ -990,61 +990,38 @@ function fmtUsd(n: number): string {
  */
 function ManagedActions({
     managed,
+    managePoolHref,
     addLiquidityHref,
 }: {
     managed: NonNullable<V3PositionRowProps["managed"]>;
+    managePoolHref: string;
     addLiquidityHref: string;
 }) {
-    const [open, setOpen] = useState(false);
+    // Manage button used to open ManagedSettingsModal in place; it now
+    // navigates to /pool/<address> where the inline auto-management
+    // section handles mode + threshold + slippage + stop. The modal-on-
+    // card UX read as a duplicate surface when the pool detail page
+    // already exists to host this kind of control.
     return (
-        <>
-            <div className="mt-4 grid grid-cols-2 gap-2">
-                <button
-                    type="button"
-                    onClick={() => setOpen(true)}
-                    disabled={managed.settingsBusy}
-                    className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-arc-border bg-white/[0.04] px-3 py-2.5 text-sm font-semibold text-arc-text transition-colors hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                    <SliderIcon size={14} />
-                    {managed.settingsBusy ? "Saving…" : "Manage"}
-                </button>
-                <Link
-                    href={addLiquidityHref}
-                    className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-arc-cta px-3 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-arc-cta-hover"
-                >
-                    <PlusIcon size={14} className="bg-white" />
-                    Add Liquidity
-                </Link>
-            </div>
-            {open && (
-                <ManagedSettingsModal
-                    open
-                    onClose={() => setOpen(false)}
-                    initialMode={managed.mode}
-                    initialMinFeeMicros={managed.minFeeMicros ?? 100_000n}
-                    initialMaxSlippageBps={managed.maxSlippageBps ?? 50}
-                    busy={!!managed.settingsBusy}
-                    stopBusy={!!managed.stopBusy}
-                    onStop={async () => {
-                        await managed.onStop();
-                        setOpen(false);
-                    }}
-                    onSave={async (next) => {
-                        await managed.onChangeSettings({
-                            mode:
-                                next.mode === "RECEIVE"
-                                    ? 1
-                                    : next.mode === "COMPOUND"
-                                      ? 2
-                                      : 0,
-                            minFeeMicros: next.minFeeMicros,
-                            maxSlippageBps: next.maxSlippageBps,
-                        });
-                        setOpen(false);
-                    }}
-                />
-            )}
-        </>
+        <div className="mt-4 grid grid-cols-2 gap-2">
+            <Link
+                href={managePoolHref}
+                className={cn(
+                    "inline-flex items-center justify-center gap-1.5 rounded-xl border border-arc-border bg-white/[0.04] px-3 py-2.5 text-sm font-semibold text-arc-text transition-colors hover:bg-white/[0.08]",
+                    managed.settingsBusy && "cursor-not-allowed opacity-50",
+                )}
+            >
+                <SliderIcon size={14} />
+                {managed.settingsBusy ? "Saving…" : "Manage"}
+            </Link>
+            <Link
+                href={addLiquidityHref}
+                className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-arc-cta px-3 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-arc-cta-hover"
+            >
+                <PlusIcon size={14} className="bg-white" />
+                Add Liquidity
+            </Link>
+        </div>
     );
 }
 
@@ -1059,195 +1036,12 @@ function ManagedActions({
  * and saves the user one signature plus a brief gap in which the
  * keeper would miss a tick.
  */
-function ManagedSettingsModal({
-    open,
-    onClose,
-    initialMode,
-    initialMinFeeMicros,
-    initialMaxSlippageBps,
-    busy,
-    stopBusy,
-    onStop,
-    onSave,
-}: {
-    open: boolean;
-    onClose: () => void;
-    initialMode: "NORMAL" | "RECEIVE" | "COMPOUND";
-    initialMinFeeMicros: bigint;
-    initialMaxSlippageBps: number;
-    busy: boolean;
-    stopBusy: boolean;
-    onStop: () => void | Promise<void>;
-    onSave: (next: {
-        mode: "NORMAL" | "RECEIVE" | "COMPOUND";
-        minFeeMicros: bigint;
-        maxSlippageBps: number;
-    }) => void | Promise<void>;
-}) {
-    const [mode, setMode] = useState<"NORMAL" | "RECEIVE" | "COMPOUND">(initialMode);
-    const initialThresholdStr = useMemo(
-        () => (Number(initialMinFeeMicros) / 1_000_000).toFixed(2),
-        [initialMinFeeMicros],
-    );
-    const initialSlippageStr = useMemo(
-        () => (initialMaxSlippageBps / 100).toFixed(2),
-        [initialMaxSlippageBps],
-    );
-    const [thresholdUsdc, setThresholdUsdc] = useState(initialThresholdStr);
-    const [slippagePct, setSlippagePct] = useState(initialSlippageStr);
-
-    const thresholdMicros = useMemo(() => {
-        const parsed = Number(thresholdUsdc);
-        if (!Number.isFinite(parsed) || parsed < 0) return 0n;
-        return BigInt(Math.floor(parsed * 1_000_000));
-    }, [thresholdUsdc]);
-    const slippageBps = useMemo(() => {
-        const parsed = Number(slippagePct);
-        if (!Number.isFinite(parsed) || parsed < 0) return 50;
-        return Math.min(10_000, Math.floor(parsed * 100));
-    }, [slippagePct]);
-
-    if (!open) return null;
-    return (
-        <Modal open onClose={busy ? () => {} : onClose}>
-            <div className="space-y-5 p-5">
-                <div className="flex items-center justify-between">
-                    <h3 className="text-lg font-semibold text-arc-text">
-                        Auto-management settings
-                    </h3>
-                    <button
-                        type="button"
-                        onClick={busy ? undefined : onClose}
-                        disabled={busy}
-                        aria-label="Close"
-                        className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-arc-text-muted hover:bg-arc-surface-2 hover:text-arc-text disabled:opacity-50"
-                    >
-                        ✕
-                    </button>
-                </div>
-
-                <div>
-                    <label className="mb-2 block text-xs uppercase tracking-wider text-arc-text-muted">
-                        Mode
-                    </label>
-                    <div className="grid grid-cols-3 gap-2">
-                        {(
-                            [
-                                {
-                                    id: "NORMAL" as const,
-                                    title: "Normal",
-                                    body: "Tracked, no actions.",
-                                },
-                                {
-                                    id: "RECEIVE" as const,
-                                    title: "Auto-receive",
-                                    body: "Push fees to wallet.",
-                                },
-                                {
-                                    id: "COMPOUND" as const,
-                                    title: "Auto-compound",
-                                    body: "Reinvest into position.",
-                                },
-                            ] as const
-                        ).map((opt) => {
-                            const active = mode === opt.id;
-                            return (
-                                <button
-                                    key={opt.id}
-                                    type="button"
-                                    onClick={() => setMode(opt.id)}
-                                    disabled={busy}
-                                    className={cn(
-                                        "rounded-xl border p-3 text-left text-xs transition-colors",
-                                        active
-                                            ? "border-sky-400 bg-sky-400/5"
-                                            : "border-arc-border bg-white/[0.015] hover:border-arc-border-strong",
-                                    )}
-                                >
-                                    <div className="font-semibold text-arc-text">
-                                        {opt.title}
-                                    </div>
-                                    <div className="mt-1 text-[10px] text-arc-text-muted">
-                                        {opt.body}
-                                    </div>
-                                </button>
-                            );
-                        })}
-                    </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                    <div>
-                        <label className="mb-2 block text-xs uppercase tracking-wider text-arc-text-muted">
-                            Threshold (USDC)
-                        </label>
-                        <input
-                            type="text"
-                            inputMode="decimal"
-                            value={thresholdUsdc}
-                            onChange={(e) => setThresholdUsdc(e.target.value)}
-                            disabled={busy}
-                            className="w-full rounded-xl border border-arc-border bg-white/[0.015] p-3 text-sm text-arc-text outline-none focus:border-arc-primary"
-                        />
-                    </div>
-                    <div>
-                        <label className="mb-2 block text-xs uppercase tracking-wider text-arc-text-muted">
-                            Slippage (%)
-                        </label>
-                        <input
-                            type="text"
-                            inputMode="decimal"
-                            value={slippagePct}
-                            onChange={(e) => setSlippagePct(e.target.value)}
-                            disabled={busy}
-                            className="w-full rounded-xl border border-arc-border bg-white/[0.015] p-3 text-sm text-arc-text outline-none focus:border-arc-primary"
-                        />
-                    </div>
-                </div>
-
-                <div className="rounded-xl border border-arc-border bg-white/[0.015] p-3 text-[11px] leading-relaxed text-arc-text-muted">
-                    Changes are applied in-place via Compounder.setMode —
-                    the NFT stays in the vault and the keeper resumes
-                    with the new settings on the next 5-minute tick. No
-                    withdraw / redeposit needed.
-                </div>
-
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                    <button
-                        type="button"
-                        onClick={() => void onStop()}
-                        disabled={busy || stopBusy}
-                        className="inline-flex items-center gap-1.5 rounded-xl border border-arc-warn/40 bg-arc-warn/10 px-4 py-2 text-sm font-semibold text-arc-warn transition-colors hover:bg-arc-warn/20 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                        {stopBusy ? "Stopping…" : "Stop position"}
-                    </button>
-                    <div className="flex items-center gap-2">
-                        <button
-                            onClick={onClose}
-                            disabled={busy || stopBusy}
-                            className="rounded-xl border border-arc-border px-4 py-2 text-sm text-arc-text-muted hover:bg-arc-surface-2"
-                        >
-                            Cancel
-                        </button>
-                        <button
-                            onClick={() =>
-                                void onSave({
-                                    mode,
-                                    minFeeMicros: thresholdMicros,
-                                    maxSlippageBps: slippageBps,
-                                })
-                            }
-                            disabled={busy || stopBusy}
-                            className="arc-button-primary px-5 py-2 text-sm"
-                        >
-                            {busy ? "Saving…" : "Save"}
-                        </button>
-                    </div>
-                </div>
-            </div>
-        </Modal>
-    );
-}
+// ManagedSettingsModal removed: the in-place settings modal that used to
+// open from the managed position card is gone. The /pool/<address> page
+// hosts an inline auto-management section instead — see
+// components/pool/PoolAutoManagementInline.tsx. Keep this commented
+// reference here so a future cleanup pass doesn't re-create the modal
+// component out of muscle memory.
 
 function PriceTile({
     label,

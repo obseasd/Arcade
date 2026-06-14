@@ -26,6 +26,11 @@ interface Props {
   inputUsd?: number;
   /** Estimated USD value of the output leg. */
   outputUsd?: number;
+  /** Pool-depth price impact (percent). Computed by the SwapCard from a
+   *  reference quote with 1% of the user's amountIn. Drives the "high
+   *  impact" warning banner inside the modal when the USD oracle is
+   *  unavailable (the dominant case for ETH legs on Arc). */
+  priceImpactPct?: number;
   /** Display label for the route's protocol (eg "Arcade V2", "Arcade V3",
    *  "Synthra V3", "XyloNet"). Mirrors the badge under the swap card.
    *  Defaults to "Arcade V2" for the legacy code paths that don't pass it. */
@@ -51,6 +56,7 @@ export function SwapConfirmModal({
   tx,
   inputUsd,
   outputUsd,
+  priceImpactPct,
   protocolLabel = "Arcade V2",
   protocolLogo,
 }: Props) {
@@ -65,6 +71,16 @@ export function SwapConfirmModal({
     return Math.max(0, (1 - outputUsd / inputUsd) * 100);
   })();
   const dangerous = lossPct >= 50;
+  // Price impact panel: separate from the USD-loss "dangerous" state so
+  // it fires even when the USD oracle is missing. Threshold 5% mirrors
+  // the SwapCard's warn tone — the modal echoes what the user already
+  // saw on the card so there's no surprise at signature time.
+  const impactWarn = priceImpactPct !== undefined && priceImpactPct >= 5;
+  const impactSeverityTag = priceImpactPct !== undefined && priceImpactPct >= 15
+    ? "EXTREME"
+    : priceImpactPct !== undefined && priceImpactPct >= 5
+      ? "HIGH"
+      : null;
 
   return (
     <Modal
@@ -129,6 +145,20 @@ export function SwapConfirmModal({
               {inputUsd ? `$${inputUsd.toFixed(2)}` : "—"} sent in. This usually
               means the pool is too thin or its ratio is broken. Triple-check
               before signing — this loss is permanent.
+            </div>
+          </div>
+        )}
+
+        {!dangerous && impactWarn && priceImpactPct !== undefined && (
+          <div className="rounded-xl border border-arc-danger/50 bg-arc-danger/10 p-3 text-xs">
+            <div className="font-semibold text-arc-danger">
+              Price impact {priceImpactPct.toFixed(2)}%{impactSeverityTag ? ` · ${impactSeverityTag}` : ""}
+            </div>
+            <div className="mt-1 text-arc-danger/80">
+              Your trade is eating a large slice of the pool depth — the
+              effective rate is materially worse than the pool's mid-price.
+              Either size down or split the trade across multiple swaps so
+              you stop pushing the curve.
             </div>
           </div>
         )}
