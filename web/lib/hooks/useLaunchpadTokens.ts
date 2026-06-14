@@ -75,7 +75,14 @@ export function useLaunchpadTokens(): { tokens: LaunchpadTokenInfo[]; isLoading:
       abi: LAUNCHPAD_ABI,
       functionName: "getTokensCount",
     })),
-    query: { enabled: generations.length > 0 },
+    // staleTime: 60s keeps the count fresh enough that a new launch
+    //   surfaces on the next tick, AND keeps a recently-mounted Launchpad
+    //   page from re-firing the whole multicall chain when the user comes
+    //   back from a token detail page.
+    // gcTime: 30 min keeps the data in memory across unmount/remount so
+    //   the Unnamed/0x0 fallback never appears just because the user
+    //   navigated away for a few seconds.
+    query: { enabled: generations.length > 0, staleTime: 60_000, gcTime: 1_800_000 },
   });
 
   const refetchAll = useCallback(() => {
@@ -119,7 +126,10 @@ export function useLaunchpadTokens(): { tokens: LaunchpadTokenInfo[]; isLoading:
       functionName: "allTokens",
       args: [BigInt(s.idx)],
     })),
-    query: { enabled: addrCallSpecs.length > 0 },
+    // Address-list is append-only on chain: a launchpad never removes a
+    // token index. 5-minute staleTime is safe; gcTime carries the cache
+    // across remounts so the back-from-detail navigation hits cache.
+    query: { enabled: addrCallSpecs.length > 0, staleTime: 300_000, gcTime: 1_800_000 },
   });
 
   // Pair each resolved address with its source generation so the
@@ -152,7 +162,14 @@ export function useLaunchpadTokens(): { tokens: LaunchpadTokenInfo[]; isLoading:
       { address: entry.address, abi: erc20Abi, functionName: "name" },
       { address: entry.address, abi: erc20Abi, functionName: "symbol" },
     ]),
-    query: { enabled: addressEntries.length > 0 },
+    // staleTime: 30s is the right cadence for marketCap + realUsdcReserve
+    //   (the live trading data); the watchEvent above force-refetches the
+    //   whole chain when a new TokenCreated event fires.
+    // gcTime: 30 min keeps name/symbol/creator in memory across page
+    //   navigation. Without it, every Launchpad re-mount refires the
+    //   full multicall and Arc's public RPC starts rate-limiting at the
+    //   ~50-token mark, leaving the page stuck on "Unnamed / 0x0".
+    query: { enabled: addressEntries.length > 0, staleTime: 30_000, gcTime: 1_800_000 },
   });
 
   // Batch-fetch all TokenCreated events ACROSS every generation. Each

@@ -434,6 +434,65 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
       ? ((outUsd.usd - inUsd.usd) / inUsd.usd) * 100
       : undefined;
 
+  // Pool-depth price impact: fire a SECOND aggregator quote with 1% of the
+  // user's amountIn as a "before-impact" reference. The active route's
+  // effective rate (amountOut / amountIn) compared to the reference rate
+  // tells us how much depth the user is eating. Critical for ETH-style
+  // legs where the USD oracle isn't wired and lossPct is undefined — a
+  // 2-ETH trade into a $40 pool would otherwise read as just "Fee 0.30%".
+  //
+  // We DO NOT fire the probe under 100 wei input (math degenerate) or when
+  // the aggregator itself is disabled (launchpad curve, unsupported pair).
+  const refProbeAmount = useMemo<bigint>(() => {
+    if (amountInRaw < 100n) return 0n;
+    const div100 = amountInRaw / 100n;
+    return div100 > 0n ? div100 : 1n;
+  }, [amountInRaw]);
+  const refQuotes = useRouteQuotes({
+    tokenIn: tokenIn.address,
+    tokenOut: tokenOut?.address,
+    decimalsIn,
+    decimalsOut,
+    amountIn: refProbeAmount,
+    recipient: account,
+    slippageBps,
+    enabled: aggregatorEnabled && refProbeAmount > 0n,
+  });
+  const priceImpactPct = useMemo<number | undefined>(() => {
+    if (!activeRoute || activeRoute.amountOut === 0n) return undefined;
+    if (refProbeAmount === 0n) return undefined;
+    if (amountInRaw === 0n) return undefined;
+    // Match the reference quote to the SAME provider when possible so
+    // we don't compare arcade-v3's effective rate against (say) synthra's
+    // mid-price. Falls back to refQuotes.best when no same-provider match.
+    const sameProvider = refQuotes.quotes.find((q) => q.provider === activeRoute.provider);
+    const ref = sameProvider ?? refQuotes.best;
+    if (!ref || ref.amountOut === 0n) return undefined;
+    // tradeRate = activeRoute.amountOut / amountInRaw
+    // refRate   = ref.amountOut / refProbeAmount
+    // impactFraction = 1 - tradeRate / refRate
+    //                = (refRate - tradeRate) / refRate
+    //                = (ref.amountOut * amountInRaw - activeRoute.amountOut * refProbeAmount)
+    //                  / (ref.amountOut * amountInRaw)
+    const refNum = ref.amountOut * amountInRaw;
+    const tradeNum = activeRoute.amountOut * refProbeAmount;
+    if (refNum === 0n) return undefined;
+    if (refNum <= tradeNum) return 0;
+    const impactBps = Number(((refNum - tradeNum) * 10000n) / refNum);
+    return impactBps / 100;
+  }, [activeRoute, refQuotes.quotes, refQuotes.best, refProbeAmount, amountInRaw]);
+  const priceImpactLabel = useMemo<string | undefined>(() => {
+    if (priceImpactPct === undefined) return undefined;
+    if (priceImpactPct < 0.01) return undefined;
+    const tag = priceImpactPct >= 15
+      ? "EXTREME"
+      : priceImpactPct >= 5
+        ? "HIGH"
+        : "";
+    const tagPart = tag ? ` · ${tag}` : "";
+    return `Price impact ${priceImpactPct.toFixed(2)}%${tagPart}`;
+  }, [priceImpactPct]);
+
   // Pick the spender to approve based on the route. For external
   // UR + Permit2 routes the user-facing approval is to Permit2 (one
   // time, max) rather than to the route's router directly. For everything
@@ -885,14 +944,13 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
             ? `Fee ${feePctLabel} (${feeFormatted} ${tokenIn.symbol ?? "TOKEN"})`
             : undefined
         }
-        slippageLabel={
-          // Min received under current slippage tolerance. Shown only on
-          // exact-in trades — exact-out shows the max-sent on the From box
-          // (separate UI surface; the current pass kept the From box
-          // intentionally clean). Skip when no quote yet.
-          exactIn && tokenOut && finalAmountOut > 0n
-            ? `Min received ${formatTokenAmount(minOut, decimalsOut, 6)} ${symOut} (${(slippageBps / 100).toFixed(2)}% slippage)`
-            : undefined
+        slippageLabel={priceImpactLabel}
+        slippageTone={
+          priceImpactPct === undefined || priceImpactPct < 1
+            ? "normal"
+            : priceImpactPct < 5
+              ? "warn"
+              : "danger"
         }
       />
 
@@ -1182,9 +1240,11 @@ interface TokenBoxProps {
   lossPct?: number;
   /** Optional fee string shown in the bottom-right (typical for the "To" box). */
   feeLabel?: string;
-  /** Optional second row under USD/fee showing the slippage-protected
-   *  worst-case output ("Min received: 19.84 USDC · 0.50% slippage"). */
+  /** Optional secondary row under USD/fee. Today this surfaces pool-depth
+   *  price impact ("Price impact 12.34% · HIGH"); the color comes from
+   *  slippageTone so callers don't have to hand-thread Tailwind classes. */
   slippageLabel?: string;
+  slippageTone?: "normal" | "warn" | "danger";
 }
 
 function TokenBox({
@@ -1201,6 +1261,7 @@ function TokenBox({
   lossPct,
   feeLabel,
   slippageLabel,
+  slippageTone,
 }: TokenBoxProps) {
   const decimals = token?.decimals ?? 18;
   // formatToken now surfaces "<0.0001" for sub-0.0001 non-zero balances
@@ -1296,7 +1357,16 @@ function TokenBox({
         </div>
       </div>
       {slippageLabel && (
-        <div className="mt-1 flex items-center justify-end text-[11px] text-arc-text-faint">
+        <div
+          className={cn(
+            "mt-1 flex items-center justify-end text-[11px]",
+            slippageTone === "danger"
+              ? "font-semibold text-arc-danger"
+              : slippageTone === "warn"
+                ? "text-arc-warn"
+                : "text-arc-text-faint",
+          )}
+        >
           <span className="tabular-nums">{slippageLabel}</span>
         </div>
       )}
