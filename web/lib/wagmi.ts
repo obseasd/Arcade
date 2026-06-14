@@ -42,7 +42,16 @@ export const wagmiConfig = getDefaultConfig({
     // N. This is NOT the same as multicall3 batching (which we can't
     // use - see chains.ts) - it's protocol-level batching, supported
     // by every standard JSON-RPC node.
-    [arcTestnet.id]: http(arcTestnet.rpcUrls.default.http[0], {
+    //
+    // Endpoint resolution:
+    //   NEXT_PUBLIC_ARC_RPC_URL = priority override. Set this to a
+    //   dedicated provider (Alchemy, thirdweb client-id URL, custom
+    //   node) when public-RPC 429s start surfacing on /launchpad /
+    //   /swap reads. Validated against http(s) so a hostile env value
+    //   can't redirect wallet calls to an attacker-controlled host.
+    //   Falls back to arcTestnet.rpcUrls.default.http[0] (the public
+    //   rpc.testnet.arc.network) when unset or malformed.
+    [arcTestnet.id]: http(resolveArcRpc(), {
       batch: { wait: 16 },
     }),
     [anvilLocal.id]: http(anvilLocal.rpcUrls.default.http[0]),
@@ -65,6 +74,25 @@ export const wagmiConfig = getDefaultConfig({
   },
   ssr: true,
 });
+
+/** Validate + return the Arc RPC URL the wagmi transport should use. The
+ *  env var NEXT_PUBLIC_ARC_RPC_URL takes priority when set and well-formed
+ *  (https only - audit FSEC-005 stance: any other scheme would let a
+ *  hostile config value leak wallet addresses to an attacker). On a
+ *  missing or malformed value we fall back to the chain definition's
+ *  public RPC so the app stays runnable in dev without the env var. */
+function resolveArcRpc(): string {
+  const fallback = arcTestnet.rpcUrls.default.http[0];
+  const raw = process.env.NEXT_PUBLIC_ARC_RPC_URL;
+  if (!raw) return fallback;
+  try {
+    const u = new URL(raw);
+    if (u.protocol !== "https:" && u.protocol !== "http:") return fallback;
+    return raw;
+  } catch {
+    return fallback;
+  }
+}
 
 function safeMainnetRpc(): string {
   // Audit 2026-06-11 v4 - ROOT CAUSE of frozen wagmi reads:
