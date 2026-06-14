@@ -1,0 +1,71 @@
+name: twitter autoclaim
+
+# POST /api/twitter/cron every 5 minutes. Walks twitter_claim_intents
+# rows whose user has signed authorize on chain AND whose timelock has
+# elapsed, and fires claimByTwitter(nonce) via the operator wallet so
+# the creator receives their fees WITHOUT paying the claim gas
+# themselves.
+#
+# The cron's bearer secret is identical to COMPOUNDER_CRON_SECRET so
+# the operator manages a single rotation surface across every
+# Compounder + Twitter Escrow cron endpoint.
+#
+# Required secrets:
+#   TWITTER_AUTOCLAIM_URL  : OR fall back to the COMPOUNDER_CRON_URL
+#                            rewrite path (strips /cron, appends
+#                            /twitter/cron). Dedicated secret is the
+#                            recommended config.
+#   COMPOUNDER_CRON_SECRET : Bearer secret matching Vercel env.
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}
+
+concurrency:
+  group: twitter-autoclaim
+  cancel-in-progress: true
+
+jobs:
+  autoclaim:
+    name: POST /api/twitter/cron
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: fire autoclaim
+        env:
+          TWITTER_AUTOCLAIM_URL: ${{ secrets.TWITTER_AUTOCLAIM_URL }}
+          COMPOUNDER_CRON_URL: ${{ secrets.COMPOUNDER_CRON_URL }}
+          COMPOUNDER_CRON_SECRET: ${{ secrets.COMPOUNDER_CRON_SECRET }}
+        run: |
+          if [ -z "$COMPOUNDER_CRON_SECRET" ]; then
+            echo "Missing COMPOUNDER_CRON_SECRET repo secret"
+            exit 1
+          fi
+
+          if [ -n "$TWITTER_AUTOCLAIM_URL" ]; then
+            URL="$TWITTER_AUTOCLAIM_URL"
+          elif [ -n "$COMPOUNDER_CRON_URL" ]; then
+            # Same robust rewrite as the reconcile workflow: strip query
+            # / fragment, strip trailing slash, strip the existing path
+            # tail, then append the twitter path.
+            BASE="${COMPOUNDER_CRON_URL%%[?#]*}"
+            BASE="${BASE%/}"
+            BASE="${BASE%/cron}"
+            BASE="${BASE%/compounder}"
+            URL="${BASE%/}/twitter/cron"
+          else
+            echo "Set either TWITTER_AUTOCLAIM_URL or COMPOUNDER_CRON_URL"
+            exit 1
+          fi
+
+          echo "Autoclaim URL: $URL"
+
+          curl --fail-with-body \
+               --max-time 90 \
+               --retry 2 \
+               --retry-delay 10 \
+               -X POST \
+               -H "Authorization: Bearer $COMPOUNDER_CRON_SECRET" \
+               -H "Content-Type: application/json" \
+               "$URL"

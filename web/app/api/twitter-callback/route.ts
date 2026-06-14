@@ -465,6 +465,41 @@ export async function GET(req: NextRequest) {
     handle: oauthHandle,
   };
 
+  // Persist the OAuth link + the claim intent so the auto-claim cron
+  // can settle this slot the moment its timelock elapses on chain
+  // (without the user having to keep the /claim tab open or
+  // re-OAuth on every accrual). The DB writes are best-effort —
+  // failures (Postgres outage, schema not yet migrated) log and
+  // continue; the legacy cookie-driven manual path still works.
+  try {
+    // Lazy import keeps the OAuth callback bundle small for installs
+    // that have not run migration 005 yet (the persistence module
+    // imports the Neon driver which is otherwise unused in this route).
+    const persist = await import("@/lib/twitterEscrowPersistence");
+    await persist.recordOAuthLink({
+      twitterHandle: oauthHandle,
+      walletAddress: recipient,
+      // twitterUserId is not currently surfaced by the OAuth callback;
+      // pass null and let the cron fall back to handle-only matching.
+      twitterUserId: null,
+    });
+    await persist.insertClaimIntent({
+      positionId: positionId.toString(),
+      slotIndex,
+      nonce,
+      twitterHandle: oauthHandle,
+      recipientAddress: recipient,
+      pairedToken,
+      pairedAmount: pairedAmount.toString(),
+      clankerToken,
+      clankerAmount: clankerAmount.toString(),
+      deadlineIso: new Date(Number(deadline) * 1000).toISOString(),
+    });
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn("[twitter-callback] auto-claim mirror failed:", err);
+  }
+
   const url = new URL(`${origin}/claim`);
   const res = NextResponse.redirect(url.toString());
   // Regression fix (2026-06-11): cookies set with domain="arcade.trading"
