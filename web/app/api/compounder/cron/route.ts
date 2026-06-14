@@ -324,6 +324,7 @@ async function handleOne(
         // genuinely aren't enough fees yet; we skip the on-chain tx
         // and try again on the next tick.
         type PushSim = readonly [bigint, bigint];
+        type SimResult = PushSim | { skip: string };
         const sim = await withTimeout(
             publicClient
                 .simulateContract({
@@ -333,28 +334,69 @@ async function handleOne(
                     args: [tokenId, currentProtocolFeeBps, deadline],
                     account,
                 })
-                .then((r) => r.result as PushSim)
-                .catch((err) => {
+                .then((r): SimResult => r.result as PushSim)
+                .catch((err): SimResult => {
                     const msg = err instanceof Error ? err.message : String(err);
-                    if (msg.includes("BELOW_THRESHOLD")) {
-                        return "below-threshold" as const;
+                    // Strip down to the short revert reason so logs read
+                    // cleanly. Known Compounder reverts:
+                    //   BELOW_THRESHOLD   - fees < cfg.minFeeMicros
+                    //   NOT_DEPOSITED     - depositor == 0
+                    //   WRONG_MODE        - cfg.mode != MODE_RECEIVE
+                    //   COOLDOWN          - lastActionAt + cooldown > now
+                    //   DEADLINE_PASSED   - deadline < now
+                    //   FEE_BPS_OVER_CAP  - protocolFeeBps > ceiling
+                    //   TWAP_DEVIATION    - price moved past slippage
+                    const KNOWN_REASONS = [
+                        "BELOW_THRESHOLD",
+                        "NOT_DEPOSITED",
+                        "WRONG_MODE",
+                        "COOLDOWN",
+                        "DEADLINE_PASSED",
+                        "FEE_BPS_OVER_CAP",
+                        "TWAP_DEVIATION",
+                    ];
+                    for (const r of KNOWN_REASONS) {
+                        if (msg.includes(r)) return { skip: r };
                     }
-                    return null;
+                    return {
+                        skip: `unknown:${msg.slice(0, 120).replace(/\s+/g, " ")}`,
+                    };
                 }),
             RPC_TIMEOUT_MS,
         );
-        if (sim === "below-threshold") {
-            summary.skipped++;
-            summary.notes.push(
-                `token=${position.tokenId} reason=below-threshold-postsync`,
-            );
-            return;
-        }
         if (!sim) {
             summary.skipped++;
             summary.notes.push(
-                `token=${position.tokenId} reason=push-sim-failed-or-timed-out`,
+                `token=${position.tokenId} reason=push-sim-timed-out`,
             );
+            return;
+        }
+        if ("skip" in sim) {
+            summary.skipped++;
+            summary.notes.push(
+                `token=${position.tokenId} reason=push:${sim.skip}`,
+            );
+            // NOT_DEPOSITED is a permanent state for this tokenId: the
+            // user withdrew on-chain but the DB row never got marked
+            // withdrawn. Mirror the truth so the cron stops re-scanning
+            // it every tick and crowding out real work.
+            if (sim.skip === "NOT_DEPOSITED") {
+                try {
+                    const baseUrl =
+                        process.env.NEXT_PUBLIC_BASE_URL ??
+                        "https://www.arcade.trading";
+                    await fetch(`${baseUrl}/api/compounder/positions`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            action: "withdraw",
+                            tokenId: position.tokenId,
+                        }),
+                    });
+                } catch {
+                    // best-effort - the reconcile cron will retry
+                }
+            }
             return;
         }
         fee0 = sim[0];
@@ -405,42 +447,67 @@ async function handleOne(
         );
 
         type CompoundSim = readonly [bigint, bigint, bigint];
+        type CompoundSimResult = CompoundSim | { skip: string };
         const sim = await withTimeout(
             publicClient
                 .simulateContract({
                     address: compounderAddress,
                     abi: AUTO_COMPOUNDER_ABI,
                     functionName: "compound",
-                    // Stage 2 ABI: pass open ceilings on the simulation
-                    // call (MAX_PROTOCOL_FEE_BPS + max deadline) so the
-                    // simulate doesn't trip the new guards before the
-                    // real call decides on the actual values.
                     args: [tokenId, 0n, 0n, 500, deadline],
                     account,
                 })
-                .then((r) => r.result as CompoundSim)
-                .catch((err) => {
+                .then((r): CompoundSimResult => r.result as CompoundSim)
+                .catch((err): CompoundSimResult => {
                     const msg = err instanceof Error ? err.message : String(err);
-                    if (msg.includes("BELOW_THRESHOLD")) {
-                        return "below-threshold" as const;
+                    const KNOWN_REASONS = [
+                        "BELOW_THRESHOLD",
+                        "NOT_DEPOSITED",
+                        "WRONG_MODE",
+                        "COOLDOWN",
+                        "DEADLINE_PASSED",
+                        "FEE_BPS_OVER_CAP",
+                        "TWAP_DEVIATION",
+                    ];
+                    for (const r of KNOWN_REASONS) {
+                        if (msg.includes(r)) return { skip: r };
                     }
-                    return null;
+                    return {
+                        skip: `unknown:${msg.slice(0, 120).replace(/\s+/g, " ")}`,
+                    };
                 }),
             RPC_TIMEOUT_MS,
         );
 
-        if (sim === "below-threshold") {
-            summary.skipped++;
-            summary.notes.push(
-                `token=${position.tokenId} reason=below-threshold-postsync`,
-            );
-            return;
-        }
         if (!sim) {
             summary.skipped++;
             summary.notes.push(
-                `token=${position.tokenId} reason=sim-failed-or-timed-out`,
+                `token=${position.tokenId} reason=compound-sim-timed-out`,
             );
+            return;
+        }
+        if ("skip" in sim) {
+            summary.skipped++;
+            summary.notes.push(
+                `token=${position.tokenId} reason=compound:${sim.skip}`,
+            );
+            if (sim.skip === "NOT_DEPOSITED") {
+                try {
+                    const baseUrl =
+                        process.env.NEXT_PUBLIC_BASE_URL ??
+                        "https://www.arcade.trading";
+                    await fetch(`${baseUrl}/api/compounder/positions`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            action: "withdraw",
+                            tokenId: position.tokenId,
+                        }),
+                    });
+                } catch {
+                    // best-effort
+                }
+            }
             return;
         }
 
