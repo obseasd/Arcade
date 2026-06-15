@@ -2,7 +2,7 @@
 
 import { ArrowUpDown, Info, Lock, Plus, Sparkles } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useState } from "react";
 import {
     Address,
     encodeAbiParameters,
@@ -413,7 +413,7 @@ export function V3AddLiquidity({
     // improvement #4) so the user reads the same swap leg + expected
     // liquidity the contract will execute. Only fires in Single Asset mode
     // with a pool + amount in flight.
-    const singleTypedRaw = (() => {
+    const singleTypedRawLive = useMemo(() => {
         try {
             if (mode !== "single") return 0n;
             if (zapTokenSide === "0" && amount0)
@@ -424,7 +424,13 @@ export function V3AddLiquidity({
             /* ignore parse errors during typing */
         }
         return 0n;
-    })();
+    }, [mode, zapTokenSide, amount0, amount1, t0.decimals, t1.decimals]);
+    // 2026-06-15 audit fix: defer the value React passes to the v3Zap
+    // useReadContract so a fast typist gets one quote per ~debounced
+    // typing burst instead of one per keystroke. useDeferredValue is
+    // the lowest-friction React-native debounce; staleTime:500 on the
+    // query smooths the actual cache lookups for the same args key.
+    const singleTypedRaw = useDeferredValue(singleTypedRawLive);
     const v3QuoteQ = useReadContract({
         address: ADDRESSES.v3Zap,
         abi: V3_ZAP_ABI,
@@ -445,6 +451,7 @@ export function V3AddLiquidity({
                 zapEnabled &&
                 hasPool &&
                 singleTypedRaw > 0n,
+            staleTime: 500,
         },
     });
     const v3Quote = v3QuoteQ.data as
@@ -1010,8 +1017,17 @@ export function V3AddLiquidity({
                                 token0Address: t0.address,
                                 token1Address: t1.address,
                                 feeTier: feePip,
-                                tickLower,
-                                tickUpper,
+                                // 2026-06-15 audit fix: ship the actual
+                                // ticks the mint used (after the
+                                // fresh-pool branch's re-anchor around
+                                // the live tick), not the user's
+                                // pre-mint React state. Without this,
+                                // the DB row carried stale anchors and
+                                // any future cron decision keyed on the
+                                // mirror ticks (rebalance, out-of-range
+                                // warnings) would read wrong values.
+                                tickLower: actualTickLower,
+                                tickUpper: actualTickUpper,
                             }),
                         });
                     } catch (mirrorErr) {

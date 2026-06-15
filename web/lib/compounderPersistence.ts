@@ -315,6 +315,38 @@ export async function upsertPosition(input: {
     }
 }
 
+/** 2026-06-15 audit MEDIUM fix: re-deposit by a different owner used to
+ *  leak the new owner's mode/threshold/slippage onto the prior owner's
+ *  position row because upsertPosition's ON CONFLICT clause keeps
+ *  owner_address pinned (C2 defence). This helper is the trusted-
+ *  reconciler-only path that legitimately re-stamps owner_address WHEN
+ *  the row was previously withdrawn (PositionWithdrawn was observed on
+ *  chain). Refreshes deposited_at so the (deposited_at, withdrawn_at)
+ *  tenure window query in getTotalClaimedByTokenForOwner is correct for
+ *  the new owner. The public POST route still does NOT call this; only
+ *  the reconcile cron does. */
+export async function restampOwnerOnRedeposit(input: {
+    tokenId: string;
+    ownerAddress: string;
+}): Promise<boolean> {
+    if (!isDbConfigured()) return false;
+    try {
+        const sql = getSql();
+        await sql`
+            UPDATE compounder_positions
+               SET owner_address  = ${input.ownerAddress.toLowerCase()},
+                   deposited_at   = NOW(),
+                   withdrawn_at   = NULL
+             WHERE token_id = ${input.tokenId}::BIGINT
+               AND withdrawn_at IS NOT NULL
+        `;
+        return true;
+    } catch (err) {
+        console.error("[compounder] restampOwnerOnRedeposit failed:", err);
+        return false;
+    }
+}
+
 export async function markWithdrawn(tokenId: string): Promise<boolean> {
     if (!isDbConfigured()) return false;
     try {

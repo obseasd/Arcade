@@ -41,24 +41,30 @@ export function PendingWithdrawalsCard() {
 
   // 2) V3 locker keeps a 2-D ledger token → recipient → amount. For each V3
   //    launch token, the wallet might have a pending paired-side (USDC/WETH)
-  //    OR clanker-side balance. We check both token sides per launch.
+  //    OR clanker-side balance.
+  //
+  // 2026-06-15 audit LOW fix: previously the array was flatMap'd as
+  // (USDC, tokenSide) per v3Token, which sent the same USDC pending
+  // read N times (one per V3 token). Build it instead as a single
+  // upfront USDC entry + one token-side read per v3Token. Index math
+  // shifts from `2*i + 1` to `i + 1`.
   const lockerCalls = useReadContracts({
     contracts:
       account && ADDRESSES.v3Locker !== zeroAddress
-        ? v3Tokens.flatMap((t) => [
+        ? [
             {
               address: ADDRESSES.v3Locker,
               abi: V3_LOCKER_ABI,
               functionName: "pendingWithdrawals" as const,
               args: [ADDRESSES.usdc, account] as const,
             },
-            {
+            ...v3Tokens.map((t) => ({
               address: ADDRESSES.v3Locker,
               abi: V3_LOCKER_ABI,
               functionName: "pendingWithdrawals" as const,
               args: [t.address, account] as const,
-            },
-          ])
+            })),
+          ]
         : [],
     query: {
       enabled: !!account && v3Tokens.length > 0 && ADDRESSES.v3Locker !== zeroAddress,
@@ -66,8 +72,7 @@ export function PendingWithdrawalsCard() {
     },
   });
 
-  // Dedupe USDC reads: the USDC pending balance is the same regardless of
-  // which token row we queried it from. Take the first.
+  // First entry is the single USDC pending read.
   const lockerUsdcPending = useMemo<bigint>(() => {
     const data = lockerCalls.data;
     if (!data || data.length === 0) return 0n;
@@ -75,12 +80,12 @@ export function PendingWithdrawalsCard() {
     return r?.status === "success" ? (r.result as bigint) : 0n;
   }, [lockerCalls.data]);
 
-  // Per-token side: each v3Token at index i has its clanker-side reading at 2i+1.
+  // Per-token side: each v3Token at index i has its clanker-side reading at i+1.
   const tokenSidePending = useMemo<Array<{ token: Address; symbol?: string; amount: bigint }>>(() => {
     if (!lockerCalls.data) return [];
     const out: Array<{ token: Address; symbol?: string; amount: bigint }> = [];
     for (let i = 0; i < v3Tokens.length; i++) {
-      const r = lockerCalls.data[2 * i + 1];
+      const r = lockerCalls.data[i + 1];
       if (r?.status !== "success") continue;
       const amount = r.result as bigint;
       if (amount === 0n) continue;

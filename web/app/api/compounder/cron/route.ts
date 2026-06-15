@@ -14,6 +14,7 @@ import {
     stampLastAction,
     insertEvent,
     enqueueAction,
+    markWithdrawn,
     type CompounderPosition,
 } from "@/lib/compounderPersistence";
 import { isDbConfigured } from "@/lib/db";
@@ -382,18 +383,16 @@ async function handleOne(
             // withdrawn. Mirror the truth so the cron stops re-scanning
             // it every tick and crowding out real work.
             if (sim.skip === "NOT_DEPOSITED") {
+                // 2026-06-15 audit MEDIUM fix: was POSTing to
+                // /api/compounder/positions with an unauthenticated
+                // body. The route's owner check is skipped when the
+                // on-chain depositor reads as zero (the NOT_DEPOSITED
+                // case), which gave an attacker a soft-delete vector
+                // on rows that legitimately should be withdrawn. Call
+                // markWithdrawn directly from the cron - no HTTP hop,
+                // no auth surface to defend.
                 try {
-                    const baseUrl =
-                        process.env.NEXT_PUBLIC_BASE_URL ??
-                        "https://www.arcade.trading";
-                    await fetch(`${baseUrl}/api/compounder/positions`, {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({
-                            action: "withdraw",
-                            tokenId: position.tokenId,
-                        }),
-                    });
+                    await markWithdrawn(position.tokenId);
                 } catch {
                     // best-effort - the reconcile cron will retry
                 }

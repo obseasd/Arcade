@@ -428,20 +428,26 @@ export default function PoolDetailPage() {
 }
 
 function useTokenMeta(addr: Address | undefined) {
+    // 2026-06-15 audit LOW fix: gate the on-chain symbol/decimals reads
+    // on enabled: !isUsdc so the USDC leg of every pool (>99% of pools)
+    // stops emitting 2 eth_calls per page load. The short-circuit at
+    // the bottom of the hook was post-hook so it only affected the
+    // return value, not the query enablement.
+    const isUsdc = !!addr && addr.toLowerCase() === USDC_LOWER;
     const symQ = useReadContract({
         address: addr,
         abi: erc20Abi,
         functionName: "symbol",
-        query: { enabled: !!addr },
+        query: { enabled: !!addr && !isUsdc },
     });
     const decQ = useReadContract({
         address: addr,
         abi: erc20Abi,
         functionName: "decimals",
-        query: { enabled: !!addr },
+        query: { enabled: !!addr && !isUsdc },
     });
     if (!addr) return undefined;
-    if (addr.toLowerCase() === USDC_LOWER) {
+    if (isUsdc) {
         return { symbol: "USDC", decimals: USDC_DECIMALS };
     }
     return {

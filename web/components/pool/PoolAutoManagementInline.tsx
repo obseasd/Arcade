@@ -1,13 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Address, createPublicClient, http } from "viem";
+import { Address } from "viem";
+import type { PublicClient } from "viem";
 import { useAccount, usePublicClient, useWriteContract } from "wagmi";
 
 import { AUTO_COMPOUNDER_ABI, modeLabelFromId } from "@/lib/abis/autoCompounder";
 import { V3_NPM_ABI } from "@/lib/abis/v3-npm";
 import { ADDRESSES } from "@/lib/constants";
-import { arcTestnet } from "@/lib/chains";
 import { pushToast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 
@@ -49,72 +49,73 @@ interface ManagedPositionRow {
 // Use the dedicated provider URL when one is configured via
 // NEXT_PUBLIC_ARC_RPC_URL (Alchemy / thirdweb) so this inline panel
 // shares the same low-rate-limit transport as the rest of the app.
-const RPC_URL =
-    process.env.NEXT_PUBLIC_ARC_RPC_URL ?? "https://rpc.testnet.arc.network";
-
-/** Read NPM.positions(tokenId) and pull the (token0, token1, fee) tuple
- *  the page needs to filter the managed-position list by pool. Returns
- *  null on any error so a single bad position id doesn't drop the whole
- *  panel. */
-async function readPositionPoolTuple(
-    tokenId: bigint,
-): Promise<{ token0: Address; token1: Address; feePip: number } | null> {
+/** 2026-06-15 audit HIGH#7 fix: batched on-chain read for the panel.
+ *  Previously the helpers built a fresh viem PublicClient per row and
+ *  fired NPM.positions + Compounder.configs sequentially in a for-loop;
+ *  the panel routinely 429ed on Arc's public RPC and rendered empty.
+ *  Reuse the wagmi-injected publicClient (Alchemy + fallback list) and
+ *  collapse the 2N reads into a single multicall — Arc still has no
+ *  working Multicall3 (memo arc-multicall3-trap) but viem batches the
+ *  JSON-RPC array over HTTP via the wagmi transport's batch:{wait:50}
+ *  config, so all per-row reads coalesce into ~1 HTTP roundtrip. */
+async function readRowsForPool(
+    client: PublicClient,
+    tokenIds: bigint[],
+    ourT0: string,
+    ourT1: string,
+    poolFeePip: number,
+): Promise<Map<string, { mode: Mode; maxSlippageBps: number; minFeeMicros: bigint }>> {
+    const out = new Map<
+        string,
+        { mode: Mode; maxSlippageBps: number; minFeeMicros: bigint }
+    >();
+    if (tokenIds.length === 0) return out;
     const npm = ADDRESSES.v3PositionManager as Address;
-    if (npm === "0x0000000000000000000000000000000000000000") return null;
-    try {
-        const client = createPublicClient({ chain: arcTestnet, transport: http(RPC_URL) });
-        const result = (await client.readContract({
-            address: npm,
-            abi: V3_NPM_ABI,
-            functionName: "positions",
-            args: [tokenId],
-        })) as readonly unknown[];
-        // NPM.positions tuple shape: [nonce, operator, token0, token1,
-        // fee, tickLower, tickUpper, liquidity, ...]. We only need indices
-        // 2, 3, 4.
-        const token0 = result[2] as Address;
-        const token1 = result[3] as Address;
-        const feePip = Number(result[4]);
-        if (!token0 || !token1 || !Number.isFinite(feePip)) return null;
-        return { token0, token1, feePip };
-    } catch {
-        return null;
-    }
-}
-
-/** Read Compounder.configs(tokenId) so the panel can compare the form
- *  state against ON-CHAIN truth, not against the API mirror (which can
- *  drift). PositionConfig tuple shape:
- *    [depositor (address), mode (uint8),
- *     maxSlippageBps (uint16), lastActionAt (uint64),
- *     minFeeMicros (uint64)]
- *  Returns null on any error so a single dead row doesn't break the
- *  panel render. */
-async function readPositionConfig(
-    tokenId: bigint,
-): Promise<
-    | { mode: Mode; maxSlippageBps: number; minFeeMicros: bigint }
-    | null
-> {
     const compounder = ADDRESSES.autoCompounder as Address;
-    if (compounder === "0x0000000000000000000000000000000000000000") return null;
+    if (
+        npm === "0x0000000000000000000000000000000000000000" ||
+        compounder === "0x0000000000000000000000000000000000000000"
+    ) {
+        return out;
+    }
+
+    // Two reads per tokenId; viem batches over HTTP.
+    const contracts = tokenIds.flatMap((tokenId) => [
+        { address: npm, abi: V3_NPM_ABI, functionName: "positions" as const, args: [tokenId] as const },
+        { address: compounder, abi: AUTO_COMPOUNDER_ABI, functionName: "configs" as const, args: [tokenId] as const },
+    ]);
+    let results: readonly { status: "success" | "failure"; result?: unknown }[];
     try {
-        const client = createPublicClient({ chain: arcTestnet, transport: http(RPC_URL) });
-        const result = (await client.readContract({
-            address: compounder,
-            abi: AUTO_COMPOUNDER_ABI,
-            functionName: "configs",
-            args: [tokenId],
-        })) as readonly unknown[];
-        const modeId = Number(result[1]);
+        results = await client.multicall({
+            contracts,
+            allowFailure: true,
+        });
+    } catch {
+        return out;
+    }
+
+    for (let i = 0; i < tokenIds.length; i++) {
+        const tokenId = tokenIds[i];
+        const posRes = results[i * 2];
+        const cfgRes = results[i * 2 + 1];
+        if (posRes?.status !== "success" || cfgRes?.status !== "success") continue;
+        const pos = posRes.result as readonly unknown[];
+        const cfg = cfgRes.result as readonly unknown[];
+        const t0 = (pos[2] as Address).toLowerCase();
+        const t1 = (pos[3] as Address).toLowerCase();
+        const feePip = Number(pos[4]);
+        const sameOrFlipped =
+            (t0 === ourT0 && t1 === ourT1) ||
+            (t0 === ourT1 && t1 === ourT0);
+        if (!sameOrFlipped || feePip !== poolFeePip) continue;
+        const modeId = Number(cfg[1]);
         const mode: Mode =
             modeId === 1 ? "RECEIVE" : modeId === 2 ? "COMPOUND" : "NORMAL";
-        const maxSlippageBps = Number(result[2]);
-        const minFeeMicros = BigInt(result[4] as bigint);
-        return { mode, maxSlippageBps, minFeeMicros };
-    } catch {
-        return null;
+        const maxSlippageBps = Number(cfg[2]);
+        const minFeeMicros = BigInt(cfg[4] as bigint);
+        out.set(tokenId.toString(), { mode, maxSlippageBps, minFeeMicros });
     }
+    return out;
 }
 
 export function PoolAutoManagementInline({
@@ -185,12 +186,13 @@ export function PoolAutoManagementInline({
                     );
                 };
 
-                const matched: ManagedPositionRow[] = [];
-                // Walk every candidate. Fast path: DB columns are populated
-                // → filter inline. Slow path: any column missing → fetch the
-                // tuple from NPM. The slow path is sequential to keep RPC
-                // pressure low; users rarely have more than 1-2 managed
-                // positions per pool so the cost is negligible.
+                // First filter candidates that even have a chance of
+                // matching this pool. DB-mirrored token addresses are
+                // a fast filter; if the row predates the mirror
+                // (resolvedT0/1 missing), we still consider it via
+                // the on-chain multicall below.
+                const candidateIds: bigint[] = [];
+                const apiByTokenId = new Map<string, (typeof positions)[number]>();
                 for (const p of positions) {
                     if (
                         p.mode !== "NORMAL" &&
@@ -199,46 +201,43 @@ export function PoolAutoManagementInline({
                     ) {
                         continue;
                     }
-                    let resolvedT0 = p.token0Address ?? null;
-                    let resolvedT1 = p.token1Address ?? null;
-                    let resolvedFee = p.feeTier ?? null;
-                    if (!resolvedT0 || !resolvedT1 || resolvedFee === null) {
-                        const tuple = await readPositionPoolTuple(BigInt(p.tokenId));
-                        if (!tuple) continue;
-                        resolvedT0 = tuple.token0;
-                        resolvedT1 = tuple.token1;
-                        resolvedFee = tuple.feePip;
-                    }
-                    if (!matchesPool(resolvedT0, resolvedT1, resolvedFee)) continue;
-                    // Overlay the on-chain configs(tokenId) tuple. The
-                    // API mirror can drift from chain (a setMode tx that
-                    // landed before the mirror call shipped, a reconcile
-                    // worker lag, etc.) and Save was getting stuck "not
-                    // dirty" because the form's initial state matched
-                    // the API instead of the truth. Reading configs()
-                    // costs one eth_call per row and gives us the
-                    // authoritative (mode, slippage, threshold) tuple
-                    // so dirty + the Save flow line up with chain.
-                    let onchainMode: Mode = p.mode as Mode;
-                    let onchainMinFee = p.minFeeMicros
-                        ? BigInt(p.minFeeMicros)
-                        : 100_000n;
-                    let onchainSlipBps = p.maxSlippageBps ?? 50;
-                    try {
-                        const cfg = await readPositionConfig(BigInt(p.tokenId));
-                        if (cfg) {
-                            onchainMode = cfg.mode;
-                            onchainMinFee = cfg.minFeeMicros;
-                            onchainSlipBps = cfg.maxSlippageBps;
-                        }
-                    } catch {
-                        // fall through to API values
-                    }
+                    const t0 = p.token0Address ?? null;
+                    const t1 = p.token1Address ?? null;
+                    const fee = p.feeTier ?? null;
+                    const hasMirror = !!t0 && !!t1 && fee !== null;
+                    if (hasMirror && !matchesPool(t0, t1, fee)) continue;
+                    candidateIds.push(BigInt(p.tokenId));
+                    apiByTokenId.set(p.tokenId, p);
+                }
+                // 2026-06-15 audit HIGH#7 fix: one multicall across all
+                // candidates instead of 2N sequential reads with a
+                // fresh PublicClient per row. The wagmi-injected
+                // publicClient already inherits the Alchemy + Arc
+                // public + thirdweb fallback transport and the
+                // batch:{wait:50} HTTP coalescing.
+                let onChainConfigs: Map<
+                    string,
+                    { mode: Mode; maxSlippageBps: number; minFeeMicros: bigint }
+                > = new Map();
+                if (publicClient && candidateIds.length > 0) {
+                    onChainConfigs = await readRowsForPool(
+                        publicClient as unknown as PublicClient,
+                        candidateIds,
+                        ourT0,
+                        ourT1,
+                        poolFeePip,
+                    );
+                }
+                const matched: ManagedPositionRow[] = [];
+                for (const tokenIdStr of apiByTokenId.keys()) {
+                    const p = apiByTokenId.get(tokenIdStr)!;
+                    const chain = onChainConfigs.get(tokenIdStr);
+                    if (!chain) continue; // didn't match pool on-chain
                     matched.push({
                         tokenId: BigInt(p.tokenId),
-                        mode: onchainMode,
-                        minFeeMicros: onchainMinFee,
-                        maxSlippageBps: onchainSlipBps,
+                        mode: chain.mode,
+                        minFeeMicros: chain.minFeeMicros,
+                        maxSlippageBps: chain.maxSlippageBps,
                     });
                 }
                 if (!cancelled) setRows(matched);
@@ -255,6 +254,7 @@ export function PoolAutoManagementInline({
         poolToken0,
         poolToken1,
         poolFeePip,
+        publicClient,
         refreshKey,
     ]);
 

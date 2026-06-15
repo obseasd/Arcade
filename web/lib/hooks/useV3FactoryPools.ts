@@ -34,7 +34,12 @@ export interface V3FactoryPool {
     tvlUsdc: bigint;
 }
 
-const FEE_TIERS = [500, 3000, 10000, 20000, 30000];
+// 2026-06-15 audit fix: prepend 100 so the 0.01% tier (canonical Arc
+// stable-stable fee) is probed. DeploySecurityV3.s.sol enables 100,
+// v3-math.ts maps 100:1, arcadeV3.ts/cron route include 100 in
+// ARCADE_V3_FEE_TIERS, and CreatePoolModal exposes the tier — without
+// it, USDC/USDT-style V3 pools were invisible in /explore.
+const FEE_TIERS = [100, 500, 3000, 10000, 20000, 30000];
 
 export function useV3FactoryPools(extraTokens: Address[] = []): {
     pools: V3FactoryPool[];

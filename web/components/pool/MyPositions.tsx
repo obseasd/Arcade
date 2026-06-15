@@ -74,19 +74,85 @@ export function MyPositions({
     [pairAddrs.data],
   );
 
-  // For each pair, fetch token0/token1/reserves/totalSupply/userLpBalance
-  const pairData = useReadContracts({
+  // 2026-06-15 audit HIGH#9 fix: fan out a cheap balanceOf-only multicall
+  // FIRST so we know which pairs the wallet actually has LP in, then
+  // fetch the full (token0/token1/reserves/totalSupply) tuple ONLY for
+  // those. The previous shape read all 5 columns for every pair on the
+  // factory regardless of balance, scaling O(factory pair count) instead
+  // of O(positions held). ~150 multicalled reads dropped to ~30 + N×4
+  // where N is positions held (usually 0-3).
+  const balancesOnly = useReadContracts({
     contracts: account
-      ? pairs.flatMap((p) => [
-          { address: p, abi: PAIR_ABI, functionName: "token0" },
-          { address: p, abi: PAIR_ABI, functionName: "token1" },
-          { address: p, abi: PAIR_ABI, functionName: "getReserves" },
-          { address: p, abi: PAIR_ABI, functionName: "totalSupply" },
-          { address: p, abi: PAIR_ABI, functionName: "balanceOf", args: [account] },
-        ])
+      ? pairs.map((p) => ({
+          address: p,
+          abi: PAIR_ABI,
+          functionName: "balanceOf" as const,
+          args: [account] as const,
+        }))
       : [],
-    query: { enabled: !!account && pairs.length > 0 },
+    query: {
+      enabled: !!account && pairs.length > 0,
+      // Long staleness so a stationary user does not refetch every
+      // remount. Refetched explicitly by the Refresh button.
+      staleTime: 30_000,
+      gcTime: 5 * 60_000,
+    },
   });
+  const heldPairIndexes = useMemo<number[]>(() => {
+    if (!balancesOnly.data) return [];
+    const out: number[] = [];
+    for (let i = 0; i < pairs.length; i++) {
+      const r = balancesOnly.data[i];
+      if (r?.status === "success" && (r.result as bigint) > 0n) out.push(i);
+    }
+    return out;
+  }, [balancesOnly.data, pairs.length]);
+  const heldPairs = useMemo(
+    () => heldPairIndexes.map((i) => pairs[i]),
+    [heldPairIndexes, pairs],
+  );
+
+  // Now fetch the remaining 4 calls per HELD pair only.
+  const pairDetail = useReadContracts({
+    contracts: heldPairs.flatMap((p) => [
+      { address: p, abi: PAIR_ABI, functionName: "token0" as const },
+      { address: p, abi: PAIR_ABI, functionName: "token1" as const },
+      { address: p, abi: PAIR_ABI, functionName: "getReserves" as const },
+      { address: p, abi: PAIR_ABI, functionName: "totalSupply" as const },
+    ]),
+    query: {
+      enabled: heldPairs.length > 0,
+      staleTime: 30_000,
+      gcTime: 5 * 60_000,
+    },
+  });
+
+  // Reassemble a single .data array in the legacy 5-call-per-pair shape
+  // so the downstream code below (which indexes 5*i + offset for ALL
+  // factory pairs) keeps working. Held-pair details are zipped in;
+  // un-held pairs surface as undefined entries, which the existing
+  // status checks already tolerate.
+  const pairData = useMemo<{ data: typeof balancesOnly.data }>(() => {
+    if (!balancesOnly.data) return { data: undefined };
+    const out: ({ status: "success" | "failure"; result?: unknown } | undefined)[] = [];
+    let heldIdx = 0;
+    for (let i = 0; i < pairs.length; i++) {
+      const has = balancesOnly.data[i]?.status === "success" &&
+        (balancesOnly.data[i]?.result as bigint) > 0n;
+      if (has && pairDetail.data) {
+        out.push(pairDetail.data[heldIdx * 4]);
+        out.push(pairDetail.data[heldIdx * 4 + 1]);
+        out.push(pairDetail.data[heldIdx * 4 + 2]);
+        out.push(pairDetail.data[heldIdx * 4 + 3]);
+        out.push(balancesOnly.data[i]);
+        heldIdx++;
+      } else {
+        // 5 undefined slots; downstream status check filters out.
+        out.push(undefined, undefined, undefined, undefined, balancesOnly.data[i]);
+      }
+    }
+    return { data: out as typeof balancesOnly.data };
+  }, [balancesOnly.data, pairDetail.data, pairs.length]);
 
   // Collect token0/token1 addresses needing metadata
   const tokenMetaTargets = useMemo(() => {
@@ -202,7 +268,10 @@ export function MyPositions({
           position={p}
           expanded={openPair === p.pair}
           onToggle={() => setOpenPair(openPair === p.pair ? null : p.pair)}
-          onRefresh={() => pairData.refetch()}
+          onRefresh={() => {
+            void balancesOnly.refetch();
+            void pairDetail.refetch();
+          }}
           publicClient={publicClient}
         />
       ))}

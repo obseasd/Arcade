@@ -254,34 +254,37 @@ export function ClaimAllFeesModal({ open, onClose, onSuccess }: Props) {
     // its native gas token (6 decimals), so the raw `gas * gasPrice` value
     // already comes out in USDC units. We sum a per-position estimate then
     // round to a friendly display.
-    const [gasEstimateUsdc, setGasEstimateUsdc] = useState<bigint | undefined>(
-        undefined,
-    );
+    // 2026-06-15 audit LOW fix: split the effect so gasPrice is fetched
+    // ONCE per modal open, not per checkbox toggle. Previously every
+    // selected.size mutation triggered a fresh getGasPrice() RPC even
+    // though gas price is per-block, not per-click. selected.size now
+    // multiplies the cached value in pure render.
+    const [gasPriceWei, setGasPriceWei] = useState<bigint | undefined>(undefined);
     useEffect(() => {
-        if (!open || !publicClient || !account || selected.size === 0) {
-            setGasEstimateUsdc(undefined);
+        if (!open || !publicClient || !account) {
+            setGasPriceWei(undefined);
             return;
         }
         let cancelled = false;
         (async () => {
             try {
                 const gasPrice = await publicClient.getGasPrice();
-                // Per-position estimate. NPM.collect is bounded; use a
-                // measured upper bound of 130k gas (matches Hyperswap's
-                // observed cost). Skips the per-id estimateContract round-
-                // trip because that requires the position to be approved
-                // for collect, which it always is for the owner anyway.
-                const perPos = 130_000n;
-                const total = BigInt(selected.size) * perPos * gasPrice;
-                if (!cancelled) setGasEstimateUsdc(total);
+                if (!cancelled) setGasPriceWei(gasPrice);
             } catch {
-                if (!cancelled) setGasEstimateUsdc(undefined);
+                if (!cancelled) setGasPriceWei(undefined);
             }
         })();
         return () => {
             cancelled = true;
         };
-    }, [open, publicClient, account, selected.size]);
+    }, [open, publicClient, account]);
+    // Per-position estimate. NPM.collect is bounded; use a measured
+    // upper bound of 130k gas (matches Hyperswap's observed cost).
+    const gasEstimateUsdc: bigint | undefined = useMemo(() => {
+        if (!gasPriceWei || selected.size === 0) return undefined;
+        const perPos = 130_000n;
+        return BigInt(selected.size) * perPos * gasPriceWei;
+    }, [gasPriceWei, selected.size]);
 
     const [submitting, setSubmitting] = useState(false);
 

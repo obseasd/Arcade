@@ -138,12 +138,26 @@ export function LimitOrdersPanel({ account, variant = "card", className }: Props
     const tokenMap = useMemo(() => {
         const m = new Map<string, { symbol: string; decimals: number }>();
         m.set(ADDRESSES.usdc.toLowerCase(), { symbol: "USDC", decimals: USDC_DECIMALS });
+        // 2026-06-15 audit MEDIUM fix: literal `decimals: 18` discarded the
+        // real on-chain decimals that useV2Tokens / useV3Tokens already
+        // fetch. cirBTC (8 decimals) and EURC (6 decimals) limit orders
+        // rendered as `<0.0001 cirBTC` etc. - the on-chain order is
+        // correct (LimitCard uses t.decimals on create), only the
+        // panel's display was broken. Use the real value, fall back to
+        // 18 only when the hook surfaced no decimals.
         for (const t of v2Tokens) {
-            m.set(t.address.toLowerCase(), { symbol: t.symbol ?? "TOKEN", decimals: 18 });
+            m.set(t.address.toLowerCase(), {
+                symbol: t.symbol ?? "TOKEN",
+                decimals: t.decimals ?? 18,
+            });
         }
         for (const t of v3Tokens) {
             const k = t.address.toLowerCase();
-            if (!m.has(k)) m.set(k, { symbol: t.symbol ?? "TOKEN", decimals: 18 });
+            if (!m.has(k))
+                m.set(k, {
+                    symbol: t.symbol ?? "TOKEN",
+                    decimals: t.decimals ?? 18,
+                });
         }
         return m;
     }, [v2Tokens, v3Tokens]);

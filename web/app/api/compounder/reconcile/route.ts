@@ -16,6 +16,7 @@ import {
     getActivePositions,
     insertEvent,
     upsertPosition,
+    restampOwnerOnRedeposit,
     markWithdrawn,
     type CompounderMode,
 } from "@/lib/compounderPersistence";
@@ -242,6 +243,18 @@ async function reconcileDeposit(
         maxSlippageBps: number;
     };
     summary.deposits++;
+    // 2026-06-15 audit MEDIUM fix: order matters. restampOwnerOnRedeposit
+    // is a no-op unless withdrawn_at IS NOT NULL on the existing row
+    // (legitimate re-entry); if it fires it refreshes owner_address +
+    // deposited_at so the tenure-window query attributes events to the
+    // new owner. upsertPosition then writes the new mode/threshold/
+    // slippage. The C2 defence on owner_address in upsertPosition still
+    // applies to the public POST route (this trusted path runs only
+    // server-side from the reconcile cron).
+    await restampOwnerOnRedeposit({
+        tokenId: args.tokenId.toString(),
+        ownerAddress: args.depositor,
+    });
     await upsertPosition({
         tokenId: args.tokenId.toString(),
         ownerAddress: args.depositor,
