@@ -629,6 +629,16 @@ async function onTxSubmitted(ctx: SubmittedContext): Promise<void> {
         // in withTimeout so a slow RPC cannot push the receipt path
         // past the function ceiling; failure falls back to NULL,
         // which the SUM query handles via COALESCE.
+        // 2026-06-15 audit follow-up: the promised "quoting error
+        // contributes 0 to the sum" guarantee was never implemented
+        // — quoteUsdcValueForPair has thrown paths (V3 quoter missing,
+        // RPC timeout, no pool for the pair) and Promise.all rejecting
+        // would silently skip insertEvent entirely, leaving stamped
+        // last_action_at rows with no corresponding event row. Caught
+        // here so insertEvent always lands, with the event amounts the
+        // receipt-log decode produced (the metric we actually care
+        // about). Same defensive .catch on the block timestamp path
+        // — a 503 from the timestamp read should never erase the event.
         const [usdValueMicros, chainBlockAtIso] = await Promise.all([
             quoteUsdcValueForPair(
                 ctx.publicClient,
@@ -636,7 +646,15 @@ async function onTxSubmitted(ctx: SubmittedContext): Promise<void> {
                 ctx.position.token1Address,
                 resolvedFee0,
                 resolvedFee1,
-            ),
+            ).catch((err) => {
+                // eslint-disable-next-line no-console
+                console.warn(
+                    "[cron] quoteUsdcValueForPair threw, defaulting to 0",
+                    ctx.position.tokenId,
+                    err,
+                );
+                return 0n;
+            }),
             withTimeout(
                 ctx.publicClient
                     .getBlock({ blockNumber: receipt.blockNumber })
@@ -646,7 +664,9 @@ async function onTxSubmitted(ctx: SubmittedContext): Promise<void> {
                     )
                     .catch((): string | null => null),
                 RPC_TIMEOUT_MS,
-            ).then((v) => (v as string | null) ?? null),
+            )
+                .then((v) => (v as string | null) ?? null)
+                .catch(() => null as string | null),
         ]);
         await insertEvent({
             tokenId: ctx.position.tokenId,
