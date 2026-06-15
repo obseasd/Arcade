@@ -46,15 +46,24 @@ function rowToSnapshot(r: RawRow): PersistedSnapshot {
     // through Date so we always emit a clean ISO downstream.
     const iso = new Date(r.snapshot_at).toISOString();
     return {
-        txCount: r.tx_count,
-        uniqueWallets: r.unique_wallets,
-        tokensLaunched: r.tokens_launched,
-        v4TokensLaunched: r.v4_tokens_launched,
-        v4HookLaunches: r.v4_hook_launches,
+        txCount: r.tx_count ?? 0,
+        uniqueWallets: r.unique_wallets ?? 0,
+        tokensLaunched: r.tokens_launched ?? 0,
+        v4TokensLaunched: r.v4_tokens_launched ?? 0,
+        v4HookLaunches: r.v4_hook_launches ?? 0,
         // Convert PG NUMERIC (string on the wire to preserve precision)
         // into native bigints for parity with the live-scan path.
-        volumeUsdcMicros: BigInt(r.volume_usdc_micros),
-        estimatedUsdcGasMicros: BigInt(r.estimated_usdc_gas_micros),
+        // The FILTERed MAX in getLatestPersistedSnapshot returns NULL
+        // when every row in the table fails the sanity predicate (e.g.
+        // a fresh deploy whose only persisted row is a pre-fix inflated
+        // one); guard with 0n so the snapshot serialiser doesn't throw
+        // on BigInt(null).
+        volumeUsdcMicros: r.volume_usdc_micros
+            ? BigInt(r.volume_usdc_micros)
+            : 0n,
+        estimatedUsdcGasMicros: r.estimated_usdc_gas_micros
+            ? BigInt(r.estimated_usdc_gas_micros)
+            : 0n,
         asOfBlock: BigInt(r.as_of_block),
         asOfIso: iso,
         truncated: r.truncated,
@@ -69,22 +78,54 @@ export async function getLatestPersistedSnapshot(): Promise<PersistedSnapshot | 
     if (!isDbConfigured()) return null;
     try {
         const sql = getSql();
+        // The cron scans a fixed 500k-block window, so an individual
+        // snapshot's counts only see events that landed in the last
+        // ~3 days. Tokens launched 4 days ago, txs from a busy week
+        // ago — all of them roll out of the window and disappear from
+        // the next snapshot's "tokens_launched" / "tx_count" /
+        // "volume" values. The dashboard previously surfaced the most
+        // recent row verbatim, which made the headline counters look
+        // like they were *shrinking* over time even though every
+        // metric is monotonically growing on chain.
+        //
+        // Take the global MAX of every monotonic column across every
+        // snapshot we've ever persisted (the table is a time-series of
+        // append-only rows, so the MAX is the cumulative truth). Pair
+        // it with the latest row's snapshot_at / as_of_block /
+        // truncated / source for the freshness signal. The result is
+        // the headline figure visitors expect: "this is the total
+        // activity Arcade has seen since launch, refreshed hourly".
         const rows = (await sql`
+            WITH latest AS (
+                SELECT snapshot_at, as_of_block, truncated, source
+                FROM stats_snapshots
+                ORDER BY snapshot_at DESC
+                LIMIT 1
+            )
             SELECT
-                snapshot_at,
-                as_of_block,
-                tx_count,
-                unique_wallets,
-                tokens_launched,
-                v4_tokens_launched,
-                v4_hook_launches,
-                volume_usdc_micros,
-                estimated_usdc_gas_micros,
-                truncated,
-                source
-            FROM stats_snapshots
-            ORDER BY snapshot_at DESC
-            LIMIT 1
+                latest.snapshot_at,
+                latest.as_of_block,
+                MAX(s.tx_count)                  AS tx_count,
+                MAX(s.unique_wallets)            AS unique_wallets,
+                MAX(s.tokens_launched)           AS tokens_launched,
+                MAX(s.v4_tokens_launched)        AS v4_tokens_launched,
+                MAX(s.v4_hook_launches)          AS v4_hook_launches,
+                -- Pre-fix snapshots (before the decodeEventLog + 10M-USDC
+                -- sanity ceiling shipped in 7f7716b) wrote inflated
+                -- volume figures up to 2.6e25 micros = $26 quadrillion.
+                -- Filtering those rows out of the MAX here cleans the
+                -- headline number without requiring a manual DELETE in
+                -- Postgres. 1e15 micros = $1B, well above any realistic
+                -- testnet volume and well below the corrupted values.
+                MAX(s.volume_usdc_micros)
+                    FILTER (WHERE s.volume_usdc_micros < 1000000000000000)
+                                                  AS volume_usdc_micros,
+                MAX(s.estimated_usdc_gas_micros) AS estimated_usdc_gas_micros,
+                latest.truncated,
+                latest.source
+            FROM stats_snapshots s
+            CROSS JOIN latest
+            GROUP BY latest.snapshot_at, latest.as_of_block, latest.truncated, latest.source
         `) as unknown as RawRow[];
         if (rows.length === 0) return null;
         return rowToSnapshot(rows[0]);
