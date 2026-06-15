@@ -898,7 +898,7 @@ function V3PositionRow({
                 the row stays compact on narrower grid widths. */}
             {managed ? (
                 <div className="mt-3 flex items-center justify-between gap-2 rounded-xl border border-arc-border bg-white/[0.015] p-3 text-xs">
-                    <span className="text-arc-text-muted">Total claimed</span>
+                    <span className="text-arc-text-muted">Total earned</span>
                     <span className="inline-flex items-center gap-3 tabular-nums">
                         <span className="inline-flex items-center gap-1.5">
                             {formatTok(
