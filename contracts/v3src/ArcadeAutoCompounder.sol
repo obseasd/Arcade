@@ -189,6 +189,18 @@ contract ArcadeAutoCompounder is IERC721ReceiverMin {
     ///      before the position is even considered for triggering.
     uint64 internal constant MIN_FEE_MICROS_FLOOR = 1_000_000;
 
+    /// @dev 2026-06-15 audit HIGH fix: the TWAP gate compares raw tick
+    ///      distance against `maxSlippageBps` as if 1 tick == 1 bp.
+    ///      At maxSlippageBps == BPS_DENOMINATOR the gate accepts
+    ///      ~10_000 ticks (~172% price deviation), effectively
+    ///      disabled. Capping the depositor-chosen value at 1000 bps
+    ///      keeps the linear tick-as-bp approximation honest (within
+    ///      ~5% of the true sqrt-price distance per the comment in
+    ///      _enforceTwapGate) AND closes the related vector where a
+    ///      phishing-signed setMode could flip slippage to BPS_DEN
+    ///      in one tx to neutralise the gate before the next compound.
+    uint16 internal constant MAX_USER_SLIPPAGE_BPS = 1_000;
+
     // Audit H1 fix: TWAP gate parameters. The window is intentionally
     // short (60 seconds) so the gate's reaction to genuine price
     // movement is fast — the goal is to block sandwich attacks where
@@ -345,7 +357,7 @@ contract ArcadeAutoCompounder is IERC721ReceiverMin {
     ///         tokenId, abi.encode(mode, minFeeMicros, maxSlippageBps)).
     ///         The latter avoids the approve-then-call two-tx UX.
     function onERC721Received(
-        address /* operator */,
+        address transferOperator,
         address from,
         uint256 tokenId,
         bytes calldata data
@@ -358,6 +370,18 @@ contract ArcadeAutoCompounder is IERC721ReceiverMin {
             return IERC721ReceiverMin.onERC721Received.selector;
         }
         require(data.length == 96, "BAD_RECEIVE_DATA");
+        // 2026-06-15 audit HIGH fix: require operator == from for the
+        // data-bearing transfer path so a third party with
+        // ERC721.setApprovalForAll() over the user's NFT cannot
+        // force-deposit it into the Compounder under
+        // attacker-chosen (mode, minFeeMicros, maxSlippageBps).
+        // The pre-approved + depositPosition() route is unaffected
+        // (that path comes through depositPosition's onlyOwnerOf
+        // guard and bypasses this decode branch via the early-return
+        // above when configs is already set).
+        // Parameter renamed from `operator` to `transferOperator` to
+        // avoid shadowing the contract's state-level `operator` role.
+        require(transferOperator == from, "OPERATOR_NOT_OWNER");
         (uint8 mode, uint64 minFeeMicros, uint16 maxSlippageBps) =
             abi.decode(data, (uint8, uint64, uint16));
         _writeConfig(tokenId, from, mode, minFeeMicros, maxSlippageBps);
@@ -422,11 +446,36 @@ contract ArcadeAutoCompounder is IERC721ReceiverMin {
     ) external whenNotPaused onlyDepositor(tokenId) {
         PositionConfig storage cfg = configs[tokenId];
         require(mode <= MODE_COMPOUND, "BAD_MODE");
-        require(maxSlippageBps <= BPS_DENOMINATOR, "BAD_SLIPPAGE");
+        // 2026-06-15 audit HIGH fix: cap maxSlippageBps at
+        // MAX_USER_SLIPPAGE_BPS so a phishing-signed setMode (or
+        // depositor mistake) cannot disable the TWAP gate. Also
+        // enforce MIN_FEE_MICROS_FLOOR here - the audit identified
+        // this as a bypass of the depositPosition-time floor since
+        // setMode wrote cfg.minFeeMicros directly without re-checking
+        // the floor. _writeConfig has the same constraints; we mirror
+        // them inline rather than route through it because setMode
+        // intentionally does NOT touch the depositor field.
+        require(
+            maxSlippageBps <= MAX_USER_SLIPPAGE_BPS,
+            "SLIPPAGE_OVER_CAP"
+        );
+        require(
+            minFeeMicros >= MIN_FEE_MICROS_FLOOR,
+            "MIN_FEE_TOO_LOW"
+        );
         uint8 oldMode = cfg.mode;
         cfg.mode = mode;
         cfg.minFeeMicros = minFeeMicros;
         cfg.maxSlippageBps = maxSlippageBps;
+        // 2026-06-15 audit LOW fix: reset the per-position cooldown so
+        // a slippage upgrade does NOT take effect on a compound that
+        // could be sandwiched in the same block. Without this, an
+        // attacker who tricks the user into setMode(maxSlippageBps = 999)
+        // could call compound() in the very same block and capture
+        // the up-to-10% deviation the gate now permits. The reset
+        // forces the attacker to wait out ACTION_COOLDOWN_SECONDS,
+        // giving the user a real chance to setMode back or withdraw.
+        cfg.lastActionAt = uint64(block.timestamp);
         emit ModeChanged(tokenId, oldMode, mode, minFeeMicros, maxSlippageBps);
     }
 
@@ -686,6 +735,19 @@ contract ArcadeAutoCompounder is IERC721ReceiverMin {
             IUniswapV3PoolMin(pool).observe(secondsAgos);
         int56 tickDelta = tickCumulatives[1] - tickCumulatives[0];
         int24 twapTick = int24(tickDelta / int56(uint56(TWAP_WINDOW_SECONDS)));
+        // 2026-06-15 audit LOW fix: Solidity truncates toward zero. For
+        // a negative `tickDelta` not divisible by TWAP_WINDOW_SECONDS,
+        // the truncation rounds the quotient *up* (less negative) by 1
+        // tick, which is the off-by-one Uniswap's OracleLibrary.consult
+        // closes explicitly. Mirror their fix so the floor goes toward
+        // -infinity. Asymmetric impact (~1 bp on a 50 bp gate) but
+        // free to apply.
+        if (
+            tickDelta < 0 &&
+            (tickDelta % int56(uint56(TWAP_WINDOW_SECONDS))) != 0
+        ) {
+            twapTick = twapTick - 1;
+        }
 
         // Tick distance in absolute value. Each tick is ~1 bp of
         // price (the exact relationship is 1.0001^tick, so 1 tick =
@@ -735,17 +797,20 @@ contract ArcadeAutoCompounder is IERC721ReceiverMin {
         uint16 maxSlippageBps
     ) internal {
         require(mode <= MODE_COMPOUND, "BAD_MODE");
-        require(maxSlippageBps <= BPS_DENOMINATOR, "BAD_SLIPPAGE");
+        // 2026-06-15 audit HIGH fix: cap maxSlippageBps at
+        // MAX_USER_SLIPPAGE_BPS on the deposit-time path too, not
+        // just BPS_DENOMINATOR. Same reasoning as setMode: the TWAP
+        // gate's tick-as-bp approximation only holds within
+        // ~1-1000 bps; above that the gate is effectively disabled.
+        require(
+            maxSlippageBps <= MAX_USER_SLIPPAGE_BPS,
+            "SLIPPAGE_OVER_CAP"
+        );
         // Audit H2 fix: enforce both gates on every config write —
         // depositPosition, onERC721Received, AND setMode. Threshold
         // floor stops the dust DoS; factory gate stops deposits of
         // NFTs whose underlying pool was never deployed by the
-        // canonical Arcade V3 factory (the only NPM the Compounder
-        // can faithfully manage; a foreign-NPM NFT would also be
-        // refused at the first compound() because FACTORY.getPool
-        // returns address(0) for the foreign pool, but the deposit-
-        // time check gives a better error and saves the user the
-        // gas of an irreversible safeTransferFrom into a dead end).
+        // canonical Arcade V3 factory.
         require(minFeeMicros >= MIN_FEE_MICROS_FLOOR, "MIN_FEE_TOO_LOW");
         _requireFactoryPool(tokenId);
         configs[tokenId] = PositionConfig({
