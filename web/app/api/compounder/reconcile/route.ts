@@ -53,16 +53,22 @@ import {
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-// Reconcile scans wide 50k-block getLogs windows. Alchemy's free tier
-// caps eth_getLogs at 10 blocks and silently 4xx's on anything wider,
-// which the catch() in the scan loop swallows -> phantom "0 events"
-// runs. Public Arc RPC and thirdweb both accept 50k windows, so we
-// front-load those and keep the dedicated URL only as a tertiary
-// fallback for eth_call-shaped reads.
+// Reconcile scans wide 50k-block getLogs windows.
+//
+// RPC ranking (Arc testnet, 2026-06-15 diagnostics):
+//   1. thirdweb        — consistent, hard cap 1000 blocks per request
+//   2. Arc public RPC  — accepts >1000 blocks but returns intermittent
+//                        empty 200-OK responses (no error, fallback can't
+//                        detect → silent data loss). Demoted to backup.
+//   3. Alchemy         — caps getLogs at 10 blocks (free tier), useless
+//                        for this scan path. Last in the list.
+//
+// Pair this list with BLOCK_WINDOW = 1000n so every provider can serve
+// any chunk without truncation.
 const ARC_RPC_LIST: readonly string[] = (() => {
     const out: string[] = [
-        "https://rpc.testnet.arc.network",
         "https://5042002.rpc.thirdweb.com",
+        "https://rpc.testnet.arc.network",
     ];
     const dedicated = process.env.NEXT_PUBLIC_ARC_RPC_URL;
     if (dedicated) out.push(dedicated);
@@ -80,14 +86,14 @@ const ARC_CHAIN = {
     },
 } as const;
 
-// Arc public RPC's actual getLogs cap is well below 50k blocks; it
-// silently 4xx's on anything wider (confirmed during the 2026-06-15
-// compounder migration where fallback's three providers all rejected
-// a 50k-block scan). Use a 2k-block chunk so we stay inside every
-// provider's documented (and undocumented) limits, and walk the
-// 50k lookback as 25 small chunks instead. Hourly cadence × 50k =
+// Chunk size is bounded by the strictest still-useful provider.
+// Thirdweb caps getLogs at 1000 blocks (-32005 "Log response size
+// exceeded"); Arc public RPC accepts wider but returns flaky empty
+// 200s that the fallback can't distinguish from "no logs". 1000
+// keeps thirdweb (now the primary) happy and the cron's 50k lookback
+// walks as 50 small chunks instead of 25. Hourly cadence × 50k =
 // ~7h of headroom per scan, still plenty.
-const BLOCK_WINDOW = 2_000n;
+const BLOCK_WINDOW = 1_000n;
 const LOOKBACK_BLOCKS = 50_000n;
 
 // Pre-hashed event signatures so the decoded log filter does not
