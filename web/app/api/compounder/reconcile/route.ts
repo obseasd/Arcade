@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import {
     createPublicClient,
     decodeEventLog,
+    fallback,
     http,
     isAddress,
     keccak256,
@@ -52,15 +53,19 @@ import {
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-// Dedicated provider URL via NEXT_PUBLIC_ARC_RPC_URL (Alchemy / thirdweb)
-// prepended to the fallback list so the reconcile scan stops hammering
-// the public Arc RPC into rate-limit territory.
+// Reconcile scans wide 50k-block getLogs windows. Alchemy's free tier
+// caps eth_getLogs at 10 blocks and silently 4xx's on anything wider,
+// which the catch() in the scan loop swallows -> phantom "0 events"
+// runs. Public Arc RPC and thirdweb both accept 50k windows, so we
+// front-load those and keep the dedicated URL only as a tertiary
+// fallback for eth_call-shaped reads.
 const ARC_RPC_LIST: readonly string[] = (() => {
-    const out: string[] = [];
+    const out: string[] = [
+        "https://rpc.testnet.arc.network",
+        "https://5042002.rpc.thirdweb.com",
+    ];
     const dedicated = process.env.NEXT_PUBLIC_ARC_RPC_URL;
     if (dedicated) out.push(dedicated);
-    out.push("https://rpc.testnet.arc.network");
-    out.push("https://5042002.rpc.thirdweb.com");
     return out;
 })();
 
@@ -121,6 +126,7 @@ interface RunSummary {
     modeChanges: number;
     compounds: number;
     feesPushed: number;
+    rpcErrors: number;
 }
 
 export async function POST(req: NextRequest) {
@@ -152,9 +158,12 @@ export async function POST(req: NextRequest) {
         );
     }
 
+    // fallback() iterates URLs on RPC error. http() without an explicit
+    // URL only uses rpcUrls.default.http[0], so a single misbehaving
+    // primary used to break the whole scan; fallback fixes that.
     const publicClient = createPublicClient({
         chain: ARC_CHAIN,
-        transport: http(),
+        transport: fallback(ARC_RPC_LIST.map((url) => http(url))),
     });
 
     const head = await publicClient.getBlockNumber();
@@ -173,6 +182,7 @@ export async function POST(req: NextRequest) {
         modeChanges: 0,
         compounds: 0,
         feesPushed: 0,
+        rpcErrors: 0,
     };
 
     for (let from = fromBlock; from <= head; from += BLOCK_WINDOW) {
@@ -183,7 +193,12 @@ export async function POST(req: NextRequest) {
                 fromBlock: from,
                 toBlock: to,
             })
-            .catch(() => [] as Awaited<ReturnType<typeof publicClient.getLogs>>);
+            .catch((err) => {
+                // eslint-disable-next-line no-console
+                console.warn("[reconcile] getLogs failed", from, to, err);
+                summary.rpcErrors++;
+                return [] as Awaited<ReturnType<typeof publicClient.getLogs>>;
+            });
         for (const log of logs) {
             summary.eventsScanned++;
             const topic0 = log.topics[0];
