@@ -138,6 +138,8 @@ interface RunSummary {
     feesPushed: number;
     rpcErrors: number;
     firstRpcError?: string;
+    handlerErrors: number;
+    firstHandlerError?: string;
 }
 
 export async function POST(req: NextRequest) {
@@ -194,6 +196,7 @@ export async function POST(req: NextRequest) {
         compounds: 0,
         feesPushed: 0,
         rpcErrors: 0,
+        handlerErrors: 0,
     };
 
     for (let from = fromBlock; from <= head; from += BLOCK_WINDOW) {
@@ -243,6 +246,14 @@ export async function POST(req: NextRequest) {
                     log.transactionHash,
                     err,
                 );
+                summary.handlerErrors++;
+                if (!summary.firstHandlerError) {
+                    summary.firstHandlerError =
+                        (err as { shortMessage?: string; message?: string })
+                            ?.shortMessage ??
+                        (err as { message?: string })?.message ??
+                        String(err);
+                }
             }
         }
     }
@@ -389,7 +400,7 @@ async function reconcileCompounded(
         publicClient,
         log.blockNumber ?? 0n,
     );
-    await insertEvent({
+    const ok = await insertEvent({
         tokenId: args.tokenId.toString(),
         eventType: "Compounded",
         amount0: args.fee0Collected.toString(),
@@ -400,6 +411,14 @@ async function reconcileCompounded(
         blockNumber: log.blockNumber?.toString() ?? null,
         chainBlockAtIso,
     });
+    if (!ok) {
+        // Surface persistence failures to the run summary so a swallowed
+        // INSERT (FK violation, type mismatch, dropped connection) is not
+        // mistakable for a successful reconcile pass.
+        throw new Error(
+            `insertEvent returned false for tx ${log.transactionHash ?? "(none)"}`,
+        );
+    }
 }
 
 async function reconcileFeesPushed(

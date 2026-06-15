@@ -27,12 +27,6 @@ export async function GET(req: NextRequest) {
     }
 
     const tokenId = req.nextUrl.searchParams.get("tokenId");
-    if (!tokenId || !/^\d+$/.test(tokenId)) {
-        return NextResponse.json(
-            { error: "tokenId query param required" },
-            { status: 400 },
-        );
-    }
 
     if (!isDbConfigured()) {
         return NextResponse.json(
@@ -43,37 +37,60 @@ export async function GET(req: NextRequest) {
 
     const sql = getSql();
 
-    const positionRows = (await sql`
-        SELECT
-            token_id::text       AS token_id,
-            owner_address,
-            mode,
-            min_fee_micros::text AS min_fee_micros,
-            max_slippage_bps,
-            deposited_at,
-            withdrawn_at,
-            last_action_at
-        FROM compounder_positions
-        WHERE token_id = ${tokenId}::BIGINT
-    `) as unknown as Array<Record<string, unknown>>;
+    const positionRows = tokenId && /^\d+$/.test(tokenId)
+        ? ((await sql`
+            SELECT
+                token_id::text       AS token_id,
+                owner_address,
+                mode,
+                min_fee_micros::text AS min_fee_micros,
+                max_slippage_bps,
+                deposited_at,
+                withdrawn_at,
+                last_action_at
+            FROM compounder_positions
+            WHERE token_id = ${tokenId}::BIGINT
+        `) as unknown as Array<Record<string, unknown>>)
+        : [];
 
-    const eventRows = (await sql`
+    const eventRows = tokenId && /^\d+$/.test(tokenId)
+        ? ((await sql`
+            SELECT
+                id,
+                token_id::text         AS token_id,
+                event_type,
+                amount0::text          AS amount0,
+                amount1::text          AS amount1,
+                protocol_fee0::text    AS protocol_fee0,
+                protocol_fee1::text    AS protocol_fee1,
+                usd_value_micros::text AS usd_value_micros,
+                tx_hash,
+                block_number::text     AS block_number,
+                chain_block_at,
+                block_at
+            FROM compounder_events
+            WHERE token_id = ${tokenId}::BIGINT
+            ORDER BY id DESC
+            LIMIT 10
+        `) as unknown as Array<Record<string, unknown>>)
+        : [];
+
+    // Unfiltered table-wide view so we can spot rows landing on the
+    // wrong tokenId or duplicated under a different key.
+    const allEvents = (await sql`
         SELECT
             id,
+            token_id::text         AS token_id,
             event_type,
             amount0::text          AS amount0,
             amount1::text          AS amount1,
-            protocol_fee0::text    AS protocol_fee0,
-            protocol_fee1::text    AS protocol_fee1,
-            usd_value_micros::text AS usd_value_micros,
             tx_hash,
             block_number::text     AS block_number,
             chain_block_at,
             block_at
         FROM compounder_events
-        WHERE token_id = ${tokenId}::BIGINT
         ORDER BY id DESC
-        LIMIT 10
+        LIMIT 20
     `) as unknown as Array<Record<string, unknown>>;
 
     return NextResponse.json({
@@ -81,5 +98,6 @@ export async function GET(req: NextRequest) {
         position: positionRows[0] ?? null,
         events: eventRows,
         eventCount: eventRows.length,
+        allEventsRecent: allEvents,
     });
 }
