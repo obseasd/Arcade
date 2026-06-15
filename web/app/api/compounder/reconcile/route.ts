@@ -112,6 +112,7 @@ function modeIdToLabel(id: number): CompounderMode {
 }
 
 interface RunSummary {
+    compounderAddress: string;
     fromBlock: string;
     toBlock: string;
     eventsScanned: number;
@@ -163,6 +164,7 @@ export async function POST(req: NextRequest) {
     // Arc range cap. Each chunk's logs are decoded in-memory and
     // dispatched to the right reconciler.
     const summary: RunSummary = {
+        compounderAddress,
         fromBlock: fromBlock.toString(),
         toBlock: head.toString(),
         eventsScanned: 0,
