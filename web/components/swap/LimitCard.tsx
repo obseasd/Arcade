@@ -4,7 +4,7 @@ import { ArrowDownUp, ChevronDown } from "lucide-react";
 import Image from "next/image";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { erc20Abi, formatUnits, parseUnits, zeroAddress, type Address } from "viem";
-import { useAccount, useReadContract, useWriteContract } from "wagmi";
+import { useAccount, usePublicClient, useReadContract, useWriteContract } from "wagmi";
 import { ROUTER_ABI } from "@/lib/abis/dex";
 import { V3_QUOTER_ABI } from "@/lib/abis/v3";
 import { ADDRESSES, LIMIT_ORDERS_ENABLED, USDC_DECIMALS, V3_FEE } from "@/lib/constants";
@@ -399,6 +399,7 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
     const needsApproval = allowance < srcAmountBn;
 
     const { writeContractAsync, isPending: isWriting } = useWriteContract();
+    const publicClient = usePublicClient();
 
     const canSubmit =
         LIMIT_ORDERS_ENABLED &&
@@ -468,10 +469,25 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
                 args: [ask],
             });
 
+            // 2026-06-15 audit HIGH#4 fix: writeContractAsync resolves the
+            // moment the wallet returns a hash (post-signature, pre-mining),
+            // so a reverted on-chain `ask` (deadline expired, allowance
+            // race, paused TWAP, bidDelay rejected) previously sailed
+            // through the happy path: success toast, Activity row, form
+            // cleared - while the Open Orders panel stayed empty. Wait for
+            // the receipt and gate the rest of the flow on receipt.status
+            // so revert lands in the catch with a real error toast.
+            if (publicClient) {
+                const receipt = await publicClient.waitForTransactionReceipt({ hash });
+                if (receipt.status !== "success") {
+                    throw new Error(`Limit order reverted on-chain. Tx: ${hash}`);
+                }
+            }
+
             pushToast({
                 kind: "info",
-                title: "Limit order submitted",
-                message: `Tx pending. Order goes on-chain.`,
+                title: "Limit order placed",
+                message: `Order on-chain.`,
             });
 
             addActivity({
@@ -485,6 +501,11 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
             // Reset inputs after submit so the user does not double-submit.
             setAmountIn("");
             setTriggerPrice("");
+            // Refresh source-token balance so the From-side label updates
+            // immediately. Without this, the cached pre-order balance
+            // continues to allow back-to-back orders past the wallet's
+            // actual available balance (audit HIGH#4 / medium balance-stale).
+            void balanceQ.refetch();
         } catch (e) {
             const msg = e instanceof Error ? e.message : "Failed to submit order";
             pushToast({ kind: "error", title: "Submit failed", message: msg.slice(0, 120) });

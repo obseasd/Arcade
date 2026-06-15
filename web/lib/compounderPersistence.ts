@@ -539,10 +539,18 @@ export async function insertEvent(input: {
         // 003_compounder_events_unique_txhash.sql adds a partial
         // UNIQUE index on tx_hash where it's non-null. A retried
         // cron POST that lands after the first response was lost in
-        // transit no longer double-counts — the duplicate quietly
-        // hits ON CONFLICT DO NOTHING. Pre-migration databases just
-        // get the new INSERT shape; the conflict clause is a no-op
-        // until the constraint exists.
+        // transit no longer double-counts.
+        //
+        // 2026-06-15 audit HIGH#2 fix: changed ON CONFLICT DO NOTHING
+        // to a heal-empty-rows DO UPDATE so the reconciler can repair
+        // zero-amount rows the cron may have written before the
+        // Compounded log-parse fix shipped. Predicate restricts the
+        // update to rows where amount0 = 0 AND amount1 = 0 - i.e.,
+        // exactly the bad-data shape the audit identified. Healthy
+        // rows are untouched, preserving the idempotency guarantee
+        // for retried POSTs. Pre-migration databases (no UNIQUE
+        // constraint) skip the conflict clause entirely; ON CONFLICT
+        // DO UPDATE is a no-op until the index exists.
         await sql`
             INSERT INTO compounder_events (
                 token_id,
@@ -567,7 +575,15 @@ export async function insertEvent(input: {
                 ${input.blockNumber ?? null}::BIGINT,
                 ${input.chainBlockAtIso ?? null}::TIMESTAMPTZ
             )
-            ON CONFLICT DO NOTHING
+            ON CONFLICT (tx_hash) DO UPDATE SET
+                amount0           = EXCLUDED.amount0,
+                amount1           = EXCLUDED.amount1,
+                protocol_fee0     = EXCLUDED.protocol_fee0,
+                protocol_fee1     = EXCLUDED.protocol_fee1,
+                usd_value_micros  = EXCLUDED.usd_value_micros,
+                chain_block_at    = COALESCE(compounder_events.chain_block_at, EXCLUDED.chain_block_at)
+            WHERE compounder_events.amount0 = 0
+              AND compounder_events.amount1 = 0
         `;
         return true;
     } catch (err) {

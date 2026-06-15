@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import {
     createPublicClient,
     createWalletClient,
+    decodeEventLog,
     http,
     isAddress,
     type Address,
@@ -574,6 +575,45 @@ async function onTxSubmitted(ctx: SubmittedContext): Promise<void> {
     if (receipt.status === "success") {
         ctx.summary.triggered++;
         await stampLastAction(ctx.position.tokenId, nowIso);
+
+        // 2026-06-15 audit HIGH#1 fix: the COMPOUND branch's ctx.fee0 / fee1
+        // are 0n because compound() returns (liquidityAdded, amount0Used,
+        // amount1Used) — never the actual fees collected. The cron's
+        // simulation in handlePosition therefore writes 0/0 into
+        // compounder_events, which was the root cause of the "Total earned
+        // = $0 forever for every auto-compound user" symptom even though
+        // fees were correctly reinvested on-chain. Parse the Compounded
+        // event log from the receipt and pull fee0Collected/fee1Collected
+        // off the decoded args BEFORE the insertEvent call. Failure to
+        // decode falls through to the existing ctx values so the row still
+        // lands (zero) — the persistence reconciler healing path then
+        // takes over.
+        let resolvedFee0 = ctx.fee0;
+        let resolvedFee1 = ctx.fee1;
+        if (ctx.kind === "compound") {
+            for (const lg of receipt.logs) {
+                try {
+                    const decoded = decodeEventLog({
+                        abi: AUTO_COMPOUNDER_ABI,
+                        data: lg.data,
+                        topics: lg.topics,
+                        eventName: "Compounded",
+                    });
+                    const args = decoded.args as unknown as {
+                        tokenId: bigint;
+                        fee0Collected?: bigint;
+                        fee1Collected?: bigint;
+                    };
+                    if (args && args.tokenId === BigInt(ctx.position.tokenId)) {
+                        resolvedFee0 = args.fee0Collected ?? 0n;
+                        resolvedFee1 = args.fee1Collected ?? 0n;
+                        break;
+                    }
+                } catch {
+                    // not a Compounded log on this entry — keep scanning.
+                }
+            }
+        }
         // Audit H2 fix: compute the USDC-equivalent of fee0 + fee1 via
         // the V3 quoter so the dashboard's "Total claimed" headline is
         // a live number instead of the dead 0 the column shipped with
@@ -595,8 +635,8 @@ async function onTxSubmitted(ctx: SubmittedContext): Promise<void> {
                 ctx.publicClient,
                 ctx.position.token0Address,
                 ctx.position.token1Address,
-                ctx.fee0,
-                ctx.fee1,
+                resolvedFee0,
+                resolvedFee1,
             ),
             withTimeout(
                 ctx.publicClient
@@ -612,8 +652,8 @@ async function onTxSubmitted(ctx: SubmittedContext): Promise<void> {
         await insertEvent({
             tokenId: ctx.position.tokenId,
             eventType: ctx.kind === "compound" ? "Compounded" : "FeesPushed",
-            amount0: ctx.fee0.toString(),
-            amount1: ctx.fee1.toString(),
+            amount0: resolvedFee0.toString(),
+            amount1: resolvedFee1.toString(),
             usdValueMicros: usdValueMicros.toString(),
             txHash: ctx.hash,
             blockNumber: receipt.blockNumber.toString(),

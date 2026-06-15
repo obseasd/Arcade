@@ -193,7 +193,19 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
   // into the For field on a path that has no exact-output quote (V3 single
   // direction quoter, launchpad-routed multi-hops). Keeps the For field
   // editable instead of snapping back to the computed quote.
-  const lastForwardRatioRef = useRef<{ amountIn: bigint; amountOut: bigint } | null>(null);
+  // 2026-06-15 audit HIGH#5 fix: tag the cached forward ratio with the
+  // (tokenIn, tokenOut) pair it was captured against. Without this tag
+  // the ref persists past a TokenSelectModal pick or flipTokens, and the
+  // back-derived amountIn for the new pair was computed off the old
+  // pair's ratio - causing minOut math that does not match the chain
+  // path and surface-side reverts (or, worst case, executions at the
+  // implied stale rate).
+  const lastForwardRatioRef = useRef<{
+    amountIn: bigint;
+    amountOut: bigint;
+    tokenIn: string;
+    tokenOut: string;
+  } | null>(null);
 
   // Fee tier of the V3 leg (the non-USDC side's pool). Both-V3 uses tokenIn's.
   const v3Fee = inIsV3 ? feeOf(tokenIn.address) : feeOf(tokenOut?.address);
@@ -352,9 +364,23 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
   // having to fire a new quote.
   useEffect(() => {
     if (lastEdited === "in" && amountInRaw > 0n && computedAmountOut && computedAmountOut > 0n) {
-      lastForwardRatioRef.current = { amountIn: amountInRaw, amountOut: computedAmountOut };
+      lastForwardRatioRef.current = {
+        amountIn: amountInRaw,
+        amountOut: computedAmountOut,
+        tokenIn: tokenIn.address.toLowerCase(),
+        tokenOut: (tokenOut?.address ?? "").toLowerCase(),
+      };
     }
-  }, [computedAmountOut, amountInRaw, lastEdited]);
+  }, [computedAmountOut, amountInRaw, lastEdited, tokenIn.address, tokenOut?.address]);
+
+  // 2026-06-15 audit HIGH#5 fix: clear the cached forward ratio when the
+  // user switches either side. TokenSelectModal already wipes amount
+  // strings + lastEdited, but the ref survived - and derivedAmountIn
+  // happily used the prior pair's ratio to back-fill From for the new
+  // pair. Same hazard on flipTokens; cleared inline in that handler too.
+  useEffect(() => {
+    lastForwardRatioRef.current = null;
+  }, [tokenIn.address, tokenOut?.address]);
 
   // Derived amountIn for paths where V2 getAmountsIn does not run (V3 quoter
   // is in-only, launchpad-routed multi-hops). Uses the cached forward ratio
@@ -364,8 +390,17 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
     if (amountOutRawTyped === 0n) return undefined;
     const r = lastForwardRatioRef.current;
     if (!r || r.amountOut === 0n) return undefined;
+    // 2026-06-15 audit HIGH#5: refuse a ratio captured against a different
+    // pair. Belt-and-braces with the clear-on-change effect above; covers
+    // the brief window between mount and the effect firing.
+    if (
+      r.tokenIn !== tokenIn.address.toLowerCase() ||
+      r.tokenOut !== (tokenOut?.address ?? "").toLowerCase()
+    ) {
+      return undefined;
+    }
     return (amountOutRawTyped * r.amountIn) / r.amountOut;
-  }, [lastEdited, amountOutRawTyped]);
+  }, [lastEdited, amountOutRawTyped, tokenIn.address, tokenOut?.address]);
 
   const computedAmountIn = amountsIn?.[0] ?? derivedAmountIn;
   /** USDC amount taken as royalty across both legs (0 when not via launchpad). */
@@ -389,8 +424,27 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
   const finalAmountIn: bigint = lastEdited === "in" ? amountInRaw : computedAmountIn ?? 0n;
   const finalAmountOut: bigint = lastEdited === "in" ? computedAmountOut ?? 0n : amountOutRawTyped;
 
+  // 2026-06-15 audit HIGH#6 fix: when the active route is partial-fill
+  // (arcade-v3 provider clamped the requested amountIn down to what the
+  // pool can absorb without crossing a tick boundary), effectiveAmountIn
+  // is what the executor will actually pull from the wallet - not the
+  // user's typed amount. The confirm modal previously displayed the
+  // typed amount, ensureAllowance approved the typed amount, and
+  // priceLabel computed clamped_out / typed_in for an artificially
+  // worse rate. effectiveFinalAmountIn collapses the cases so the
+  // modal/allowance/rate-label all read the figure the chain will
+  // actually execute against.
+  const partialFillActive =
+    !!activeRoute?.partialFill &&
+    activeRoute.partialFill.effectiveAmountIn <
+      activeRoute.partialFill.requestedAmountIn;
+  const effectiveFinalAmountIn: bigint =
+    partialFillActive && activeRoute?.partialFill
+      ? activeRoute.partialFill.effectiveAmountIn
+      : finalAmountIn;
+
   const minOut = (finalAmountOut * BigInt(10_000 - slippageBps)) / 10_000n;
-  const maxIn = (finalAmountIn * BigInt(10_000 + slippageBps)) / 10_000n;
+  const maxIn = (effectiveFinalAmountIn * BigInt(10_000 + slippageBps)) / 10_000n;
 
   // Balances
   // Audit A-3: batch the two balanceOf reads via Multicall3 (wired in
@@ -592,9 +646,14 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
   const symIn = tokenIn.symbol ?? "TOKEN";
   const symOut = tokenOut?.symbol ?? "TOKEN";
   const priceLabel =
-    finalAmountIn > 0n && finalAmountOut > 0n && tokenOut
+    effectiveFinalAmountIn > 0n && finalAmountOut > 0n && tokenOut
       ? (() => {
-          const per1 = (finalAmountOut * 10n ** BigInt(decimalsIn)) / finalAmountIn;
+          // HIGH#6: derive rate from EFFECTIVE input so a partial-fill
+          // doesn't surface "you got 23% of expected" as a fake-bad
+          // exchange rate. The chain rate is clamped_out / clamped_in,
+          // not clamped_out / typed_in.
+          const per1 =
+            (finalAmountOut * 10n ** BigInt(decimalsIn)) / effectiveFinalAmountIn;
           return `1 ${symIn} = ${formatTokenAmount(per1, decimalsOut, 6)} ${symOut}`;
         })()
       : "-";
@@ -640,6 +699,11 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
 
   const flipTokens = () => {
     if (!tokenOut) return;
+    // 2026-06-15 audit HIGH#5: flip swaps the pair tokens. The cached
+    // forward ratio belongs to the pre-flip pair; clear it before the
+    // setState batch lands so derivedAmountIn never reads a ratio
+    // tagged for the previous direction.
+    lastForwardRatioRef.current = null;
     setTokenIn(tokenOut);
     setTokenOut(tokenIn);
     setAmountInStr("");
@@ -670,7 +734,11 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
         // WRAP_ETH variant — no ERC20 allowance needed, value is sent
         // with the tx. Skip ensureAllowance entirely.
       } else {
-        await ensureAllowance(exactIn ? finalAmountIn : maxIn);
+        // HIGH#6: under partial-fill we only need to approve the amount
+        // the executor will actually pull, not the user-typed amount.
+        // Over-approval to v3Router is harmless (trusted contract) but
+        // the smaller amount keeps the allowance footprint honest.
+        await ensureAllowance(exactIn ? effectiveFinalAmountIn : maxIn);
       }
       setTx({ status: "pending", message: "Submitting swap…" });
       const deadline = BigInt(Math.floor(Date.now() / 1000) + 600);
@@ -1225,7 +1293,7 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
           onConfirm={onConfirm}
           tokenIn={tokenIn}
           tokenOut={tokenOut}
-          amountInFormatted={formatTokenAmount(finalAmountIn, decimalsIn, 6)}
+          amountInFormatted={formatTokenAmount(effectiveFinalAmountIn, decimalsIn, 6)}
           amountOutFormatted={formatTokenAmount(finalAmountOut, decimalsOut, 6)}
           rateLabel={priceLabel}
           guardLabel={guardLabel}
@@ -1234,6 +1302,11 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
           inputUsd={inUsd.usd}
           outputUsd={outUsd.usd}
           priceImpactPct={priceImpactPct}
+          partialFillNotice={
+            partialFillActive && activeRoute?.partialFill
+              ? `You typed ${formatTokenAmount(activeRoute.partialFill.requestedAmountIn, decimalsIn, 6)} ${symIn} but only ${formatTokenAmount(activeRoute.partialFill.effectiveAmountIn, decimalsIn, 6)} ${symIn} will be swapped — the pool can't absorb more at this fee tier without crossing a tick.`
+              : undefined
+          }
           protocolLabel={
             // When an external route wins, the confirm screen has to
             // reflect that — otherwise the user signs a Synthra tx but

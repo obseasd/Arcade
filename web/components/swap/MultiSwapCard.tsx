@@ -322,7 +322,19 @@ export function MultiSwapCard({ tab, onTabChange }: MultiSwapCardProps) {
         functionName: "swapToSingle",
         args: [tupleArgs, outputToken.address, minTotalOut, deadline],
       });
-      await publicClient!.waitForTransactionReceipt({ hash });
+      // 2026-06-15 audit HIGH#3 fix: capture the receipt return value and
+      // gate success on receipt.status. Before this, a reverted on-chain
+      // tx flowed through the happy path: form cleared, balances refetched,
+      // a green swap toast fired, and an activity row was written with
+      // the quoted total - all while the user's tokens stayed untouched.
+      // Throwing here routes the failure through the catch block, which
+      // now also fires an error toast so navigated-away failures are
+      // visible. Mirrors the same shape audit fix already deployed on
+      // SwapCard.tsx (M1+H3+H4, commit 7aa13a1).
+      const receipt = await publicClient!.waitForTransactionReceipt({ hash });
+      if (receipt.status !== "success") {
+        throw new Error(`Multi-swap reverted on-chain. Tx: ${hash}`);
+      }
       setTx({ status: "idle" });
       setInputs([]);
       balanceCalls.refetch();
@@ -344,7 +356,13 @@ export function MultiSwapCard({ tab, onTabChange }: MultiSwapCardProps) {
         amountFormatted: outFormatted,
       });
     } catch (e: any) {
-      setTx({ status: "error", message: e?.shortMessage || e?.message || "Multi-swap failed" });
+      const msg = e?.shortMessage || e?.message || "Multi-swap failed";
+      setTx({ status: "error", message: msg });
+      pushToast({
+        kind: "error",
+        title: "Multi-swap failed",
+        message: msg,
+      });
     }
   };
 

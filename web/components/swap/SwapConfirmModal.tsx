@@ -31,6 +31,13 @@ interface Props {
    *  impact" warning banner inside the modal when the USD oracle is
    *  unavailable (the dominant case for ETH legs on Arc). */
   priceImpactPct?: number;
+  /** 2026-06-15 audit HIGH#6: when the arcade-v3 provider has clamped
+   *  the user's typed amountIn down to what the pool can absorb without
+   *  crossing a tick (partial-fill), the modal shows an explicit notice
+   *  so the user understands they're about to sign a smaller swap than
+   *  the amount in their input field. Undefined when not in a
+   *  partial-fill state. */
+  partialFillNotice?: string;
   /** Display label for the route's protocol (eg "Arcade V2", "Arcade V3",
    *  "Synthra V3", "XyloNet"). Mirrors the badge under the swap card.
    *  Defaults to "Arcade V2" for the legacy code paths that don't pass it. */
@@ -57,6 +64,7 @@ export function SwapConfirmModal({
   inputUsd,
   outputUsd,
   priceImpactPct,
+  partialFillNotice,
   protocolLabel = "Arcade V2",
   protocolLogo,
 }: Props) {
@@ -146,6 +154,13 @@ export function SwapConfirmModal({
               means the pool is too thin or its ratio is broken. Triple-check
               before signing — this loss is permanent.
             </div>
+          </div>
+        )}
+
+        {partialFillNotice && (
+          <div className="rounded-xl border border-arc-warn/50 bg-arc-warn/10 p-3 text-xs">
+            <div className="font-semibold text-arc-warn">Partial fill</div>
+            <div className="mt-1 text-arc-warn/80">{partialFillNotice}</div>
           </div>
         )}
 
