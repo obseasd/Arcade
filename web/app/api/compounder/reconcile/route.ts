@@ -80,10 +80,14 @@ const ARC_CHAIN = {
     },
 } as const;
 
-// Match the cron's 50k-block window (Arc public RPC is sensitive to
-// wider getLogs ranges, the documented quirk). Hourly cadence × 50k
-// blocks at ~0.5s blocktime = ~7h of headroom per scan, plenty.
-const BLOCK_WINDOW = 50_000n;
+// Arc public RPC's actual getLogs cap is well below 50k blocks; it
+// silently 4xx's on anything wider (confirmed during the 2026-06-15
+// compounder migration where fallback's three providers all rejected
+// a 50k-block scan). Use a 2k-block chunk so we stay inside every
+// provider's documented (and undocumented) limits, and walk the
+// 50k lookback as 25 small chunks instead. Hourly cadence × 50k =
+// ~7h of headroom per scan, still plenty.
+const BLOCK_WINDOW = 2_000n;
 const LOOKBACK_BLOCKS = 50_000n;
 
 // Pre-hashed event signatures so the decoded log filter does not
@@ -127,6 +131,7 @@ interface RunSummary {
     compounds: number;
     feesPushed: number;
     rpcErrors: number;
+    firstRpcError?: string;
 }
 
 export async function POST(req: NextRequest) {
@@ -197,6 +202,13 @@ export async function POST(req: NextRequest) {
                 // eslint-disable-next-line no-console
                 console.warn("[reconcile] getLogs failed", from, to, err);
                 summary.rpcErrors++;
+                if (!summary.firstRpcError) {
+                    summary.firstRpcError =
+                        (err as { shortMessage?: string; message?: string })
+                            ?.shortMessage ??
+                        (err as { message?: string })?.message ??
+                        String(err);
+                }
                 return [] as Awaited<ReturnType<typeof publicClient.getLogs>>;
             });
         for (const log of logs) {
