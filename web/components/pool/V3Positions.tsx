@@ -899,7 +899,14 @@ function V3PositionRow({
                 <div className="mt-3 flex items-center justify-between gap-2 rounded-xl border border-arc-border bg-white/[0.015] p-3 text-xs">
                     <span className="text-arc-text-muted">Total earned</span>
                     <span className="inline-flex items-center gap-3 tabular-nums">
-                        <span className="inline-flex items-center gap-1.5">
+                        <span
+                            className={cn(
+                                "inline-flex items-center gap-1.5",
+                                (managed.totalClaimedAmount0 ?? 0n) > 0n
+                                    ? "text-white"
+                                    : "text-arc-text-faint",
+                            )}
+                        >
                             {formatTok(
                                 managed.totalClaimedAmount0 ?? 0n,
                                 t0Info.decimals,
@@ -907,7 +914,14 @@ function V3PositionRow({
                             <TokenIcon symbol={t0Info.symbol} size={14} />
                         </span>
                         <span className="text-arc-text-faint">/</span>
-                        <span className="inline-flex items-center gap-1.5">
+                        <span
+                            className={cn(
+                                "inline-flex items-center gap-1.5",
+                                (managed.totalClaimedAmount1 ?? 0n) > 0n
+                                    ? "text-white"
+                                    : "text-arc-text-faint",
+                            )}
+                        >
                             {formatTok(
                                 managed.totalClaimedAmount1 ?? 0n,
                                 t1Info.decimals,
@@ -920,12 +934,26 @@ function V3PositionRow({
                 <div className="mt-3 flex items-center justify-between gap-2 rounded-xl border border-arc-border bg-white/[0.015] p-3 text-xs">
                     <span className="text-arc-text-muted">Unclaimed fees</span>
                     <span className="inline-flex items-center gap-3 tabular-nums">
-                        <span className="inline-flex items-center gap-1.5">
+                        <span
+                            className={cn(
+                                "inline-flex items-center gap-1.5",
+                                p.tokensOwed0 > 0n
+                                    ? "text-white"
+                                    : "text-arc-text-faint",
+                            )}
+                        >
                             {formatTok(p.tokensOwed0, t0Info.decimals)}
                             <TokenIcon symbol={t0Info.symbol} size={14} />
                         </span>
                         <span className="text-arc-text-faint">/</span>
-                        <span className="inline-flex items-center gap-1.5">
+                        <span
+                            className={cn(
+                                "inline-flex items-center gap-1.5",
+                                p.tokensOwed1 > 0n
+                                    ? "text-white"
+                                    : "text-arc-text-faint",
+                            )}
+                        >
                             {formatTok(p.tokensOwed1, t1Info.decimals)}
                             <TokenIcon symbol={t1Info.symbol} size={14} />
                         </span>
