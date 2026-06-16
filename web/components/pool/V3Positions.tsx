@@ -729,8 +729,10 @@ function V3PositionRow({
                         <TokenIcon symbol={t1Info.symbol} size={40} />
                     </div>
                     <div>
-                        {/* Row 1: pair name + ID. Keeps the title clean
-                            and prominent. */}
+                        {/* Row 1: pair name only. ID badge moved to the
+                            top-right of the card header (see sibling
+                            container after this flex block) so the title
+                            reads cleanest. */}
                         <div className="flex flex-wrap items-center gap-1.5">
                             <button type="button"
                                 onClick={() => setInverted((v) => !v)}
@@ -740,9 +742,6 @@ function V3PositionRow({
                                 {t0Info.symbol} / {t1Info.symbol}
                                 <ArrowLeftRight className="h-3 w-3 opacity-0 transition-opacity group-hover:opacity-70" />
                             </button>
-                            <span className="rounded-md border border-arc-cta-hover/40 bg-arc-cta-hover/10 px-1.5 py-0.5 text-[10px] font-semibold text-arc-cta-hover">
-                                ID:{p.tokenId.toString()}
-                            </span>
                         </div>
                         {/* Row 2: fee tier + range status + mode. Grouped
                             so the fee % sits immediately to the left of
@@ -793,11 +792,12 @@ function V3PositionRow({
                         </div>
                     </div>
                 </div>
-                {/* 2026-06-16: Edit button removed. The placeholder linked
-                    to the NFT on Arcscan, which the user reported as
-                    confusing dead weight given Manage already covers the
-                    on-card actions. Restore here when the full per-position
-                    edit page (range adjustment, mint extra) is ready. */}
+                {/* Top-right ID chip. Aligned via the parent flex's
+                    `justify-between` so it always sits at the card's
+                    right edge regardless of the pair name's width. */}
+                <span className="self-start rounded-md border border-arc-cta-hover/40 bg-arc-cta-hover/10 px-1.5 py-0.5 text-[10px] font-semibold text-arc-cta-hover">
+                    ID:{p.tokenId.toString()}
+                </span>
             </div>
 
             {/* Pool-level metrics row. APR / 1D Volume / Total TVL all read
