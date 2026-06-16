@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { Info, Trash2 } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { CrossIcon } from "@/components/ui/MaskIcon";
 import {
     Address,
@@ -93,6 +94,7 @@ export function RemoveLiquidityModalV3({
     const { address: account } = useAccount();
     const publicClient = usePublicClient();
     const { data: walletClient } = useWalletClient();
+    const router = useRouter();
 
     const [pct, setPct] = useState(100);
     const [pctCustom, setPctCustom] = useState("");
@@ -265,10 +267,16 @@ export function RemoveLiquidityModalV3({
 
             const a0 = formatUnits(preview.amount0, token0Meta.decimals);
             const a1 = formatUnits(preview.amount1, token1Meta.decimals);
+            // Use the rich liquidity-removed toast (stacked token icons,
+            // tidy amount0 / amount1 layout) instead of the plain info
+            // toast — same UX as Hyperswap's "Liquidity removed" pop.
             pushToast({
-                kind: "info",
-                title: isFullExit ? "Position closed" : "Liquidity removed",
-                message: `Got ~${trimAmt(a0)} ${token0Meta.symbol} + ~${trimAmt(a1)} ${token1Meta.symbol}`,
+                kind: "liquidity-removed",
+                token0: { address: token0, symbol: token0Meta.symbol },
+                token1: { address: token1, symbol: token1Meta.symbol },
+                amount0Formatted: trimAmt(a0),
+                amount1Formatted: trimAmt(a1),
+                poolHref: `/pool/${poolAddress}`,
             });
             addActivity({
                 type: "claim-fees",
@@ -281,6 +289,13 @@ export function RemoveLiquidityModalV3({
             });
             onSuccess?.();
             onClose();
+            // After a full exit the position card on /pool/<addr> would
+            // render as "0 liquidity / no position to manage". Routing
+            // back to /positions matches the user's mental model —
+            // "I closed this, take me back to my list of positions".
+            if (isFullExit) {
+                router.push("/positions");
+            }
         } catch (e: unknown) {
             const o = e as Record<string, unknown> | null;
             const reason =
