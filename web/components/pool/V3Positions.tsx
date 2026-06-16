@@ -729,6 +729,8 @@ function V3PositionRow({
                         <TokenIcon symbol={t1Info.symbol} size={40} />
                     </div>
                     <div>
+                        {/* Row 1: pair name + ID. Keeps the title clean
+                            and prominent. */}
                         <div className="flex flex-wrap items-center gap-1.5">
                             <button type="button"
                                 onClick={() => setInverted((v) => !v)}
@@ -741,6 +743,12 @@ function V3PositionRow({
                             <span className="rounded-md border border-arc-cta-hover/40 bg-arc-cta-hover/10 px-1.5 py-0.5 text-[10px] font-semibold text-arc-cta-hover">
                                 ID:{p.tokenId.toString()}
                             </span>
+                        </div>
+                        {/* Row 2: fee tier + range status + mode. Grouped
+                            so the fee % sits immediately to the left of
+                            the In/Out-of-range chip without flex-wrap
+                            breaking them apart on narrow cards. */}
+                        <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                             <span className="rounded-md border border-sky-400/40 bg-sky-400/10 px-1.5 py-0.5 text-[10px] font-semibold text-sky-400">
                                 {(p.fee / 10000).toFixed(2)}%
                             </span>

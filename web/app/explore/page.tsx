@@ -341,6 +341,22 @@ export default function ExplorePage() {
         }
 
         for (const t of v3Tokens) {
+            // 2026-06-16 fix: only enumerate this V3 token as a launchpad
+            // sub-row if there's an ACTUAL launchpad pool on file
+            // (CLANKER_V3 mode). STATIC_V3_TOKENS like SeedETH lack a
+            // launchpadPool entry, so v3PoolOf returns undefined and
+            // the prior code pushed a sub-row with tvlUsdc=0n and
+            // poolAddress=t.address (the token, not the pool). The
+            // factory-probe loop below would then find the real
+            // USDC/SeedETH pool and try to add it, but the (token,
+            // feeBps) dedup considered the zero-TVL row a duplicate
+            // and skipped it — surfacing "—" TVL on the row forever.
+            // Letting STATIC_V3_TOKENS fall through to the factory
+            // probe restores correct TVL + the real pool address for
+            // Add Liquidity.
+            const launchpadPool = v3PoolOf(t.address);
+            if (!launchpadPool || launchpadPool === zeroAddress) continue;
+
             const ka = USDC_LOWER < t.address.toLowerCase() ? USDC_LOWER : t.address.toLowerCase();
             const kb = USDC_LOWER < t.address.toLowerCase() ? t.address.toLowerCase() : USDC_LOWER;
             const key = `${ka}|${kb}`;
@@ -359,12 +375,11 @@ export default function ExplorePage() {
                 });
             }
             const row = grouped.get(key)!;
-            const launchpadPool = v3PoolOf(t.address);
             const tvlUsdc =
                 launchpadV3TvlByToken.get(t.address.toLowerCase()) ?? 0n;
             row.subRows.push({
                 address: t.address,
-                poolAddress: launchpadPool ?? t.address,
+                poolAddress: launchpadPool,
                 version: "v3",
                 feeBps: Math.round(v3FeeOf(t.address) / 100),
                 tvlUsdc,
