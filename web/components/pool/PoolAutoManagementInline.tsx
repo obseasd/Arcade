@@ -35,6 +35,15 @@ export interface PoolAutoManagementInlineProps {
     poolToken0?: Address;
     poolToken1?: Address;
     poolFeePip?: number;
+    /** Optional tokenId hint from the URL (?tokenId=N). When the user
+     *  navigated here via "Manage" on a specific position card, focusing
+     *  the section on THAT NFT removes the confusion of "I clicked
+     *  Manage on token 5 but the section shows token 9's settings".
+     *  When set and the token IS managed, only that NFT's row renders.
+     *  When set but the token is NOT in the managed list, a clear
+     *  "this position isn't auto-managed yet" notice renders instead
+     *  of silently hiding the section. */
+    focusTokenId?: string | null;
 }
 
 type Mode = "NORMAL" | "RECEIVE" | "COMPOUND";
@@ -143,6 +152,7 @@ export function PoolAutoManagementInline({
     poolToken0,
     poolToken1,
     poolFeePip,
+    focusTokenId,
 }: PoolAutoManagementInlineProps) {
     const { address: account } = useAccount();
     const { writeContractAsync } = useWriteContract();
@@ -280,6 +290,58 @@ export function PoolAutoManagementInline({
     ]);
 
     if (!account || !compounderEnabled) return null;
+
+    // When focusTokenId is set, narrow the section to that NFT only and
+    // surface a clear "not yet auto-managed" notice when the user came
+    // from a position that isn't deposited in the compounder. Without
+    // the focus filter, the user clicked Manage on token 5, landed
+    // here, and saw token 9's settings - reads as "Manage shows
+    // Auto-compound for my Normal position".
+    if (focusTokenId) {
+        const focused = rows.find((r) => r.tokenId.toString() === focusTokenId);
+        if (focused) {
+            return (
+                <section className="mt-4 space-y-3">
+                    <h2 className="text-lg font-semibold text-arc-text">
+                        Auto-management
+                    </h2>
+                    <ManagedRowCard
+                        key={focused.tokenId.toString()}
+                        row={focused}
+                        onSaved={bumpRefresh}
+                        writeContractAsync={writeContractAsync}
+                        publicClient={publicClient}
+                        ownerAddress={account}
+                    />
+                </section>
+            );
+        }
+        return (
+            <section className="mt-4 space-y-3">
+                <h2 className="text-lg font-semibold text-arc-text">
+                    Auto-management
+                </h2>
+                <div className="rounded-2xl border border-arc-border bg-white/[0.015] p-5">
+                    <div className="text-sm font-semibold text-arc-text">
+                        NFT #{focusTokenId} is not auto-managed yet
+                    </div>
+                    <p className="mt-1.5 text-xs text-arc-text-muted">
+                        Deposit this position into the auto-compounder to
+                        enable Auto-receive (push fees to your wallet) or
+                        Auto-compound (reinvest into the position with
+                        anti-MEV cooldown and slippage cap).
+                    </p>
+                    <p className="mt-3 text-xs text-arc-text-faint">
+                        Coming soon: a one-click deposit + mode picker on
+                        this page. For now you can create a fresh managed
+                        position via the V3 add-liquidity flow with the
+                        Auto-receive / Auto-compound toggles.
+                    </p>
+                </div>
+            </section>
+        );
+    }
+
     if (rows.length === 0) return null;
 
     return (

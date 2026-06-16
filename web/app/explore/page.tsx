@@ -26,7 +26,7 @@ import {
     Tooltip as RechartsTooltip,
 } from "recharts";
 import { Address, erc20Abi, formatUnits, zeroAddress } from "viem";
-import { useReadContracts } from "wagmi";
+import { usePublicClient, useReadContracts } from "wagmi";
 
 import { PAIR_ABI } from "@/lib/abis/dex";
 import { ADDRESSES, USDC_DECIMALS } from "@/lib/constants";
@@ -180,26 +180,60 @@ export default function ExplorePage() {
         }
         return out;
     }, [v3Tokens, v3PoolOf]);
-    const launchpadV3BalQ = useReadContracts({
-        contracts: launchpadV3Pools.map((p) => ({
-            address: ADDRESSES.usdc,
-            abi: erc20Abi,
-            functionName: "balanceOf" as const,
-            args: [p.pool] as const,
-        })),
-        query: { enabled: launchpadV3Pools.length > 0 },
-    });
-    const launchpadV3TvlByToken = useMemo<Map<string, bigint>>(() => {
-        const m = new Map<string, bigint>();
-        if (!launchpadV3BalQ.data) return m;
-        for (let i = 0; i < launchpadV3Pools.length; i++) {
-            const r = launchpadV3BalQ.data[i];
-            if (r?.status !== "success") continue;
-            const bal = r.result as bigint;
-            m.set(launchpadV3Pools[i].token.toLowerCase(), bal * 2n);
+    // 2026-06-16 fix: previous useReadContracts(multicall) silently
+    // returned every balance as 0n on Arc public RPC, which surfaced as
+    // "—" TVL on every launchpad V3 pool in /explore even though the
+    // pool detail page (individual useReadContract on the same RPC)
+    // showed the real $117 TVL just fine. Same root cause as
+    // useV3FactoryPools' multicall trap (memo arc-multicall3-trap):
+    // viem can't infer a fallback for batched eth_call on a chain
+    // that has no Multicall3 deployed. Replaced with individual
+    // readContract calls under usePublicClient, keyed on the stable
+    // pool-address join so the effect doesn't refire every render.
+    const explorePublicClient = usePublicClient();
+    const launchpadV3PoolsKey = useMemo(
+        () => launchpadV3Pools.map((p) => p.pool).join(","),
+        [launchpadV3Pools],
+    );
+    const [launchpadV3Balances, setLaunchpadV3Balances] = useState<
+        Map<string, bigint>
+    >(new Map());
+    useEffect(() => {
+        if (!explorePublicClient || launchpadV3Pools.length === 0) {
+            setLaunchpadV3Balances(new Map());
+            return;
         }
-        return m;
-    }, [launchpadV3BalQ.data, launchpadV3Pools]);
+        let cancelled = false;
+        (async () => {
+            const reads = await Promise.all(
+                launchpadV3Pools.map((p) =>
+                    explorePublicClient
+                        .readContract({
+                            address: ADDRESSES.usdc,
+                            abi: erc20Abi,
+                            functionName: "balanceOf",
+                            args: [p.pool],
+                        })
+                        .then(
+                            (r) => ({
+                                token: p.token.toLowerCase(),
+                                bal: r as bigint,
+                            }),
+                            () => ({ token: p.token.toLowerCase(), bal: 0n }),
+                        ),
+                ),
+            );
+            if (cancelled) return;
+            const m = new Map<string, bigint>();
+            for (const r of reads) m.set(r.token, r.bal * 2n);
+            setLaunchpadV3Balances(m);
+        })();
+        return () => {
+            cancelled = true;
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [explorePublicClient, launchpadV3PoolsKey]);
+    const launchpadV3TvlByToken = launchpadV3Balances;
 
     const tokenLookup = useMemo(() => {
         const m = new Map<string, { symbol: string; decimals: number }>();

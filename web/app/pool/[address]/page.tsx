@@ -2,7 +2,7 @@
 
 import { ArrowLeft, ExternalLink, Plus, TrendingUp } from "lucide-react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import { useMemo } from "react";
 import { Address, erc20Abi, formatUnits, isAddress, zeroAddress } from "viem";
 import { useAccount, useReadContract } from "wagmi";
@@ -29,6 +29,18 @@ const USDC_LOWER = ADDRESSES.usdc.toLowerCase();
  */
 export default function PoolDetailPage() {
     const params = useParams<{ address: string }>();
+    const searchParams = useSearchParams();
+    // ?tokenId=N hash from the V3Positions Manage button. Lets the
+    // auto-management section show settings for the SPECIFIC NFT the
+    // user came to manage, rather than the first one in the pool
+    // (which read as "this is the auto-management for token X" when
+    // the user's intent was actually token Y). null when arrived
+    // via deep link, search, or any other non-Manage path.
+    const focusTokenIdParam = searchParams?.get("tokenId") ?? null;
+    const focusTokenId =
+        focusTokenIdParam && /^\d+$/.test(focusTokenIdParam)
+            ? focusTokenIdParam
+            : null;
     const { address: account } = useAccount();
     const pairAddrRaw = params?.address ?? "";
     const pair = isAddress(pairAddrRaw)
@@ -420,6 +432,7 @@ export default function PoolDetailPage() {
                     poolToken0={token0}
                     poolToken1={token1}
                     poolFeePip={v3Fee || undefined}
+                    focusTokenId={focusTokenId}
                 />
             )}
 

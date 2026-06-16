@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeftRight, ExternalLink, Pencil, Sparkles } from "lucide-react";
+import { ArrowLeftRight, Sparkles } from "lucide-react";
 import { PlusIcon, SliderIcon } from "@/components/ui/MaskIcon";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -785,20 +785,11 @@ function V3PositionRow({
                         </div>
                     </div>
                 </div>
-                {/* Top-right action: Edit button (mirrors Hyperswap). Routes
-                    to the NFT on the explorer for now since the full manage
-                    UI ships in a follow-up commit. */}
-                <a
-                    href={`${explorerUrl}/token/${ADDRESSES.v3PositionManager}?a=${p.tokenId}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    title={`NFT #${p.tokenId.toString()} on the explorer`}
-                    className="inline-flex items-center gap-1 self-start rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-1.5 text-xs font-medium text-arc-text transition-colors hover:bg-white/5"
-                >
-                    <Pencil className="h-3 w-3" />
-                    Edit
-                    <ExternalLink className="h-2.5 w-2.5 opacity-60" />
-                </a>
+                {/* 2026-06-16: Edit button removed. The placeholder linked
+                    to the NFT on Arcscan, which the user reported as
+                    confusing dead weight given Manage already covers the
+                    on-card actions. Restore here when the full per-position
+                    edit page (range adjustment, mint extra) is ready. */}
             </div>
 
             {/* Pool-level metrics row. APR / 1D Volume / Total TVL all read
@@ -940,14 +931,14 @@ function V3PositionRow({
             {managed ? (
                 <ManagedActions
                     managed={managed}
-                    managePoolHref={poolAddress ? `/pool/${poolAddress}` : "/positions"}
+                    managePoolHref={poolAddress ? `/pool/${poolAddress}?tokenId=${p.tokenId.toString()}` : "/positions"}
                     addLiquidityHref={`/positions/add?type=v3&t0=${p.token0}&t1=${p.token1}&fee=${p.fee / 100}`}
                 />
             ) : (
                 <div className="mt-4 grid grid-cols-2 gap-2">
                     {poolAddress ? (
                         <Link
-                            href={`/pool/${poolAddress}`}
+                            href={`/pool/${poolAddress}?tokenId=${p.tokenId.toString()}`}
                             className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-arc-border bg-white/[0.04] px-3 py-2.5 text-sm font-semibold text-arc-text transition-colors hover:bg-white/[0.08]"
                         >
                             <SliderIcon size={14} />
