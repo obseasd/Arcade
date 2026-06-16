@@ -169,7 +169,7 @@ function PositionsInner() {
         {v3Count > 0 && (
           <button type="button"
             onClick={() => setClaimOpen(true)}
-            className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-white bg-white/[0.015] px-3 py-2.5 text-sm font-semibold text-sky-400 transition-colors hover:bg-white/[0.04]"
+            className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-arc-border bg-white/[0.015] px-3 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-white/[0.04]"
           >
             <Sparkles className="h-4 w-4" />
             Claim All Fees
