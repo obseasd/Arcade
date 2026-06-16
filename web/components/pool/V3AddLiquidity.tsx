@@ -2,7 +2,7 @@
 
 import { ArrowUpDown, Info, Lock, Plus, Sparkles } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useDeferredValue, useEffect, useMemo, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
 import {
     Address,
     encodeAbiParameters,
@@ -387,10 +387,17 @@ export function V3AddLiquidity({
     const [autoThresholdUsdc, setAutoThresholdUsdc] = useState("1.00");
     const [autoSlippagePct, setAutoSlippagePct] = useState("0.50");
     const MIN_THRESHOLD_USDC = 1.0;
-    const autoThresholdBelowFloor = useMemo(() => {
+    // Snap-on-blur: when the user finishes editing the threshold input
+    // (focus moves away), any value below the contract's 1 USDC floor
+    // gets bumped up to the floor. We don't clamp on every keystroke
+    // because that would snap "0.5" to "1" the moment the user types
+    // "0" and prevent them from ever entering a multi-character value.
+    // The on-chain validator below ALSO clamps for defence-in-depth.
+    const onAutoThresholdBlur = useCallback(() => {
         const parsed = Number(autoThresholdUsdc);
-        if (!Number.isFinite(parsed)) return false;
-        return parsed < MIN_THRESHOLD_USDC;
+        if (!Number.isFinite(parsed) || parsed < MIN_THRESHOLD_USDC) {
+            setAutoThresholdUsdc(MIN_THRESHOLD_USDC.toFixed(2));
+        }
     }, [autoThresholdUsdc]);
     const autoThresholdMicros = useMemo(() => {
         const parsed = Number(autoThresholdUsdc);
@@ -1466,6 +1473,7 @@ export function V3AddLiquidity({
                                     inputMode="decimal"
                                     value={autoThresholdUsdc}
                                     onChange={(e) => setAutoThresholdUsdc(e.target.value)}
+                                    onBlur={onAutoThresholdBlur}
                                     disabled={submitting}
                                     className="w-full rounded-xl border border-arc-border bg-white/[0.015] p-2.5 text-sm text-arc-text outline-none focus:border-arc-primary"
                                 />
@@ -1483,17 +1491,6 @@ export function V3AddLiquidity({
                                     className="w-full rounded-xl border border-arc-border bg-white/[0.015] p-2.5 text-sm text-arc-text outline-none focus:border-arc-primary"
                                 />
                             </div>
-                        </div>
-                    )}
-                    {/* Floor warning. The Compounder contract reverts with
-                        MIN_FEE_TOO_LOW on any deposit whose threshold is
-                        under 1 USDC; without this hint the user's first
-                        try fails immediately after the V3 mint and the
-                        toast surfaces a generic "safeTransferFrom
-                        reverted" error. */}
-                    {autoMode !== 0 && autoThresholdBelowFloor && (
-                        <div className="mt-2 rounded-lg border border-arc-warn/40 bg-arc-warn/10 px-3 py-2 text-[11px] text-arc-warn">
-                            Threshold must be at least 1.00 USDC. The contract floor will round this up automatically on deposit.
                         </div>
                     )}
                 </div>

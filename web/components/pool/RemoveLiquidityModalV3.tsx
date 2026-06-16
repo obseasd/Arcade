@@ -430,8 +430,7 @@ export function RemoveLiquidityModalV3({
                     whether the user picks up pre-existing unclaimed
                     fees in the same tx as the principal. On a 100%
                     exit the toggle is forced on and the NFT is always
-                    burned afterwards (see exec path) — keeping the
-                    wallet clean. */}
+                    burned afterwards (see exec path). */}
                 <div className="space-y-2">
                     <ToggleRow
                         label="Also claim unclaimed fees"
@@ -444,12 +443,6 @@ export function RemoveLiquidityModalV3({
                         onChange={setClaimFees}
                         disabled={isFullExit}
                     />
-                    {isFullExit && (
-                        <div className="rounded-xl border border-arc-border bg-white/[0.015] p-3 text-[11px] text-arc-text-muted">
-                            The NFT will be burned after closing — cleans up
-                            your wallet, the position is gone for good.
-                        </div>
-                    )}
                 </div>
 
                 {/* Slippage notice (placeholder for a settings popover) */}

@@ -391,14 +391,18 @@ function ManagedRowCard({
 
     // ArcadeAutoCompounder.setMode enforces MIN_FEE_MICROS_FLOOR =
     // 1_000_000 (1 USDC). Anything below would revert with
-    // "MIN_FEE_TOO_LOW". Clamp + warn in the UI so the user sees the
-    // bump explicitly rather than having setMode revert with a
-    // generic error.
+    // "MIN_FEE_TOO_LOW". We clamp the displayed value to the floor on
+    // blur (not on every keystroke — otherwise typing "0.5" snaps to
+    // "1" the moment the user types "0") and ALSO clamp the bigint
+    // we pass to setMode so a fat-finger that somehow bypasses the
+    // blur still won't revert. No banner anymore: the snap-on-blur is
+    // visible and unambiguous, the banner was just noise.
     const MIN_THRESHOLD_USDC = 1.0;
-    const thresholdBelowFloor = useMemo(() => {
+    const onThresholdBlur = useCallback(() => {
         const parsed = Number(thresholdUsdc);
-        if (!Number.isFinite(parsed)) return false;
-        return parsed < MIN_THRESHOLD_USDC;
+        if (!Number.isFinite(parsed) || parsed < MIN_THRESHOLD_USDC) {
+            setThresholdUsdc(MIN_THRESHOLD_USDC.toFixed(2));
+        }
     }, [thresholdUsdc]);
     const thresholdMicros = useMemo(() => {
         const parsed = Number(thresholdUsdc);
@@ -572,6 +576,7 @@ function ManagedRowCard({
                         inputMode="decimal"
                         value={thresholdUsdc}
                         onChange={(e) => setThresholdUsdc(e.target.value)}
+                        onBlur={onThresholdBlur}
                         disabled={busy || mode === "NORMAL"}
                         tabIndex={mode === "NORMAL" ? -1 : 0}
                         className="w-full rounded-xl border border-arc-border bg-white/[0.015] p-3 text-sm text-arc-text outline-none focus:border-arc-primary"
@@ -592,12 +597,6 @@ function ManagedRowCard({
                     />
                 </div>
             </div>
-
-            {mode !== "NORMAL" && thresholdBelowFloor && (
-                <div className="mb-3 rounded-lg border border-arc-warn/40 bg-arc-warn/10 px-3 py-2 text-[11px] text-arc-warn">
-                    Threshold must be at least 1.00 USDC. The contract floor will round this up automatically on save.
-                </div>
-            )}
 
             <div className="flex items-center justify-end">
                 <button
