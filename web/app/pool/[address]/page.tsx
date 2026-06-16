@@ -261,22 +261,23 @@ export default function PoolDetailPage() {
     const positionTickUpper = positionTuple ? Number(positionTuple[6]) : 0;
     const positionTokensOwed0 = positionTuple?.[10] ?? 0n;
     const positionTokensOwed1 = positionTuple?.[11] ?? 0n;
-    // Remove only renders when the NFT is in the user's own wallet AND
-    // has live liquidity. Auto-managed positions (NFT owned by the
-    // Compounder) need a Stop first; the disabled-with-tooltip variant
-    // below makes that explicit.
+    // Remove renders when the NFT exists in this pool AND has live
+    // liquidity. Two ownership cases handled:
+    //   - User-owned: open the modal in the normal partial-or-full
+    //     remove flow.
+    //   - Compounder-custodied (auto-receive / auto-compound): open the
+    //     modal locked at 100% with a Stop+Remove sequence — under the
+    //     hood we first call ArcadeAutoCompounder.withdrawPosition to
+    //     pull the NFT back, then run the standard NPM multicall to
+    //     decrease+collect+burn. The user signs twice.
+    //   - Anything else: button does not render.
     const canRemove =
         !!focusTokenId &&
         isV3 &&
         !!positionTuple &&
         positionLiquidity > 0n &&
-        isUserOwned;
-    const removeBlockedByCompounder =
-        !!focusTokenId &&
-        isV3 &&
-        !!positionTuple &&
-        positionLiquidity > 0n &&
-        isCustodiedByCompounder;
+        (isUserOwned || isCustodiedByCompounder);
+    const isManaged = canRemove && isCustodiedByCompounder;
 
     const [removeOpen, setRemoveOpen] = useState(false);
 
@@ -358,17 +359,6 @@ export default function PoolDetailPage() {
                             Remove
                         </button>
                     )}
-                    {removeBlockedByCompounder && (
-                        <button
-                            type="button"
-                            disabled
-                            title="Auto-managed position. Use Stop in the auto-management section below to withdraw the NFT to your wallet first."
-                            className="inline-flex cursor-not-allowed items-center gap-1.5 rounded-xl border border-arc-border bg-white/[0.04] px-4 py-2 text-sm font-semibold text-arc-text-faint"
-                        >
-                            <Trash2 className="h-4 w-4" />
-                            Remove
-                        </button>
-                    )}
                     <Link
                         href={addLiqHref}
                         className="inline-flex items-center gap-1.5 rounded-xl bg-arc-cta px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-arc-cta-hover"
@@ -401,6 +391,7 @@ export default function PoolDetailPage() {
                     onSuccess={() => {
                         setRemoveOpen(false);
                         void positionQ.refetch();
+                        void ownerOfQ.refetch();
                     }}
                     tokenId={BigInt(focusTokenId!)}
                     poolAddress={pair}
@@ -413,6 +404,7 @@ export default function PoolDetailPage() {
                     tickUpper={positionTickUpper}
                     tokensOwed0={positionTokensOwed0}
                     tokensOwed1={positionTokensOwed1}
+                    isManaged={isManaged}
                 />
             )}
 

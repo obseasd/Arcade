@@ -16,8 +16,10 @@ import {
     usePublicClient,
     useReadContract,
     useWalletClient,
+    useWriteContract,
 } from "wagmi";
 
+import { AUTO_COMPOUNDER_ABI } from "@/lib/abis/autoCompounder";
 import { V3_NPM_ABI, V3_POOL_ABI } from "@/lib/abis/v3-npm";
 import { ADDRESSES } from "@/lib/constants";
 import { Modal } from "@/components/ui/Modal";
@@ -51,6 +53,15 @@ interface Props {
      *  estimate same as ClaimAllFeesModal's per-row preview. */
     tokensOwed0: bigint;
     tokensOwed1: bigint;
+    /** When true, the NFT is currently custodied by the auto-compounder
+     *  (the user transferred it in via safeTransferFrom with a mode
+     *  payload). Removing in this state requires a Stop+Remove sequence:
+     *  first ArcadeAutoCompounder.withdrawPosition pulls the NFT back to
+     *  the user, then the standard NPM multicall closes it. The user
+     *  signs twice. The modal locks pct to 100 in this case (partial
+     *  remove on a managed position would leave the keeper in an
+     *  inconsistent state). */
+    isManaged?: boolean;
 }
 
 const PRESETS = [25, 50, 75, 100] as const;
@@ -90,13 +101,17 @@ export function RemoveLiquidityModalV3({
     tickUpper,
     tokensOwed0,
     tokensOwed1,
+    isManaged = false,
 }: Props) {
     const { address: account } = useAccount();
     const publicClient = usePublicClient();
     const { data: walletClient } = useWalletClient();
+    const { writeContractAsync } = useWriteContract();
     const router = useRouter();
 
-    const [pct, setPct] = useState(100);
+    // Managed positions are locked to a 100% exit: anything else would
+    // leave the keeper's state divergent from the on-chain liquidity.
+    const [pct, setPct] = useState(isManaged ? 100 : 100);
     const [pctCustom, setPctCustom] = useState("");
     const [claimFees, setClaimFees] = useState(true);
     const [slippageBps] = useState(50); // 0.5% default; settings popover can be added later
@@ -149,10 +164,12 @@ export function RemoveLiquidityModalV3({
     }, [sqrtPriceX96, liquidityToRemove, tickLower, tickUpper]);
 
     const onPreset = (preset: number) => {
+        if (isManaged) return;
         setPct(preset);
         setPctCustom("");
     };
     const onCustomChange = (raw: string) => {
+        if (isManaged) return;
         setPctCustom(raw);
         const n = Number(raw);
         if (Number.isFinite(n) && n >= 0 && n <= 100) {
@@ -176,6 +193,23 @@ export function RemoveLiquidityModalV3({
             const deadline = BigInt(
                 Math.floor(Date.now() / 1000) + deadlineMin * 60,
             );
+
+            // 0. Managed-position stop: withdrawPosition pulls the NFT
+            //    back from the AutoCompounder to the user's wallet so
+            //    the subsequent NPM.decreaseLiquidity passes the
+            //    _isApprovedOrOwner gate. Signed FIRST; the user has to
+            //    confirm two txs total in the managed flow.
+            if (isManaged) {
+                const withdrawHash = await writeContractAsync({
+                    address: ADDRESSES.autoCompounder,
+                    abi: AUTO_COMPOUNDER_ABI,
+                    functionName: "withdrawPosition",
+                    args: [tokenId],
+                });
+                await publicClient.waitForTransactionReceipt({
+                    hash: withdrawHash,
+                });
+            }
             const slipDen = 10_000n - BigInt(slippageBps);
             const amount0Min = (preview.amount0 * slipDen) / 10_000n;
             const amount1Min = (preview.amount1 * slipDen) / 10_000n;
@@ -353,10 +387,30 @@ export function RemoveLiquidityModalV3({
             </div>
 
             <div className="space-y-4 p-5">
+                {/* Managed-position banner. Locks the % at 100 and tells
+                    the user this is a 2-signature flow: Stop withdraws
+                    the NFT from the auto-compounder, then the standard
+                    NPM multicall closes it. */}
+                {isManaged && (
+                    <div className="rounded-xl border border-arc-cta-hover/30 bg-arc-cta-hover/5 p-3 text-[11px] text-arc-text-muted">
+                        Auto-managed position: closing requires two
+                        signatures. First the auto-compounder hands the
+                        NFT back to your wallet, then it gets fully
+                        removed and burned. Amount locked at 100%.
+                    </div>
+                )}
                 {/* Percentage picker. Big readout up top so the user reads
                     "X%" before scanning the presets, then the input field
-                    + presets row below for fine control. */}
-                <div className="rounded-xl border border-arc-border bg-white/[0.015] p-4">
+                    + presets row below for fine control. Disabled wholesale
+                    when isManaged because partial removes on a managed
+                    position would diverge the keeper's tracked state from
+                    the on-chain liquidity. */}
+                <div
+                    className={cn(
+                        "rounded-xl border border-arc-border bg-white/[0.015] p-4",
+                        isManaged && "opacity-60",
+                    )}
+                >
                     <div className="mb-3 flex items-baseline justify-between">
                         <div className="text-xs uppercase tracking-wider text-arc-text-muted">
                             Amount to remove
@@ -373,11 +427,13 @@ export function RemoveLiquidityModalV3({
                                     key={p}
                                     type="button"
                                     onClick={() => onPreset(p)}
+                                    disabled={isManaged && p !== 100}
                                     className={cn(
                                         "rounded-lg border px-2 py-2 text-sm font-semibold transition-colors",
                                         active
                                             ? "border-arc-cta-hover bg-arc-cta-hover/10 text-arc-cta-hover"
                                             : "border-arc-border bg-white/[0.015] text-arc-text-muted hover:bg-white/[0.04]",
+                                        isManaged && p !== 100 && "cursor-not-allowed opacity-40 hover:bg-transparent",
                                     )}
                                 >
                                     {p}%
@@ -391,8 +447,9 @@ export function RemoveLiquidityModalV3({
                             inputMode="numeric"
                             value={pctCustom}
                             onChange={(e) => onCustomChange(e.target.value)}
-                            placeholder="Custom %"
-                            className="w-full rounded-lg border border-arc-border bg-white/[0.015] px-3 py-2 text-sm text-arc-text outline-none focus:border-arc-cta-hover"
+                            disabled={isManaged}
+                            placeholder={isManaged ? "Locked at 100%" : "Custom %"}
+                            className="w-full rounded-lg border border-arc-border bg-white/[0.015] px-3 py-2 text-sm text-arc-text outline-none focus:border-arc-cta-hover disabled:cursor-not-allowed disabled:opacity-50"
                         />
                     </div>
                 </div>
@@ -472,7 +529,12 @@ export function RemoveLiquidityModalV3({
                     )}
                 >
                     {submitting ? (
-                        "Removing…"
+                        isManaged ? "Stopping…" : "Removing…"
+                    ) : isManaged ? (
+                        <>
+                            <Trash2 className="h-4 w-4" />
+                            Stop &amp; close position
+                        </>
                     ) : isFullExit ? (
                         <>
                             <Trash2 className="h-4 w-4" />
