@@ -19,6 +19,7 @@ import {
     getSqrtRatioAtTick,
     tickToPriceWithDecimals,
 } from "@/lib/v3-math";
+import { computePendingFees } from "@/lib/v3-fee-math";
 import { cn } from "@/lib/utils";
 
 const USDC_LOWER = ADDRESSES.usdc.toLowerCase();
@@ -144,34 +145,6 @@ export function V3Positions({
     // V3 list as wallet-owned ones now — they're appended to tokenIds
     // and tagged via managedByTokenId so each card knows whether to
     // render the auto-management variant.
-    // Pending fees per managed position. Total earned on a managed
-    // card surfaces "fees the user will eventually receive" so we add
-    // the live pendingFees(tokenId) (= tokensOwed read off the NPM
-    // position) on top of the historical sum from compounder_events.
-    // Without this, a sub-1-USDC pending balance reads as "no fees"
-    // and the user thinks the keeper is stuck even though their
-    // swaps are generating fees just fine.
-    const pendingFeesQ = useReadContracts({
-        contracts: managedMetas.map((m) => ({
-            address: ADDRESSES.autoCompounder,
-            abi: AUTO_COMPOUNDER_ABI,
-            functionName: "pendingFees" as const,
-            args: [m.tokenId] as const,
-        })),
-        query: { enabled: managedMetas.length > 0 && compounderEnabled },
-    });
-    const pendingByTokenId = useMemo(() => {
-        const m = new Map<string, { fees0: bigint; fees1: bigint }>();
-        if (!pendingFeesQ.data) return m;
-        for (let i = 0; i < managedMetas.length; i++) {
-            const r = pendingFeesQ.data[i];
-            if (r?.status !== "success") continue;
-            const [fees0, fees1] = r.result as readonly [bigint, bigint];
-            m.set(managedMetas[i].tokenId.toString(), { fees0, fees1 });
-        }
-        return m;
-    }, [pendingFeesQ.data, managedMetas]);
-
     const managedByTokenId = useMemo(() => {
         const m = new Map<string, ManagedPositionMeta>();
         for (const meta of managedMetas) m.set(meta.tokenId.toString(), meta);
@@ -380,6 +353,8 @@ export function V3Positions({
                     tickLower: Number(r[5]),
                     tickUpper: Number(r[6]),
                     liquidity: r[7],
+                    feeGrowthInside0LastX128: r[8],
+                    feeGrowthInside1LastX128: r[9],
                     tokensOwed0: r[10],
                     tokensOwed1: r[11],
                 };
@@ -461,6 +436,137 @@ export function V3Positions({
         });
         return m;
     }, [slot0Q.data, poolAddrs]);
+
+    // Pending fees for managed positions. NPM.tokensOwed0/1 (= what
+    // ArcadeAutoCompounder.pendingFees returns) only updates on touch,
+    // so a fresh swap-volume run shows 0 until something pokes the
+    // position. To surface live fees in the UI we read the pool's
+    // feeGrowthGlobal + the tick feeGrowthOutside at both ends of the
+    // position's range, then apply the Uniswap V3 inside-vs-outside
+    // formula off-chain (see lib/v3-fee-math.ts). 4 extra reads per
+    // managed position, batched. Wallet-only positions are skipped:
+    // their "Unclaimed fees" row already uses the live tokensOwed
+    // (NPM.collect can sweep those exactly), which is fine for them
+    // because the user can call collect directly to realise.
+    const managedPositionSlots = useMemo(() => {
+        const out: Array<{
+            tokenId: bigint;
+            poolAddr: Address;
+            tickLower: number;
+            tickUpper: number;
+            liquidity: bigint;
+            feeGrowthInside0LastX128: bigint;
+            feeGrowthInside1LastX128: bigint;
+            tokensOwed0: bigint;
+            tokensOwed1: bigint;
+        }> = [];
+        const managedIdSet = new Set(
+            managedMetas.map((m) => m.tokenId.toString()),
+        );
+        for (let i = 0; i < positions.length; i++) {
+            const p = positions[i];
+            if (!managedIdSet.has(p.tokenId.toString())) continue;
+            const poolAddr = poolAddrs[i];
+            if (!poolAddr) continue;
+            out.push({
+                tokenId: p.tokenId,
+                poolAddr,
+                tickLower: p.tickLower,
+                tickUpper: p.tickUpper,
+                liquidity: p.liquidity,
+                feeGrowthInside0LastX128: p.feeGrowthInside0LastX128,
+                feeGrowthInside1LastX128: p.feeGrowthInside1LastX128,
+                tokensOwed0: p.tokensOwed0,
+                tokensOwed1: p.tokensOwed1,
+            });
+        }
+        return out;
+    }, [positions, poolAddrs, managedMetas]);
+
+    const feeGrowthQ = useReadContracts({
+        contracts: managedPositionSlots.flatMap((s) => [
+            {
+                address: s.poolAddr,
+                abi: V3_POOL_ABI,
+                functionName: "feeGrowthGlobal0X128" as const,
+            },
+            {
+                address: s.poolAddr,
+                abi: V3_POOL_ABI,
+                functionName: "feeGrowthGlobal1X128" as const,
+            },
+            {
+                address: s.poolAddr,
+                abi: V3_POOL_ABI,
+                functionName: "ticks" as const,
+                args: [s.tickLower] as const,
+            },
+            {
+                address: s.poolAddr,
+                abi: V3_POOL_ABI,
+                functionName: "ticks" as const,
+                args: [s.tickUpper] as const,
+            },
+        ]),
+        query: { enabled: managedPositionSlots.length > 0 },
+    });
+
+    const pendingByTokenId = useMemo(() => {
+        const m = new Map<string, { fees0: bigint; fees1: bigint }>();
+        if (!feeGrowthQ.data) return m;
+        for (let i = 0; i < managedPositionSlots.length; i++) {
+            const slot = managedPositionSlots[i];
+            const base = i * 4;
+            const g0 = feeGrowthQ.data[base];
+            const g1 = feeGrowthQ.data[base + 1];
+            const tL = feeGrowthQ.data[base + 2];
+            const tU = feeGrowthQ.data[base + 3];
+            if (
+                g0?.status !== "success" ||
+                g1?.status !== "success" ||
+                tL?.status !== "success" ||
+                tU?.status !== "success"
+            ) {
+                continue;
+            }
+            const currentTick = slot0ByPool.get(
+                slot.poolAddr.toLowerCase(),
+            )?.tick;
+            if (currentTick === undefined) continue;
+            const tickLowerData = tL.result as unknown as readonly [
+                bigint,
+                bigint,
+                bigint,
+                bigint,
+                ...unknown[],
+            ];
+            const tickUpperData = tU.result as unknown as readonly [
+                bigint,
+                bigint,
+                bigint,
+                bigint,
+                ...unknown[],
+            ];
+            const fees = computePendingFees({
+                currentTick,
+                tickLower: slot.tickLower,
+                tickUpper: slot.tickUpper,
+                feeGrowthGlobal0X128: g0.result as bigint,
+                feeGrowthGlobal1X128: g1.result as bigint,
+                lowerFeeGrowthOutside0X128: tickLowerData[2],
+                lowerFeeGrowthOutside1X128: tickLowerData[3],
+                upperFeeGrowthOutside0X128: tickUpperData[2],
+                upperFeeGrowthOutside1X128: tickUpperData[3],
+                liquidity: slot.liquidity,
+                feeGrowthInside0LastX128: slot.feeGrowthInside0LastX128,
+                feeGrowthInside1LastX128: slot.feeGrowthInside1LastX128,
+                tokensOwed0: slot.tokensOwed0,
+                tokensOwed1: slot.tokensOwed1,
+            });
+            m.set(slot.tokenId.toString(), fees);
+        }
+        return m;
+    }, [feeGrowthQ.data, managedPositionSlots, slot0ByPool]);
 
     const tokenInfo = useMemo(() => {
         const m: Record<string, { symbol: string; decimals: number }> = {};
