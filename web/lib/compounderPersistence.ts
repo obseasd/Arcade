@@ -607,7 +607,7 @@ export async function insertEvent(input: {
                 ${input.blockNumber ?? null}::BIGINT,
                 ${input.chainBlockAtIso ?? null}::TIMESTAMPTZ
             )
-            ON CONFLICT (tx_hash) DO UPDATE SET
+            ON CONFLICT (tx_hash) WHERE tx_hash IS NOT NULL DO UPDATE SET
                 amount0           = EXCLUDED.amount0,
                 amount1           = EXCLUDED.amount1,
                 protocol_fee0     = EXCLUDED.protocol_fee0,
