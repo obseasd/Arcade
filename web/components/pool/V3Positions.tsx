@@ -144,6 +144,34 @@ export function V3Positions({
     // V3 list as wallet-owned ones now — they're appended to tokenIds
     // and tagged via managedByTokenId so each card knows whether to
     // render the auto-management variant.
+    // Pending fees per managed position. Total earned on a managed
+    // card surfaces "fees the user will eventually receive" so we add
+    // the live pendingFees(tokenId) (= tokensOwed read off the NPM
+    // position) on top of the historical sum from compounder_events.
+    // Without this, a sub-1-USDC pending balance reads as "no fees"
+    // and the user thinks the keeper is stuck even though their
+    // swaps are generating fees just fine.
+    const pendingFeesQ = useReadContracts({
+        contracts: managedMetas.map((m) => ({
+            address: ADDRESSES.autoCompounder,
+            abi: AUTO_COMPOUNDER_ABI,
+            functionName: "pendingFees" as const,
+            args: [m.tokenId] as const,
+        })),
+        query: { enabled: managedMetas.length > 0 && compounderEnabled },
+    });
+    const pendingByTokenId = useMemo(() => {
+        const m = new Map<string, { fees0: bigint; fees1: bigint }>();
+        if (!pendingFeesQ.data) return m;
+        for (let i = 0; i < managedMetas.length; i++) {
+            const r = pendingFeesQ.data[i];
+            if (r?.status !== "success") continue;
+            const [fees0, fees1] = r.result as readonly [bigint, bigint];
+            m.set(managedMetas[i].tokenId.toString(), { fees0, fees1 });
+        }
+        return m;
+    }, [pendingFeesQ.data, managedMetas]);
+
     const managedByTokenId = useMemo(() => {
         const m = new Map<string, ManagedPositionMeta>();
         for (const meta of managedMetas) m.set(meta.tokenId.toString(), meta);
@@ -566,6 +594,10 @@ export function V3Positions({
                                       totalClaimedUsdc: meta.totalClaimedUsdc,
                                       totalClaimedAmount0: meta.totalClaimedAmount0,
                                       totalClaimedAmount1: meta.totalClaimedAmount1,
+                                      pendingFees0:
+                                          pendingByTokenId.get(tokenIdStr)?.fees0,
+                                      pendingFees1:
+                                          pendingByTokenId.get(tokenIdStr)?.fees1,
                                       minFeeMicros: meta.minFeeMicros,
                                       maxSlippageBps: meta.maxSlippageBps,
                                       onStop: () => stopManagement(tokenIdStr),
@@ -620,6 +652,12 @@ interface V3PositionRowProps {
          *  sees "1.23 USDC + 0.0005 ETH" instead of a flat USD number. */
         totalClaimedAmount0?: bigint;
         totalClaimedAmount1?: bigint;
+        /** Live pendingFees(tokenId) from the compounder (= tokensOwed
+         *  on the NPM position). Summed into the displayed Total earned
+         *  so sub-threshold fees that haven't been compound'd yet still
+         *  show up — they're recoverable on Stop+close anyway. */
+        pendingFees0?: bigint;
+        pendingFees1?: bigint;
         minFeeMicros?: bigint;
         maxSlippageBps?: number;
         onStop: () => void | Promise<void>;
@@ -888,42 +926,50 @@ function V3PositionRow({
                 positions show the live "Unclaimed fees" pair. Token
                 symbols render as <TokenIcon> circles in both variants so
                 the row stays compact on narrower grid widths. */}
-            {managed ? (
-                <div className="mt-3 flex items-center justify-between gap-2 rounded-xl border border-arc-border bg-white/[0.015] p-3 text-xs">
-                    <span className="text-arc-text-muted">Total earned</span>
-                    <span className="inline-flex items-center gap-3 tabular-nums">
-                        <span
-                            className={cn(
-                                "inline-flex items-center gap-1.5",
-                                (managed.totalClaimedAmount0 ?? 0n) > 0n
-                                    ? "text-white"
-                                    : "text-arc-text-faint",
-                            )}
-                        >
-                            {formatTok(
-                                managed.totalClaimedAmount0 ?? 0n,
-                                t0Info.decimals,
-                            )}
-                            <TokenIcon symbol={t0Info.symbol} size={14} />
+            {managed ? (() => {
+                // Total earned = compounded/pushed events from DB +
+                // live pending fees on-chain. The pending tier counts
+                // because closing the position now collects them
+                // alongside the principal (the NPM.collect call in the
+                // Remove flow sweeps everything that's owed regardless
+                // of the keeper's threshold).
+                const total0 =
+                    (managed.totalClaimedAmount0 ?? 0n) +
+                    (managed.pendingFees0 ?? 0n);
+                const total1 =
+                    (managed.totalClaimedAmount1 ?? 0n) +
+                    (managed.pendingFees1 ?? 0n);
+                return (
+                    <div className="mt-3 flex items-center justify-between gap-2 rounded-xl border border-arc-border bg-white/[0.015] p-3 text-xs">
+                        <span className="text-arc-text-muted">Total earned</span>
+                        <span className="inline-flex items-center gap-3 tabular-nums">
+                            <span
+                                className={cn(
+                                    "inline-flex items-center gap-1.5",
+                                    total0 > 0n
+                                        ? "text-white"
+                                        : "text-arc-text-faint",
+                                )}
+                            >
+                                {formatTok(total0, t0Info.decimals)}
+                                <TokenIcon symbol={t0Info.symbol} size={14} />
+                            </span>
+                            <span className="text-arc-text-faint">/</span>
+                            <span
+                                className={cn(
+                                    "inline-flex items-center gap-1.5",
+                                    total1 > 0n
+                                        ? "text-white"
+                                        : "text-arc-text-faint",
+                                )}
+                            >
+                                {formatTok(total1, t1Info.decimals)}
+                                <TokenIcon symbol={t1Info.symbol} size={14} />
+                            </span>
                         </span>
-                        <span className="text-arc-text-faint">/</span>
-                        <span
-                            className={cn(
-                                "inline-flex items-center gap-1.5",
-                                (managed.totalClaimedAmount1 ?? 0n) > 0n
-                                    ? "text-white"
-                                    : "text-arc-text-faint",
-                            )}
-                        >
-                            {formatTok(
-                                managed.totalClaimedAmount1 ?? 0n,
-                                t1Info.decimals,
-                            )}
-                            <TokenIcon symbol={t1Info.symbol} size={14} />
-                        </span>
-                    </span>
-                </div>
-            ) : (
+                    </div>
+                );
+            })() : (
                 <div className="mt-3 flex items-center justify-between gap-2 rounded-xl border border-arc-border bg-white/[0.015] p-3 text-xs">
                     <span className="text-arc-text-muted">Unclaimed fees</span>
                     <span className="inline-flex items-center gap-3 tabular-nums">
