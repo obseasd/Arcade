@@ -317,7 +317,7 @@ export function RemoveLiquidityModalV3({
                 poolHref: `/pool/${poolAddress}`,
             });
             addActivity({
-                type: "claim-fees",
+                type: "remove-liquidity",
                 account,
                 token: token0.toLowerCase() === ADDRESSES.usdc.toLowerCase() ? token1 : token0,
                 label: isFullExit

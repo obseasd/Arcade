@@ -10,6 +10,7 @@ import { ADDRESSES, USDC_DECIMALS } from "@/lib/constants";
 import { arcTestnet } from "@/lib/chains";
 import { useApproveIfNeeded } from "@/lib/hooks/useApproveIfNeeded";
 import { pushToast } from "@/lib/toast";
+import { addActivity } from "@/lib/activityFeed";
 import { TokenIcon } from "@/components/ui/TokenIcon";
 import { cn, formatLpBalance, formatToken, formatUSDC } from "@/lib/utils";
 
@@ -342,14 +343,24 @@ function PositionRow({
           );
         }
       }
+      const a0 = fmt(expected0, p.decimals0);
+      const a1 = fmt(expected1, p.decimals1);
       pushToast({
         kind: "liquidity-removed",
         token0: { address: p.token0, symbol: p.symbol0 },
         token1: { address: p.token1, symbol: p.symbol1 },
-        amount0Formatted: fmt(expected0, p.decimals0),
-        amount1Formatted: fmt(expected1, p.decimals1),
+        amount0Formatted: a0,
+        amount1Formatted: a1,
         poolHref: `/pool/${p.pair}`,
         explorerUrl: `${arcTestnet.blockExplorers?.default.url}/tx/${hash}`,
+      });
+      addActivity({
+        type: "remove-liquidity",
+        account,
+        token: p.token0.toLowerCase() === USDC_LOWER ? p.token1 : p.token0,
+        label: `Removed ${p.symbol0} / ${p.symbol1} liquidity`,
+        value: `${a0} ${p.symbol0} + ${a1} ${p.symbol1}`,
+        txHash: hash,
       });
       onRefresh();
     } catch (e: unknown) {
