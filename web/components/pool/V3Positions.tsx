@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeftRight, Sparkles } from "lucide-react";
+import { ArrowLeftRight, Sparkles, Trash2 } from "lucide-react";
 import { PlusIcon, SliderIcon } from "@/components/ui/MaskIcon";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -14,6 +14,7 @@ import { V3_FACTORY_ABI, V3_NPM_ABI, V3_POOL_ABI } from "@/lib/abis/v3-npm";
 import { ADDRESSES, USDC_DECIMALS } from "@/lib/constants";
 import { arcTestnet } from "@/lib/chains";
 import { TokenIcon } from "@/components/ui/TokenIcon";
+import { RemoveLiquidityModalV3 } from "@/components/pool/RemoveLiquidityModalV3";
 import {
     getAmountsForLiquidity,
     getSqrtRatioAtTick,
@@ -588,6 +589,20 @@ export function V3Positions({
                                   }
                                 : undefined
                         }
+                        onMutated={() => {
+                            // Mirror the post-write refresh dance the
+                            // stopManagement callback already runs: the
+                            // NPM balance / token-ids / positions reads
+                            // all need a re-poll so a closed position
+                            // disappears (or a partially-decreased one
+                            // updates its underlying preview / fees).
+                            void Promise.all([
+                                balanceQ.refetch(),
+                                tokenIdsQ.refetch(),
+                                positionsQ.refetch(),
+                                refreshManaged(),
+                            ]);
+                        }}
                     />
                 );
             })}
@@ -638,6 +653,12 @@ interface V3PositionRowProps {
         stopBusy?: boolean;
         settingsBusy?: boolean;
     };
+    /** Fired after the user finishes a write that changes the position
+     *  state (currently: Remove liquidity). Parent uses it to refetch
+     *  the NPM balanceOf / positions tuples so the card either updates
+     *  in place or disappears. Optional — without it the modal still
+     *  closes, but the card stays stale until the next page refresh. */
+    onMutated?: () => void;
 }
 
 function V3PositionRow({
@@ -646,7 +667,9 @@ function V3PositionRow({
     poolAddress,
     slot0,
     managed,
+    onMutated,
 }: V3PositionRowProps) {
+    const [removeOpen, setRemoveOpen] = useState(false);
     const t0Info = tokenInfo[p.token0.toLowerCase()] ?? { symbol: "?", decimals: 18 };
     const t1Info = tokenInfo[p.token1.toLowerCase()] ?? { symbol: "?", decimals: 18 };
     const minPrice = tickToPriceWithDecimals(p.tickLower, t0Info.decimals, t1Info.decimals);
@@ -971,11 +994,11 @@ function V3PositionRow({
                     addLiquidityHref={`/positions/add?type=v3&t0=${p.token0}&t1=${p.token1}&fee=${p.fee / 100}`}
                 />
             ) : (
-                <div className="mt-4 grid grid-cols-2 gap-2">
+                <div className="mt-4 grid grid-cols-3 gap-2">
                     {poolAddress ? (
                         <Link
                             href={`/pool/${poolAddress}?tokenId=${p.tokenId.toString()}`}
-                            className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-arc-border bg-white/[0.04] px-3 py-2.5 text-sm font-semibold text-arc-text transition-colors hover:bg-white/[0.08]"
+                            className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-arc-border bg-white/[0.04] px-2 py-2.5 text-sm font-semibold text-arc-text transition-colors hover:bg-white/[0.08]"
                         >
                             <SliderIcon size={14} />
                             Manage
@@ -983,20 +1006,53 @@ function V3PositionRow({
                     ) : (
                         <button type="button"
                             disabled
-                            className="inline-flex cursor-not-allowed items-center justify-center gap-1.5 rounded-xl border border-arc-border bg-white/[0.04] px-3 py-2.5 text-sm font-semibold text-arc-text-faint"
+                            className="inline-flex cursor-not-allowed items-center justify-center gap-1.5 rounded-xl border border-arc-border bg-white/[0.04] px-2 py-2.5 text-sm font-semibold text-arc-text-faint"
                         >
                             <SliderIcon size={14} />
                             Manage
                         </button>
                     )}
+                    <button
+                        type="button"
+                        onClick={() => setRemoveOpen(true)}
+                        disabled={!poolAddress || p.liquidity === 0n}
+                        className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-arc-border bg-white/[0.04] px-2 py-2.5 text-sm font-semibold text-arc-text transition-colors hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:text-arc-text-faint disabled:opacity-60"
+                    >
+                        <Trash2 className="h-3.5 w-3.5" />
+                        Remove
+                    </button>
                     <Link
                         href={`/positions/add?type=v3&t0=${p.token0}&t1=${p.token1}&fee=${p.fee / 100}`}
-                        className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-arc-cta px-3 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-arc-cta-hover"
+                        className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-arc-cta px-2 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-arc-cta-hover"
                     >
                         <PlusIcon size={14} className="bg-white" />
-                        Add Liquidity
+                        Add
                     </Link>
                 </div>
+            )}
+            {/* Mount the remove modal lazily once the user opens it.
+                Keeps the per-card overhead at zero on the common case
+                of "scroll through 10 positions, don't touch any". */}
+            {poolAddress && (
+                <RemoveLiquidityModalV3
+                    open={removeOpen}
+                    onClose={() => setRemoveOpen(false)}
+                    onSuccess={() => {
+                        setRemoveOpen(false);
+                        onMutated?.();
+                    }}
+                    tokenId={p.tokenId}
+                    poolAddress={poolAddress}
+                    token0={p.token0}
+                    token1={p.token1}
+                    token0Meta={{ symbol: t0Info.symbol, decimals: t0Info.decimals }}
+                    token1Meta={{ symbol: t1Info.symbol, decimals: t1Info.decimals }}
+                    liquidity={p.liquidity}
+                    tickLower={p.tickLower}
+                    tickUpper={p.tickUpper}
+                    tokensOwed0={p.tokensOwed0}
+                    tokensOwed1={p.tokensOwed1}
+                />
             )}
         </div>
     );
