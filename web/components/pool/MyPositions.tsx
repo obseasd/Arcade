@@ -241,13 +241,42 @@ export function MyPositions({
   }
 
   const searchLower = search.trim().toLowerCase();
-  const filtered = searchLower
-    ? positions.filter(
-        (p) =>
-          p.symbol0.toLowerCase().includes(searchLower) ||
-          p.symbol1.toLowerCase().includes(searchLower),
-      )
-    : positions;
+  // Dust filter: skip positions whose USD value < $0.01. Stray sub-cent
+  // LP balances accumulate from rounded-to-zero adds, prior testing on
+  // pairs the user no longer cares about, and an occasional dusting tx.
+  // Showing them clutters the list and reads as "where did this come
+  // from?" since the user usually has no recollection of providing.
+  // We only filter pairs where one side is USDC — exotic non-USDC
+  // pairs (no USD reference) get rendered regardless so we don't hide
+  // anything we can't price.
+  const computeUsdValue = (p: PositionInfo): number | undefined => {
+    if (p.lpTotal === 0n) return undefined;
+    const t0IsUsdc = p.token0.toLowerCase() === USDC_LOWER;
+    const t1IsUsdc = p.token1.toLowerCase() === USDC_LOWER;
+    if (!t0IsUsdc && !t1IsUsdc) return undefined;
+    const amt0 = (p.lpBalance * p.reserve0) / p.lpTotal;
+    const amt1 = (p.lpBalance * p.reserve1) / p.lpTotal;
+    const a0 = Number(formatUnits(amt0, p.decimals0));
+    const a1 = Number(formatUnits(amt1, p.decimals1));
+    const r0 = Number(formatUnits(p.reserve0, p.decimals0));
+    const r1 = Number(formatUnits(p.reserve1, p.decimals1));
+    const usdcPerT0 = t0IsUsdc ? 1 : r0 > 0 ? r1 / r0 : 0;
+    const usdcPerT1 = t1IsUsdc ? 1 : r1 > 0 ? r0 / r1 : 0;
+    return a0 * usdcPerT0 + a1 * usdcPerT1;
+  };
+  const filtered = positions
+    .filter((p) => {
+      if (!searchLower) return true;
+      return (
+        p.symbol0.toLowerCase().includes(searchLower) ||
+        p.symbol1.toLowerCase().includes(searchLower)
+      );
+    })
+    .filter((p) => {
+      const usd = computeUsdValue(p);
+      if (usd === undefined) return true; // can't price, keep
+      return usd >= 0.01;
+    });
 
   if (filtered.length === 0) {
     return (
