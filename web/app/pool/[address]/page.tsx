@@ -4,7 +4,7 @@ import { ArrowLeft, ExternalLink, Plus, TrendingUp, Trash2 } from "lucide-react"
 import Link from "next/link";
 import { useParams, useSearchParams } from "next/navigation";
 import { useMemo, useState } from "react";
-import { Address, erc20Abi, formatUnits, isAddress, zeroAddress } from "viem";
+import { Address, erc20Abi, formatUnits, isAddress, parseAbi, zeroAddress } from "viem";
 import { useAccount, useReadContract } from "wagmi";
 
 import { PAIR_ABI } from "@/lib/abis/dex";
@@ -207,6 +207,39 @@ export default function PoolDetailPage() {
                 ADDRESSES.v3PositionManager !== zeroAddress,
         },
     });
+    // NPM.ownerOf(tokenId) so we know whether this NFT is custodied by
+    // the AutoCompounder. If yes, the Remove flow MUST refuse the call
+    // (the user isn't NPM-owner, NPM.decreaseLiquidity reverts on the
+    // _isApprovedOrOwner gate). The user has to Stop auto-management
+    // first to pull the NFT back to their wallet. V3_NPM_ABI doesn't
+    // include the ERC-721 read methods so we declare a 1-line ownerOf
+    // ABI here instead of widening the shared file.
+    const ownerOfQ = useReadContract({
+        address: ADDRESSES.v3PositionManager,
+        abi: parseAbi([
+            "function ownerOf(uint256 tokenId) view returns (address)",
+        ]),
+        functionName: "ownerOf",
+        args:
+            focusTokenId && isV3 && ADDRESSES.v3PositionManager !== zeroAddress
+                ? [BigInt(focusTokenId)]
+                : undefined,
+        query: {
+            enabled:
+                !!focusTokenId &&
+                isV3 &&
+                ADDRESSES.v3PositionManager !== zeroAddress,
+        },
+    });
+    const positionOwner = ownerOfQ.data as Address | undefined;
+    const isUserOwned =
+        !!positionOwner &&
+        !!account &&
+        positionOwner.toLowerCase() === account.toLowerCase();
+    const isCustodiedByCompounder =
+        !!positionOwner &&
+        positionOwner.toLowerCase() ===
+            ADDRESSES.autoCompounder.toLowerCase();
     const positionTuple = positionQ.data as
         | readonly [
               bigint,
@@ -228,11 +261,22 @@ export default function PoolDetailPage() {
     const positionTickUpper = positionTuple ? Number(positionTuple[6]) : 0;
     const positionTokensOwed0 = positionTuple?.[10] ?? 0n;
     const positionTokensOwed1 = positionTuple?.[11] ?? 0n;
+    // Remove only renders when the NFT is in the user's own wallet AND
+    // has live liquidity. Auto-managed positions (NFT owned by the
+    // Compounder) need a Stop first; the disabled-with-tooltip variant
+    // below makes that explicit.
     const canRemove =
         !!focusTokenId &&
         isV3 &&
         !!positionTuple &&
-        positionLiquidity > 0n;
+        positionLiquidity > 0n &&
+        isUserOwned;
+    const removeBlockedByCompounder =
+        !!focusTokenId &&
+        isV3 &&
+        !!positionTuple &&
+        positionLiquidity > 0n &&
+        isCustodiedByCompounder;
 
     const [removeOpen, setRemoveOpen] = useState(false);
 
@@ -296,17 +340,30 @@ export default function PoolDetailPage() {
                     </div>
                 </div>
                 <div className="flex items-center gap-2">
-                    {/* Remove button surfaces ONLY when the user arrived
-                        via Manage on a specific position card (URL
-                        carries ?tokenId=N) and the NFT actually has
-                        liquidity to remove. Sits to the left of Add
-                        Liquidity to mirror Hyperswap's pool-detail
-                        header ordering. */}
+                    {/* Remove button surfaces when the user arrived via
+                        Manage on a specific position card (URL carries
+                        ?tokenId=N) and the NFT actually has liquidity
+                        to remove. Sits to the left of Add Liquidity to
+                        mirror Hyperswap's pool-detail header ordering.
+                        Auto-managed positions render the button in a
+                        disabled state with a tooltip pointing at Stop
+                        so the user understands WHY Remove is blocked. */}
                     {canRemove && (
                         <button
                             type="button"
                             onClick={() => setRemoveOpen(true)}
                             className="inline-flex items-center gap-1.5 rounded-xl border border-arc-border bg-white/[0.04] px-4 py-2 text-sm font-semibold text-arc-text transition-colors hover:bg-white/[0.08]"
+                        >
+                            <Trash2 className="h-4 w-4" />
+                            Remove
+                        </button>
+                    )}
+                    {removeBlockedByCompounder && (
+                        <button
+                            type="button"
+                            disabled
+                            title="Auto-managed position. Use Stop in the auto-management section below to withdraw the NFT to your wallet first."
+                            className="inline-flex cursor-not-allowed items-center gap-1.5 rounded-xl border border-arc-border bg-white/[0.04] px-4 py-2 text-sm font-semibold text-arc-text-faint"
                         >
                             <Trash2 className="h-4 w-4" />
                             Remove
