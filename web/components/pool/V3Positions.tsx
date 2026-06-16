@@ -140,7 +140,10 @@ export function V3Positions({
         void refreshManaged();
     }, [refreshManaged]);
 
-    const managedCount = managedMetas.length;
+    // Managed positions (custodied by the Compounder) live in the same
+    // V3 list as wallet-owned ones now — they're appended to tokenIds
+    // and tagged via managedByTokenId so each card knows whether to
+    // render the auto-management variant.
     const managedByTokenId = useMemo(() => {
         const m = new Map<string, ManagedPositionMeta>();
         for (const meta of managedMetas) m.set(meta.tokenId.toString(), meta);
@@ -468,26 +471,16 @@ export function V3Positions({
             )
         );
     }
-    if (count === 0) {
-        // When the wallet holds zero NFTs directly BUT has positions
-        // under auto-management, the legacy "no positions yet" message
-        // reads as a bug. Surface the managed count + a deep-link to
-        // the panel below so the user can find their positions.
-        if (managedCount > 0) {
-            return (
-                <div className="arc-card flex flex-col items-center gap-3 p-8 text-center text-sm text-arc-text-muted">
-                    <Sparkles className="h-5 w-5 text-sky-400" />
-                    <div>
-                        You have{" "}
-                        <span className="font-semibold text-arc-text">{managedCount}</span>{" "}
-                        position{managedCount === 1 ? "" : "s"} under auto-management.
-                        Find them in the{" "}
-                        <span className="font-medium text-arc-text">Auto-management</span>{" "}
-                        section below.
-                    </div>
-                </div>
-            );
-        }
+    // 2026-06-16: the "you have N positions under auto-management"
+    // notice used to render here when count === 0 && managedCount > 0
+    // and the auto-management panel was a separate section. Managed
+    // positions now render inline in the V3 list below with the
+    // AUTO-COMPOUND badge, so the notice was misleading: it said "find
+    // them below" but nothing rendered below since the early return
+    // skipped the positions list. We now gate the empty state on
+    // tokenIds.length (= wallet + managed) so the inline cards render
+    // when only the managed leg has entries.
+    if (tokenIds.length === 0) {
         return (
             emptyState ?? (
                 <div className="arc-card p-8 text-center text-sm text-arc-text-muted">

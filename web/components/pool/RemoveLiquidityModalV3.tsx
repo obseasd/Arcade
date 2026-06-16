@@ -99,7 +99,6 @@ export function RemoveLiquidityModalV3({
     const [pct, setPct] = useState(100);
     const [pctCustom, setPctCustom] = useState("");
     const [claimFees, setClaimFees] = useState(true);
-    const [burnNft, setBurnNft] = useState(true);
     const [slippageBps] = useState(50); // 0.5% default; settings popover can be added later
     const [deadlineMin] = useState(20);
     const [submitting, setSubmitting] = useState(false);
@@ -111,7 +110,6 @@ export function RemoveLiquidityModalV3({
             setPct(100);
             setPctCustom("");
             setClaimFees(true);
-            setBurnNft(true);
             setSubmitting(false);
         }
     }, [open]);
@@ -231,11 +229,17 @@ export function RemoveLiquidityModalV3({
                 );
             }
 
-            // 3. If the user removed 100% and asked for a clean wallet,
-            // burn the NFT. The NPM enforces "liquidity == 0 &&
-            // tokensOwed0 == 0 && tokensOwed1 == 0" inside burn(), so
-            // we MUST collect first - which step 2 above already does.
-            if (isFullExit && burnNft) {
+            // 3. Always burn the NFT on a 100% exit. The NPM enforces
+            // "liquidity == 0 && tokensOwed0 == 0 && tokensOwed1 == 0"
+            // inside burn(), so we MUST collect first — which step 2
+            // above already does. We used to gate this on a "Burn NFT"
+            // toggle, but the keep-the-NFT case is a power-user edge
+            // (same-range re-deposit, airdrop farming, downstream
+            // tooling) and the dangling-zero-position confusion it
+            // creates outweighs the savings. Forcing the burn keeps
+            // the wallet clean and matches the user's mental model of
+            // "I closed this — it should be gone".
+            if (isFullExit) {
                 calls.push(
                     encodeFunctionData({
                         abi: V3_NPM_ABI,
@@ -422,9 +426,12 @@ export function RemoveLiquidityModalV3({
                     )}
                 </div>
 
-                {/* Toggles - Claim fees + Burn NFT. Burn only renders
-                    when the user is fully exiting since burn requires
-                    a zeroed-out position. */}
+                {/* Claim fees toggle. On a partial remove this controls
+                    whether the user picks up pre-existing unclaimed
+                    fees in the same tx as the principal. On a 100%
+                    exit the toggle is forced on and the NFT is always
+                    burned afterwards (see exec path) — keeping the
+                    wallet clean. */}
                 <div className="space-y-2">
                     <ToggleRow
                         label="Also claim unclaimed fees"
@@ -438,12 +445,10 @@ export function RemoveLiquidityModalV3({
                         disabled={isFullExit}
                     />
                     {isFullExit && (
-                        <ToggleRow
-                            label="Burn NFT after closing"
-                            sub="Cleans up the empty position from your wallet."
-                            on={burnNft}
-                            onChange={setBurnNft}
-                        />
+                        <div className="rounded-xl border border-arc-border bg-white/[0.015] p-3 text-[11px] text-arc-text-muted">
+                            The NFT will be burned after closing — cleans up
+                            your wallet, the position is gone for good.
+                        </div>
                     )}
                 </div>
 
