@@ -169,7 +169,7 @@ function PositionsInner() {
         {v3Count > 0 && (
           <button type="button"
             onClick={() => setClaimOpen(true)}
-            className="inline-flex items-center gap-1.5 rounded-xl border border-arc-border bg-arc-bg-elevated px-4 py-2 text-sm font-semibold text-arc-text transition-colors hover:bg-white/5"
+            className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-arc-border bg-white/[0.04] px-3 py-2.5 text-sm font-semibold text-arc-text transition-colors hover:bg-white/[0.08]"
           >
             <Sparkles className="h-4 w-4" />
             Claim All Fees
@@ -177,12 +177,12 @@ function PositionsInner() {
         )}
         <button type="button"
           onClick={() => setNewOpen(true)}
-          className="arc-button-primary relative overflow-hidden bg-cover bg-center bg-no-repeat px-5 py-2.5 text-base shadow-[0_10px_30px_-12px_rgba(52,90,120,0.55)] ring-1 ring-arc-cta-hover/40"
+          className="relative inline-flex items-center justify-center gap-1.5 overflow-hidden rounded-xl bg-arc-cta bg-cover bg-center bg-no-repeat px-3 py-2.5 text-sm font-semibold text-white shadow-[0_10px_30px_-12px_rgba(52,90,120,0.55)] ring-1 ring-arc-cta-hover/40 transition-colors hover:bg-arc-cta-hover"
           style={{ backgroundImage: "url('/create%20token.png')" }}
         >
           <span className="pointer-events-none absolute inset-0 bg-gradient-to-r from-black/55 via-black/30 to-black/55" aria-hidden />
-          <span className="relative flex items-center gap-2 font-semibold drop-shadow-[0_1px_2px_rgba(0,0,0,0.85)]">
-            <PlusIcon size={16} className="bg-white" /> New position
+          <span className="relative flex items-center gap-1.5 drop-shadow-[0_1px_2px_rgba(0,0,0,0.85)]">
+            <PlusIcon size={14} className="bg-white" /> New position
           </span>
         </button>
       </div>

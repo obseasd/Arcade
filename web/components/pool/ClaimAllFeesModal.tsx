@@ -498,7 +498,7 @@ export function ClaimAllFeesModal({ open, onClose, onSuccess }: Props) {
                                     className={cn(
                                         "flex w-full items-center justify-between gap-3 rounded-xl border p-3 text-left transition-colors",
                                         isSelected
-                                            ? "border-arc-success bg-arc-success/5"
+                                            ? "border-arc-cta-hover bg-arc-cta-hover/10"
                                             : "border-arc-border bg-white/[0.015] hover:bg-white/[0.04]",
                                     )}
                                 >
@@ -558,7 +558,7 @@ export function ClaimAllFeesModal({ open, onClose, onSuccess }: Props) {
                                         className={cn(
                                             "h-5 w-5 shrink-0",
                                             isSelected
-                                                ? "text-arc-success"
+                                                ? "text-arc-cta-hover"
                                                 : "text-arc-text-faint opacity-50",
                                         )}
                                     />
@@ -584,12 +584,12 @@ export function ClaimAllFeesModal({ open, onClose, onSuccess }: Props) {
                     </div>
                 )}
 
-                <div className="flex items-center gap-2 pt-1">
+                <div className="pt-1">
                     <button type="button"
                         onClick={onClaim}
                         disabled={selected.size === 0 || submitting}
                         className={cn(
-                            "flex-1 rounded-xl py-2.5 text-sm font-semibold transition-colors",
+                            "inline-flex w-full items-center justify-center gap-1.5 rounded-xl py-3 text-sm font-semibold transition-colors",
                             selected.size === 0 || submitting
                                 ? "cursor-not-allowed bg-arc-cta-disabled text-arc-text-muted"
                                 : "bg-arc-cta text-white hover:bg-arc-cta-hover",
@@ -602,12 +602,6 @@ export function ClaimAllFeesModal({ open, onClose, onSuccess }: Props) {
                               : selected.size === 1
                                 ? "Claim"
                                 : "Claim all"}
-                    </button>
-                    <button type="button"
-                        onClick={onClose}
-                        className="rounded-xl border border-arc-border bg-arc-bg-elevated px-4 py-2.5 text-sm font-semibold text-arc-text transition-colors hover:bg-white/5"
-                    >
-                        Cancel
                     </button>
                 </div>
             </div>
