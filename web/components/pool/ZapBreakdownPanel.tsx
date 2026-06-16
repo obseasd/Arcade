@@ -34,6 +34,12 @@ interface Props {
     tokenInIsT0?: boolean;
     /** Active slippage tolerance, bps. */
     slippageBps: number;
+    /** Estimated price impact of the internal swap leg, in basis points
+     *  (10000 = 100%). Computed as (spotPrice - effectivePrice) /
+     *  spotPrice. Surfaced inline so the user sees how much the pool
+     *  price moves against them on thin-liquidity zaps. Omit when the
+     *  parent can't compute reserves yet. */
+    priceImpactBps?: number;
 }
 
 /**
@@ -60,6 +66,7 @@ export function ZapBreakdownPanel({
     expectedAmount1,
     tokenInIsT0,
     slippageBps,
+    priceImpactBps,
 }: Props) {
     if (amountIn === 0n || swapAmount === 0n || expectedOut === 0n) {
         return (
@@ -107,6 +114,23 @@ export function ZapBreakdownPanel({
                 <div className="mt-1 text-[10px] text-arc-text-faint">
                     Paired with the {fmtRaw(remainingIn, tokenIn.decimals)} {tokenIn.symbol} you didn&apos;t swap.
                 </div>
+                {priceImpactBps !== undefined && priceImpactBps > 0 && (
+                    <div
+                        className={cn(
+                            "mt-1.5 flex items-center justify-between border-t border-arc-border/50 pt-1.5 text-[11px]",
+                            priceImpactBps >= 1000
+                                ? "text-arc-danger"
+                                : priceImpactBps >= 300
+                                  ? "text-arc-warn"
+                                  : "text-arc-text-muted",
+                        )}
+                    >
+                        <span>Price impact</span>
+                        <span className="font-semibold tabular-nums">
+                            {fmtPriceImpact(priceImpactBps)}
+                        </span>
+                    </div>
+                )}
             </div>
 
             {/* Pool deposit. For V3 we show what mint() will actually consume
@@ -188,6 +212,17 @@ function fmtRaw(raw: bigint, decimals: number): string {
     if (n < 0.0001) return "<0.0001";
     if (n < 1) return n.toFixed(6);
     return n.toLocaleString(undefined, { maximumFractionDigits: 4 });
+}
+
+/** Render a basis-point price impact as a percentage with sane precision.
+ *  <0.01% reads as a near-zero sub-cent floor so we don't claim "0.00%
+ *  impact" when in fact a few wei are slipping. */
+function fmtPriceImpact(bps: number): string {
+    if (bps < 1) return "<0.01%";
+    const pct = bps / 100;
+    if (pct < 1) return `-${pct.toFixed(2)}%`;
+    if (pct < 10) return `-${pct.toFixed(2)}%`;
+    return `-${pct.toFixed(1)}%`;
 }
 
 function abbreviate(n: bigint): string {

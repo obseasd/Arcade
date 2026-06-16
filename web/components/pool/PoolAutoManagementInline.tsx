@@ -79,20 +79,41 @@ async function readRowsForPool(
         return out;
     }
 
-    // Two reads per tokenId; viem batches over HTTP.
-    const contracts = tokenIds.flatMap((tokenId) => [
-        { address: npm, abi: V3_NPM_ABI, functionName: "positions" as const, args: [tokenId] as const },
-        { address: compounder, abi: AUTO_COMPOUNDER_ABI, functionName: "configs" as const, args: [tokenId] as const },
+    // 2026-06-16 fix: previous version used client.multicall() which
+    // viem REQUIRES a deployed Multicall3 contract for. Arc testnet has
+    // no working Multicall3 (memo arc-multicall3-trap), so the call
+    // threw at runtime, the surrounding try/catch swallowed it, and
+    // the Auto-management section silently rendered nothing for every
+    // user with a managed position. Replaced with parallel
+    // readContract calls. The wagmi-injected HTTP transport coalesces
+    // the underlying eth_call requests into a single JSON-RPC batch
+    // (batch: { wait: 50 }), so wall-clock cost is the same one
+    // round-trip the multicall promised.
+    const reads = tokenIds.flatMap((tokenId) => [
+        client
+            .readContract({
+                address: npm,
+                abi: V3_NPM_ABI,
+                functionName: "positions",
+                args: [tokenId],
+            })
+            .then(
+                (r) => ({ status: "success" as const, result: r }),
+                () => ({ status: "failure" as const, result: undefined }),
+            ),
+        client
+            .readContract({
+                address: compounder,
+                abi: AUTO_COMPOUNDER_ABI,
+                functionName: "configs",
+                args: [tokenId],
+            })
+            .then(
+                (r) => ({ status: "success" as const, result: r }),
+                () => ({ status: "failure" as const, result: undefined }),
+            ),
     ]);
-    let results: readonly { status: "success" | "failure"; result?: unknown }[];
-    try {
-        results = await client.multicall({
-            contracts,
-            allowFailure: true,
-        });
-    } catch {
-        return out;
-    }
+    const results = await Promise.all(reads);
 
     for (let i = 0; i < tokenIds.length; i++) {
         const tokenId = tokenIds[i];

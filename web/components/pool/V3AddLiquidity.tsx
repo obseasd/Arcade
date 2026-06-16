@@ -464,6 +464,32 @@ export function V3AddLiquidity({
           }
         | undefined;
 
+    // V3 zap price impact (bps). Derives the spot rate from sqrtPriceX96
+    // (token1 per token0 in raw units) then compares against the
+    // effective rate the quoter returned. Thin-liquidity / wide-range
+    // mints can move the price double-digit % per swap leg and the
+    // user only saw it via the LP receipt. Surfaced inline now.
+    const zapPriceImpactBps: number | undefined = useMemo(() => {
+        if (!v3Quote || sqrtPriceX96 === 0n) return undefined;
+        const { swapAmount, expectedOut } = v3Quote;
+        if (swapAmount === 0n || expectedOut === 0n) return undefined;
+        const Q192 = 1n << 192n;
+        const sq2 = sqrtPriceX96 * sqrtPriceX96;
+        // idealOut = swapAmount * spotPrice
+        //   if paying token0:  spotPrice (t1/t0) = sq2 / Q192
+        //     => idealOut = swapAmount * sq2 / Q192
+        //   if paying token1:  spotPrice (t0/t1) = Q192 / sq2
+        //     => idealOut = swapAmount * Q192 / sq2
+        const idealOut =
+            zapTokenSide === "0"
+                ? (swapAmount * sq2) / Q192
+                : (swapAmount * Q192) / sq2;
+        if (idealOut === 0n) return undefined;
+        if (expectedOut >= idealOut) return 0;
+        const bps = Number(((idealOut - expectedOut) * 10_000n) / idealOut);
+        return Math.max(0, Math.min(10_000, bps));
+    }, [v3Quote, sqrtPriceX96, zapTokenSide]);
+
     // Out-of-range single-sided logic only makes sense when a pool already
     // exists (we know the current tick). On a fresh pool the user is
     // SETTING the initial price via the midpoint of their range, so both
@@ -1367,6 +1393,7 @@ export function V3AddLiquidity({
                        address). */
                     tokenInIsT0={zapTokenSide === "0"}
                     slippageBps={slippageBps}
+                    priceImpactBps={zapPriceImpactBps}
                 />
             )}
 

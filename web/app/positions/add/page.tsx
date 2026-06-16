@@ -235,6 +235,37 @@ function AddLiquidityInner() {
         | readonly [bigint, bigint, bigint]
         | undefined;
 
+    // Zap price impact (bps). Computes how far the spot price moved
+    // against the user during the internal swap leg. Critical signal for
+    // thin-liquidity pools (a $90 swap on a $35 TVL memecoin pool can
+    // burn 60-70% to curve movement, and the user only saw it after
+    // signing). Formula: 1 - (expectedOut / swapAmount) / (rOut / rIn)
+    // = (rIn * rOut - expectedOut * rIn / swapAmount * rOut) … rewritten
+    // as integer arithmetic below to stay in bigint land.
+    const zapPriceImpactBps: number | undefined = useMemo(() => {
+        if (!zapQuote || !reservesQ.data || !token0Q.data || !tokenB) return undefined;
+        const [r0, r1] = reservesQ.data as [bigint, bigint, number];
+        const isAFirst =
+            tokenA.address.toLowerCase() ===
+            (token0Q.data as Address).toLowerCase();
+        const [reserveIn, reserveOut] = isAFirst ? [r0, r1] : [r1, r0];
+        const swapAmount = zapQuote[0];
+        const expectedOut = zapQuote[1];
+        if (
+            reserveIn === 0n ||
+            reserveOut === 0n ||
+            swapAmount === 0n ||
+            expectedOut === 0n
+        ) {
+            return undefined;
+        }
+        const numerator = expectedOut * reserveIn;
+        const denominator = swapAmount * reserveOut;
+        if (denominator === 0n || numerator >= denominator) return 0;
+        const bps = Number(((denominator - numerator) * 10_000n) / denominator);
+        return Math.max(0, Math.min(10_000, bps));
+    }, [zapQuote, reservesQ.data, token0Q.data, tokenA.address, tokenB]);
+
     const { pricePerA, pricePerB, sharePct } = usePoolEstimates({
         amountA,
         amountB,
@@ -599,6 +630,7 @@ function AddLiquidityInner() {
                             expectedOut={zapQuote[1]}
                             expectedLp={zapQuote[2]}
                             slippageBps={slippageBps}
+                            priceImpactBps={zapPriceImpactBps}
                         />
                     </div>
                 )}
