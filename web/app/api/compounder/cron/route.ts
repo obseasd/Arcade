@@ -668,16 +668,32 @@ async function onTxSubmitted(ctx: SubmittedContext): Promise<void> {
                 .then((v) => (v as string | null) ?? null)
                 .catch(() => null as string | null),
         ]);
-        await insertEvent({
-            tokenId: ctx.position.tokenId,
-            eventType: ctx.kind === "compound" ? "Compounded" : "FeesPushed",
-            amount0: resolvedFee0.toString(),
-            amount1: resolvedFee1.toString(),
-            usdValueMicros: usdValueMicros.toString(),
-            txHash: ctx.hash,
-            blockNumber: receipt.blockNumber.toString(),
-            chainBlockAtIso,
-        });
+        // 2026-06-16: insertEvent now throws on schema errors instead of
+        // returning false silently. Catch here so a single bad row does
+        // not blow up the rest of onTxSubmitted (lastActionAt already
+        // stamped, summary.triggered already incremented). The
+        // reconcile cron will heal the missing row on its next sweep
+        // via the ON CONFLICT (tx_hash) heal path.
+        try {
+            await insertEvent({
+                tokenId: ctx.position.tokenId,
+                eventType: ctx.kind === "compound" ? "Compounded" : "FeesPushed",
+                amount0: resolvedFee0.toString(),
+                amount1: resolvedFee1.toString(),
+                usdValueMicros: usdValueMicros.toString(),
+                txHash: ctx.hash,
+                blockNumber: receipt.blockNumber.toString(),
+                chainBlockAtIso,
+            });
+        } catch (err) {
+            // eslint-disable-next-line no-console
+            console.error(
+                "[cron] insertEvent throw — row missing, will reconcile later:",
+                ctx.position.tokenId,
+                ctx.hash,
+                err,
+            );
+        }
     } else {
         ctx.summary.failed++;
         await enqueueAction(ctx.position.tokenId, ctx.kind, {

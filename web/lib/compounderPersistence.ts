@@ -619,8 +619,14 @@ export async function insertEvent(input: {
         `;
         return true;
     } catch (err) {
+        // 2026-06-16 follow-up: the swallow-return-false path hid every
+        // schema error during the auto-compounder migration. Backfill /
+        // reconcile callers got `ok: false` with no detail and Vercel
+        // logs were the only diagnostic. Re-throw so the caller's
+        // try/catch can surface the actual postgres error in the API
+        // response. Callers without a try/catch must wrap us themselves.
         console.error("[compounder] insertEvent failed:", err);
-        return false;
+        throw err;
     }
 }
 
