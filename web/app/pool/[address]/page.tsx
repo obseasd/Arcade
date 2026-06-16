@@ -1,20 +1,21 @@
 "use client";
 
-import { ArrowLeft, ExternalLink, Plus, TrendingUp } from "lucide-react";
+import { ArrowLeft, ExternalLink, Plus, TrendingUp, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useParams, useSearchParams } from "next/navigation";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { Address, erc20Abi, formatUnits, isAddress, zeroAddress } from "viem";
 import { useAccount, useReadContract } from "wagmi";
 
 import { PAIR_ABI } from "@/lib/abis/dex";
-import { V3_POOL_ABI } from "@/lib/abis/v3-npm";
+import { V3_NPM_ABI, V3_POOL_ABI } from "@/lib/abis/v3-npm";
 import { ADDRESSES, USDC_DECIMALS } from "@/lib/constants";
 import { arcTestnet } from "@/lib/chains";
 import { TokenIcon } from "@/components/ui/TokenIcon";
 import { tickToPriceWithDecimals } from "@/lib/v3-math";
 import { cn, formatAddress, formatUsd } from "@/lib/utils";
 import { PoolAutoManagementInline } from "@/components/pool/PoolAutoManagementInline";
+import { RemoveLiquidityModalV3 } from "@/components/pool/RemoveLiquidityModalV3";
 
 const USDC_LOWER = ADDRESSES.usdc.toLowerCase();
 
@@ -187,6 +188,54 @@ export default function PoolDetailPage() {
     const v3CurrentPrice = isV3 && token0Meta && token1Meta
         ? tickToPriceWithDecimals(v3Tick, token0Meta.decimals, token1Meta.decimals)
         : 0;
+    // When the user arrived via Manage on a specific position card, fetch
+    // that NFT's full state so the Remove button can pop the modal with
+    // accurate liquidity / ticks / tokensOwed. Skipped on V2 pools and
+    // when the URL has no tokenId hint.
+    const positionQ = useReadContract({
+        address: ADDRESSES.v3PositionManager,
+        abi: V3_NPM_ABI,
+        functionName: "positions",
+        args:
+            focusTokenId && isV3 && ADDRESSES.v3PositionManager !== zeroAddress
+                ? [BigInt(focusTokenId)]
+                : undefined,
+        query: {
+            enabled:
+                !!focusTokenId &&
+                isV3 &&
+                ADDRESSES.v3PositionManager !== zeroAddress,
+        },
+    });
+    const positionTuple = positionQ.data as
+        | readonly [
+              bigint,
+              Address,
+              Address,
+              Address,
+              number,
+              number,
+              number,
+              bigint,
+              bigint,
+              bigint,
+              bigint,
+              bigint,
+          ]
+        | undefined;
+    const positionLiquidity = positionTuple?.[7] ?? 0n;
+    const positionTickLower = positionTuple ? Number(positionTuple[5]) : 0;
+    const positionTickUpper = positionTuple ? Number(positionTuple[6]) : 0;
+    const positionTokensOwed0 = positionTuple?.[10] ?? 0n;
+    const positionTokensOwed1 = positionTuple?.[11] ?? 0n;
+    const canRemove =
+        !!focusTokenId &&
+        isV3 &&
+        !!positionTuple &&
+        positionLiquidity > 0n;
+
+    const [removeOpen, setRemoveOpen] = useState(false);
+
     const v3T0Bal = (t0BalQ.data as bigint | undefined) ?? 0n;
     const v3T1Bal = (t1BalQ.data as bigint | undefined) ?? 0n;
     // V3 TVL ~= USDC side x 2. Pick whichever leg is USDC.
@@ -247,6 +296,22 @@ export default function PoolDetailPage() {
                     </div>
                 </div>
                 <div className="flex items-center gap-2">
+                    {/* Remove button surfaces ONLY when the user arrived
+                        via Manage on a specific position card (URL
+                        carries ?tokenId=N) and the NFT actually has
+                        liquidity to remove. Sits to the left of Add
+                        Liquidity to mirror Hyperswap's pool-detail
+                        header ordering. */}
+                    {canRemove && (
+                        <button
+                            type="button"
+                            onClick={() => setRemoveOpen(true)}
+                            className="inline-flex items-center gap-1.5 rounded-xl border border-arc-border bg-white/[0.04] px-4 py-2 text-sm font-semibold text-arc-text transition-colors hover:bg-white/[0.08]"
+                        >
+                            <Trash2 className="h-4 w-4" />
+                            Remove
+                        </button>
+                    )}
                     <Link
                         href={addLiqHref}
                         className="inline-flex items-center gap-1.5 rounded-xl bg-arc-cta px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-arc-cta-hover"
@@ -267,6 +332,32 @@ export default function PoolDetailPage() {
                     </Link>
                 </div>
             </div>
+
+            {/* Lazy-mount the Remove modal. The button only renders when
+                positionQ resolved with non-zero liquidity, so by the time
+                this section runs everything below is guaranteed to be
+                defined. */}
+            {canRemove && token0 && token1 && token0Meta && token1Meta && (
+                <RemoveLiquidityModalV3
+                    open={removeOpen}
+                    onClose={() => setRemoveOpen(false)}
+                    onSuccess={() => {
+                        setRemoveOpen(false);
+                        void positionQ.refetch();
+                    }}
+                    tokenId={BigInt(focusTokenId!)}
+                    poolAddress={pair}
+                    token0={token0}
+                    token1={token1}
+                    token0Meta={token0Meta}
+                    token1Meta={token1Meta}
+                    liquidity={positionLiquidity}
+                    tickLower={positionTickLower}
+                    tickUpper={positionTickUpper}
+                    tokensOwed0={positionTokensOwed0}
+                    tokensOwed1={positionTokensOwed1}
+                />
+            )}
 
             {/* KPI strip. TVL surfaces from on-chain reserves (V2) or
                 USDC-leg x 2 (V3); volume/fees ship with ArcLens. */}
