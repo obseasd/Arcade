@@ -261,7 +261,26 @@ export async function getAggregateStats(): Promise<StatsSnapshot> {
     const volumeResults = await Promise.all(
         allLaunchpads.map((a) => sumLaunchpadVolume(client, a, fromBlock, head)),
     );
-    const volumeUsdcMicros = volumeResults.reduce((acc, n) => acc + n, 0n);
+    // V3 swap volume comes through the pool side (router emits no
+    // Swap), so we enumerate USDC-touching pools from every V3 factory
+    // we ship and sum the absolute USDC delta per Swap event. Adds
+    // every concentrated-LP trade — including the user's own /swap
+    // USDC<->CL flow that was invisible before this hook.
+    const v3FactoryAddrs: Address[] = [
+        ADDRESSES.v3Factory,
+        "0x4774F5C79201A4f5b62a0d23064233a8b6382581", // gen 8 v3 factory
+    ].filter(
+        (a): a is Address =>
+            !!a && a !== "0x0000000000000000000000000000000000000000",
+    );
+    const v3VolumeUsdcMicros = await sumV3SwapVolume(
+        client,
+        v3FactoryAddrs,
+        fromBlock,
+        head,
+    );
+    const volumeUsdcMicros =
+        volumeResults.reduce((acc, n) => acc + n, 0n) + v3VolumeUsdcMicros;
     const v4TokensLaunched = ADDRESSES.v4Launchpad
         ? await countLaunchpadEvents(client, ADDRESSES.v4Launchpad, fromBlock, head)
         : 0;
@@ -410,6 +429,21 @@ const BUY_TOPIC = keccak256(
 const SELL_TOPIC = keccak256(
     toHex("Sell(address,address,uint256,uint256,uint256)"),
 );
+
+// Uniswap V3 pool / factory event topics. We use the pool-side Swap
+// (not the router) because the router doesn't emit one — every V3 trade
+// boils down to a pool.Swap. PoolCreated lets us enumerate pools off
+// the factory so we don't have to scan every Swap on the network and
+// then filter (Arc has more V3 stacks than just Arcade).
+const POOL_CREATED_TOPIC = keccak256(
+    toHex("PoolCreated(address,address,uint24,int24,address)"),
+);
+const SWAP_EVT_ABI = parseAbiItem(
+    "event Swap(address indexed sender, address indexed recipient, int256 amount0, int256 amount1, uint160 sqrtPriceX96, uint128 liquidity, int24 tick)",
+);
+const SWAP_TOPIC = keccak256(
+    toHex("Swap(address,address,int256,int256,uint160,uint128,int24)"),
+);
 // Sanity ceiling per individual event - any single Buy/Sell larger
 // than this is treated as decoding noise and dropped. The launchpad
 // graduates at 20k USDC so a single Buy of more than ~1M USDC is
@@ -481,6 +515,145 @@ async function sumLaunchpadVolume(
                         // decode failure - signature mismatch on a prior
                         // generation, malformed log. Drop silently so a
                         // single bad event does not poison the window.
+                    }
+                }
+                return acc;
+            } catch {
+                return 0n;
+            }
+        }),
+    );
+    return sums.reduce((a, b) => a + b, 0n);
+}
+
+/**
+ * Sums |USDC delta| across every V3 pool swap that touches USDC. The
+ * router doesn't emit a Swap event so we go through the pool side:
+ *
+ *   1. Enumerate Arcade V3 pools from PoolCreated events on each
+ *      known factory (current + every historical generation we still
+ *      want to count). The decoded args give us pool address +
+ *      token0 + token1, which lets us pre-filter to USDC-touching
+ *      pools without an extra RPC.
+ *   2. Scan Swap events across the filtered pool set in one
+ *      multi-address getLogs per block window. Each Swap log carries
+ *      signed amount0 / amount1; we read whichever side is USDC for
+ *      that pool, take its absolute value, and sum.
+ *
+ * Single-tx swaps emit one Swap; multi-hop swaps emit one per leg, so
+ * a USDC->A->USDC arb would double-count. That's fine here: the
+ * dashboard is reporting "USDC routed", not "round-trip USDC". A more
+ * precise per-trade accounting lands with the Ponder indexer.
+ *
+ * Empty array of factories (none configured in env) returns 0 so the
+ * caller doesn't have to guard.
+ */
+async function sumV3SwapVolume(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    client: any,
+    factories: Address[],
+    fromBlock: bigint,
+    head: bigint,
+): Promise<bigint> {
+    if (factories.length === 0) return 0n;
+    const usdc = ADDRESSES.usdc.toLowerCase();
+
+    // 1. Enumerate USDC-touching pools from every factory in parallel.
+    const factoryWindows: Array<{ from: bigint; to: bigint }> = [];
+    for (let from = fromBlock; from <= head; from += BLOCK_WINDOW) {
+        const to = from + BLOCK_WINDOW - 1n > head ? head : from + BLOCK_WINDOW - 1n;
+        factoryWindows.push({ from, to });
+    }
+    /** Map<lowercased pool address, 0 if USDC = token0, 1 if USDC = token1>. */
+    const usdcPools = new Map<string, 0 | 1>();
+    await Promise.all(
+        factories.flatMap((factory) =>
+            factoryWindows.map(async ({ from, to }) => {
+                try {
+                    const logs = await client.getLogs({
+                        address: factory,
+                        topics: [POOL_CREATED_TOPIC],
+                        fromBlock: from,
+                        toBlock: to,
+                    });
+                    for (const log of logs) {
+                        try {
+                            const decoded = decodeEventLog({
+                                abi: [
+                                    parseAbiItem(
+                                        "event PoolCreated(address indexed token0, address indexed token1, uint24 indexed fee, int24 tickSpacing, address pool)",
+                                    ),
+                                ],
+                                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                                data: (log as any).data,
+                                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                                topics: (log as any).topics,
+                            });
+                            const args = decoded.args as unknown as {
+                                token0: Address;
+                                token1: Address;
+                                pool: Address;
+                            };
+                            const t0 = args.token0.toLowerCase();
+                            const t1 = args.token1.toLowerCase();
+                            if (t0 === usdc)
+                                usdcPools.set(args.pool.toLowerCase(), 0);
+                            else if (t1 === usdc)
+                                usdcPools.set(args.pool.toLowerCase(), 1);
+                        } catch {
+                            /* decode noise, skip */
+                        }
+                    }
+                } catch {
+                    /* window failed, skip */
+                }
+            }),
+        ),
+    );
+
+    if (usdcPools.size === 0) return 0n;
+    const poolAddrs = Array.from(usdcPools.keys()) as Address[];
+
+    // 2. Scan Swap events across the USDC-touching pools.
+    const swapWindows: Array<{ from: bigint; to: bigint }> = [];
+    for (let from = fromBlock; from <= head; from += BLOCK_WINDOW) {
+        const to = from + BLOCK_WINDOW - 1n > head ? head : from + BLOCK_WINDOW - 1n;
+        swapWindows.push({ from, to });
+    }
+    const sums = await Promise.all(
+        swapWindows.map(async ({ from, to }) => {
+            try {
+                const logs = await client.getLogs({
+                    address: poolAddrs,
+                    topics: [SWAP_TOPIC],
+                    fromBlock: from,
+                    toBlock: to,
+                });
+                let acc = 0n;
+                for (const log of logs) {
+                    try {
+                        const usdcSide = usdcPools.get(
+                            (log as { address: string }).address.toLowerCase(),
+                        );
+                        if (usdcSide === undefined) continue;
+                        const decoded = decodeEventLog({
+                            abi: [SWAP_EVT_ABI],
+                            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                            data: (log as any).data,
+                            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                            topics: (log as any).topics,
+                        });
+                        const args = decoded.args as unknown as {
+                            amount0: bigint;
+                            amount1: bigint;
+                        };
+                        const raw = usdcSide === 0 ? args.amount0 : args.amount1;
+                        const abs = raw < 0n ? -raw : raw;
+                        if (abs > 0n && abs < MAX_SANE_EVENT_MICROS) {
+                            acc += abs;
+                        }
+                    } catch {
+                        /* decode failure, skip */
                     }
                 }
                 return acc;
