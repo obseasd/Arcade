@@ -2,12 +2,10 @@
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
-import { Address, encodeFunctionData, erc20Abi, formatUnits, parseUnits } from "viem";
+import { Address, erc20Abi, formatUnits, parseUnits } from "viem";
 import { useAccount, usePublicClient, useReadContract, useReadContracts, useWriteContract } from "wagmi";
 import { LAUNCHPAD_ABI } from "@/lib/abis/launchpad";
-import { MEMO_ABI, MEMO_ADDRESS } from "@/lib/abis/memo";
 import { V3_POOL_ABI, V3_QUOTER_ABI, V3_ROUTER_ABI } from "@/lib/abis/v3";
-import { useTradeMemo } from "@/lib/hooks/useTradeMemo";
 import { ADDRESSES, LAUNCHPAD_TOKEN_DECIMALS, USDC_DECIMALS } from "@/lib/constants";
 import { AmountInput } from "@/components/ui/AmountInput";
 import { TokenIcon } from "@/components/ui/TokenIcon";
@@ -113,7 +111,6 @@ export function ClankerTradePanel({ token, symbol, pool, image, onTradeSuccess }
 
   const { ensureAllowance } = useApproveIfNeeded(side === "buy" ? ADDRESSES.usdc : token, ADDRESSES.v3Router);
   const { writeContractAsync } = useWriteContract();
-  const memo = useTradeMemo();
 
   const onTrade = async () => {
     if (!account || amountRaw === 0n || !isUsdcPaired || fee === 0) return;
@@ -126,31 +123,12 @@ export function ClankerTradePanel({ token, symbol, pool, image, onTradeSuccess }
         side === "buy"
           ? ([ADDRESSES.usdc, token, fee, account, amountRaw, minOut, deadline] as const)
           : ([token, ADDRESSES.usdc, fee, account, amountRaw, minOut, deadline] as const);
-      // Memo-wrap when the URL carries ?ref or ?campaign — callFrom
-      // preserves msg.sender, so V3 router still pulls USDC from the
-      // EOA and sends the output back to it. Bare call otherwise.
-      const hash = memo
-        ? await writeContractAsync({
-            address: MEMO_ADDRESS,
-            abi: MEMO_ABI,
-            functionName: "memo",
-            args: [
-              ADDRESSES.v3Router,
-              encodeFunctionData({
-                abi: V3_ROUTER_ABI,
-                functionName: "exactInputSingle",
-                args,
-              }),
-              memo.id,
-              memo.data,
-            ],
-          })
-        : await writeContractAsync({
-            address: ADDRESSES.v3Router,
-            abi: V3_ROUTER_ABI,
-            functionName: "exactInputSingle",
-            args,
-          });
+      const hash = await writeContractAsync({
+        address: ADDRESSES.v3Router,
+        abi: V3_ROUTER_ABI,
+        functionName: "exactInputSingle",
+        args,
+      });
       // Audit 2026-06-11 UX-C-2: receipt.status check. Without this gate
       // a reverted CLANKER_V3 buy/sell (anti-sniper skim slippage,
       // pool ratio drift) still cleared the form and pushed a green toast.
