@@ -73,11 +73,18 @@ export const wagmiConfig = getDefaultConfig({
     // launchpad image metadata scanning while staying on Alchemy for
     // the cheap reads. retryCount: 0 on each leg so we don't multiply
     // out the failure latency before rotating.
+    // 2026-06-17 Arc v0.7.2 hardfork (active 06-18 12:00 UTC) introduces a
+    // 100-entry cap per JSON-RPC batch (--arc.rpc.max-batch-entries).
+    // Larger batches return -32600 BEFORE processing. viem's batch.batchSize
+    // defaults to 1000, so without an explicit cap our useReadContracts on
+    // /launchpad / /positions would silently start failing the moment the
+    // hardfork lands. Pin to 90 (small safety margin) so we never trip the
+    // node-side cap even if it's tightened further later.
     [arcTestnet.id]: fallback(
       [
-        http(resolveArcRpc(), { batch: { wait: 50 }, retryCount: 0 }),
-        http("https://rpc.testnet.arc.network", { batch: { wait: 50 }, retryCount: 0 }),
-        http("https://5042002.rpc.thirdweb.com", { batch: { wait: 50 }, retryCount: 0 }),
+        http(resolveArcRpc(), { batch: { wait: 50, batchSize: 90 }, retryCount: 0 }),
+        http("https://rpc.testnet.arc.network", { batch: { wait: 50, batchSize: 90 }, retryCount: 0 }),
+        http("https://5042002.rpc.thirdweb.com", { batch: { wait: 50, batchSize: 90 }, retryCount: 0 }),
       ],
       { rank: false },
     ),
