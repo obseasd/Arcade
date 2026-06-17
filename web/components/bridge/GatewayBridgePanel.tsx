@@ -62,6 +62,7 @@ const TESTNET_SOURCES: {
 interface GatewayBalance {
     confirmed: string;
     pending: string;
+    breakdown: { chain: string; confirmed: string; pending: string }[];
     raw?: unknown;
 }
 
@@ -89,31 +90,43 @@ export function GatewayBridgePanel() {
         }
         setBalanceLoading(true);
         try {
-            // App Kit's UnifiedBalance.getBalances returns aggregated
-            // confirmed + pending across every Gateway-supported chain.
-            // We render the confirmed/pending split because the
-            // Unified Balance Kit spec (and our project memory) flags
-            // collapsing them into one number as a UX trap.
+            // 2026-06-17 round 3 fix: the SDK shape is
+            // sources: { address, chains: [...] }
+            // NOT { account } as I had it. With the wrong shape the
+            // API silently returns 0 even when there's a confirmed
+            // deposit (observed on Base Sepolia tx
+            // 0xdce6bb8d...95 which DID land USDC at the Gateway
+            // Wallet 0x0077...19b9). Pass every testnet chain we
+            // expose so the breakdown lists each one with its
+            // confirmed + pending split.
+            const chains = TESTNET_SOURCES.map((s) => s.id);
             const result = (await kit.unifiedBalance.getBalances({
                 token: "USDC",
-                sources: { account } as never,
+                sources: { address: account, chains } as never,
                 includePending: true,
             } as never)) as unknown as {
                 totalConfirmedBalance?: string;
                 totalPendingBalance?: string;
+                breakdown?: {
+                    chain: string;
+                    confirmedBalance?: string;
+                    pendingBalance?: string;
+                }[];
             };
             setBalance({
                 confirmed: result?.totalConfirmedBalance ?? "0",
                 pending: result?.totalPendingBalance ?? "0",
+                breakdown: (result?.breakdown ?? []).map((b) => ({
+                    chain: b.chain,
+                    confirmed: b.confirmedBalance ?? "0",
+                    pending: b.pendingBalance ?? "0",
+                })),
                 raw: result,
             });
         } catch (err) {
-            // Most failure paths here are "user doesn't have a Gateway
-            // balance yet" — silently fall through rather than surface
-            // a scary error toast.
             // eslint-disable-next-line no-console
             console.warn("[gateway] getBalances failed", err);
-            setBalance({ confirmed: "0", pending: "0" });
+            setBalance({ confirmed: "0", pending: "0", breakdown: [] });
         } finally {
             setBalanceLoading(false);
         }
@@ -248,6 +261,24 @@ export function GatewayBridgePanel() {
                         <span className="tabular-nums">{balance.pending} USDC</span>
                     </div>
                 )}
+                {balance && balance.breakdown.some((b) => Number(b.confirmed) > 0 || Number(b.pending) > 0) && (
+                    <div className="mt-2 space-y-1 border-t border-arc-border/40 pt-2 text-[11px] text-arc-text-muted">
+                        <div className="uppercase tracking-wider text-arc-text-faint">By chain</div>
+                        {balance.breakdown
+                            .filter((b) => Number(b.confirmed) > 0 || Number(b.pending) > 0)
+                            .map((b) => (
+                                <div key={b.chain} className="flex justify-between gap-2 tabular-nums">
+                                    <span>{b.chain}</span>
+                                    <span>
+                                        {b.confirmed}
+                                        {Number(b.pending) > 0 && (
+                                            <span className="text-arc-warn"> +{b.pending} pending</span>
+                                        )}
+                                    </span>
+                                </div>
+                            ))}
+                    </div>
+                )}
             </div>
 
             {/* Deposit form */}
@@ -323,6 +354,19 @@ export function GatewayBridgePanel() {
                         <ExternalLink className="h-2.5 w-2.5" />
                     </a>
                 )}
+            </div>
+
+            {/* Top-up scope note — sets expectations: today this only
+              *  deposits USDC into the Circle-tracked unified balance.
+              *  Spending it directly inside Arcade swaps/buys is NOT
+              *  wired yet. The CCTP V2 tab is the path that actually
+              *  bridges USDC to Arc Testnet so it's usable in-app. */}
+            <div className="rounded-xl border border-arc-border bg-white/[0.015] p-3 text-[11px] text-arc-text-muted">
+                <span className="font-semibold text-arc-text">Top-up only.</span>{" "}
+                Deposits credit your Circle Unified Balance. Spending it directly
+                inside Arcade trades is not yet wired — use the{" "}
+                <span className="text-arc-text">CCTP V2</span> tab when you actually
+                need USDC on Arc Testnet.
             </div>
 
             {/* Faucet hint */}
