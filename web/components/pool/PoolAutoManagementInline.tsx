@@ -55,18 +55,6 @@ interface ManagedPositionRow {
     maxSlippageBps: number;
 }
 
-// Use the dedicated provider URL when one is configured via
-// NEXT_PUBLIC_ARC_RPC_URL (Alchemy / thirdweb) so this inline panel
-// shares the same low-rate-limit transport as the rest of the app.
-/** 2026-06-15 audit HIGH#7 fix: batched on-chain read for the panel.
- *  Previously the helpers built a fresh viem PublicClient per row and
- *  fired NPM.positions + Compounder.configs sequentially in a for-loop;
- *  the panel routinely 429ed on Arc's public RPC and rendered empty.
- *  Reuse the wagmi-injected publicClient (Alchemy + fallback list) and
- *  collapse the 2N reads into a single multicall — Arc still has no
- *  working Multicall3 (memo arc-multicall3-trap) but viem batches the
- *  JSON-RPC array over HTTP via the wagmi transport's batch:{wait:50}
- *  config, so all per-row reads coalesce into ~1 HTTP roundtrip. */
 async function readRowsForPool(
     client: PublicClient,
     tokenIds: bigint[],
@@ -88,41 +76,24 @@ async function readRowsForPool(
         return out;
     }
 
-    // 2026-06-16 fix: previous version used client.multicall() which
-    // viem REQUIRES a deployed Multicall3 contract for. Arc testnet has
-    // no working Multicall3 (memo arc-multicall3-trap), so the call
-    // threw at runtime, the surrounding try/catch swallowed it, and
-    // the Auto-management section silently rendered nothing for every
-    // user with a managed position. Replaced with parallel
-    // readContract calls. The wagmi-injected HTTP transport coalesces
-    // the underlying eth_call requests into a single JSON-RPC batch
-    // (batch: { wait: 50 }), so wall-clock cost is the same one
-    // round-trip the multicall promised.
-    const reads = tokenIds.flatMap((tokenId) => [
-        client
-            .readContract({
-                address: npm,
-                abi: V3_NPM_ABI,
-                functionName: "positions",
-                args: [tokenId],
-            })
-            .then(
-                (r) => ({ status: "success" as const, result: r }),
-                () => ({ status: "failure" as const, result: undefined }),
-            ),
-        client
-            .readContract({
-                address: compounder,
-                abi: AUTO_COMPOUNDER_ABI,
-                functionName: "configs",
-                args: [tokenId],
-            })
-            .then(
-                (r) => ({ status: "success" as const, result: r }),
-                () => ({ status: "failure" as const, result: undefined }),
-            ),
+    const contracts = tokenIds.flatMap((tokenId) => [
+        {
+            address: npm,
+            abi: V3_NPM_ABI,
+            functionName: "positions" as const,
+            args: [tokenId] as const,
+        },
+        {
+            address: compounder,
+            abi: AUTO_COMPOUNDER_ABI,
+            functionName: "configs" as const,
+            args: [tokenId] as const,
+        },
     ]);
-    const results = await Promise.all(reads);
+    const results = (await client.multicall({
+        contracts: contracts as never,
+        allowFailure: true,
+    })) as { status: "success" | "failure"; result: unknown }[];
 
     for (let i = 0; i < tokenIds.length; i++) {
         const tokenId = tokenIds[i];

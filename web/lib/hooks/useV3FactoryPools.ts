@@ -1,8 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
 import { Address, erc20Abi, zeroAddress } from "viem";
-import { usePublicClient, useReadContracts } from "wagmi";
+import { useReadContracts } from "wagmi";
 
 import { V3_FACTORY_ABI } from "@/lib/abis/v3-npm";
 import { ADDRESSES } from "@/lib/constants";
@@ -101,73 +100,25 @@ export function useV3FactoryPools(extraTokens: Address[] = []): {
         }
     }
 
-    // 2026-06-16 fix: replaced useReadContracts (multicall) with a
-    // Promise.all of individual readContract calls keyed by the pool
-    // address list. The previous version surfaced "—" TVL for every V3
-    // pool in /explore even when the pool detail page (same chain, same
-    // wallet, same RPC) read the USDC balance just fine. Root cause:
-    // multicall3 is intentionally NOT configured on Arc (memo
-    // arc-multicall3-trap), and the batch-fallback path in
-    // useReadContracts is brittle on Arc's public RPC (intermittent
-    // empty 200-OK responses on getLogs and batched eth_call, observed
-    // 2026-06-15). Individual reads via the wagmi-injected publicClient
-    // are the same code path that works on the pool detail page.
-    const publicClient = usePublicClient();
-    const poolAddrKey = useMemo(
-        () => poolsBare.map((p) => p.pool).join(","),
-        [poolsBare],
-    );
-    const [usdcBalances, setUsdcBalances] = useState<Map<string, bigint>>(
-        new Map(),
-    );
-    const [balanceLoading, setBalanceLoading] = useState(false);
+    const balancesQ = useReadContracts({
+        contracts: poolsBare.map((p) => ({
+            address: ADDRESSES.usdc,
+            abi: erc20Abi,
+            functionName: "balanceOf" as const,
+            args: [p.pool] as const,
+        })),
+        query: { enabled: poolsBare.length > 0 },
+    });
 
-    useEffect(() => {
-        if (!publicClient || poolsBare.length === 0) {
-            setUsdcBalances(new Map());
-            return;
-        }
-        let cancelled = false;
-        setBalanceLoading(true);
-        (async () => {
-            const reads = await Promise.all(
-                poolsBare.map((p) =>
-                    publicClient
-                        .readContract({
-                            address: ADDRESSES.usdc,
-                            abi: erc20Abi,
-                            functionName: "balanceOf",
-                            args: [p.pool],
-                        })
-                        .then(
-                            (r) => ({ pool: p.pool.toLowerCase(), bal: r as bigint }),
-                            () => ({ pool: p.pool.toLowerCase(), bal: 0n }),
-                        ),
-                ),
-            );
-            if (cancelled) return;
-            const m = new Map<string, bigint>();
-            for (const r of reads) m.set(r.pool, r.bal);
-            setUsdcBalances(m);
-            setBalanceLoading(false);
-        })();
-        return () => {
-            cancelled = true;
-        };
-        // poolAddrKey is the stable join of every pool address. Listing
-        // it explicitly stops the effect from re-firing on every render
-        // (poolsBare is a new array each render) while still rerunning
-        // when the underlying pool set changes.
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [publicClient, poolAddrKey]);
-
-    const pools: V3FactoryPool[] = poolsBare.map((p) => {
-        const usdcBal = usdcBalances.get(p.pool.toLowerCase()) ?? 0n;
+    const pools: V3FactoryPool[] = poolsBare.map((p, i) => {
+        const res = balancesQ.data?.[i];
+        const usdcBal =
+            res?.status === "success" ? (res.result as bigint) : 0n;
         return { ...p, tvlUsdc: usdcBal * 2n };
     });
 
     return {
         pools,
-        isLoading: v2Loading || probesQ.isLoading || balanceLoading,
+        isLoading: v2Loading || probesQ.isLoading || balancesQ.isLoading,
     };
 }
