@@ -39,6 +39,18 @@ type OrderTuple = {
         fillDelay: number;
         data: `0x${string}`;
     };
+    /** Keeper bid currently parked on this order. `time === 0` means no
+     *  bid exists; otherwise a keeper has committed at `time` and the
+     *  fill window opens at `time + ask.bidDelay`. Used by the "in
+     *  motion" badge so the maker can tell a keeper is engaged. */
+    bid: {
+        time: number;
+        taker: Address;
+        exchange: Address;
+        dstAmount: bigint;
+        dstFee: bigint;
+        data: `0x${string}`;
+    };
 };
 
 /**
@@ -355,6 +367,16 @@ function OrderRow({
     const state = decodeOrderStatus(order.status, now);
     const src = tokenMap.get(order.ask.srcToken.toLowerCase()) ?? { symbol: "?", decimals: 18 };
     const dst = tokenMap.get(order.ask.dstToken.toLowerCase()) ?? { symbol: "?", decimals: 18 };
+    // In-motion = a keeper has placed a bid on this open order and the
+    // fill window hasn't opened yet (current time < bid.time + bidDelay).
+    // When the window opens, the fill can land any block, so we flip the
+    // sub-state to "Ready to fill" without changing the canonical state
+    // (still "open" until the on-chain status changes).
+    const bidPlaced = state === "open" && order.bid.time > 0;
+    const fillWindowOpensAt = order.bid.time + order.ask.bidDelay;
+    const inMotion = bidPlaced && now < fillWindowOpensAt;
+    const readyToFill = bidPlaced && now >= fillWindowOpensAt;
+    const fillEtaSec = inMotion ? fillWindowOpensAt - now : 0;
 
     const filledPct =
         order.ask.srcAmount > 0n
@@ -368,6 +390,24 @@ function OrderRow({
                     <div className="flex items-center gap-2 text-xs">
                         <span className="text-arc-text-faint">#{Number(order.id)}</span>
                         <StatusPill state={state} />
+                        {inMotion && (
+                            <span
+                                className="inline-flex items-center gap-1 rounded-md bg-sky-400/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-sky-400"
+                                title={`Keeper ${order.bid.taker.slice(0, 6)}…${order.bid.taker.slice(-4)} bid at block-time ${order.bid.time}. Fill window opens in ${fillEtaSec}s.`}
+                            >
+                                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-sky-400" />
+                                In motion · {fillEtaSec}s
+                            </span>
+                        )}
+                        {readyToFill && (
+                            <span
+                                className="inline-flex items-center gap-1 rounded-md bg-arc-warn/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-arc-warn"
+                                title={`Keeper ${order.bid.taker.slice(0, 6)}…${order.bid.taker.slice(-4)} can call fill any block.`}
+                            >
+                                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-arc-warn" />
+                                Ready to fill
+                            </span>
+                        )}
                     </div>
                     {/* Visual sell -> buy line with token icons. Matches the
                         chrome of TokenRow chips in the Limit card so the user
