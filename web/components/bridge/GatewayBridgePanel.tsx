@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ArrowDown, ExternalLink, Info, Loader2 } from "lucide-react";
 import { baseSepolia, arbitrumSepolia, sepolia } from "wagmi/chains";
-import { useAccount, useConnectorClient, useSwitchChain } from "wagmi";
+import { useAccount, useSwitchChain } from "wagmi";
 import { AppKit, UnifiedBalanceChain } from "@circle-fin/app-kit";
 import { createViemAdapterFromProvider } from "@circle-fin/adapter-viem-v2";
 import { TokenIcon } from "@/components/ui/TokenIcon";
@@ -66,8 +66,7 @@ interface GatewayBalance {
 }
 
 export function GatewayBridgePanel() {
-    const { address: account, chainId: walletChainId } = useAccount();
-    const { data: connectorClient } = useConnectorClient();
+    const { address: account, chainId: walletChainId, connector } = useAccount();
     const { switchChainAsync } = useSwitchChain();
 
     const [sourceChain, setSourceChain] = useState<UnifiedBalanceChain>(
@@ -126,24 +125,16 @@ export function GatewayBridgePanel() {
 
     const canDeposit =
         !!account &&
-        !!connectorClient &&
+        !!connector &&
         amount.trim() !== "" &&
         Number(amount) > 0 &&
         !submitting;
 
     const onDeposit = useCallback(async () => {
-        if (!canDeposit || !account || !connectorClient) return;
+        if (!canDeposit || !account || !connector) return;
         setSubmitting(true);
         setLastDepositTx(null);
         try {
-            // The SDK's viem adapter reads the source-chain USDC balance
-            // through the wallet's CURRENT EIP-1193 provider. If the
-            // wallet is on Arc (or any chain that isn't the picked
-            // source) the balance check hits the wrong ERC20 contract
-            // and the deposit reverts with "Insufficient USDC balance
-            // on <source>". Switch the wallet to the source chain
-            // first; both the balance read and the signed approve+
-            // deposit then target the same network.
             const source = TESTNET_SOURCES.find((s) => s.id === sourceChain);
             if (!source) throw new Error("Unsupported source chain");
             if (walletChainId !== source.chainId) {
@@ -153,13 +144,30 @@ export function GatewayBridgePanel() {
                     message: `Switch your wallet to ${source.label} to fund the deposit.`,
                 });
                 await switchChainAsync({ chainId: source.chainId });
+                // Some wallets (Rabby, mobile) propagate the chain
+                // change asynchronously. Give the connector a beat to
+                // emit chainChanged before we pull a fresh provider,
+                // otherwise getProvider() may still report the old
+                // chain and the SDK's balance check hits the wrong
+                // USDC contract.
+                await new Promise((r) => setTimeout(r, 600));
             }
 
-            // Pull the underlying EIP-1193 provider off the wagmi
-            // connector client. Circle's viem adapter wraps it into
-            // its own ViemAdapter for chain-agnostic operations.
+            // 2026-06-17 fix: previous version passed
+            // wagmi's `connectorClient.transport` (a viem Transport
+            // wrapper) to createViemAdapterFromProvider. The adapter
+            // expects a raw EIP-1193 provider with `.request({method,
+            // params})`. The mismatch made the SDK fall back to its
+            // own RPC, see balance 0, and revert with "Insufficient
+            // USDC balance on <source>" even when the wallet had USDC.
+            // Pull the underlying EIP-1193 provider straight off the
+            // wagmi connector instead.
+            const rawProvider = (await connector.getProvider()) as {
+                request: (args: { method: string; params?: unknown[] }) => Promise<unknown>;
+            };
+
             const adapter = await createViemAdapterFromProvider({
-                provider: (connectorClient.transport as unknown as { request: never }),
+                provider: rawProvider as never,
                 chain: sourceChain,
             } as never);
 
@@ -199,7 +207,7 @@ export function GatewayBridgePanel() {
     }, [
         canDeposit,
         account,
-        connectorClient,
+        connector,
         sourceChain,
         amount,
         kit,

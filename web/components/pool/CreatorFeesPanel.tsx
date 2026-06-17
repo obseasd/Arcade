@@ -2,10 +2,8 @@
 
 import { useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Address, encodeFunctionData, erc20Abi, zeroAddress } from "viem";
+import { Address, erc20Abi, zeroAddress } from "viem";
 import { useAccount, usePublicClient, useReadContract, useReadContracts, useWriteContract } from "wagmi";
-import { MEMO_ABI, MEMO_ADDRESS } from "@/lib/abis/memo";
-import { encodeMemoData, memoIdFor } from "@/lib/memo";
 import { V3_LOCKER_ABI } from "@/lib/abis/v3";
 import { ADDRESSES, USDC_DECIMALS } from "@/lib/constants";
 import { useV3Tokens } from "@/lib/hooks/useV3Tokens";
@@ -163,65 +161,36 @@ function PositionRow({ position }: { position: CreatorPosition }) {
     const snapPairedSymbol = pairedMeta.symbol ?? "?";
     const snapPairedDecimals = pairedMeta.decimals;
     try {
-      // Wrap the collectFees call through the Memo contract so the
-      // off-chain indexer can attribute the payout to the creator +
-      // token + positionId without re-deriving it from logs. The
-      // callFrom precompile preserves msg.sender, so the locker still
-      // sees the EOA creator and gates the claim by the on-chain
-      // recipient list as before.
-      const memoId = memoIdFor(
-        "invoice",
-        `${position.token.toLowerCase()}:${position.positionId.toString()}`,
-      );
-      const memoData = encodeMemoData({
-        token: position.token.toLowerCase(),
-        positionId: position.positionId.toString(),
-      });
-      const innerData = encodeFunctionData({
+      // 2026-06-17 rollback: previous version wrapped collectFees in a
+      // Memo.memo() call so the off-chain indexer could attribute the
+      // payout. The Memo contract reverted on Arc Testnet for this
+      // path (callFrom precompile failed for the locker's internal
+      // permit2-backed transfers, observed via tx
+      // 0xe1ce41e1...db28db4487, status=0x0). The locker already
+      // gates the claim by the on-chain recipient list, so
+      // attribution is recoverable from logs without the Memo wrap.
+      const hash = await writeContractAsync({
+        address: ADDRESSES.v3Locker,
         abi: V3_LOCKER_ABI,
         functionName: "collectFees",
         args: [position.positionId],
       });
-      let hash: `0x${string}`;
-      try {
-        hash = await writeContractAsync({
-          address: MEMO_ADDRESS,
-          abi: MEMO_ABI,
-          functionName: "memo",
-          args: [ADDRESSES.v3Locker, innerData, memoId, memoData],
-        });
-      } catch (memoErr: any) {
-        // Memo wraps the callFrom precompile, which is EOA-only.
-        // Smart-wallet creators (Safe etc) would revert at the
-        // precompile sender check; fall back to a bare collectFees so
-        // they can still claim. Only fall back on contract-level
-        // rejection — re-throw user rejections so the toast stays
-        // honest.
-        if (memoErr?.code === 4001 || /reject/i.test(memoErr?.message ?? "")) {
-          throw memoErr;
-        }
-        hash = await writeContractAsync({
-          address: ADDRESSES.v3Locker,
-          abi: V3_LOCKER_ABI,
-          functionName: "collectFees",
-          args: [position.positionId],
-        });
-      }
       if (publicClient) await publicClient.waitForTransactionReceipt({ hash });
+      // The claim-fees toast renders `+{amount} {symbol}` on its own,
+      // so amount0Formatted carries the NUMBER ONLY (no symbol).
       const isUsdc = snapPairedSymbol === "USDC" || snapPairedSymbol === "EURC";
-      const pairedFmt = isUsdc
-        ? `${formatUSDC(snapPaired, snapPairedDecimals, 4)} ${snapPairedSymbol}`
-        : `${formatToken(snapPaired, snapPairedDecimals, 6)} ${snapPairedSymbol}`;
-      const clankerFmt = `${formatToken(snapClanker, 18, 6)} ${position.symbol ?? "TOKEN"}`;
-      const parts: string[] = [];
-      if (snapPaired > 0n) parts.push(pairedFmt);
-      if (snapClanker > 0n) parts.push(clankerFmt);
+      const pairedAmt = isUsdc
+        ? formatUSDC(snapPaired, snapPairedDecimals, 4)
+        : formatToken(snapPaired, snapPairedDecimals, 6);
+      const clankerAmt = formatToken(snapClanker, 18, 6);
+      const pairedAddr = pairedToken ?? ADDRESSES.usdc;
       pushToast({
-        kind: "info",
-        title: "Fees claimed",
-        message: parts.length > 0
-          ? `Received ${parts.join(" + ")}`
-          : `${position.symbol ?? "Token"} creator fees sent to your wallet`,
+        kind: "claim-fees",
+        positionLabel: `$${position.symbol ?? "TOKEN"}`,
+        token0: { address: pairedAddr, symbol: snapPairedSymbol },
+        token1: { address: position.token, symbol: position.symbol },
+        amount0Formatted: snapPaired > 0n ? pairedAmt : null,
+        amount1Formatted: snapClanker > 0n ? clankerAmt : null,
       });
       // Await previewQ.refetch() BEFORE invalidating the all-time
       // earnings scan so the row's pending amounts update visibly
