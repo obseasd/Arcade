@@ -50,16 +50,23 @@ export function DiamondIdentityMint() {
 
     const [minting, setMinting] = useState(false);
 
+    const tierLabel =
+        tier === "diamond"
+            ? "Diamond"
+            : tier === "gold"
+                ? "Gold"
+                : tier === "silver"
+                    ? "Silver"
+                    : "";
+
     const metadataUri = useMemo<string>(() => {
         if (!account) return "";
         const json = {
-            name: `Arcade Diamond Creator`,
-            description:
-                "Issued to wallets that have shipped 10+ bonded token launches on Arcade. Portable proof of creator track record on Arc.",
-            image:
-                "https://www.arcade.trading/og/diamond-creator.png",
+            name: `Arcade ${tierLabel} Creator`,
+            description: `Issued to wallets that have shipped enough bonded token launches on Arcade to reach the ${tierLabel} tier. Portable proof of creator track record on Arc.`,
+            image: `https://www.arcade.trading/og/${tier}-creator.png`,
             attributes: [
-                { trait_type: "tier", value: "Diamond" },
+                { trait_type: "tier", value: tierLabel },
                 { trait_type: "bonded_launches", value: bondedCount },
                 {
                     trait_type: "issuer",
@@ -81,7 +88,7 @@ export function DiamondIdentityMint() {
         // JSON in one step.
         const hex: Hex = stringToHex(JSON.stringify(json));
         return `data:application/json;hex,${hex.slice(2)}`;
-    }, [account, bondedCount]);
+    }, [account, bondedCount, tier, tierLabel]);
 
     const onMint = async () => {
         if (!account) return;
@@ -123,19 +130,38 @@ export function DiamondIdentityMint() {
     };
 
     if (!account || tierLoading) return null;
-    if (tier !== "diamond") return null;
+    if (tier === "none") return null;
 
     const alreadyMinted =
         ((balanceOfQ.data as bigint | undefined) ?? 0n) > 0n;
 
+    // Tier-specific accent. Mirror the CreatorTierBadge palette so the
+    // mint card on /my-tokens reads visually as the same product surface
+    // as the badge that appears on the launchpad detail page.
+    const tierAccent =
+        tier === "diamond"
+            ? {
+                  iconWrap: "bg-sky-400/10 text-sky-400",
+                  badgeWrap: "border-sky-400/40 bg-sky-400/10 text-sky-400",
+              }
+            : tier === "gold"
+                ? {
+                      iconWrap: "bg-arc-warn/10 text-arc-warn",
+                      badgeWrap: "border-arc-warn/40 bg-arc-warn/10 text-arc-warn",
+                  }
+                : {
+                      iconWrap: "bg-white/[0.06] text-arc-text-muted",
+                      badgeWrap: "border-arc-border bg-white/[0.03] text-arc-text-muted",
+                  };
+
     return (
         <div className="arc-card flex items-start gap-4 p-5">
-            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-sky-400/10 text-sky-400">
+            <div className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-xl ${tierAccent.iconWrap}`}>
                 <Gem className="h-6 w-6" />
             </div>
             <div className="min-w-0 flex-1">
                 <div className="text-sm font-semibold text-arc-text">
-                    Diamond Creator Identity
+                    {tierLabel} Creator Identity
                 </div>
                 <p className="mt-1 text-xs text-arc-text-muted">
                     You shipped {bondedCount} bonded launches. Claim your
@@ -144,7 +170,7 @@ export function DiamondIdentityMint() {
                 </p>
                 <div className="mt-3 flex flex-wrap items-center gap-2">
                     {alreadyMinted ? (
-                        <span className="inline-flex items-center gap-1 rounded-md border border-arc-success/40 bg-arc-success/10 px-2 py-1 text-[11px] font-semibold uppercase tracking-wider text-arc-success">
+                        <span className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] font-semibold uppercase tracking-wider ${tierAccent.badgeWrap}`}>
                             <Gem className="h-3 w-3" />
                             Identity claimed
                         </span>
@@ -163,7 +189,7 @@ export function DiamondIdentityMint() {
                             ) : (
                                 <>
                                     <Gem className="h-3 w-3" />
-                                    Claim Diamond Identity
+                                    Claim {tierLabel} Identity
                                 </>
                             )}
                         </button>

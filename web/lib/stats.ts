@@ -279,8 +279,25 @@ export async function getAggregateStats(): Promise<StatsSnapshot> {
         fromBlock,
         head,
     );
+    // V2 swap volume on pairs the launchpad didn't intermediate. Direct
+    // /swap usage (via the V2 router or Permit2 → router) hits the pair
+    // straight and skips the launchpad's Buy/Sell event entirely, so
+    // every non-launchpad V2 trade was previously invisible to the
+    // dashboard. Same enumeration shape as V3.
+    const v2FactoryAddrs: Address[] = [ADDRESSES.factory].filter(
+        (a): a is Address =>
+            !!a && a !== "0x0000000000000000000000000000000000000000",
+    );
+    const v2VolumeUsdcMicros = await sumV2SwapVolume(
+        client,
+        v2FactoryAddrs,
+        fromBlock,
+        head,
+    );
     const volumeUsdcMicros =
-        volumeResults.reduce((acc, n) => acc + n, 0n) + v3VolumeUsdcMicros;
+        volumeResults.reduce((acc, n) => acc + n, 0n) +
+        v3VolumeUsdcMicros +
+        v2VolumeUsdcMicros;
     const v4TokensLaunched = ADDRESSES.v4Launchpad
         ? await countLaunchpadEvents(client, ADDRESSES.v4Launchpad, fromBlock, head)
         : 0;
@@ -443,6 +460,21 @@ const SWAP_EVT_ABI = parseAbiItem(
 );
 const SWAP_TOPIC = keccak256(
     toHex("Swap(address,address,int256,int256,uint160,uint128,int24)"),
+);
+
+// V2 pair Swap event. Unlike V3 the amounts are uint256 (not int256)
+// and split into separate in/out fields per side, but the principle is
+// the same: pair-side emit, router silent, USDC volume = whichever side
+// is the USDC leg of the pair. PairCreated lets us enumerate pairs off
+// the factory the same way.
+const PAIR_CREATED_TOPIC = keccak256(
+    toHex("PairCreated(address,address,address,uint256)"),
+);
+const V2_SWAP_EVT_ABI = parseAbiItem(
+    "event Swap(address indexed sender, uint256 amount0In, uint256 amount1In, uint256 amount0Out, uint256 amount1Out, address indexed to)",
+);
+const V2_SWAP_TOPIC = keccak256(
+    toHex("Swap(address,uint256,uint256,uint256,uint256,address)"),
 );
 // Sanity ceiling per individual event - any single Buy/Sell larger
 // than this is treated as decoding noise and dropped. The launchpad
@@ -651,6 +683,147 @@ async function sumV3SwapVolume(
                         const abs = raw < 0n ? -raw : raw;
                         if (abs > 0n && abs < MAX_SANE_EVENT_MICROS) {
                             acc += abs;
+                        }
+                    } catch {
+                        /* decode failure, skip */
+                    }
+                }
+                return acc;
+            } catch {
+                return 0n;
+            }
+        }),
+    );
+    return sums.reduce((a, b) => a + b, 0n);
+}
+
+/**
+ * Sums |USDC delta| across every V2 pair swap that touches USDC. Same
+ * shape as sumV3SwapVolume but using V2's uint256 in/out fields instead
+ * of V3's signed int256.
+ *
+ *   1. Enumerate USDC-touching pairs from PairCreated events on every
+ *      known factory generation. Decoded args give us pair address +
+ *      token0 + token1; we keep only the USDC-paired ones.
+ *   2. Scan Swap events across the filtered set in a single multi-
+ *      address getLogs per window. USDC volume per swap = the
+ *      USDC-side in + the USDC-side out — they're never both non-zero
+ *      on a Uniswap V2 swap but adding works either way.
+ *
+ * Direct V2 router swaps (not via the launchpad) were entirely
+ * uncounted before this — only launchpad Buy/Sell events made it
+ * through. Cumulative volume now includes USDC↔ANYTHING on every V2
+ * pair Arcade ever spun up.
+ */
+async function sumV2SwapVolume(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    client: any,
+    factories: Address[],
+    fromBlock: bigint,
+    head: bigint,
+): Promise<bigint> {
+    if (factories.length === 0) return 0n;
+    const usdc = ADDRESSES.usdc.toLowerCase();
+
+    // 1. Enumerate USDC-touching pairs from every factory.
+    const factoryWindows: Array<{ from: bigint; to: bigint }> = [];
+    for (let from = fromBlock; from <= head; from += BLOCK_WINDOW) {
+        const to = from + BLOCK_WINDOW - 1n > head ? head : from + BLOCK_WINDOW - 1n;
+        factoryWindows.push({ from, to });
+    }
+    const usdcPairs = new Map<string, 0 | 1>();
+    await Promise.all(
+        factories.flatMap((factory) =>
+            factoryWindows.map(async ({ from, to }) => {
+                try {
+                    const logs = await client.getLogs({
+                        address: factory,
+                        topics: [PAIR_CREATED_TOPIC],
+                        fromBlock: from,
+                        toBlock: to,
+                    });
+                    for (const log of logs) {
+                        try {
+                            const decoded = decodeEventLog({
+                                abi: [
+                                    parseAbiItem(
+                                        "event PairCreated(address indexed token0, address indexed token1, address pair, uint256)",
+                                    ),
+                                ],
+                                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                                data: (log as any).data,
+                                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                                topics: (log as any).topics,
+                            });
+                            const args = decoded.args as unknown as {
+                                token0: Address;
+                                token1: Address;
+                                pair: Address;
+                            };
+                            const t0 = args.token0.toLowerCase();
+                            const t1 = args.token1.toLowerCase();
+                            if (t0 === usdc)
+                                usdcPairs.set(args.pair.toLowerCase(), 0);
+                            else if (t1 === usdc)
+                                usdcPairs.set(args.pair.toLowerCase(), 1);
+                        } catch {
+                            /* decode noise, skip */
+                        }
+                    }
+                } catch {
+                    /* window failed, skip */
+                }
+            }),
+        ),
+    );
+    if (usdcPairs.size === 0) return 0n;
+    const pairAddrs = Array.from(usdcPairs.keys()) as Address[];
+
+    // 2. Scan Swap events on each pair.
+    const swapWindows: Array<{ from: bigint; to: bigint }> = [];
+    for (let from = fromBlock; from <= head; from += BLOCK_WINDOW) {
+        const to = from + BLOCK_WINDOW - 1n > head ? head : from + BLOCK_WINDOW - 1n;
+        swapWindows.push({ from, to });
+    }
+    const sums = await Promise.all(
+        swapWindows.map(async ({ from, to }) => {
+            try {
+                const logs = await client.getLogs({
+                    address: pairAddrs,
+                    topics: [V2_SWAP_TOPIC],
+                    fromBlock: from,
+                    toBlock: to,
+                });
+                let acc = 0n;
+                for (const log of logs) {
+                    try {
+                        const usdcSide = usdcPairs.get(
+                            (log as { address: string }).address.toLowerCase(),
+                        );
+                        if (usdcSide === undefined) continue;
+                        const decoded = decodeEventLog({
+                            abi: [V2_SWAP_EVT_ABI],
+                            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                            data: (log as any).data,
+                            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                            topics: (log as any).topics,
+                        });
+                        const args = decoded.args as unknown as {
+                            amount0In: bigint;
+                            amount1In: bigint;
+                            amount0Out: bigint;
+                            amount1Out: bigint;
+                        };
+                        // USDC volume = USDC moving in OR out of the
+                        // pair on this swap. On a healthy V2 swap only
+                        // one side is non-zero; adding them is safe and
+                        // makes the math direction-agnostic.
+                        const usdcVol =
+                            usdcSide === 0
+                                ? args.amount0In + args.amount0Out
+                                : args.amount1In + args.amount1Out;
+                        if (usdcVol > 0n && usdcVol < MAX_SANE_EVENT_MICROS) {
+                            acc += usdcVol;
                         }
                     } catch {
                         /* decode failure, skip */

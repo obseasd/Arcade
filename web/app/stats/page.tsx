@@ -172,9 +172,19 @@ export default async function StatsPage() {
                     <li>
                         Transaction and wallet counts come from a server-side
                         eth_getLogs scan of every Arcade contract on Arc testnet
-                        (chainId 5042002), chunked in 50,000-block windows. Every
-                        prior-generation contract address is included so the
-                        cumulative count keeps growing past a fresh deploy.
+                        (chainId 5042002), chunked in 5,000-block windows. The
+                        scan covers V2 (router + factory + launchpad), V3 (router,
+                        factory, quoter, NPM, locker, zap) and V4 surfaces; every
+                        prior-generation address is included so the cumulative
+                        count keeps growing past a fresh deploy.
+                    </li>
+                    <li>
+                        Volume sums USDC moved across launchpad Buy / Sell, every
+                        Arcade V3 pool Swap (USDC side, absolute value), and every
+                        Arcade V2 pair Swap (USDC side, in + out). V3 multi-hop
+                        swaps emit one Swap per leg so a USDC→A→USDC round-trip
+                        counts each leg — the dashboard semantic is &quot;USDC
+                        routed&quot; not &quot;round-trip USDC&quot;.
                     </li>
                     <li>
                         USDC gas paid is an estimate: transaction count multiplied

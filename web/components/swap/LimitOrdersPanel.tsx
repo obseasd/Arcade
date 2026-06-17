@@ -52,6 +52,10 @@ type OrderTuple = {
         dstFee: bigint;
         data: `0x${string}`;
     };
+    /** Set by the ?devFakeBid URL flag so the badge can render a "DEV"
+     *  prefix and the maker doesn't mistake the synthetic bid for a
+     *  real keeper engagement. Not present on real orders. */
+    __devFake?: boolean;
 };
 
 /**
@@ -159,6 +163,7 @@ export function LimitOrdersPanel({ account, variant = "card", className }: Props
             if (i !== targetIdx) return o;
             return {
                 ...o,
+                __devFake: true,
                 bid: {
                     time: now - 4, // 4s into a bidDelay window
                     taker: "0xDeadBeefCafe1234567890abCDEF000000000001" as Address,
@@ -433,19 +438,19 @@ function OrderRow({
                         {inMotion && (
                             <span
                                 className="inline-flex items-center gap-1 rounded-md bg-sky-400/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-sky-400"
-                                title={`Keeper ${order.bid.taker.slice(0, 6)}…${order.bid.taker.slice(-4)} bid at block-time ${order.bid.time}. Fill window opens in ${fillEtaSec}s.`}
+                                title={`Keeper ${order.bid.taker.slice(0, 6)}…${order.bid.taker.slice(-4)} bid at block-time ${order.bid.time}. Fill window opens in ${fillEtaSec}s.${order.__devFake ? " (synthetic bid injected by ?devFakeBid URL flag)" : ""}`}
                             >
                                 <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-sky-400" />
-                                In motion · {fillEtaSec}s
+                                {order.__devFake ? "DEV · " : ""}In motion · {fillEtaSec}s
                             </span>
                         )}
                         {readyToFill && (
                             <span
                                 className="inline-flex items-center gap-1 rounded-md bg-arc-warn/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-arc-warn"
-                                title={`Keeper ${order.bid.taker.slice(0, 6)}…${order.bid.taker.slice(-4)} can call fill any block.`}
+                                title={`Keeper ${order.bid.taker.slice(0, 6)}…${order.bid.taker.slice(-4)} can call fill any block.${order.__devFake ? " (synthetic bid injected by ?devFakeBid URL flag)" : ""}`}
                             >
                                 <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-arc-warn" />
-                                Ready to fill
+                                {order.__devFake ? "DEV · " : ""}Ready to fill
                             </span>
                         )}
                     </div>
