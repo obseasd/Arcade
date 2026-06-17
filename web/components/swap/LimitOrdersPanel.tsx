@@ -3,6 +3,7 @@
 import { X } from "lucide-react";
 import { RefreshIcon } from "@/components/ui/MaskIcon";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import type { Address } from "viem";
 import { usePublicClient, useReadContract, useReadContracts, useWriteContract } from "wagmi";
 import { ORBS_TWAP_ABI, decodeOrderStatus } from "@/lib/abis/orbsTwap";
@@ -124,12 +125,51 @@ export function LimitOrdersPanel({ account, variant = "card", className }: Props
         query: { refetchInterval: 15_000, enabled: ids.length > 0 },
     });
 
+    // Dev-mode hook: `?devFakeBid=N` (or `?devFakeBid=first`) injects a
+    // synthetic keeper bid into the first/Nth open order so the
+    // "In motion · Xs" → "Ready to fill" badge renders against real
+    // chain state. Useful on Arc Testnet where no keeper bot is live
+    // and otherwise no bid event would ever fire. Decays out of the
+    // in-motion window after ~bidDelay seconds (= 12s by Orbs default)
+    // so you can watch both states without reloading.
+    const searchParams = useSearchParams();
+    const devFakeBidParam = searchParams?.get("devFakeBid") ?? null;
+
     const orders: OrderTuple[] = useMemo(() => {
         if (!ordersQ.data) return [];
-        return ordersQ.data
+        const real = ordersQ.data
             .map((r) => (r.status === "success" ? (r.result as unknown as OrderTuple) : undefined))
             .filter((o): o is OrderTuple => !!o);
-    }, [ordersQ.data]);
+        if (!devFakeBidParam) return real;
+        // Match either an order id (devFakeBid=42) or position
+        // ("first"). Falls back to the first OPEN order so the flag
+        // does something useful even on a brand-new wallet.
+        const targetIdx = (() => {
+            if (devFakeBidParam === "first") {
+                return real.findIndex((o) => decodeOrderStatus(o.status, now) === "open");
+            }
+            const asId = Number(devFakeBidParam);
+            if (!Number.isFinite(asId)) {
+                return real.findIndex((o) => decodeOrderStatus(o.status, now) === "open");
+            }
+            return real.findIndex((o) => Number(o.id) === asId);
+        })();
+        if (targetIdx < 0) return real;
+        return real.map((o, i) => {
+            if (i !== targetIdx) return o;
+            return {
+                ...o,
+                bid: {
+                    time: now - 4, // 4s into a bidDelay window
+                    taker: "0xDeadBeefCafe1234567890abCDEF000000000001" as Address,
+                    exchange: o.ask.exchange,
+                    dstAmount: o.ask.dstMinAmount,
+                    dstFee: 0n,
+                    data: "0x",
+                },
+            };
+        });
+    }, [ordersQ.data, devFakeBidParam, now]);
 
     const visible = useMemo(() => {
         return orders.filter((o) => {

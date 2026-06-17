@@ -206,6 +206,15 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
     tokenIn: string;
     tokenOut: string;
   } | null>(null);
+  // The ref alone doesn't cause re-renders, which is fine for the V2 path
+  // because `quoteIn` re-runs whenever amountOutRawTyped changes. For V3
+  // single-hop swaps there's no quoteExactOutputSingle, so we seed the
+  // ref with a probe forward quote (see v3ProbeOut below). Bump this
+  // counter from the seed effect so the `derivedAmountIn` memo recomputes
+  // the moment the seed lands — otherwise typing into the For field on a
+  // fresh V3 pair would leave the From input empty until the user nudged
+  // another dep.
+  const [ratioVersion, setRatioVersion] = useState(0);
 
   // Fee tier of the V3 leg (the non-USDC side's pool). Both-V3 uses tokenIn's.
   const v3Fee = inIsV3 ? feeOf(tokenIn.address) : feeOf(tokenOut?.address);
@@ -266,6 +275,50 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
       retry: false,
     },
   });
+
+  // V3 exact-output probe. The V3 quoter doesn't expose
+  // quoteExactOutputSingle, so when the user types into the For field on
+  // a V3 single-hop pair the back-derivation has no ratio to work from
+  // and the From input stays empty. Fire a small forward quote (1 unit
+  // of tokenIn) just to seed lastForwardRatioRef; back-derivation then
+  // converts the user's typed output to the implied input in real time.
+  // Only fires when (a) we're on a V3 single-hop, (b) the user is in
+  // exact-output mode, (c) the ratio cache is empty, (d) the user
+  // actually typed something into For (avoids burning a quote on every
+  // pair switch). Skip if a snipe tax would distort the ratio — single
+  // unit can round to 0 micro-USDC after the skim and corrupt the seed.
+  const v3SeedAmountIn = decimalsKnown ? 10n ** BigInt(decimalsIn) : 0n;
+  const needsV3Seed =
+    v3SingleHop &&
+    lastEdited === "out" &&
+    amountOutRawTyped > 0n &&
+    lastForwardRatioRef.current === null &&
+    v3SeedAmountIn > 0n &&
+    !isSnipeBuy;
+  const v3ProbeOut = useReadContract({
+    address: ADDRESSES.v3Quoter,
+    abi: V3_QUOTER_ABI,
+    functionName: "quoteExactInputSingle",
+    args:
+      needsV3Seed && tokenOut
+        ? [tokenIn.address, tokenOut.address, v3Fee, v3SeedAmountIn]
+        : undefined,
+    query: { enabled: needsV3Seed && !!tokenOut, retry: false },
+  });
+
+  useEffect(() => {
+    if (!needsV3Seed) return;
+    const out = v3ProbeOut.data as bigint | undefined;
+    if (!out || out === 0n) return;
+    lastForwardRatioRef.current = {
+      amountIn: v3SeedAmountIn,
+      amountOut: out,
+      tokenIn: tokenIn.address.toLowerCase(),
+      tokenOut: (tokenOut?.address ?? "").toLowerCase(),
+    };
+    setRatioVersion((v) => v + 1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [needsV3Seed, v3ProbeOut.data]);
 
   // Launchpad-router quote - accounts for the post-migration royalty on each
   // leg whose token is a migrated launchpad token. Only used in multi-hop
@@ -380,6 +433,7 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
   // pair. Same hazard on flipTokens; cleared inline in that handler too.
   useEffect(() => {
     lastForwardRatioRef.current = null;
+    setRatioVersion((v) => v + 1);
   }, [tokenIn.address, tokenOut?.address]);
 
   // Derived amountIn for paths where V2 getAmountsIn does not run (V3 quoter
@@ -400,7 +454,9 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
       return undefined;
     }
     return (amountOutRawTyped * r.amountIn) / r.amountOut;
-  }, [lastEdited, amountOutRawTyped, tokenIn.address, tokenOut?.address]);
+    // ratioVersion is bumped by the V3 probe-seed effect to force a
+    // recompute when lastForwardRatioRef populates from the seed quote.
+  }, [lastEdited, amountOutRawTyped, tokenIn.address, tokenOut?.address, ratioVersion]);
 
   const computedAmountIn = amountsIn?.[0] ?? derivedAmountIn;
   /** USDC amount taken as royalty across both legs (0 when not via launchpad). */
