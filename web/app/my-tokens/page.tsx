@@ -40,6 +40,7 @@ import { TokenCard } from "@/components/launchpad/TokenCard";
 import { MyPositions } from "@/components/pool/MyPositions";
 import { V3Positions } from "@/components/pool/V3Positions";
 import { CreatorFeesPanel } from "@/components/pool/CreatorFeesPanel";
+import { DiamondIdentityMint } from "@/components/creator/DiamondIdentityMint";
 import { PendingWithdrawalsCard } from "@/components/pool/PendingWithdrawalsCard";
 import { VaultClaimPanel } from "@/components/pool/VaultClaimPanel";
 import { CreatePoolModal } from "@/components/pool/CreatePoolModal";
@@ -1102,6 +1103,7 @@ function CreatorTab({
     const hasAnyLaunch = mine.length > 0 || v4Mine.length > 0;
     return (
         <div className="space-y-8">
+            <DiamondIdentityMint />
             <CreatorEarningsCard />
             <PendingWithdrawalsCard />
 

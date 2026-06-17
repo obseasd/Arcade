@@ -1073,7 +1073,7 @@ function V3PositionRow({
                                 )}
                             >
                                 {formatTok(total0, t0Info.decimals)}
-                                <TokenIcon symbol={t0Info.symbol} size={14} />
+                                <AutoTokenIcon address={p.token0} symbol={t0Info.symbol} size={14} />
                             </span>
                             <span className="text-arc-text-faint">/</span>
                             <span
@@ -1085,7 +1085,7 @@ function V3PositionRow({
                                 )}
                             >
                                 {formatTok(total1, t1Info.decimals)}
-                                <TokenIcon symbol={t1Info.symbol} size={14} />
+                                <AutoTokenIcon address={p.token1} symbol={t1Info.symbol} size={14} />
                             </span>
                         </span>
                     </div>

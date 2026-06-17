@@ -83,9 +83,17 @@ export default async function StatsPage() {
                     </span>
                 </h1>
                 <p className="mt-3 text-sm text-arc-text-muted sm:text-base">
-                    Live attribution of Arcade&apos;s contribution to Arc, Circle&apos;s
-                    EVM L1. Updated every 5 minutes.
+                    Live attribution of Arcade&apos;s contribution to Arc,
+                    Circle&apos;s EVM L1. Snapshots are written hourly by a
+                    GitHub Actions cron and the page refreshes its read
+                    every 30 seconds.
                 </p>
+                {usingPersisted && persisted?.persistedAtIso && (
+                    <p className="mt-2 text-[11px] uppercase tracking-wider text-arc-text-faint">
+                        Last snapshot: {formatRelativeTime(persisted.persistedAtIso)}{" "}
+                        · Block {snap.asOfBlock.toString()}
+                    </p>
+                )}
             </header>
 
             <section className="mb-10 rounded-3xl border border-arc-border bg-arc-bg-elevated p-8 sm:p-10">
@@ -194,6 +202,24 @@ export default async function StatsPage() {
             </section>
         </div>
     );
+}
+
+/** Human-friendly "X min ago" rendering for the snapshot freshness
+ *  badge. Falls back to a short ISO date when the persisted timestamp
+ *  is more than a day old (the cron is broken or paused if we ever
+ *  see that, but better to render something than collapse). */
+function formatRelativeTime(iso: string): string {
+    const now = Date.now();
+    const then = new Date(iso).getTime();
+    const sec = Math.max(0, Math.floor((now - then) / 1000));
+    if (sec < 60) return `${sec}s ago`;
+    const min = Math.floor(sec / 60);
+    if (min < 60) return `${min} min ago`;
+    const hr = Math.floor(min / 60);
+    if (hr < 24) return `${hr} h ago`;
+    const day = Math.floor(hr / 24);
+    if (day < 7) return `${day} d ago`;
+    return new Date(iso).toISOString().slice(0, 10);
 }
 
 function MetricCard({

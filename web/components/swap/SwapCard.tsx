@@ -638,6 +638,71 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
       !!activeRoute &&
       activeRoute.amountOut > 0n,
   });
+  // Per-provider impact map, computed from the same refQuotes probe as
+  // the active-route impact display below. Used by the impact-aware
+  // best-route picker further down: a high-output route with a 90%
+  // price impact is almost never what the user actually wants compared
+  // to a slightly lower-output route at 1-2% impact. Computing impact
+  // per provider (rather than just for activeRoute) lets us re-pick
+  // best WITHOUT changing the user's manual selection.
+  const perRouteImpactPct = useMemo<Map<string, number>>(() => {
+    const m = new Map<string, number>();
+    if (refProbeAmount === 0n || amountInRaw === 0n) return m;
+    for (const q of routeQuotes.quotes) {
+      if (q.amountOut === 0n) continue;
+      const ref = refQuotes.quotes.find((r) => r.provider === q.provider) ?? refQuotes.best;
+      if (!ref || ref.amountOut === 0n) continue;
+      const refNum = ref.amountOut * amountInRaw;
+      const tradeNum = q.amountOut * refProbeAmount;
+      if (refNum === 0n) continue;
+      if (refNum <= tradeNum) {
+        m.set(q.provider, 0);
+        continue;
+      }
+      const impactBps = Number(((refNum - tradeNum) * 10000n) / refNum);
+      m.set(q.provider, impactBps / 100);
+    }
+    return m;
+  }, [routeQuotes.quotes, refQuotes.quotes, refQuotes.best, refProbeAmount, amountInRaw]);
+
+  // Impact-aware best-route override. Default `routeQuotes.best` is
+  // pure max-output, which on asymmetric pools (USDC/CL deep-vs-shallow
+  // tiers) lands on the 96% price-impact route when a calmer 5% route
+  // exists. Filter quotes to `impact <= MAX_AUTO_IMPACT_PCT`, take the
+  // highest amountOut among those, and fall back to the raw best when
+  // every route is above the threshold (= no choice but to surface the
+  // ugly one with its EXTREME warning).
+  const MAX_AUTO_IMPACT_PCT = 30;
+  const impactAwareBest = useMemo<RouteQuote | undefined>(() => {
+    const fallback = routeQuotes.best ?? undefined;
+    if (routeQuotes.quotes.length === 0) return fallback;
+    if (perRouteImpactPct.size === 0) return fallback;
+    const calm = routeQuotes.quotes.filter((q) => {
+      const imp = perRouteImpactPct.get(q.provider);
+      // Routes we haven't been able to compute impact for stay eligible.
+      // Better to surface a route without an impact reading than to
+      // silently drop providers whose ref probe failed.
+      return imp === undefined || imp <= MAX_AUTO_IMPACT_PCT;
+    });
+    if (calm.length === 0) return fallback;
+    calm.sort((a, b) => (b.amountOut > a.amountOut ? 1 : -1));
+    return calm[0];
+  }, [routeQuotes.quotes, routeQuotes.best, perRouteImpactPct]);
+
+  // When the impact-aware pick differs from the aggregator's raw best
+  // AND the user hasn't manually selected a route, push the calmer
+  // route into selectedRoute so the actual swap submit uses it. The
+  // existing pair-change effect at the top of this component resets
+  // selectedRoute on token swap so this auto-pick stays sticky only
+  // within the current pair. The user can still click the raw best in
+  // the route list if they explicitly want the high-impact path.
+  useEffect(() => {
+    if (selectedRoute) return;
+    if (!impactAwareBest || !routeQuotes.best) return;
+    if (impactAwareBest.provider === routeQuotes.best.provider) return;
+    setSelectedRoute(impactAwareBest);
+  }, [selectedRoute, impactAwareBest, routeQuotes.best]);
+
   const priceImpactPct = useMemo<number | undefined>(() => {
     if (!activeRoute || activeRoute.amountOut === 0n) return undefined;
     if (refProbeAmount === 0n) return undefined;

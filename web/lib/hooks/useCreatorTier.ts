@@ -115,12 +115,23 @@ export function useCreatorTier(
         for (const r of statesQ.data) {
             if (r.status !== "success") continue;
             // tokens(addr) returns a positional tuple: the typed wagmi
-            // result is an array; index 1 is `creator`, index 7 is the
-            // `migrated` bool.
+            // result is an array. Index 1 = creator, 4 = mode, 7 = migrated.
+            //
+            // Counting rule for the creator tier:
+            //   - mode 0 (PUMP) / 1 (CLANKER bonding curve): counts when
+            //     `migrated === true` (the token actually bonded past the
+            //     curve and minted a V2 pair).
+            //   - mode 2 (CLANKER_V3): always counts. V3 launches skip the
+            //     bonding-curve phase entirely; the launch IS the bond,
+            //     liquidity is locked in V3 from the first block. Without
+            //     this branch, V3 creators would never earn a tier no
+            //     matter how many tokens they ship.
             const tuple = r.result as readonly unknown[];
             const tokenCreator = (tuple?.[1] as Address | undefined)?.toLowerCase();
+            const mode = Number(tuple?.[4] ?? 0);
             const migrated = Boolean(tuple?.[7]);
-            if (tokenCreator === lcCreator && migrated) n += 1;
+            const counts = mode === 2 || migrated;
+            if (tokenCreator === lcCreator && counts) n += 1;
         }
         return n;
     }, [creator, statesQ.data]);
