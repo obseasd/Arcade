@@ -1040,45 +1040,71 @@ function V3PositionRow({
                 the row stays compact on narrower grid widths. */}
             {managed ? (() => {
                 // Total earned = compounded/pushed events from DB +
-                // live pending fees on-chain. The pending tier counts
-                // because closing the position now collects them
-                // alongside the principal (the NPM.collect call in the
-                // Remove flow sweeps everything that's owed regardless
-                // of the keeper's threshold).
-                const total0 =
-                    (managed.totalClaimedAmount0 ?? 0n) +
-                    (managed.pendingFees0 ?? 0n);
-                const total1 =
-                    (managed.totalClaimedAmount1 ?? 0n) +
-                    (managed.pendingFees1 ?? 0n);
+                // live pending fees on-chain. Split visually:
+                //   - "Compounded" row sums the historical DB events
+                //     (= what the keeper has already realized into
+                //     reinvested liquidity).
+                //   - "Pending" row shows the live tokensOwed-equivalent
+                //     read off the pool's feeGrowth. These haven't
+                //     compounded yet but are recovered on close.
+                // Matches the Unified Balance Kit pattern of separating
+                // confirmed-and-acted vs accrued-but-pending.
+                const claimed0 = managed.totalClaimedAmount0 ?? 0n;
+                const claimed1 = managed.totalClaimedAmount1 ?? 0n;
+                const pending0 = managed.pendingFees0 ?? 0n;
+                const pending1 = managed.pendingFees1 ?? 0n;
+                const total0 = claimed0 + pending0;
+                const total1 = claimed1 + pending1;
+                const hasPending = pending0 > 0n || pending1 > 0n;
                 return (
-                    <div className="mt-3 flex items-center justify-between gap-2 rounded-xl border border-arc-border bg-white/[0.015] p-3 text-xs">
-                        <span className="text-arc-text-muted">Total earned</span>
-                        <span className="inline-flex items-center gap-3 tabular-nums">
-                            <span
-                                className={cn(
-                                    "inline-flex items-center gap-1.5",
-                                    total0 > 0n
-                                        ? "text-white"
-                                        : "text-arc-text-faint",
-                                )}
-                            >
-                                {formatTok(total0, t0Info.decimals)}
-                                <TokenIcon symbol={t0Info.symbol} size={14} />
+                    <div className="mt-3 space-y-1.5 rounded-xl border border-arc-border bg-white/[0.015] p-3 text-xs">
+                        <div className="flex items-center justify-between gap-2">
+                            <span className="text-arc-text-muted">Total earned</span>
+                            <span className="inline-flex items-center gap-3 tabular-nums">
+                                <span
+                                    className={cn(
+                                        "inline-flex items-center gap-1.5",
+                                        total0 > 0n
+                                            ? "text-white"
+                                            : "text-arc-text-faint",
+                                    )}
+                                >
+                                    {formatTok(total0, t0Info.decimals)}
+                                    <TokenIcon symbol={t0Info.symbol} size={14} />
+                                </span>
+                                <span className="text-arc-text-faint">/</span>
+                                <span
+                                    className={cn(
+                                        "inline-flex items-center gap-1.5",
+                                        total1 > 0n
+                                            ? "text-white"
+                                            : "text-arc-text-faint",
+                                    )}
+                                >
+                                    {formatTok(total1, t1Info.decimals)}
+                                    <TokenIcon symbol={t1Info.symbol} size={14} />
+                                </span>
                             </span>
-                            <span className="text-arc-text-faint">/</span>
-                            <span
-                                className={cn(
-                                    "inline-flex items-center gap-1.5",
-                                    total1 > 0n
-                                        ? "text-white"
-                                        : "text-arc-text-faint",
-                                )}
+                        </div>
+                        {hasPending && (
+                            <div
+                                className="flex items-center justify-between gap-2 border-t border-arc-border/40 pt-1.5 text-[10px] uppercase tracking-wider"
+                                title="Live fees accrued since the last compound. Recovered on close even if below threshold."
                             >
-                                {formatTok(total1, t1Info.decimals)}
-                                <TokenIcon symbol={t1Info.symbol} size={14} />
-                            </span>
-                        </span>
+                                <span className="text-arc-text-faint">Pending</span>
+                                <span className="inline-flex items-center gap-3 tabular-nums text-arc-text-muted">
+                                    <span className="inline-flex items-center gap-1.5">
+                                        {formatTok(pending0, t0Info.decimals)}
+                                        <TokenIcon symbol={t0Info.symbol} size={12} />
+                                    </span>
+                                    <span className="text-arc-text-faint">/</span>
+                                    <span className="inline-flex items-center gap-1.5">
+                                        {formatTok(pending1, t1Info.decimals)}
+                                        <TokenIcon symbol={t1Info.symbol} size={12} />
+                                    </span>
+                                </span>
+                            </div>
+                        )}
                     </div>
                 );
             })() : (
