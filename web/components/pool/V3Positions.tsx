@@ -438,18 +438,17 @@ export function V3Positions({
         return m;
     }, [slot0Q.data, poolAddrs]);
 
-    // Pending fees for managed positions. NPM.tokensOwed0/1 (= what
-    // ArcadeAutoCompounder.pendingFees returns) only updates on touch,
-    // so a fresh swap-volume run shows 0 until something pokes the
-    // position. To surface live fees in the UI we read the pool's
-    // feeGrowthGlobal + the tick feeGrowthOutside at both ends of the
-    // position's range, then apply the Uniswap V3 inside-vs-outside
-    // formula off-chain (see lib/v3-fee-math.ts). 4 extra reads per
-    // managed position, batched. Wallet-only positions are skipped:
-    // their "Unclaimed fees" row already uses the live tokensOwed
-    // (NPM.collect can sweep those exactly), which is fine for them
-    // because the user can call collect directly to realise.
-    const managedPositionSlots = useMemo(() => {
+    // Pending fees for EVERY V3 position (managed or wallet-only).
+    // NPM.tokensOwed0/1 only updates when the position is touched
+    // (mint/burn/collect), so a position sitting in-range while other
+    // people swap shows 0 fees until you poke it. To surface live
+    // fees we read the pool's feeGrowthGlobal + the tick
+    // feeGrowthOutside at both ends of the range, then apply the
+    // Uniswap V3 inside-vs-outside formula off-chain (see
+    // lib/v3-fee-math.ts). 4 extra reads per position, batched. This
+    // was managed-only previously, which surfaced as a "no fees on
+    // an in-range wallet LP after swaps" bug reported 2026-06-17.
+    const positionSlots = useMemo(() => {
         const out: Array<{
             tokenId: bigint;
             poolAddr: Address;
@@ -461,12 +460,8 @@ export function V3Positions({
             tokensOwed0: bigint;
             tokensOwed1: bigint;
         }> = [];
-        const managedIdSet = new Set(
-            managedMetas.map((m) => m.tokenId.toString()),
-        );
         for (let i = 0; i < positions.length; i++) {
             const p = positions[i];
-            if (!managedIdSet.has(p.tokenId.toString())) continue;
             const poolAddr = poolAddrs[i];
             if (!poolAddr) continue;
             out.push({
@@ -482,10 +477,10 @@ export function V3Positions({
             });
         }
         return out;
-    }, [positions, poolAddrs, managedMetas]);
+    }, [positions, poolAddrs]);
 
     const feeGrowthQ = useReadContracts({
-        contracts: managedPositionSlots.flatMap((s) => [
+        contracts: positionSlots.flatMap((s) => [
             {
                 // V3_POOL_ABI_FULL because the trimmed v3-npm V3_POOL_ABI
                 // doesn't include feeGrowthGlobal*/ticks — using it here
@@ -514,14 +509,14 @@ export function V3Positions({
                 args: [s.tickUpper] as const,
             },
         ]),
-        query: { enabled: managedPositionSlots.length > 0 },
+        query: { enabled: positionSlots.length > 0 },
     });
 
     const pendingByTokenId = useMemo(() => {
         const m = new Map<string, { fees0: bigint; fees1: bigint }>();
         if (!feeGrowthQ.data) return m;
-        for (let i = 0; i < managedPositionSlots.length; i++) {
-            const slot = managedPositionSlots[i];
+        for (let i = 0; i < positionSlots.length; i++) {
+            const slot = positionSlots[i];
             const base = i * 4;
             const g0 = feeGrowthQ.data[base];
             const g1 = feeGrowthQ.data[base + 1];
@@ -572,7 +567,7 @@ export function V3Positions({
             m.set(slot.tokenId.toString(), fees);
         }
         return m;
-    }, [feeGrowthQ.data, managedPositionSlots, slot0ByPool]);
+    }, [feeGrowthQ.data, positionSlots, slot0ByPool]);
 
     const tokenInfo = useMemo(() => {
         const m: Record<string, { symbol: string; decimals: number }> = {};
@@ -688,6 +683,7 @@ export function V3Positions({
             {filtered.map(({ p, i }) => {
                 const tokenIdStr = p.tokenId.toString();
                 const meta = managedByTokenId.get(tokenIdStr);
+                const livePending = pendingByTokenId.get(tokenIdStr);
                 return (
                     <V3PositionRow
                         key={tokenIdStr}
@@ -699,6 +695,8 @@ export function V3Positions({
                                 ? slot0ByPool.get(poolAddrs[i]!.toLowerCase())
                                 : undefined
                         }
+                        livePending0={livePending?.fees0}
+                        livePending1={livePending?.fees1}
                         managed={
                             meta && account
                                 ? {
@@ -747,6 +745,12 @@ interface V3PositionRowProps {
     tokenInfo: Record<string, { symbol: string; decimals: number }>;
     poolAddress: Address | undefined;
     slot0: { sqrtPriceX96: bigint; tick: number } | undefined;
+    /** Live fees accrued since the position was last touched, computed
+     *  off-chain from the pool's feeGrowthGlobal + tick feeGrowthOutside
+     *  values. Falls back to `position.tokensOwed*` (which only updates
+     *  on mint/burn/collect) when not provided. */
+    livePending0?: bigint;
+    livePending1?: bigint;
     /** When set, the card swaps its "Unclaimed fees" + "Manage / Add
      *  Liquidity" footer for the auto-management variant: a mode badge
      *  next to the in-range chip, a "Total claimed" row that sums every
@@ -788,6 +792,8 @@ function V3PositionRow({
     tokenInfo,
     poolAddress,
     slot0,
+    livePending0,
+    livePending1,
     managed,
 }: V3PositionRowProps) {
     const t0Info = tokenInfo[p.token0.toLowerCase()] ?? { symbol: "?", decimals: 18 };
@@ -1038,105 +1044,52 @@ function V3PositionRow({
                 positions show the live "Unclaimed fees" pair. Token
                 symbols render as <TokenIcon> circles in both variants so
                 the row stays compact on narrower grid widths. */}
-            {managed ? (() => {
-                // Total earned = compounded/pushed events from DB +
-                // live pending fees on-chain. Split visually:
-                //   - "Compounded" row sums the historical DB events
-                //     (= what the keeper has already realized into
-                //     reinvested liquidity).
-                //   - "Pending" row shows the live tokensOwed-equivalent
-                //     read off the pool's feeGrowth. These haven't
-                //     compounded yet but are recovered on close.
-                // Matches the Unified Balance Kit pattern of separating
-                // confirmed-and-acted vs accrued-but-pending.
-                const claimed0 = managed.totalClaimedAmount0 ?? 0n;
-                const claimed1 = managed.totalClaimedAmount1 ?? 0n;
-                const pending0 = managed.pendingFees0 ?? 0n;
-                const pending1 = managed.pendingFees1 ?? 0n;
+            {(() => {
+                // Single "Total earned" row for every position. For
+                // managed positions, total = lifetime compounded
+                // (mirrored from DB events) + currently pending
+                // (live feeGrowth math). For wallet-only positions,
+                // total = currently pending only (collect on close).
+                // The previously separate "Pending" subline was just
+                // redundant noise — Total earned already includes it.
+                const pending0 = livePending0 ?? p.tokensOwed0;
+                const pending1 = livePending1 ?? p.tokensOwed1;
+                const claimed0 = managed?.totalClaimedAmount0 ?? 0n;
+                const claimed1 = managed?.totalClaimedAmount1 ?? 0n;
                 const total0 = claimed0 + pending0;
                 const total1 = claimed1 + pending1;
-                const hasPending = pending0 > 0n || pending1 > 0n;
+                const label = managed ? "Total earned" : "Unclaimed fees";
                 return (
-                    <div className="mt-3 space-y-1.5 rounded-xl border border-arc-border bg-white/[0.015] p-3 text-xs">
-                        <div className="flex items-center justify-between gap-2">
-                            <span className="text-arc-text-muted">Total earned</span>
-                            <span className="inline-flex items-center gap-3 tabular-nums">
-                                <span
-                                    className={cn(
-                                        "inline-flex items-center gap-1.5",
-                                        total0 > 0n
-                                            ? "text-white"
-                                            : "text-arc-text-faint",
-                                    )}
-                                >
-                                    {formatTok(total0, t0Info.decimals)}
-                                    <TokenIcon symbol={t0Info.symbol} size={14} />
-                                </span>
-                                <span className="text-arc-text-faint">/</span>
-                                <span
-                                    className={cn(
-                                        "inline-flex items-center gap-1.5",
-                                        total1 > 0n
-                                            ? "text-white"
-                                            : "text-arc-text-faint",
-                                    )}
-                                >
-                                    {formatTok(total1, t1Info.decimals)}
-                                    <TokenIcon symbol={t1Info.symbol} size={14} />
-                                </span>
-                            </span>
-                        </div>
-                        {hasPending && (
-                            <div
-                                className="flex items-center justify-between gap-2 border-t border-arc-border/40 pt-1.5 text-[10px] uppercase tracking-wider"
-                                title="Live fees accrued since the last compound. Recovered on close even if below threshold."
+                    <div className="mt-3 flex items-center justify-between gap-2 rounded-xl border border-arc-border bg-white/[0.015] p-3 text-xs">
+                        <span className="text-arc-text-muted">{label}</span>
+                        <span className="inline-flex items-center gap-3 tabular-nums">
+                            <span
+                                className={cn(
+                                    "inline-flex items-center gap-1.5",
+                                    total0 > 0n
+                                        ? "text-white"
+                                        : "text-arc-text-faint",
+                                )}
                             >
-                                <span className="text-arc-text-faint">Pending</span>
-                                <span className="inline-flex items-center gap-3 tabular-nums text-arc-text-muted">
-                                    <span className="inline-flex items-center gap-1.5">
-                                        {formatTok(pending0, t0Info.decimals)}
-                                        <TokenIcon symbol={t0Info.symbol} size={12} />
-                                    </span>
-                                    <span className="text-arc-text-faint">/</span>
-                                    <span className="inline-flex items-center gap-1.5">
-                                        {formatTok(pending1, t1Info.decimals)}
-                                        <TokenIcon symbol={t1Info.symbol} size={12} />
-                                    </span>
-                                </span>
-                            </div>
-                        )}
+                                {formatTok(total0, t0Info.decimals)}
+                                <TokenIcon symbol={t0Info.symbol} size={14} />
+                            </span>
+                            <span className="text-arc-text-faint">/</span>
+                            <span
+                                className={cn(
+                                    "inline-flex items-center gap-1.5",
+                                    total1 > 0n
+                                        ? "text-white"
+                                        : "text-arc-text-faint",
+                                )}
+                            >
+                                {formatTok(total1, t1Info.decimals)}
+                                <TokenIcon symbol={t1Info.symbol} size={14} />
+                            </span>
+                        </span>
                     </div>
                 );
-            })() : (
-                <div className="mt-3 flex items-center justify-between gap-2 rounded-xl border border-arc-border bg-white/[0.015] p-3 text-xs">
-                    <span className="text-arc-text-muted">Unclaimed fees</span>
-                    <span className="inline-flex items-center gap-3 tabular-nums">
-                        <span
-                            className={cn(
-                                "inline-flex items-center gap-1.5",
-                                p.tokensOwed0 > 0n
-                                    ? "text-white"
-                                    : "text-arc-text-faint",
-                            )}
-                        >
-                            {formatTok(p.tokensOwed0, t0Info.decimals)}
-                            <TokenIcon symbol={t0Info.symbol} size={14} />
-                        </span>
-                        <span className="text-arc-text-faint">/</span>
-                        <span
-                            className={cn(
-                                "inline-flex items-center gap-1.5",
-                                p.tokensOwed1 > 0n
-                                    ? "text-white"
-                                    : "text-arc-text-faint",
-                            )}
-                        >
-                            {formatTok(p.tokensOwed1, t1Info.decimals)}
-                            <TokenIcon symbol={t1Info.symbol} size={14} />
-                        </span>
-                    </span>
-                </div>
-            )}
+            })()}
 
             {/* Bottom action bar. Managed positions get a single Stop
                 button that hands the NFT back; normal positions keep the
