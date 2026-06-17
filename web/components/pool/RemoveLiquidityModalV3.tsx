@@ -20,6 +20,10 @@ import {
 } from "wagmi";
 
 import { AUTO_COMPOUNDER_ABI } from "@/lib/abis/autoCompounder";
+import {
+    MULTICALL3_FROM_ABI,
+    MULTICALL3_FROM_ADDRESS,
+} from "@/lib/abis/multicall3From";
 import { V3_NPM_ABI, V3_POOL_ABI } from "@/lib/abis/v3-npm";
 import { ADDRESSES } from "@/lib/constants";
 import { Modal } from "@/components/ui/Modal";
@@ -193,115 +197,109 @@ export function RemoveLiquidityModalV3({
             const deadline = BigInt(
                 Math.floor(Date.now() / 1000) + deadlineMin * 60,
             );
-
-            // 0. Managed-position stop: withdrawPosition pulls the NFT
-            //    back from the AutoCompounder to the user's wallet so
-            //    the subsequent NPM.decreaseLiquidity passes the
-            //    _isApprovedOrOwner gate. Signed FIRST; the user has to
-            //    confirm two txs total in the managed flow.
-            if (isManaged) {
-                const withdrawHash = await writeContractAsync({
-                    address: ADDRESSES.autoCompounder,
-                    abi: AUTO_COMPOUNDER_ABI,
-                    functionName: "withdrawPosition",
-                    args: [tokenId],
-                });
-                await publicClient.waitForTransactionReceipt({
-                    hash: withdrawHash,
-                });
-            }
             const slipDen = 10_000n - BigInt(slippageBps);
             const amount0Min = (preview.amount0 * slipDen) / 10_000n;
             const amount1Min = (preview.amount1 * slipDen) / 10_000n;
 
-            const calls: `0x${string}`[] = [];
-            // 1. Decrease the position by the chosen % at the slippage
-            // floor the user agreed to. The contract returns the actual
-            // amounts decremented to the position's owed tokens (which
-            // the next collect sweeps).
-            calls.push(
-                encodeFunctionData({
-                    abi: V3_NPM_ABI,
-                    functionName: "decreaseLiquidity",
-                    args: [
-                        {
-                            tokenId,
-                            liquidity: liquidityToRemove,
-                            amount0Min,
-                            amount1Min,
-                            deadline,
-                        },
-                    ],
-                }),
-            );
-
-            // 2. Collect the freshly decremented principal AND (if the
-            // toggle is on) the pre-existing unclaimed fees. We always
-            // sweep the principal even when claimFees is off — the
-            // decreased liquidity sits in tokensOwed0/1 after step 1
-            // and would otherwise be lost to the next session. The
-            // toggle only controls whether the PRE-EXISTING tokensOwed
-            // (= unclaimed fees from prior swap activity) is included;
-            // since collect always sweeps the full balance, we honour
-            // the toggle by skipping the collect call entirely when
-            // off AND the user is keeping >0% of the position (so the
-            // residual fees stay claimable from the position card).
-            if (claimFees || isFullExit) {
-                calls.push(
-                    encodeFunctionData({
-                        abi: V3_NPM_ABI,
-                        functionName: "collect",
-                        args: [
-                            {
-                                tokenId,
-                                recipient: account,
-                                amount0Max: MAX_UINT128,
-                                amount1Max: MAX_UINT128,
-                            },
-                        ],
-                    }),
-                );
-            }
-
-            // 3. Always burn the NFT on a 100% exit. The NPM enforces
-            // "liquidity == 0 && tokensOwed0 == 0 && tokensOwed1 == 0"
-            // inside burn(), so we MUST collect first — which step 2
-            // above already does. We used to gate this on a "Burn NFT"
-            // toggle, but the keep-the-NFT case is a power-user edge
-            // (same-range re-deposit, airdrop farming, downstream
-            // tooling) and the dangling-zero-position confusion it
-            // creates outweighs the savings. Forcing the burn keeps
-            // the wallet clean and matches the user's mental model of
-            // "I closed this — it should be gone".
-            if (isFullExit) {
-                calls.push(
-                    encodeFunctionData({
-                        abi: V3_NPM_ABI,
-                        functionName: "burn",
-                        args: [tokenId],
-                    }),
-                );
-            }
-
-            // 4. Wrap everything into one multicall tx so the user
-            // signs ONCE and either the whole flow lands atomically or
-            // nothing does. NPM inherits Uniswap V3's Multicall.sol so
-            // this is a stock pattern. We encode the multicall(bytes[])
-            // signature by hand because wagmi v2's writeContract type
-            // narrowing doesn't expose bytes[]-returning Multicall
-            // selectors (known issue, also used in ClaimAllFeesModal).
-            const multicallData = encodeFunctionData({
-                abi: parseAbi([
-                    "function multicall(bytes[] data) payable returns (bytes[])",
-                ]),
-                functionName: "multicall",
-                args: [calls],
+            // Encode each NPM op once; the order matters (decrease →
+            // collect → burn) because burn() reverts unless both
+            // liquidity and tokensOwed are zero.
+            const decreaseCall = encodeFunctionData({
+                abi: V3_NPM_ABI,
+                functionName: "decreaseLiquidity",
+                args: [
+                    {
+                        tokenId,
+                        liquidity: liquidityToRemove,
+                        amount0Min,
+                        amount1Min,
+                        deadline,
+                    },
+                ],
             });
-            const hash = await walletClient.sendTransaction({
-                to: ADDRESSES.v3PositionManager,
-                data: multicallData,
+            const collectCall = encodeFunctionData({
+                abi: V3_NPM_ABI,
+                functionName: "collect",
+                args: [
+                    {
+                        tokenId,
+                        recipient: account,
+                        amount0Max: MAX_UINT128,
+                        amount1Max: MAX_UINT128,
+                    },
+                ],
             });
-            await publicClient.waitForTransactionReceipt({ hash });
+            const burnCall = encodeFunctionData({
+                abi: V3_NPM_ABI,
+                functionName: "burn",
+                args: [tokenId],
+            });
+
+            if (isManaged) {
+                // 2026-06-17 upgrade: Stop+Remove used to need 2 user
+                // signatures (withdrawPosition, then NPM multicall).
+                // Arc deployed Multicall3From — a sender-preserving
+                // batch contract that routes every subcall through the
+                // callFrom precompile so each target sees the user as
+                // msg.sender. That lets us bundle withdrawPosition
+                // (gated on Compounder.onlyDepositor) plus
+                // decrease/collect/burn (gated on NPM._isApprovedOrOwner)
+                // into ONE atomic batch with ONE signature.
+                const withdrawCall = encodeFunctionData({
+                    abi: AUTO_COMPOUNDER_ABI,
+                    functionName: "withdrawPosition",
+                    args: [tokenId],
+                });
+                const batchCalls = [
+                    {
+                        target: ADDRESSES.autoCompounder,
+                        allowFailure: false,
+                        callData: withdrawCall,
+                    },
+                    {
+                        target: ADDRESSES.v3PositionManager,
+                        allowFailure: false,
+                        callData: decreaseCall,
+                    },
+                    {
+                        target: ADDRESSES.v3PositionManager,
+                        allowFailure: false,
+                        callData: collectCall,
+                    },
+                    {
+                        target: ADDRESSES.v3PositionManager,
+                        allowFailure: false,
+                        callData: burnCall,
+                    },
+                ];
+                const hash = await writeContractAsync({
+                    address: MULTICALL3_FROM_ADDRESS,
+                    abi: MULTICALL3_FROM_ABI,
+                    functionName: "aggregate3",
+                    args: [batchCalls],
+                });
+                await publicClient.waitForTransactionReceipt({ hash });
+            } else {
+                // User-owned NFT: still uses the NPM's own Multicall
+                // because that path doesn't require sender preservation
+                // (the user already owns the NFT) and the NPM
+                // multicall is well-tested in the field.
+                const npmCalls: `0x${string}`[] = [decreaseCall];
+                if (claimFees || isFullExit) npmCalls.push(collectCall);
+                if (isFullExit) npmCalls.push(burnCall);
+                const multicallData = encodeFunctionData({
+                    abi: parseAbi([
+                        "function multicall(bytes[] data) payable returns (bytes[])",
+                    ]),
+                    functionName: "multicall",
+                    args: [npmCalls],
+                });
+                const hash = await walletClient.sendTransaction({
+                    to: ADDRESSES.v3PositionManager,
+                    data: multicallData,
+                });
+                await publicClient.waitForTransactionReceipt({ hash });
+            }
 
             const a0 = formatUnits(preview.amount0, token0Meta.decimals);
             const a1 = formatUnits(preview.amount1, token1Meta.decimals);
@@ -393,10 +391,11 @@ export function RemoveLiquidityModalV3({
                     NPM multicall closes it. */}
                 {isManaged && (
                     <div className="rounded-xl border border-arc-cta-hover/30 bg-arc-cta-hover/5 p-3 text-[11px] text-arc-text-muted">
-                        Auto-managed position: closing requires two
-                        signatures. First the auto-compounder hands the
-                        NFT back to your wallet, then it gets fully
-                        removed and burned. Amount locked at 100%.
+                        Auto-managed position: one signature closes
+                        everything. The auto-compounder hands the NFT
+                        back, the position is fully removed, and the
+                        NFT is burned — all atomic via Multicall3From.
+                        Amount locked at 100%.
                     </div>
                 )}
                 {/* Percentage picker. Big readout up top so the user reads
