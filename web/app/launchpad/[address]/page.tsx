@@ -30,6 +30,7 @@ const PriceChart = dynamic(
 import { TradePanel } from "@/components/launchpad/TradePanel";
 import { ClankerTradePanel } from "@/components/launchpad/ClankerTradePanel";
 import { CreatorTokenPanel } from "@/components/launchpad/CreatorTokenPanel";
+import { CreatorTierBadge } from "@/components/creator/CreatorTierBadge";
 import { PendingClaimBanner } from "@/components/launchpad/PendingClaimBanner";
 import { TokenActivityPanel } from "@/components/launchpad/TokenActivityPanel";
 import { Comments } from "@/components/launchpad/Comments";
@@ -311,6 +312,8 @@ export default function TokenDetailPage() {
                   >
                     {formatAddress(state.creator)}
                   </a>
+                  <CreatorTierBadge creator={state.creator} />
+
                   {/* Audit F-3: normalise the Twitter handle to a strict
                       `^[a-z0-9_]{1,15}$` shape before embedding in the href.
                       Without this, a deployer who pins metadata with a
