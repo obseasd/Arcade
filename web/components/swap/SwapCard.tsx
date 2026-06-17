@@ -282,11 +282,14 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
   // and the From input stays empty. Fire a small forward quote (1 unit
   // of tokenIn) just to seed lastForwardRatioRef; back-derivation then
   // converts the user's typed output to the implied input in real time.
-  // Only fires when (a) we're on a V3 single-hop, (b) the user is in
-  // exact-output mode, (c) the ratio cache is empty, (d) the user
-  // actually typed something into For (avoids burning a quote on every
-  // pair switch). Skip if a snipe tax would distort the ratio — single
-  // unit can round to 0 micro-USDC after the skim and corrupt the seed.
+  //
+  // We INTENTIONALLY don't skip the snipe-tax path here. CLANKER_V3
+  // tokens are almost always behind a snipe skim, so guarding on
+  // !isSnipeBuy would mean the seed never fires for the very tokens
+  // this fix is meant to cover (CL etc). The 1% / 2% skim distortion
+  // on the seed ratio is acceptable for a From-field display value;
+  // the actual chain-side swap quotes again at submit time with full
+  // skim accounting, so the executed amount is correct regardless.
   const v3SeedAmountIn = decimalsKnown ? 10n ** BigInt(decimalsIn) : 0n;
   const needsV3Seed =
     v3SingleHop &&
@@ -294,7 +297,7 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
     amountOutRawTyped > 0n &&
     lastForwardRatioRef.current === null &&
     v3SeedAmountIn > 0n &&
-    !isSnipeBuy;
+    v3Fee > 0;
   const v3ProbeOut = useReadContract({
     address: ADDRESSES.v3Quoter,
     abi: V3_QUOTER_ABI,
