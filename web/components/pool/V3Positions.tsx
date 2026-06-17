@@ -14,6 +14,7 @@ import { V3_FACTORY_ABI, V3_NPM_ABI, V3_POOL_ABI } from "@/lib/abis/v3-npm";
 import { V3_POOL_ABI as V3_POOL_ABI_FULL } from "@/lib/abis/v3";
 import { ADDRESSES, USDC_DECIMALS } from "@/lib/constants";
 import { arcTestnet } from "@/lib/chains";
+import { AutoTokenIcon } from "@/components/ui/AutoTokenIcon";
 import { TokenIcon } from "@/components/ui/TokenIcon";
 import {
     getAmountsForLiquidity,
@@ -874,8 +875,8 @@ function V3PositionRow({
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div className="flex items-center gap-3">
                     <div className="flex -space-x-2">
-                        <TokenIcon symbol={t0Info.symbol} size={40} />
-                        <TokenIcon symbol={t1Info.symbol} size={40} />
+                        <AutoTokenIcon address={p.token0} symbol={t0Info.symbol} size={40} />
+                        <AutoTokenIcon address={p.token1} symbol={t1Info.symbol} size={40} />
                     </div>
                     <div>
                         {/* Row 1: pair name only. ID badge moved to the
@@ -990,7 +991,7 @@ function V3PositionRow({
                         as "1.7459 USDC (72.27%)" rather than orphaned in
                         the right gutter. */}
                     <div className="flex items-center gap-2 text-sm">
-                        <TokenIcon symbol={t0Info.symbol} size={18} />
+                        <AutoTokenIcon address={p.token0} symbol={t0Info.symbol} size={18} />
                         <span className="tabular-nums font-semibold text-arc-text">
                             {formatTok(underlying.amount0, t0Info.decimals)}
                         </span>
@@ -1002,7 +1003,7 @@ function V3PositionRow({
                         )}
                     </div>
                     <div className="flex items-center gap-2 text-sm">
-                        <TokenIcon symbol={t1Info.symbol} size={18} />
+                        <AutoTokenIcon address={p.token1} symbol={t1Info.symbol} size={18} />
                         <span className="tabular-nums font-semibold text-arc-text">
                             {formatTok(underlying.amount1, t1Info.decimals)}
                         </span>

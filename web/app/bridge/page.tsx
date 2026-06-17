@@ -1,4 +1,3 @@
-import { BridgeBalancePanel } from "@/components/bridge/BridgeBalancePanel";
 import { BridgeCard } from "@/components/bridge/BridgeCard";
 import { BridgeHistory } from "@/components/bridge/BridgeHistory";
 
@@ -12,7 +11,6 @@ import { BridgeHistory } from "@/components/bridge/BridgeHistory";
 export default function BridgePage() {
   return (
     <div className="mx-auto max-w-[490px] px-4 py-8 sm:px-6 sm:py-20">
-      <BridgeBalancePanel />
       <BridgeCard />
       <BridgeHistory />
     </div>
