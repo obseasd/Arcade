@@ -10,6 +10,9 @@ import { AmountInput } from "@/components/ui/AmountInput";
 import { TokenIcon } from "@/components/ui/TokenIcon";
 import { TxStatus, type TxState } from "@/components/ui/TxStatus";
 import { useApproveIfNeeded } from "@/lib/hooks/useApproveIfNeeded";
+import { useTradeMemo } from "@/lib/hooks/useTradeMemo";
+import { MEMO_ABI, MEMO_ADDRESS } from "@/lib/abis/memo";
+import { encodeFunctionData } from "viem";
 import { pushToast } from "@/lib/toast";
 import { addActivity } from "@/lib/activityFeed";
 import { cn, formatToken, formatUSDC } from "@/lib/utils";
@@ -114,6 +117,7 @@ export function TradePanel({ token, symbol, migrated, image, onTradeSuccess }: P
 
   const { ensureAllowance } = useApproveIfNeeded(side === "buy" ? ADDRESSES.usdc : token, spender);
   const { writeContractAsync } = useWriteContract();
+  const memo = useTradeMemo();
 
   const onTrade = async () => {
     if (!account || amountRaw === 0n) return;
@@ -134,12 +138,33 @@ export function TradePanel({ token, symbol, migrated, image, onTradeSuccess }: P
       const args = migrated
         ? ([token, amountRaw, minOut, deadline] as const)
         : ([token, amountRaw, minOut] as const);
-      const hash = await writeContractAsync({
-        address: ADDRESSES.launchpad,
-        abi: LAUNCHPAD_ABI,
-        functionName: fn,
-        args: args as unknown as readonly [`0x${string}`, bigint, bigint],
-      });
+      // When the URL carries ?ref or ?campaign, wrap the launchpad
+      // call through the Memo contract. callFrom preserves msg.sender
+      // so the launchpad still sees the EOA; the Memo event lets the
+      // off-chain indexer attribute the trade. Bare call otherwise so
+      // un-attributed buys don't pay the wrapping overhead.
+      const hash = memo
+        ? await writeContractAsync({
+            address: MEMO_ADDRESS,
+            abi: MEMO_ABI,
+            functionName: "memo",
+            args: [
+              ADDRESSES.launchpad,
+              encodeFunctionData({
+                abi: LAUNCHPAD_ABI,
+                functionName: fn,
+                args: args as unknown as readonly [`0x${string}`, bigint, bigint],
+              }),
+              memo.id,
+              memo.data,
+            ],
+          })
+        : await writeContractAsync({
+            address: ADDRESSES.launchpad,
+            abi: LAUNCHPAD_ABI,
+            functionName: fn,
+            args: args as unknown as readonly [`0x${string}`, bigint, bigint],
+          });
       // Audit 2026-06-11 UX-C-1: receipt.status check. waitForTransactionReceipt
       // returns a receipt for both success and revert; without this gate a
       // reverted tx still cleared the form, pushed a green toast, and wrote

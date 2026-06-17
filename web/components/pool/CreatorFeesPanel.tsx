@@ -2,8 +2,10 @@
 
 import { useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Address, erc20Abi, zeroAddress } from "viem";
+import { Address, encodeFunctionData, erc20Abi, zeroAddress } from "viem";
 import { useAccount, usePublicClient, useReadContract, useReadContracts, useWriteContract } from "wagmi";
+import { MEMO_ABI, MEMO_ADDRESS } from "@/lib/abis/memo";
+import { encodeMemoData, memoIdFor } from "@/lib/memo";
 import { V3_LOCKER_ABI } from "@/lib/abis/v3";
 import { ADDRESSES, USDC_DECIMALS } from "@/lib/constants";
 import { useV3Tokens } from "@/lib/hooks/useV3Tokens";
@@ -161,12 +163,50 @@ function PositionRow({ position }: { position: CreatorPosition }) {
     const snapPairedSymbol = pairedMeta.symbol ?? "?";
     const snapPairedDecimals = pairedMeta.decimals;
     try {
-      const hash = await writeContractAsync({
-        address: ADDRESSES.v3Locker,
+      // Wrap the collectFees call through the Memo contract so the
+      // off-chain indexer can attribute the payout to the creator +
+      // token + positionId without re-deriving it from logs. The
+      // callFrom precompile preserves msg.sender, so the locker still
+      // sees the EOA creator and gates the claim by the on-chain
+      // recipient list as before.
+      const memoId = memoIdFor(
+        "invoice",
+        `${position.token.toLowerCase()}:${position.positionId.toString()}`,
+      );
+      const memoData = encodeMemoData({
+        token: position.token.toLowerCase(),
+        positionId: position.positionId.toString(),
+      });
+      const innerData = encodeFunctionData({
         abi: V3_LOCKER_ABI,
         functionName: "collectFees",
         args: [position.positionId],
       });
+      let hash: `0x${string}`;
+      try {
+        hash = await writeContractAsync({
+          address: MEMO_ADDRESS,
+          abi: MEMO_ABI,
+          functionName: "memo",
+          args: [ADDRESSES.v3Locker, innerData, memoId, memoData],
+        });
+      } catch (memoErr: any) {
+        // Memo wraps the callFrom precompile, which is EOA-only.
+        // Smart-wallet creators (Safe etc) would revert at the
+        // precompile sender check; fall back to a bare collectFees so
+        // they can still claim. Only fall back on contract-level
+        // rejection — re-throw user rejections so the toast stays
+        // honest.
+        if (memoErr?.code === 4001 || /reject/i.test(memoErr?.message ?? "")) {
+          throw memoErr;
+        }
+        hash = await writeContractAsync({
+          address: ADDRESSES.v3Locker,
+          abi: V3_LOCKER_ABI,
+          functionName: "collectFees",
+          args: [position.positionId],
+        });
+      }
       if (publicClient) await publicClient.waitForTransactionReceipt({ hash });
       const isUsdc = snapPairedSymbol === "USDC" || snapPairedSymbol === "EURC";
       const pairedFmt = isUsdc
