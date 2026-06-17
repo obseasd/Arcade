@@ -261,39 +261,16 @@ export async function getAggregateStats(): Promise<StatsSnapshot> {
     const volumeResults = await Promise.all(
         allLaunchpads.map((a) => sumLaunchpadVolume(client, a, fromBlock, head)),
     );
-    // V3 swap volume comes through the pool side (router emits no
-    // Swap), so we enumerate USDC-touching pools from every V3 factory
-    // we ship and sum the absolute USDC delta per Swap event. Adds
-    // every concentrated-LP trade — including the user's own /swap
-    // USDC<->CL flow that was invisible before this hook.
-    const v3FactoryAddrs: Address[] = [
-        ADDRESSES.v3Factory,
-        "0x4774F5C79201A4f5b62a0d23064233a8b6382581", // gen 8 v3 factory
-    ].filter(
-        (a): a is Address =>
-            !!a && a !== "0x0000000000000000000000000000000000000000",
-    );
-    const v3VolumeUsdcMicros = await sumV3SwapVolume(
-        client,
-        v3FactoryAddrs,
-        fromBlock,
-        head,
-    );
-    // V2 swap volume on pairs the launchpad didn't intermediate. Direct
-    // /swap usage (via the V2 router or Permit2 → router) hits the pair
-    // straight and skips the launchpad's Buy/Sell event entirely, so
-    // every non-launchpad V2 trade was previously invisible to the
-    // dashboard. Same enumeration shape as V3.
-    const v2FactoryAddrs: Address[] = [ADDRESSES.factory].filter(
-        (a): a is Address =>
-            !!a && a !== "0x0000000000000000000000000000000000000000",
-    );
-    const v2VolumeUsdcMicros = await sumV2SwapVolume(
-        client,
-        v2FactoryAddrs,
-        fromBlock,
-        head,
-    );
+    // V3 swap volume — see sumV3SwapVolume for the address-less
+    // strategy. This now catches Rubicon V3 / Arcade V3 / Synthra /
+    // any other V3-fork pool that routes USDC, including ones whose
+    // PoolCreated event lives outside the 500k-block scan window
+    // (the factory-enumeration version we shipped first silently
+    // missed all of them, which is why the dashboard reported $265
+    // even after the user ran sustained USDC↔SeedETH trades).
+    const v3VolumeUsdcMicros = await sumV3SwapVolume(client, fromBlock, head);
+    // V2 swap volume — same address-less strategy as V3.
+    const v2VolumeUsdcMicros = await sumV2SwapVolume(client, fromBlock, head);
     const volumeUsdcMicros =
         volumeResults.reduce((acc, n) => acc + n, 0n) +
         v3VolumeUsdcMicros +
@@ -560,141 +537,137 @@ async function sumLaunchpadVolume(
 
 /**
  * Sums |USDC delta| across every V3 pool swap that touches USDC. The
- * router doesn't emit a Swap event so we go through the pool side:
+ * router doesn't emit a Swap event so we go through the pool side.
  *
- *   1. Enumerate Arcade V3 pools from PoolCreated events on each
- *      known factory (current + every historical generation we still
- *      want to count). The decoded args give us pool address +
- *      token0 + token1, which lets us pre-filter to USDC-touching
- *      pools without an extra RPC.
- *   2. Scan Swap events across the filtered pool set in one
- *      multi-address getLogs per block window. Each Swap log carries
- *      signed amount0 / amount1; we read whichever side is USDC for
- *      that pool, take its absolute value, and sum.
+ * Strategy: address-LESS getLogs filtered by the Swap topic, then
+ * lazy-resolve each unique pool's token0/token1 via multicall to
+ * decide whether USDC is on side 0 or 1. This bypasses the
+ * factory-enumeration approach we used first — which silently
+ * missed pools created OUTSIDE the 500k-block scan window (the user
+ * trades USDC↔SeedETH through Rubicon V3 pools deployed long ago,
+ * none of whose PoolCreated events live in the recent window) AND
+ * pools created by V3 forks we don't know about (Rubicon V3,
+ * Synthra, UnitFlow, etc).
  *
- * Single-tx swaps emit one Swap; multi-hop swaps emit one per leg, so
- * a USDC->A->USDC arb would double-count. That's fine here: the
- * dashboard is reporting "USDC routed", not "round-trip USDC". A more
- * precise per-trade accounting lands with the Ponder indexer.
+ * Trade-off: address-less getLogs returns a lot more events to
+ * decode, but Arc's public RPC handles a 5k-block window with this
+ * pattern cleanly and the cron only runs once an hour. The hot
+ * upgrade path stays the indexer.
  *
- * Empty array of factories (none configured in env) returns 0 so the
- * caller doesn't have to guard.
+ * Multi-hop swaps emit one Swap per leg, so a USDC→A→USDC arb is
+ * double-counted. That matches the dashboard semantic ("USDC
+ * routed"), which is what we want here.
  */
 async function sumV3SwapVolume(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     client: any,
-    factories: Address[],
     fromBlock: bigint,
     head: bigint,
 ): Promise<bigint> {
-    if (factories.length === 0) return 0n;
     const usdc = ADDRESSES.usdc.toLowerCase();
 
-    // 1. Enumerate USDC-touching pools from every factory in parallel.
-    const factoryWindows: Array<{ from: bigint; to: bigint }> = [];
-    for (let from = fromBlock; from <= head; from += BLOCK_WINDOW) {
-        const to = from + BLOCK_WINDOW - 1n > head ? head : from + BLOCK_WINDOW - 1n;
-        factoryWindows.push({ from, to });
-    }
-    /** Map<lowercased pool address, 0 if USDC = token0, 1 if USDC = token1>. */
-    const usdcPools = new Map<string, 0 | 1>();
-    await Promise.all(
-        factories.flatMap((factory) =>
-            factoryWindows.map(async ({ from, to }) => {
-                try {
-                    const logs = await client.getLogs({
-                        address: factory,
-                        topics: [POOL_CREATED_TOPIC],
-                        fromBlock: from,
-                        toBlock: to,
-                    });
-                    for (const log of logs) {
-                        try {
-                            const decoded = decodeEventLog({
-                                abi: [
-                                    parseAbiItem(
-                                        "event PoolCreated(address indexed token0, address indexed token1, uint24 indexed fee, int24 tickSpacing, address pool)",
-                                    ),
-                                ],
-                                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                                data: (log as any).data,
-                                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                                topics: (log as any).topics,
-                            });
-                            const args = decoded.args as unknown as {
-                                token0: Address;
-                                token1: Address;
-                                pool: Address;
-                            };
-                            const t0 = args.token0.toLowerCase();
-                            const t1 = args.token1.toLowerCase();
-                            if (t0 === usdc)
-                                usdcPools.set(args.pool.toLowerCase(), 0);
-                            else if (t1 === usdc)
-                                usdcPools.set(args.pool.toLowerCase(), 1);
-                        } catch {
-                            /* decode noise, skip */
-                        }
-                    }
-                } catch {
-                    /* window failed, skip */
-                }
-            }),
-        ),
-    );
-
-    if (usdcPools.size === 0) return 0n;
-    const poolAddrs = Array.from(usdcPools.keys()) as Address[];
-
-    // 2. Scan Swap events across the USDC-touching pools.
+    // 1. Scan ALL Swap events by topic across the window (no address
+    //    filter). Each log's `address` IS the pool, so we collect a
+    //    de-duped set of pools touched in the scan window.
     const swapWindows: Array<{ from: bigint; to: bigint }> = [];
     for (let from = fromBlock; from <= head; from += BLOCK_WINDOW) {
         const to = from + BLOCK_WINDOW - 1n > head ? head : from + BLOCK_WINDOW - 1n;
         swapWindows.push({ from, to });
     }
-    const sums = await Promise.all(
+    const allWindows = await Promise.all(
         swapWindows.map(async ({ from, to }) => {
             try {
-                const logs = await client.getLogs({
-                    address: poolAddrs,
+                return (await client.getLogs({
                     topics: [SWAP_TOPIC],
                     fromBlock: from,
                     toBlock: to,
-                });
-                let acc = 0n;
-                for (const log of logs) {
-                    try {
-                        const usdcSide = usdcPools.get(
-                            (log as { address: string }).address.toLowerCase(),
-                        );
-                        if (usdcSide === undefined) continue;
-                        const decoded = decodeEventLog({
-                            abi: [SWAP_EVT_ABI],
-                            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                            data: (log as any).data,
-                            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                            topics: (log as any).topics,
-                        });
-                        const args = decoded.args as unknown as {
-                            amount0: bigint;
-                            amount1: bigint;
-                        };
-                        const raw = usdcSide === 0 ? args.amount0 : args.amount1;
-                        const abs = raw < 0n ? -raw : raw;
-                        if (abs > 0n && abs < MAX_SANE_EVENT_MICROS) {
-                            acc += abs;
-                        }
-                    } catch {
-                        /* decode failure, skip */
-                    }
-                }
-                return acc;
+                })) as Array<{ address: string; topics: string[]; data: string }>;
             } catch {
-                return 0n;
+                return [];
             }
         }),
     );
-    return sums.reduce((a, b) => a + b, 0n);
+    const allLogs = allWindows.flat();
+    if (allLogs.length === 0) return 0n;
+
+    const poolAddrs = Array.from(
+        new Set(allLogs.map((l) => l.address.toLowerCase())),
+    );
+
+    // 2. For every pool seen, read token0 + token1 in one multicall
+    //    and keep only the USDC-touching ones. Failures (e.g. a
+    //    contract that emits Swap but isn't actually a V3 pool) drop
+    //    silently. ERC-20 token0()/token1() selectors are the
+    //    standard Uniswap V3 ones: 0x0dfe1681 / 0xd21220a7.
+    const t0Calls = poolAddrs.map((p) =>
+        client
+            .readContract({
+                address: p as Address,
+                abi: [
+                    parseAbiItem("function token0() view returns (address)"),
+                ],
+                functionName: "token0",
+            })
+            .then(
+                (a: Address) => a,
+                () => undefined,
+            ),
+    );
+    const t1Calls = poolAddrs.map((p) =>
+        client
+            .readContract({
+                address: p as Address,
+                abi: [
+                    parseAbiItem("function token1() view returns (address)"),
+                ],
+                functionName: "token1",
+            })
+            .then(
+                (a: Address) => a,
+                () => undefined,
+            ),
+    );
+    const [t0s, t1s] = await Promise.all([
+        Promise.all(t0Calls),
+        Promise.all(t1Calls),
+    ]);
+    /** Map<lowercased pool, 0 if USDC = token0, 1 if USDC = token1>. */
+    const usdcPools = new Map<string, 0 | 1>();
+    for (let i = 0; i < poolAddrs.length; i++) {
+        const t0 = t0s[i]?.toLowerCase();
+        const t1 = t1s[i]?.toLowerCase();
+        if (t0 === usdc) usdcPools.set(poolAddrs[i], 0);
+        else if (t1 === usdc) usdcPools.set(poolAddrs[i], 1);
+    }
+    if (usdcPools.size === 0) return 0n;
+
+    // 3. Sum |USDC side amount| across the swap logs we already pulled.
+    let total = 0n;
+    for (const log of allLogs) {
+        const usdcSide = usdcPools.get(log.address.toLowerCase());
+        if (usdcSide === undefined) continue;
+        try {
+            const decoded = decodeEventLog({
+                abi: [SWAP_EVT_ABI],
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                data: (log as any).data,
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                topics: (log as any).topics,
+            });
+            const args = decoded.args as unknown as {
+                amount0: bigint;
+                amount1: bigint;
+            };
+            const raw = usdcSide === 0 ? args.amount0 : args.amount1;
+            const abs = raw < 0n ? -raw : raw;
+            if (abs > 0n && abs < MAX_SANE_EVENT_MICROS) {
+                total += abs;
+            }
+        } catch {
+            /* decode failure, skip */
+        }
+    }
+    return total;
 }
 
 /**
@@ -718,124 +691,111 @@ async function sumV3SwapVolume(
 async function sumV2SwapVolume(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     client: any,
-    factories: Address[],
     fromBlock: bigint,
     head: bigint,
 ): Promise<bigint> {
-    if (factories.length === 0) return 0n;
     const usdc = ADDRESSES.usdc.toLowerCase();
 
-    // 1. Enumerate USDC-touching pairs from every factory.
-    const factoryWindows: Array<{ from: bigint; to: bigint }> = [];
-    for (let from = fromBlock; from <= head; from += BLOCK_WINDOW) {
-        const to = from + BLOCK_WINDOW - 1n > head ? head : from + BLOCK_WINDOW - 1n;
-        factoryWindows.push({ from, to });
-    }
-    const usdcPairs = new Map<string, 0 | 1>();
-    await Promise.all(
-        factories.flatMap((factory) =>
-            factoryWindows.map(async ({ from, to }) => {
-                try {
-                    const logs = await client.getLogs({
-                        address: factory,
-                        topics: [PAIR_CREATED_TOPIC],
-                        fromBlock: from,
-                        toBlock: to,
-                    });
-                    for (const log of logs) {
-                        try {
-                            const decoded = decodeEventLog({
-                                abi: [
-                                    parseAbiItem(
-                                        "event PairCreated(address indexed token0, address indexed token1, address pair, uint256)",
-                                    ),
-                                ],
-                                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                                data: (log as any).data,
-                                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                                topics: (log as any).topics,
-                            });
-                            const args = decoded.args as unknown as {
-                                token0: Address;
-                                token1: Address;
-                                pair: Address;
-                            };
-                            const t0 = args.token0.toLowerCase();
-                            const t1 = args.token1.toLowerCase();
-                            if (t0 === usdc)
-                                usdcPairs.set(args.pair.toLowerCase(), 0);
-                            else if (t1 === usdc)
-                                usdcPairs.set(args.pair.toLowerCase(), 1);
-                        } catch {
-                            /* decode noise, skip */
-                        }
-                    }
-                } catch {
-                    /* window failed, skip */
-                }
-            }),
-        ),
-    );
-    if (usdcPairs.size === 0) return 0n;
-    const pairAddrs = Array.from(usdcPairs.keys()) as Address[];
-
-    // 2. Scan Swap events on each pair.
+    // Mirror sumV3SwapVolume's address-less strategy: scan Swap events
+    // chain-wide, lazy-resolve each unique pair's token0/token1, sum
+    // USDC sides. Factory-bound enumeration silently dropped pairs
+    // whose PairCreated event sat outside the 500k-block window,
+    // which is most of them on Arc testnet.
     const swapWindows: Array<{ from: bigint; to: bigint }> = [];
     for (let from = fromBlock; from <= head; from += BLOCK_WINDOW) {
         const to = from + BLOCK_WINDOW - 1n > head ? head : from + BLOCK_WINDOW - 1n;
         swapWindows.push({ from, to });
     }
-    const sums = await Promise.all(
+    const allWindows = await Promise.all(
         swapWindows.map(async ({ from, to }) => {
             try {
-                const logs = await client.getLogs({
-                    address: pairAddrs,
+                return (await client.getLogs({
                     topics: [V2_SWAP_TOPIC],
                     fromBlock: from,
                     toBlock: to,
-                });
-                let acc = 0n;
-                for (const log of logs) {
-                    try {
-                        const usdcSide = usdcPairs.get(
-                            (log as { address: string }).address.toLowerCase(),
-                        );
-                        if (usdcSide === undefined) continue;
-                        const decoded = decodeEventLog({
-                            abi: [V2_SWAP_EVT_ABI],
-                            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                            data: (log as any).data,
-                            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                            topics: (log as any).topics,
-                        });
-                        const args = decoded.args as unknown as {
-                            amount0In: bigint;
-                            amount1In: bigint;
-                            amount0Out: bigint;
-                            amount1Out: bigint;
-                        };
-                        // USDC volume = USDC moving in OR out of the
-                        // pair on this swap. On a healthy V2 swap only
-                        // one side is non-zero; adding them is safe and
-                        // makes the math direction-agnostic.
-                        const usdcVol =
-                            usdcSide === 0
-                                ? args.amount0In + args.amount0Out
-                                : args.amount1In + args.amount1Out;
-                        if (usdcVol > 0n && usdcVol < MAX_SANE_EVENT_MICROS) {
-                            acc += usdcVol;
-                        }
-                    } catch {
-                        /* decode failure, skip */
-                    }
-                }
-                return acc;
+                })) as Array<{ address: string; topics: string[]; data: string }>;
             } catch {
-                return 0n;
+                return [];
             }
         }),
     );
-    return sums.reduce((a, b) => a + b, 0n);
+    const allLogs = allWindows.flat();
+    if (allLogs.length === 0) return 0n;
+
+    const pairAddrs = Array.from(
+        new Set(allLogs.map((l) => l.address.toLowerCase())),
+    );
+    const t0Calls = pairAddrs.map((p) =>
+        client
+            .readContract({
+                address: p as Address,
+                abi: [
+                    parseAbiItem("function token0() view returns (address)"),
+                ],
+                functionName: "token0",
+            })
+            .then(
+                (a: Address) => a,
+                () => undefined,
+            ),
+    );
+    const t1Calls = pairAddrs.map((p) =>
+        client
+            .readContract({
+                address: p as Address,
+                abi: [
+                    parseAbiItem("function token1() view returns (address)"),
+                ],
+                functionName: "token1",
+            })
+            .then(
+                (a: Address) => a,
+                () => undefined,
+            ),
+    );
+    const [t0s, t1s] = await Promise.all([
+        Promise.all(t0Calls),
+        Promise.all(t1Calls),
+    ]);
+    const usdcPairs = new Map<string, 0 | 1>();
+    for (let i = 0; i < pairAddrs.length; i++) {
+        const t0 = t0s[i]?.toLowerCase();
+        const t1 = t1s[i]?.toLowerCase();
+        if (t0 === usdc) usdcPairs.set(pairAddrs[i], 0);
+        else if (t1 === usdc) usdcPairs.set(pairAddrs[i], 1);
+    }
+    if (usdcPairs.size === 0) return 0n;
+
+    let total = 0n;
+    for (const log of allLogs) {
+        const usdcSide = usdcPairs.get(log.address.toLowerCase());
+        if (usdcSide === undefined) continue;
+        try {
+            const decoded = decodeEventLog({
+                abi: [V2_SWAP_EVT_ABI],
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                data: (log as any).data,
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                topics: (log as any).topics,
+            });
+            const args = decoded.args as unknown as {
+                amount0In: bigint;
+                amount1In: bigint;
+                amount0Out: bigint;
+                amount1Out: bigint;
+            };
+            const usdcVol =
+                usdcSide === 0
+                    ? args.amount0In + args.amount0Out
+                    : args.amount1In + args.amount1Out;
+            if (usdcVol > 0n && usdcVol < MAX_SANE_EVENT_MICROS) {
+                total += usdcVol;
+            }
+        } catch {
+            /* decode failure, skip */
+        }
+    }
+    return total;
 }
 
 /**
