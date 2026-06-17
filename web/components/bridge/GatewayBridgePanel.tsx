@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ArrowDown, ExternalLink, Info, Loader2 } from "lucide-react";
-import { useAccount, useConnectorClient } from "wagmi";
+import { baseSepolia, arbitrumSepolia, sepolia } from "wagmi/chains";
+import { useAccount, useConnectorClient, useSwitchChain } from "wagmi";
 import { AppKit, UnifiedBalanceChain } from "@circle-fin/app-kit";
 import { createViemAdapterFromProvider } from "@circle-fin/adapter-viem-v2";
 import { TokenIcon } from "@/components/ui/TokenIcon";
@@ -32,20 +33,28 @@ import { cn } from "@/lib/utils";
 /** Supported source chains for testnet deposits. We only expose ones
  *  where the user can plausibly obtain testnet USDC + ETH for gas. The
  *  destination is always Arc Testnet (user is on the Arcade Bridge UI). */
-const TESTNET_SOURCES: { id: UnifiedBalanceChain; label: string; faucet: string }[] = [
+const TESTNET_SOURCES: {
+    id: UnifiedBalanceChain;
+    label: string;
+    chainId: number;
+    faucet: string;
+}[] = [
     {
         id: UnifiedBalanceChain.Base_Sepolia,
         label: "Base Sepolia",
+        chainId: baseSepolia.id,
         faucet: "https://faucet.circle.com",
     },
     {
         id: UnifiedBalanceChain.Arbitrum_Sepolia,
         label: "Arbitrum Sepolia",
+        chainId: arbitrumSepolia.id,
         faucet: "https://faucet.circle.com",
     },
     {
         id: UnifiedBalanceChain.Ethereum_Sepolia,
         label: "Ethereum Sepolia",
+        chainId: sepolia.id,
         faucet: "https://faucet.circle.com",
     },
 ];
@@ -57,8 +66,9 @@ interface GatewayBalance {
 }
 
 export function GatewayBridgePanel() {
-    const { address: account } = useAccount();
+    const { address: account, chainId: walletChainId } = useAccount();
     const { data: connectorClient } = useConnectorClient();
+    const { switchChainAsync } = useSwitchChain();
 
     const [sourceChain, setSourceChain] = useState<UnifiedBalanceChain>(
         UnifiedBalanceChain.Base_Sepolia,
@@ -126,6 +136,25 @@ export function GatewayBridgePanel() {
         setSubmitting(true);
         setLastDepositTx(null);
         try {
+            // The SDK's viem adapter reads the source-chain USDC balance
+            // through the wallet's CURRENT EIP-1193 provider. If the
+            // wallet is on Arc (or any chain that isn't the picked
+            // source) the balance check hits the wrong ERC20 contract
+            // and the deposit reverts with "Insufficient USDC balance
+            // on <source>". Switch the wallet to the source chain
+            // first; both the balance read and the signed approve+
+            // deposit then target the same network.
+            const source = TESTNET_SOURCES.find((s) => s.id === sourceChain);
+            if (!source) throw new Error("Unsupported source chain");
+            if (walletChainId !== source.chainId) {
+                pushToast({
+                    kind: "info",
+                    title: "Switching network",
+                    message: `Switch your wallet to ${source.label} to fund the deposit.`,
+                });
+                await switchChainAsync({ chainId: source.chainId });
+            }
+
             // Pull the underlying EIP-1193 provider off the wagmi
             // connector client. Circle's viem adapter wraps it into
             // its own ViemAdapter for chain-agnostic operations.
@@ -167,7 +196,17 @@ export function GatewayBridgePanel() {
         } finally {
             setSubmitting(false);
         }
-    }, [canDeposit, account, connectorClient, sourceChain, amount, kit, refreshBalance]);
+    }, [
+        canDeposit,
+        account,
+        connectorClient,
+        sourceChain,
+        amount,
+        kit,
+        refreshBalance,
+        walletChainId,
+        switchChainAsync,
+    ]);
 
     return (
         <div className="arc-card space-y-4 p-5">
@@ -256,7 +295,14 @@ export function GatewayBridgePanel() {
                             : "cursor-not-allowed bg-arc-cta-disabled text-arc-text-muted",
                     )}
                 >
-                    {submitting ? "Submitting…" : !account ? "Connect wallet" : "Deposit"}
+                    {submitting
+                        ? "Submitting…"
+                        : !account
+                            ? "Connect wallet"
+                            : walletChainId !==
+                              TESTNET_SOURCES.find((s) => s.id === sourceChain)?.chainId
+                                ? `Switch to ${labelFor(sourceChain)} & Deposit`
+                                : "Deposit"}
                 </button>
                 {lastDepositTx && (
                     <a
