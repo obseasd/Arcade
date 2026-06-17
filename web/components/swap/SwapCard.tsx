@@ -277,51 +277,60 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
   });
 
   // V3 exact-output probe. The V3 quoter doesn't expose
-  // quoteExactOutputSingle, so when the user types into the For field on
-  // a V3 single-hop pair the back-derivation has no ratio to work from
-  // and the From input stays empty. Fire a small forward quote (1 unit
-  // of tokenIn) just to seed lastForwardRatioRef; back-derivation then
-  // converts the user's typed output to the implied input in real time.
+  // quoteExactOutputSingle, so when the user types into the For field
+  // the back-derivation has no ratio to work from and the From input
+  // stays empty. Fire a small forward quote (1 unit of tokenIn)
+  // across EVERY known V3 fee tier (100 / 500 / 3000 / 10000); the
+  // best-quote tier seeds lastForwardRatioRef. We fan out on all four
+  // tiers because the swap aggregator routes USDC↔CL through 1% in
+  // one direction and 0.3% in the other (asymmetric pool prices), so
+  // a static fee picked off useV3Tokens would seed the wrong ratio
+  // half the time — or worse, hit NO_POOL and never seed at all.
   //
-  // We INTENTIONALLY don't skip the snipe-tax path here. CLANKER_V3
-  // tokens are almost always behind a snipe skim, so guarding on
-  // !isSnipeBuy would mean the seed never fires for the very tokens
-  // this fix is meant to cover (CL etc). The 1% / 2% skim distortion
-  // on the seed ratio is acceptable for a From-field display value;
-  // the actual chain-side swap quotes again at submit time with full
-  // skim accounting, so the executed amount is correct regardless.
+  // Snipe-tax distortion on a 1-unit seed (~1-2% off the true rate)
+  // is acceptable because the chain-side swap quotes again at submit
+  // time with full skim accounting.
+  const PROBE_FEE_TIERS = [100, 500, 3_000, 10_000] as const;
   const v3SeedAmountIn = decimalsKnown ? 10n ** BigInt(decimalsIn) : 0n;
   const needsV3Seed =
-    v3SingleHop &&
     lastEdited === "out" &&
     amountOutRawTyped > 0n &&
     lastForwardRatioRef.current === null &&
     v3SeedAmountIn > 0n &&
-    v3Fee > 0;
-  const v3ProbeOut = useReadContract({
-    address: ADDRESSES.v3Quoter,
-    abi: V3_QUOTER_ABI,
-    functionName: "quoteExactInputSingle",
-    args:
-      needsV3Seed && tokenOut
-        ? [tokenIn.address, tokenOut.address, v3Fee, v3SeedAmountIn]
-        : undefined,
-    query: { enabled: needsV3Seed && !!tokenOut, retry: false },
+    !!tokenOut &&
+    decimalsKnown;
+  const v3ProbeOuts = useReadContracts({
+    contracts: PROBE_FEE_TIERS.map((fee) => ({
+      address: ADDRESSES.v3Quoter,
+      abi: V3_QUOTER_ABI,
+      functionName: "quoteExactInputSingle" as const,
+      args: [tokenIn.address, tokenOut?.address ?? tokenIn.address, fee, v3SeedAmountIn] as const,
+    })),
+    query: { enabled: needsV3Seed, retry: false },
   });
 
   useEffect(() => {
-    if (!needsV3Seed) return;
-    const out = v3ProbeOut.data as bigint | undefined;
-    if (!out || out === 0n) return;
+    if (!needsV3Seed || !v3ProbeOuts.data) return;
+    // Pick the tier with the best (largest) output. Asymmetric pools
+    // can have one tier return a huge quote and another return zero
+    // / NO_POOL revert; the largest wins, matching the aggregator's
+    // direction-specific choice.
+    let best = 0n;
+    for (const r of v3ProbeOuts.data) {
+      if (r.status !== "success") continue;
+      const out = r.result as bigint;
+      if (out > best) best = out;
+    }
+    if (best === 0n) return;
     lastForwardRatioRef.current = {
       amountIn: v3SeedAmountIn,
-      amountOut: out,
+      amountOut: best,
       tokenIn: tokenIn.address.toLowerCase(),
       tokenOut: (tokenOut?.address ?? "").toLowerCase(),
     };
     setRatioVersion((v) => v + 1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [needsV3Seed, v3ProbeOut.data]);
+  }, [needsV3Seed, v3ProbeOuts.data]);
 
   // Launchpad-router quote - accounts for the post-migration royalty on each
   // leg whose token is a migrated launchpad token. Only used in multi-hop
