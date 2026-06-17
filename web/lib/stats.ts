@@ -66,6 +66,12 @@ const PREDECESSOR_CONTRACTS: Address[] = [
     // gen 8 (2026-06-11, audit v2 + cooldown-fix prep deploy)
     "0xD863e3475E00550FBe0Abf4F1127B673E65C86a4", // launchpad
     "0xc7321283D18C4cABcD5Eda4489845336A9F5c3ed", // twitter escrow
+    "0x4774F5C79201A4f5b62a0d23064233a8b6382581", // v3 factory
+    "0x0C0a9c3B994dD87203c7e24c8e141f8F87945eE2", // v3 locker
+    "0xb7D8795FbAC9CA2AE8067f876d3633bc96d86477", // v3 router
+    "0x55ff22A36Cb8f42F3efeFB26E30E5b0876FD4587", // v3 quoter
+    "0x7dfd779d77843Ef781b5346Aa86B985dCdF9757b", // v3 NPM
+    "0x4Ad8cEC259671903dEfcE38518FCc905B773e73e", // v3 zap
     // gen 7 (2026-06-09, audit-3 batch)
     "0x62aC6A355D092267a93a1Ffb13B7D1c121A5c0e8",
     "0xD63609d130698489603AC07dFDa338D958765808",
@@ -156,19 +162,32 @@ export async function getAggregateStats(): Promise<StatsSnapshot> {
     const head = await client.getBlockNumber();
     const fromBlock = head > MAX_TOTAL_BLOCKS ? head - MAX_TOTAL_BLOCKS : 0n;
 
+    // 2026-06-17 fix: V3 stack was missing from the contracts list, so
+    // every swap routed via the V3 router (every Clanker V3 trade) and
+    // every concentrated-LP mint/burn/collect was invisible to the
+    // tx-count + unique-wallets totals. Same gap on the factory /
+    // quoter / NPM / Zap. Volume on V3 swaps is still missing because
+    // sumLaunchpadVolume only reads Buy/Sell events on the launchpad —
+    // a precise V3 volume scan ships with the indexer roadmap. This
+    // patch at least restores the headline counts.
     const contracts: Address[] = [
         ADDRESSES.router,
         ADDRESSES.factory,
         ADDRESSES.launchpad,
         ADDRESSES.multiSwap,
+        ADDRESSES.v3Router,
+        ADDRESSES.v3Factory,
+        ADDRESSES.v3Quoter,
+        ADDRESSES.v3PositionManager,
         ADDRESSES.v3Locker,
+        ADDRESSES.v3Zap,
         ADDRESSES.tokenVault,
         ...(ADDRESSES.twitterEscrow ? [ADDRESSES.twitterEscrow] : []),
         ...(ADDRESSES.v4Launchpad ? [ADDRESSES.v4Launchpad] : []),
         ...(ADDRESSES.arcadeHook ? [ADDRESSES.arcadeHook] : []),
         ...(ADDRESSES.v4PoolManager ? [ADDRESSES.v4PoolManager] : []),
         ...PREDECESSOR_CONTRACTS,
-    ];
+    ].filter((a): a is Address => !!a && a !== "0x0000000000000000000000000000000000000000");
 
     const seenTxs = new Set<string>();
     const seenWallets = new Set<string>();
