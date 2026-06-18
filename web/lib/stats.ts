@@ -116,6 +116,17 @@ const ARC_TESTNET = {
     network: "arc-testnet",
     nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 6 },
     rpcUrls: { default: { http: [ARC_RPC] }, public: { http: [ARC_RPC] } },
+    // Multicall3 canonical address — wires viem's client.multicall()
+    // so the V3/V2 volume scanners can batch hundreds of token0/token1
+    // reads into a single HTTP roundtrip instead of fanning out to
+    // unbatched eth_calls (which the cron's 60s budget can't survive).
+    contracts: {
+        multicall3: {
+            address:
+                "0xcA11bde05977b3631167028862bE2a173976CA11" as Address,
+            blockCreated: 0,
+        },
+    },
 } as const;
 
 // USDC-gas estimate: txCount * AVG_TX_GAS_USED * AVG_GAS_PRICE_WEI / DIV.
@@ -582,63 +593,78 @@ async function sumV3SwapVolume(
                     fromBlock: from,
                     toBlock: to,
                 })) as Array<{ address: string; topics: string[]; data: string }>;
-            } catch {
+            } catch (err) {
+                console.warn(
+                    `[stats v3] getLogs ${from}..${to} failed:`,
+                    (err as Error)?.message ?? err,
+                );
                 return [];
             }
         }),
     );
     const allLogs = allWindows.flat();
+    console.log(`[stats v3] scanned ${allLogs.length} Swap events`);
     if (allLogs.length === 0) return 0n;
 
     const poolAddrs = Array.from(
         new Set(allLogs.map((l) => l.address.toLowerCase())),
     );
+    console.log(`[stats v3] ${poolAddrs.length} unique pools`);
 
-    // 2. For every pool seen, read token0 + token1 in one multicall
-    //    and keep only the USDC-touching ones. Failures (e.g. a
-    //    contract that emits Swap but isn't actually a V3 pool) drop
-    //    silently. ERC-20 token0()/token1() selectors are the
-    //    standard Uniswap V3 ones: 0x0dfe1681 / 0xd21220a7.
-    const t0Calls = poolAddrs.map((p) =>
-        client
-            .readContract({
+    // 2. For every pool seen, read token0 + token1 via multicall3.
+    //    Unbatched readContract fan-out blew past the cron's 60s
+    //    budget on Arc's public RPC; multicall coalesces all reads
+    //    into one HTTP roundtrip per chunk. Chunk size of 500 keeps
+    //    the calldata under the gas cap on Arc's multicall3.
+    const CHUNK = 500;
+    const usdcPools = new Map<string, 0 | 1>();
+    for (let i = 0; i < poolAddrs.length; i += CHUNK) {
+        const slice = poolAddrs.slice(i, i + CHUNK);
+        const contracts = slice.flatMap((p) => [
+            {
                 address: p as Address,
                 abi: [
                     parseAbiItem("function token0() view returns (address)"),
                 ],
-                functionName: "token0",
-            })
-            .then(
-                (a: Address) => a,
-                () => undefined,
-            ),
-    );
-    const t1Calls = poolAddrs.map((p) =>
-        client
-            .readContract({
+                functionName: "token0" as const,
+            },
+            {
                 address: p as Address,
                 abi: [
                     parseAbiItem("function token1() view returns (address)"),
                 ],
-                functionName: "token1",
-            })
-            .then(
-                (a: Address) => a,
-                () => undefined,
-            ),
-    );
-    const [t0s, t1s] = await Promise.all([
-        Promise.all(t0Calls),
-        Promise.all(t1Calls),
-    ]);
-    /** Map<lowercased pool, 0 if USDC = token0, 1 if USDC = token1>. */
-    const usdcPools = new Map<string, 0 | 1>();
-    for (let i = 0; i < poolAddrs.length; i++) {
-        const t0 = t0s[i]?.toLowerCase();
-        const t1 = t1s[i]?.toLowerCase();
-        if (t0 === usdc) usdcPools.set(poolAddrs[i], 0);
-        else if (t1 === usdc) usdcPools.set(poolAddrs[i], 1);
+                functionName: "token1" as const,
+            },
+        ]);
+        let results: Array<{ status: "success" | "failure"; result?: Address }> = [];
+        try {
+            results = (await client.multicall({
+                contracts: contracts as never,
+                allowFailure: true,
+            })) as never;
+        } catch (err) {
+            console.warn(
+                `[stats v3] multicall chunk ${i} failed:`,
+                (err as Error)?.message ?? err,
+            );
+            continue;
+        }
+        for (let j = 0; j < slice.length; j++) {
+            const r0 = results[j * 2];
+            const r1 = results[j * 2 + 1];
+            const t0 =
+                r0?.status === "success"
+                    ? (r0.result as Address | undefined)?.toLowerCase()
+                    : undefined;
+            const t1 =
+                r1?.status === "success"
+                    ? (r1.result as Address | undefined)?.toLowerCase()
+                    : undefined;
+            if (t0 === usdc) usdcPools.set(slice[j], 0);
+            else if (t1 === usdc) usdcPools.set(slice[j], 1);
+        }
     }
+    console.log(`[stats v3] ${usdcPools.size} USDC-touching pools`);
     if (usdcPools.size === 0) return 0n;
 
     // 3. Sum |USDC side amount| across the swap logs we already pulled.
@@ -714,56 +740,73 @@ async function sumV2SwapVolume(
                     fromBlock: from,
                     toBlock: to,
                 })) as Array<{ address: string; topics: string[]; data: string }>;
-            } catch {
+            } catch (err) {
+                console.warn(
+                    `[stats v2] getLogs ${from}..${to} failed:`,
+                    (err as Error)?.message ?? err,
+                );
                 return [];
             }
         }),
     );
     const allLogs = allWindows.flat();
+    console.log(`[stats v2] scanned ${allLogs.length} Swap events`);
     if (allLogs.length === 0) return 0n;
 
     const pairAddrs = Array.from(
         new Set(allLogs.map((l) => l.address.toLowerCase())),
     );
-    const t0Calls = pairAddrs.map((p) =>
-        client
-            .readContract({
+    console.log(`[stats v2] ${pairAddrs.length} unique pairs`);
+
+    const CHUNK = 500;
+    const usdcPairs = new Map<string, 0 | 1>();
+    for (let i = 0; i < pairAddrs.length; i += CHUNK) {
+        const slice = pairAddrs.slice(i, i + CHUNK);
+        const contracts = slice.flatMap((p) => [
+            {
                 address: p as Address,
                 abi: [
                     parseAbiItem("function token0() view returns (address)"),
                 ],
-                functionName: "token0",
-            })
-            .then(
-                (a: Address) => a,
-                () => undefined,
-            ),
-    );
-    const t1Calls = pairAddrs.map((p) =>
-        client
-            .readContract({
+                functionName: "token0" as const,
+            },
+            {
                 address: p as Address,
                 abi: [
                     parseAbiItem("function token1() view returns (address)"),
                 ],
-                functionName: "token1",
-            })
-            .then(
-                (a: Address) => a,
-                () => undefined,
-            ),
-    );
-    const [t0s, t1s] = await Promise.all([
-        Promise.all(t0Calls),
-        Promise.all(t1Calls),
-    ]);
-    const usdcPairs = new Map<string, 0 | 1>();
-    for (let i = 0; i < pairAddrs.length; i++) {
-        const t0 = t0s[i]?.toLowerCase();
-        const t1 = t1s[i]?.toLowerCase();
-        if (t0 === usdc) usdcPairs.set(pairAddrs[i], 0);
-        else if (t1 === usdc) usdcPairs.set(pairAddrs[i], 1);
+                functionName: "token1" as const,
+            },
+        ]);
+        let results: Array<{ status: "success" | "failure"; result?: Address }> = [];
+        try {
+            results = (await client.multicall({
+                contracts: contracts as never,
+                allowFailure: true,
+            })) as never;
+        } catch (err) {
+            console.warn(
+                `[stats v2] multicall chunk ${i} failed:`,
+                (err as Error)?.message ?? err,
+            );
+            continue;
+        }
+        for (let j = 0; j < slice.length; j++) {
+            const r0 = results[j * 2];
+            const r1 = results[j * 2 + 1];
+            const t0 =
+                r0?.status === "success"
+                    ? (r0.result as Address | undefined)?.toLowerCase()
+                    : undefined;
+            const t1 =
+                r1?.status === "success"
+                    ? (r1.result as Address | undefined)?.toLowerCase()
+                    : undefined;
+            if (t0 === usdc) usdcPairs.set(slice[j], 0);
+            else if (t1 === usdc) usdcPairs.set(slice[j], 1);
+        }
     }
+    console.log(`[stats v2] ${usdcPairs.size} USDC-touching pairs`);
     if (usdcPairs.size === 0) return 0n;
 
     let total = 0n;
