@@ -394,8 +394,14 @@ async function fetchTrades(
   for (const log of allLogs) {
     const priceQ64 = log.args.newPriceQ64 as bigint | undefined;
     if (!priceQ64) continue;
+    // Audit 2026-06-18 H-20: live onCurveLog applies a *1e12 scale to
+    // bring newPriceQ64 (raw-USDC / raw-token-wei, 18-dec token vs
+    // 6-dec USDC) into "USDC per whole token" units; the historical
+    // path was missing it, so the chart Y-axis jumped 12 orders of
+    // magnitude the moment the first live trade arrived. Keep the two
+    // paths in lockstep.
     const priceE24 = (priceQ64 * 10n ** 24n) >> 64n;
-    const price = Number(priceE24) / 1e24;
+    const price = (Number(priceE24) / 1e24) * 1e12;
     const isBuy = "usdcIn" in (log.args as any);
     const volumeUsdc = Number(isBuy ? log.args.usdcIn : log.args.usdcOut) / 1e6;
     trades.push({ time: tsFor(log.blockNumber as bigint), price, volumeUsdc, isBuy });

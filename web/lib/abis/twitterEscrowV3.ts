@@ -199,6 +199,55 @@ export const TWITTER_ESCROW_V3_ABI = [
         inputs: [{ name: "newSigner", type: "address" }],
         outputs: [],
     },
+    // Audit 2026-06-18 M-13: the gen 8 contract replaced the
+    // immediate setTrustedSigner with a 2-step + 24h timelock flow.
+    // Without these entries, the frontend cannot even type-check a
+    // call to the new path — wagmi's typed writeContract would
+    // reject `functionName: "requestTrustedSignerRotation"`.
+    //
+    // Flow:
+    //   1. requestTrustedSignerRotation(newSigner)
+    //      → stages newSigner, sets trustedSignerNotBefore = now + 24h
+    //   2. (optional) cancelTrustedSignerRotation() at any time
+    //   3. finalizeTrustedSignerRotation() once block.timestamp >= notBefore
+    //      → trustedSigner = pendingTrustedSigner, pending = 0
+    {
+        type: "function",
+        name: "requestTrustedSignerRotation",
+        stateMutability: "nonpayable",
+        inputs: [{ name: "newSigner", type: "address" }],
+        outputs: [],
+    },
+    {
+        type: "function",
+        name: "cancelTrustedSignerRotation",
+        stateMutability: "nonpayable",
+        inputs: [],
+        outputs: [],
+    },
+    {
+        type: "function",
+        name: "finalizeTrustedSignerRotation",
+        stateMutability: "nonpayable",
+        inputs: [],
+        outputs: [],
+    },
+    {
+        type: "function",
+        name: "pendingTrustedSigner",
+        stateMutability: "view",
+        inputs: [],
+        outputs: [{ name: "", type: "address" }],
+    },
+    {
+        type: "function",
+        name: "trustedSignerNotBefore",
+        stateMutability: "view",
+        inputs: [],
+        outputs: [{ name: "", type: "uint64" }],
+    },
+    // Error decoded by viem on the deprecated setTrustedSigner path.
+    { type: "error", name: "USE_TIMELOCK_ROTATION", inputs: [] },
     {
         type: "function",
         name: "pause",

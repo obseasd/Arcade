@@ -69,9 +69,46 @@ export function createV3ForkProvider(cfg: V3ForkConfig): RouteProvider {
     return {
         meta: PROVIDER_META[cfg.id],
         async quote(req, publicClient) {
-            return v3ForkQuote(cfg, req, publicClient);
+            // Audit 2026-06-18 M-20: the AbortSignal on QuoteRequest
+            // was never threaded into the underlying readContract
+            // calls, so a fast-typing user kept N stale RPC roundtrips
+            // in flight after every keystroke. Viem's readContract
+            // does not accept a signal directly, so we wrap the whole
+            // quote in a race that resolves null on abort. The RPC
+            // calls themselves still complete server-side (the budget
+            // is gone either way) but the front-end no longer waits
+            // for them.
+            return raceSignal(v3ForkQuote(cfg, req, publicClient), req.signal);
         },
     };
+}
+
+function raceSignal<T>(p: Promise<T>, signal: AbortSignal | undefined): Promise<T | null> {
+    if (!signal) return p as Promise<T | null>;
+    if (signal.aborted) return Promise.resolve(null);
+    return new Promise<T | null>((resolve, reject) => {
+        let settled = false;
+        const onAbort = () => {
+            if (settled) return;
+            settled = true;
+            resolve(null);
+        };
+        signal.addEventListener("abort", onAbort, { once: true });
+        p.then(
+            (v) => {
+                if (settled) return;
+                settled = true;
+                signal.removeEventListener("abort", onAbort);
+                resolve(v);
+            },
+            (e) => {
+                if (settled) return;
+                settled = true;
+                signal.removeEventListener("abort", onAbort);
+                reject(e);
+            },
+        );
+    });
 }
 
 async function v3ForkQuote(

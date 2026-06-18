@@ -332,6 +332,92 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [needsV3Seed, v3ProbeOuts.data]);
 
+  // Audit 2026-06-18 H-16: verification probe. The 1-unit seed gives a
+  // mid-price rate that is ~accurate on deep pools but can be 10-50%
+  // off on thin Clanker V3 pools where the user's typed For amount
+  // moves the pool meaningfully. Re-probe at the LINEARLY-DERIVED
+  // amountIn so the For field reflects the rate the user will actually
+  // get, not an extrapolation that triggers slippage reverts.
+  //
+  // Why a verification probe instead of a binary search: the swap
+  // surface ships in two writes (typing + submit). A second round-trip
+  // probe per typing pause is acceptable; an N-round binary search per
+  // keystroke is not. The user can still submit on a thin pool with
+  // wider slippage — they just see the real expected rate first.
+  const verifiedRatioRef = useRef<{
+    derivedIn: bigint;
+    tokenIn: string;
+    tokenOut: string;
+  } | null>(null);
+  const seedRatio = lastForwardRatioRef.current;
+  const verifyAmountIn = useMemo<bigint>(() => {
+    if (lastEdited !== "out") return 0n;
+    if (!seedRatio || seedRatio.amountOut === 0n) return 0n;
+    if (amountOutRawTyped === 0n) return 0n;
+    if (
+      seedRatio.tokenIn !== tokenIn.address.toLowerCase() ||
+      seedRatio.tokenOut !== (tokenOut?.address ?? "").toLowerCase()
+    ) {
+      return 0n;
+    }
+    return (amountOutRawTyped * seedRatio.amountIn) / seedRatio.amountOut;
+    // ratioVersion picks up the seed refresh; we deliberately depend on
+    // it so a fresh seed re-fires the verification probe.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lastEdited, amountOutRawTyped, ratioVersion, tokenIn.address, tokenOut?.address]);
+  const needsV3Verify =
+    lastEdited === "out" &&
+    amountOutRawTyped > 0n &&
+    verifyAmountIn > 0n &&
+    verifyAmountIn !== v3SeedAmountIn &&
+    !!tokenOut &&
+    decimalsKnown &&
+    (verifiedRatioRef.current === null ||
+      verifiedRatioRef.current.derivedIn !== verifyAmountIn ||
+      verifiedRatioRef.current.tokenIn !== tokenIn.address.toLowerCase() ||
+      verifiedRatioRef.current.tokenOut !== (tokenOut?.address ?? "").toLowerCase());
+  const v3VerifyOuts = useReadContracts({
+    contracts: PROBE_FEE_TIERS.map((fee) => ({
+      address: ADDRESSES.v3Quoter,
+      abi: V3_QUOTER_ABI,
+      functionName: "quoteExactInputSingle" as const,
+      args: [tokenIn.address, tokenOut?.address ?? tokenIn.address, fee, verifyAmountIn] as const,
+    })),
+    query: { enabled: needsV3Verify, retry: false },
+  });
+  useEffect(() => {
+    if (!needsV3Verify || !v3VerifyOuts.data) return;
+    let best = 0n;
+    for (const r of v3VerifyOuts.data) {
+      if (r.status !== "success") continue;
+      const out = r.result as bigint;
+      if (out > best) best = out;
+    }
+    if (best === 0n) return;
+    // Update the canonical ratio cache from the verification probe.
+    // Subsequent re-derivations (typing into the For field) now use
+    // the curve-accurate rate at trade scale instead of the 1-unit
+    // mid-price.
+    lastForwardRatioRef.current = {
+      amountIn: verifyAmountIn,
+      amountOut: best,
+      tokenIn: tokenIn.address.toLowerCase(),
+      tokenOut: (tokenOut?.address ?? "").toLowerCase(),
+    };
+    verifiedRatioRef.current = {
+      derivedIn: verifyAmountIn,
+      tokenIn: tokenIn.address.toLowerCase(),
+      tokenOut: (tokenOut?.address ?? "").toLowerCase(),
+    };
+    setRatioVersion((v) => v + 1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [needsV3Verify, v3VerifyOuts.data]);
+  // Reset verification cache on pair / direction change so the next
+  // typing session re-verifies cleanly.
+  useEffect(() => {
+    verifiedRatioRef.current = null;
+  }, [tokenIn.address, tokenOut?.address, lastEdited]);
+
   // Launchpad-router quote - accounts for the post-migration royalty on each
   // leg whose token is a migrated launchpad token. Only used in multi-hop
   // mode when at least one side is migrated.
@@ -382,31 +468,53 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
     slippageBps,
     enabled: aggregatorEnabled,
   });
-  const [selectedRoute, setSelectedRoute] = useState<RouteQuote | undefined>(undefined);
-  // Reset the user's manual pick only when the token PAIR changes (a new
-  // pair always has its own provider set). We do NOT reset on amountIn
-  // changes — that would wipe the user's selection every single
-  // keystroke (audit finding R-3). Instead, watch the live quotes list:
-  // if the selected provider drops out (e.g. amount went above its
-  // available liquidity), fall back to the auto-best on next render.
+  // Audit 2026-06-18 H-17 + H-19: previously this stored the entire
+  // RouteQuote, including its `executor.args` snapshot. When the user
+  // changed amountIn (or any input that flows through the quote
+  // pipeline), routeQuotes refreshed but selectedRoute kept the OLD
+  // executor args. The submit path then signed a tx built against the
+  // stale amount, while the UI showed the new one.
+  //
+  // Fix: store ONLY the provider name. activeRoute is derived from
+  // the live routeQuotes.quotes list, so the executor + amountOut are
+  // always fresh. userPickedProvider tracks whether the choice was
+  // explicit (sticky until pair / null) or auto-picked by the
+  // impact-aware filter (re-evaluated whenever quotes change).
+  const [selectedProvider, setSelectedProvider] = useState<string | undefined>(undefined);
+  const [userPickedProvider, setUserPickedProvider] = useState(false);
+  // Reset on pair change so a new pair always has its own provider set.
   useEffect(() => {
-    setSelectedRoute(undefined);
+    setSelectedProvider(undefined);
+    setUserPickedProvider(false);
   }, [tokenIn.address, tokenOut?.address]);
+  // If the selected provider drops out (e.g. amount went above its
+  // available liquidity), reset and let the auto-pick run again.
   useEffect(() => {
-    if (!selectedRoute) return;
+    if (!selectedProvider) return;
     const stillPresent = routeQuotes.quotes.some(
-      (q) => q.provider === selectedRoute.provider,
+      (q) => q.provider === selectedProvider,
     );
-    if (!stillPresent) setSelectedRoute(undefined);
-  }, [selectedRoute, routeQuotes.quotes]);
+    if (!stillPresent) {
+      setSelectedProvider(undefined);
+      setUserPickedProvider(false);
+    }
+  }, [selectedProvider, routeQuotes.quotes]);
 
-  // The currently-active route: either the user's manual pick or the
-  // aggregator's auto-picked best. When non-null and the provider is
-  // external (Synthra / UnitFlow / future XyloNet), the SwapCard wires
-  // the route's pre-built executor into the writeContract path and
-  // takes amountOut directly from it. Arcade routes keep the legacy
-  // pipeline since the existing V3/V2 quote + writeContract already
-  // handle them (anti-sniper tax, launchpad multi-hop, etc).
+  // The currently-active route: either the user's manual pick (resolved
+  // against the LIVE quotes list so executor.args is always fresh) or
+  // the aggregator's auto-picked best. When non-null and the provider
+  // is external (Synthra / UnitFlow / future XyloNet), the SwapCard
+  // wires the route's pre-built executor into the writeContract path
+  // and takes amountOut directly from it. Arcade routes keep the
+  // legacy pipeline since the existing V3/V2 quote + writeContract
+  // already handle them (anti-sniper tax, launchpad multi-hop, etc).
+  const selectedRoute: RouteQuote | undefined = useMemo(
+    () =>
+      selectedProvider
+        ? routeQuotes.quotes.find((q) => q.provider === selectedProvider)
+        : undefined,
+    [selectedProvider, routeQuotes.quotes],
+  );
   const activeRoute: RouteQuote | null = selectedRoute ?? routeQuotes.best ?? null;
   const isExternalRoute =
     !!activeRoute &&
@@ -650,7 +758,17 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
     if (refProbeAmount === 0n || amountInRaw === 0n) return m;
     for (const q of routeQuotes.quotes) {
       if (q.amountOut === 0n) continue;
-      const ref = refQuotes.quotes.find((r) => r.provider === q.provider) ?? refQuotes.best;
+      // Audit 2026-06-18 H-18: previously fell back to refQuotes.best
+      // (the cross-provider best small-amount quote) when no
+      // same-provider ref was available. That produced wildly wrong
+      // impacts: comparing arcade-v3's full-amount output against
+      // synthra's mid-price ref would surface arcade-v3 as having
+      // -90% impact and bump it artificially to the top of the
+      // calm-route list. Without a same-provider baseline we cannot
+      // honestly compute impact, so we skip the route from the
+      // impact-aware ranking (it stays selectable via the route list
+      // and the user still sees its output, just no impact reading).
+      const ref = refQuotes.quotes.find((r) => r.provider === q.provider);
       if (!ref || ref.amountOut === 0n) continue;
       const refNum = ref.amountOut * amountInRaw;
       const tradeNum = q.amountOut * refProbeAmount;
@@ -663,7 +781,7 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
       m.set(q.provider, impactBps / 100);
     }
     return m;
-  }, [routeQuotes.quotes, refQuotes.quotes, refQuotes.best, refProbeAmount, amountInRaw]);
+  }, [routeQuotes.quotes, refQuotes.quotes, refProbeAmount, amountInRaw]);
 
   // Impact-aware best-route override. Default `routeQuotes.best` is
   // pure max-output, which on asymmetric pools (USDC/CL deep-vs-shallow
@@ -689,19 +807,28 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
     return calm[0];
   }, [routeQuotes.quotes, routeQuotes.best, perRouteImpactPct]);
 
-  // When the impact-aware pick differs from the aggregator's raw best
-  // AND the user hasn't manually selected a route, push the calmer
-  // route into selectedRoute so the actual swap submit uses it. The
-  // existing pair-change effect at the top of this component resets
-  // selectedRoute on token swap so this auto-pick stays sticky only
-  // within the current pair. The user can still click the raw best in
-  // the route list if they explicitly want the high-impact path.
+  // Audit 2026-06-18 H-19: auto-pick re-fires whenever impactAwareBest
+  // changes (i.e. whenever amountIn moves into a new impact regime).
+  // Previously the effect short-circuited as soon as ANY selectedRoute
+  // was set — including the auto-picked one — so the user stayed on a
+  // route that may have been calm at $10 but is now 95% impact at
+  // $10,000. The userPickedProvider flag distinguishes an explicit
+  // user click (sticky within the pair) from a prior auto-pick
+  // (re-evaluated on every quote refresh).
   useEffect(() => {
-    if (selectedRoute) return;
+    if (userPickedProvider) return;
     if (!impactAwareBest || !routeQuotes.best) return;
-    if (impactAwareBest.provider === routeQuotes.best.provider) return;
-    setSelectedRoute(impactAwareBest);
-  }, [selectedRoute, impactAwareBest, routeQuotes.best]);
+    if (impactAwareBest.provider === routeQuotes.best.provider) {
+      // Calm route IS the raw best → no override needed. Clear any
+      // prior auto-selection so the activeRoute falls back to
+      // routeQuotes.best naturally.
+      if (selectedProvider) setSelectedProvider(undefined);
+      return;
+    }
+    if (selectedProvider !== impactAwareBest.provider) {
+      setSelectedProvider(impactAwareBest.provider);
+    }
+  }, [userPickedProvider, impactAwareBest, routeQuotes.best, selectedProvider]);
 
   const priceImpactPct = useMemo<number | undefined>(() => {
     if (!activeRoute || activeRoute.amountOut === 0n) return undefined;
@@ -1357,7 +1484,10 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
           quotes={routeQuotes.quotes}
           loading={routeQuotes.loading}
           selected={selectedRoute ?? routeQuotes.best ?? undefined}
-          onSelect={(q) => setSelectedRoute(q)}
+          onSelect={(q) => {
+            setSelectedProvider(q.provider);
+            setUserPickedProvider(true);
+          }}
           decimalsOut={decimalsOut}
           symbolOut={symOut}
           usdPricePerOut={

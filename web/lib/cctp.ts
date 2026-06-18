@@ -224,6 +224,14 @@ export interface ParsedCctpMessage {
   sourceDomain: number;
   destinationDomain: number;
   nonce: bigint;
+  /**
+   * Full bytes32 nonce as a 0x-prefixed hex string. Used as the
+   * key into MessageTransmitter.usedNonces() for client-side
+   * already-minted prechecks (audit 2026-06-18 M-06). The `nonce`
+   * bigint above exposes only the low 8 bytes for legacy telemetry
+   * and is NOT suitable as a usedNonces key on V2.
+   */
+  nonceHash: `0x${string}`;
   mintRecipient: `0x${string}`;
 }
 
@@ -264,7 +272,10 @@ export function parseCctpV2Message(message: `0x${string}`): ParsedCctpMessage | 
       return null;
     }
     const mintRecipient = ("0x" + mintRecipientHex) as `0x${string}`;
-    return { version, sourceDomain, destinationDomain, nonce, mintRecipient };
+    // Full bytes32 nonce slice (bytes 12..43 of the message body).
+    const nonceHash = ("0x" + hex.slice(12 * 2, 44 * 2)) as `0x${string}`;
+    if (nonceHash.length !== 66) return null;
+    return { version, sourceDomain, destinationDomain, nonce, nonceHash, mintRecipient };
   } catch {
     return null;
   }

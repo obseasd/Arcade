@@ -55,6 +55,13 @@ export const ADDRESSES = {
    *  re-deposits them into the position (COMPOUND mode). Optional — the
    *  Auto-management section on /positions is hidden when zeroAddress. */
   autoCompounder: safeAddress(process.env.NEXT_PUBLIC_AUTO_COMPOUNDER_ADDRESS),
+  /** ArcadeIdentityIssuer: on-chain tier verifier wrapping the ERC-8004
+   *  Identity Registry. Audit 2026-06-18 H-09 fix. When zeroAddress, the
+   *  Identity mint UI falls back to direct Registry.mint (client-side
+   *  tier gate only). Set this once the Issuer is deployed and the
+   *  Registry has been re-configured to accept calls only from the
+   *  Issuer. */
+  identityIssuer: safeAddress(process.env.NEXT_PUBLIC_ARCADE_IDENTITY_ISSUER_ADDRESS),
   // --- Uniswap V4 prototype (ArcadeV4Launchpad + ArcadeAntiSniperHook) ---
   // Original 2-step (createLaunch then initializePool) flow, behind
   // NEXT_PUBLIC_V4_ENABLED. Superseded by the ArcadeHook production stack

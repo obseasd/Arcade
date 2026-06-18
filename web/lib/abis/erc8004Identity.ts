@@ -65,6 +65,19 @@ export const ERC_8004_IDENTITY_ABI = [
         ],
         outputs: [{ name: "tokenId", type: "uint256" }],
     },
+    // Audit 2026-06-18 H-10: burn surface for the tier-upgrade flow.
+    // The previous mint path locked the metadata URI on-chain
+    // forever, so a creator who hit Silver, minted, then graduated to
+    // Gold would have a permanent Silver NFT in their wallet. Burn +
+    // re-mint refreshes the metadata to match current tier. Standard
+    // ERC-721 burn signature; the Arc Identity Registry exposes it.
+    {
+        type: "function",
+        name: "burn",
+        stateMutability: "nonpayable",
+        inputs: [{ name: "tokenId", type: "uint256" }],
+        outputs: [],
+    },
     {
         type: "event",
         name: "Transfer",

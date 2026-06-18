@@ -20,6 +20,7 @@ import {
   TOKEN_MESSENGER_V2_ABI,
   addressToBytes32,
   fetchAttestation,
+  fetchAttestationDetailed,
   getCctpChain,
   parseCctpV2Message,
 } from "@/lib/cctp";
@@ -484,8 +485,15 @@ export function BridgeCard() {
     const poll = async () => {
       attempts += 1;
       const att = await fetchAttestation(step.srcDomain, step.burnTxHash);
-      // eslint-disable-next-line no-console
-      console.log(`[CCTP] poll #${attempts}`, { status: att?.status, hasAtt: !!att });
+      // Audit 2026-06-18 M-04: drop console.log on every poll. The
+      // bridge can poll 30+ times per session and Vercel's free
+      // log tier capped quickly under heavy use. Keep telemetry
+      // gated behind NODE_ENV=development so testnet debugging
+      // still works without flooding prod logs.
+      if (process.env.NODE_ENV === "development") {
+        // eslint-disable-next-line no-console
+        console.log(`[CCTP] poll #${attempts}`, { status: att?.status, hasAtt: !!att });
+      }
       if (att && att.status === "complete" && !cancelled) {
         // Audit Bridge C-2: parse the Iris message header and assert
         // sourceDomain / destinationDomain / mintRecipient match what
@@ -553,13 +561,57 @@ export function BridgeCard() {
       }
       return false;
     };
-    // First poll right away so the user sees activity
-    poll();
-    const interval = setInterval(async () => {
+    // Audit 2026-06-18 H-08: replace the fixed 6s setInterval with an
+    // exponential-backoff recursive setTimeout. Iris egress is
+    // rate-limited on the production endpoint and the previous
+    // 6s/forever cadence (= 600 requests/hour against the SAME tx
+    // hash) was a guaranteed 429 spiral on mainnet. New cadence:
+    //   poll 0 : immediate
+    //   poll 1 : 6s
+    //   poll 2 : 9s    (× 1.5)
+    //   poll 3 : 13s
+    //   poll 4 : 20s
+    //   ...
+    //   cap at 30s/poll once the burn has been pending > 2 minutes.
+    // The base 6s cadence is restored on every "missing" / "pending"
+    // signal (the burn is making progress); a "transient" signal (5xx,
+    // network) only bumps the backoff. The recursive timeout is held
+    // in a ref so cleanup can cancel a scheduled-but-not-fired tick.
+    const BASE_DELAY_MS = 6_000;
+    const MAX_DELAY_MS = 30_000;
+    let pollTimer: ReturnType<typeof setTimeout> | null = null;
+    let currentDelayMs = BASE_DELAY_MS;
+    const schedulePoll = (delayMs: number) => {
       if (cancelled) return;
+      pollTimer = setTimeout(async () => {
+        if (cancelled) return;
+        // fetchAttestationDetailed surfaces transient vs missing vs
+        // complete so we can branch backoff intelligently.
+        const detailed = await fetchAttestationDetailed(step.srcDomain, step.burnTxHash);
+        if (detailed.kind === "transient") {
+          // Iris hiccup or network blip. Bump backoff, do NOT call
+          // through to poll() which would also fetchAttestation
+          // again (double traffic).
+          currentDelayMs = Math.min(Math.floor(currentDelayMs * 1.5), MAX_DELAY_MS);
+          schedulePoll(currentDelayMs);
+          return;
+        }
+        // Reset backoff on any non-transient result.
+        currentDelayMs = BASE_DELAY_MS;
+        const done = await poll();
+        if (!done) schedulePoll(currentDelayMs);
+      }, delayMs);
+    };
+    // First poll right away so the user sees activity. Use the
+    // detailed flavor for parity with the scheduled path.
+    (async () => {
+      const detailed = await fetchAttestationDetailed(step.srcDomain, step.burnTxHash);
+      if (detailed.kind === "transient") {
+        currentDelayMs = Math.min(Math.floor(BASE_DELAY_MS * 1.5), MAX_DELAY_MS);
+      }
       const done = await poll();
-      if (done) clearInterval(interval);
-    }, 6_000);
+      if (!done) schedulePoll(currentDelayMs);
+    })();
     // Independent tick for the UI elapsed counter (1s granularity).
     const tickInterval = setInterval(() => {
       if (cancelled) return;
@@ -567,7 +619,7 @@ export function BridgeCard() {
     }, 1_000);
     return () => {
       cancelled = true;
-      clearInterval(interval);
+      if (pollTimer) clearTimeout(pollTimer);
       clearInterval(tickInterval);
     };
   }, [step]);
@@ -653,6 +705,37 @@ export function BridgeCard() {
       }
       const dstClient = getPublicClient(config, { chainId: step.dstId });
       if (!dstClient) throw new Error("Could not get destination chain client");
+      // Audit 2026-06-18 M-06: precheck usedNonces on the destination
+      // MessageTransmitter so a duplicate-mint attempt (user clicks
+      // Claim twice in two tabs, or polls a stale attestation cache)
+      // short-circuits to a friendly UX instead of burning gas on a
+      // tx that reverts at the on-chain "AlreadyUsed" check. The
+      // precheck is best-effort: if we cannot parse the nonce or the
+      // RPC read fails we proceed and the on-chain check stays as
+      // the canonical guard.
+      const parsedNonceCheck = parseCctpV2Message(step.message);
+      if (parsedNonceCheck?.nonceHash) {
+        try {
+          const used = (await dstClient.readContract({
+            address: CCTP_V2_MESSAGE_TRANSMITTER,
+            abi: MESSAGE_TRANSMITTER_V2_ABI,
+            functionName: "usedNonces",
+            args: [parsedNonceCheck.nonceHash],
+          })) as bigint;
+          if (used > 0n) {
+            pushToast({
+              kind: "info",
+              title: "Already minted",
+              message: "Circle attestation already consumed on the destination chain.",
+            });
+            clearPendingBridge(account);
+            setStep({ kind: "idle" });
+            return;
+          }
+        } catch {
+          // RPC failure — fall through to the on-chain guard.
+        }
+      }
       const hash = await writeContractAsync({
         address: CCTP_V2_MESSAGE_TRANSMITTER,
         abi: MESSAGE_TRANSMITTER_V2_ABI,

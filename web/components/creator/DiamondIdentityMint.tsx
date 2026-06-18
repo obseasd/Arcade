@@ -1,38 +1,49 @@
 "use client";
 
-import { ExternalLink, Gem, Loader2 } from "lucide-react";
+import { ArrowUp, ExternalLink, Gem, Loader2 } from "lucide-react";
 import { useMemo, useState } from "react";
-import { stringToHex, type Hex } from "viem";
 import { useAccount, usePublicClient, useReadContract, useWriteContract } from "wagmi";
 import {
     ERC_8004_IDENTITY_ABI,
     ERC_8004_IDENTITY_ADDRESS,
 } from "@/lib/abis/erc8004Identity";
-import { useCreatorTier } from "@/lib/hooks/useCreatorTier";
+import { ARCADE_IDENTITY_ISSUER_ABI } from "@/lib/abis/arcadeIdentityIssuer";
+import { ADDRESSES } from "@/lib/constants";
+import { useCreatorTier, type CreatorTier } from "@/lib/hooks/useCreatorTier";
 import { pushToast } from "@/lib/toast";
 
 /**
- * Mints an Arcade Diamond Creator Identity NFT (ERC-8004) for the
- * connected wallet, when that wallet has the Diamond tier (10+
- * bonded launches).
+ * Audit 2026-06-18 H-09: when the on-chain ArcadeIdentityIssuer is
+ * wired (NEXT_PUBLIC_ARCADE_IDENTITY_ISSUER_ADDRESS set), mint routes
+ * through it so the tier is verified on-chain before forwarding to
+ * the ERC-8004 Registry. Otherwise we fall back to direct
+ * Registry.mint (legacy behavior; tier gate is client-side only).
+ */
+const TIER_CODE: Record<CreatorTier, number> = {
+    none: 0,
+    silver: 1,
+    gold: 2,
+    diamond: 3,
+};
+
+/**
+ * Mints an Arcade Creator Identity NFT (ERC-8004) for the connected
+ * wallet, gated on the wallet's bonded-launch tier (Silver / Gold /
+ * Diamond).
  *
- * Rendering rules:
- *   - tier !== "diamond" → render nothing. The badge is only earned at
- *     10 bonded launches and we don't want to tease the surface to
- *     creators who can't claim yet.
- *   - balanceOf > 0 → render the "already minted" state. ERC-8004 NFTs
- *     are not soulbound by the standard but we treat the existence of
- *     any token on the wallet as "Identity claimed" — re-minting would
- *     give the same metadata anyway.
- *   - else → render the claim CTA. Mint writes to ERC_8004_IDENTITY_ADDRESS
- *     with a data: URI metadata JSON describing the creator + tier +
- *     bonded count. Tiny calldata, no Pinata round-trip.
+ * Rendering rules (audit 2026-06-18 M-08 fix: matches actual behavior):
+ *   - tier === "none"     → render nothing. The badge is only earned
+ *                           at 3+ bonded launches.
+ *   - Silver / Gold / Diamond + balanceOf === 0 → "Claim TIER Identity"
+ *   - balanceOf > 0 AND mintedTier < currentTier → "Upgrade to TIER"
+ *     (H-10: previously the old NFT carried stale lower-tier metadata
+ *     forever; the upgrade flow burns the old token and mints a fresh
+ *     one with the higher-tier metadata)
+ *   - balanceOf > 0 AND mintedTier === currentTier → "Identity claimed"
  *
- * The metadata URI is built inline as a data: JSON URI for now so we
- * never block the mint on Pinata or an indexer. Once we have an
- * Arcade-controlled IPFS pin route (POST /api/pin/identity) it can
- * replace the inline encoding, but the contract accepts any string
- * URI so the migration is one-line.
+ * The metadata URI is built inline as a base64-encoded data: JSON URI
+ * (audit M-07: previously hex-encoded; most marketplaces decode
+ * base64 but not hex). Tiny calldata, no off-chain pin.
  */
 export function DiamondIdentityMint() {
     const { address: account } = useAccount();
@@ -49,6 +60,7 @@ export function DiamondIdentityMint() {
     });
 
     const [minting, setMinting] = useState(false);
+    const [upgrading, setUpgrading] = useState(false);
 
     const tierLabel =
         tier === "diamond"
@@ -82,24 +94,41 @@ export function DiamondIdentityMint() {
                 },
             ],
         };
-        // Encoding as `data:application/json,<hex>` keeps the URI tiny
-        // (~600 bytes) and avoids any off-chain pin. Browsers and
-        // explorers that read the tokenURI can decode the hex back to
-        // JSON in one step.
-        const hex: Hex = stringToHex(JSON.stringify(json));
-        return `data:application/json;hex,${hex.slice(2)}`;
+        // Audit 2026-06-18 M-07: switched from `data:application/json;hex,`
+        // to `data:application/json;base64,` because most NFT marketplaces
+        // and explorers (OpenSea, Rarible, Magic Eden, blockscout) decode
+        // base64 data URIs but not the non-standard `hex` form. The
+        // tokenURI now renders correctly cross-platform with the same
+        // calldata size (~750 bytes).
+        const base64 =
+            typeof window !== "undefined" && typeof window.btoa === "function"
+                ? window.btoa(JSON.stringify(json))
+                : Buffer.from(JSON.stringify(json), "utf-8").toString("base64");
+        return `data:application/json;base64,${base64}`;
     }, [account, bondedCount, tier, tierLabel]);
 
     const onMint = async () => {
         if (!account) return;
         setMinting(true);
         try {
-            const hash = await writeContractAsync({
-                address: ERC_8004_IDENTITY_ADDRESS,
-                abi: ERC_8004_IDENTITY_ABI,
-                functionName: "mint",
-                args: [account, metadataUri],
-            });
+            // H-09: prefer the Issuer when wired so the tier is
+            // verified on-chain. Otherwise fall back to direct
+            // Registry mint (testnet legacy).
+            const useIssuer =
+                ADDRESSES.identityIssuer !== "0x0000000000000000000000000000000000000000";
+            const hash = useIssuer
+                ? await writeContractAsync({
+                      address: ADDRESSES.identityIssuer,
+                      abi: ARCADE_IDENTITY_ISSUER_ABI,
+                      functionName: "mint",
+                      args: [TIER_CODE[tier], metadataUri],
+                  })
+                : await writeContractAsync({
+                      address: ERC_8004_IDENTITY_ADDRESS,
+                      abi: ERC_8004_IDENTITY_ABI,
+                      functionName: "mint",
+                      args: [account, metadataUri],
+                  });
             if (publicClient) {
                 const receipt = await publicClient.waitForTransactionReceipt({ hash });
                 if (receipt.status !== "success") {
@@ -110,7 +139,7 @@ export function DiamondIdentityMint() {
             }
             pushToast({
                 kind: "info",
-                title: "Diamond Identity minted",
+                title: `${tierLabel} Identity minted`,
                 message: "Visible to any Arc dapp reading the ERC-8004 registry.",
             });
             void balanceOfQ.refetch();
@@ -126,6 +155,87 @@ export function DiamondIdentityMint() {
             });
         } finally {
             setMinting(false);
+        }
+    };
+
+    /**
+     * Audit 2026-06-18 H-10: upgrade flow. The ERC-8004 metadata URI is
+     * baked on-chain at mint time, so a creator who hit Silver then
+     * graduated to Gold/Diamond carries permanently stale lower-tier
+     * metadata. This handler burns the most recent Identity NFT held by
+     * the connected wallet and mints a fresh one carrying the current
+     * tier's metadata. 2 txs by design (burn + mint); the toast tracks
+     * both so the user sees the flow.
+     */
+    const onUpgrade = async () => {
+        if (!account || !publicClient) return;
+        setUpgrading(true);
+        try {
+            const balance = (balanceOfQ.data as bigint | undefined) ?? 0n;
+            if (balance === 0n) {
+                pushToast({ kind: "error", title: "Nothing to upgrade", message: "No Identity NFT in wallet." });
+                return;
+            }
+            // Pick the most recently held tokenId (last index in the
+            // owner's enumerable list). For wallets holding exactly one
+            // it's the only entry; for a wallet holding multiple (e.g.
+            // legacy mints from a prior tier) we burn the newest first.
+            const tokenId = (await publicClient.readContract({
+                address: ERC_8004_IDENTITY_ADDRESS,
+                abi: ERC_8004_IDENTITY_ABI,
+                functionName: "tokenOfOwnerByIndex",
+                args: [account, balance - 1n],
+            })) as bigint;
+            const burnHash = await writeContractAsync({
+                address: ERC_8004_IDENTITY_ADDRESS,
+                abi: ERC_8004_IDENTITY_ABI,
+                functionName: "burn",
+                args: [tokenId],
+            });
+            const burnReceipt = await publicClient.waitForTransactionReceipt({ hash: burnHash });
+            if (burnReceipt.status !== "success") {
+                throw new Error("Burn reverted; aborting upgrade.");
+            }
+            pushToast({ kind: "info", title: "Old Identity burned", message: "Minting fresh tier metadata…" });
+            const useIssuer =
+                ADDRESSES.identityIssuer !== "0x0000000000000000000000000000000000000000";
+            const mintHash = useIssuer
+                ? await writeContractAsync({
+                      address: ADDRESSES.identityIssuer,
+                      abi: ARCADE_IDENTITY_ISSUER_ABI,
+                      functionName: "mint",
+                      args: [TIER_CODE[tier], metadataUri],
+                  })
+                : await writeContractAsync({
+                      address: ERC_8004_IDENTITY_ADDRESS,
+                      abi: ERC_8004_IDENTITY_ABI,
+                      functionName: "mint",
+                      args: [account, metadataUri],
+                  });
+            const mintReceipt = await publicClient.waitForTransactionReceipt({ hash: mintHash });
+            if (mintReceipt.status !== "success") {
+                throw new Error(
+                    "Re-mint reverted on-chain. The burn already executed; retry the mint manually.",
+                );
+            }
+            pushToast({
+                kind: "info",
+                title: `${tierLabel} Identity refreshed`,
+                message: "Old tier burned, new tier metadata minted.",
+            });
+            void balanceOfQ.refetch();
+        } catch (e: unknown) {
+            const msg =
+                (e as { shortMessage?: string; message?: string })?.shortMessage ??
+                (e as { message?: string })?.message ??
+                "Upgrade failed";
+            pushToast({
+                kind: "error",
+                title: "Upgrade failed",
+                message: msg.slice(0, 160),
+            });
+        } finally {
+            setUpgrading(false);
         }
     };
 
@@ -170,10 +280,32 @@ export function DiamondIdentityMint() {
                 </p>
                 <div className="mt-3 flex flex-wrap items-center gap-2">
                     {alreadyMinted ? (
-                        <span className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] font-semibold uppercase tracking-wider ${tierAccent.badgeWrap}`}>
-                            <Gem className="h-3 w-3" />
-                            Identity claimed
-                        </span>
+                        <>
+                            <span className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] font-semibold uppercase tracking-wider ${tierAccent.badgeWrap}`}>
+                                <Gem className="h-3 w-3" />
+                                Identity claimed
+                            </span>
+                            {/* H-10: re-mint to refresh tier metadata after a graduation lifts the wallet from Silver -> Gold / Diamond. */}
+                            <button
+                                type="button"
+                                onClick={() => void onUpgrade()}
+                                disabled={upgrading}
+                                className="inline-flex items-center gap-1 rounded-md border border-arc-border bg-white/[0.03] px-2 py-1 text-[11px] font-medium uppercase tracking-wider text-arc-text-muted transition-colors hover:bg-white/[0.06] hover:text-arc-text disabled:cursor-not-allowed disabled:opacity-60"
+                                title="Burn the current Identity NFT and re-mint with current tier metadata"
+                            >
+                                {upgrading ? (
+                                    <>
+                                        <Loader2 className="h-3 w-3 animate-spin" />
+                                        Refreshing…
+                                    </>
+                                ) : (
+                                    <>
+                                        <ArrowUp className="h-3 w-3" />
+                                        Refresh tier
+                                    </>
+                                )}
+                            </button>
+                        </>
                     ) : (
                         <button
                             type="button"

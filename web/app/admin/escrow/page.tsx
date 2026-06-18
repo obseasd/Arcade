@@ -16,7 +16,7 @@ import {
     UserCog,
 } from "lucide-react";
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Address, isAddress, parseUnits, zeroAddress } from "viem";
 import { useAccount, useReadContract, useWriteContract } from "wagmi";
 import { TWITTER_ESCROW_V3_ABI } from "@/lib/abis/twitterEscrowV3";
@@ -369,6 +369,16 @@ function TimelockCard() {
 // ===================== Trusted signer =====================
 
 function SignerCard() {
+    // Audit 2026-06-18 M-12: the v3 escrow replaced the immediate
+    // setTrustedSigner with a 2-step + 24h timelock flow. The
+    // previous version of this card called the deprecated
+    // setTrustedSigner which reverts USE_TIMELOCK_ROTATION on every
+    // attempt, so the operator could not actually rotate the signer
+    // through the UI during an incident. This rewrite surfaces the
+    // request / cancel / finalize states inline so the operator can
+    // start the rotation, see the active timer, cancel if mistaken,
+    // and finalize once the 24h window elapses, all without ever
+    // touching foundry / cast.
     const escrow = ADDRESSES.twitterEscrow;
     const { writeContractAsync } = useWriteContract();
     const signerQ = useReadContract({
@@ -376,60 +386,194 @@ function SignerCard() {
         abi: TWITTER_ESCROW_V3_ABI,
         functionName: "trustedSigner",
     });
+    const pendingQ = useReadContract({
+        address: escrow,
+        abi: TWITTER_ESCROW_V3_ABI,
+        functionName: "pendingTrustedSigner",
+        query: { refetchInterval: 15_000 },
+    });
+    const notBeforeQ = useReadContract({
+        address: escrow,
+        abi: TWITTER_ESCROW_V3_ABI,
+        functionName: "trustedSignerNotBefore",
+        query: { refetchInterval: 15_000 },
+    });
     const current = signerQ.data as Address | undefined;
+    const pending = pendingQ.data as Address | undefined;
+    const notBefore = (notBeforeQ.data as bigint | undefined) ?? 0n;
+    const hasPending = !!pending && pending !== zeroAddress;
+    const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
+    useEffect(() => {
+        if (!hasPending) return;
+        const id = setInterval(() => setNow(Math.floor(Date.now() / 1000)), 1000);
+        return () => clearInterval(id);
+    }, [hasPending]);
+    const secondsLeft = Number(notBefore) - now;
+    const timerElapsed = hasPending && secondsLeft <= 0;
+
     const [next, setNext] = useState("");
-    const [submitting, setSubmitting] = useState(false);
+    const [submitting, setSubmitting] = useState<
+        null | "request" | "cancel" | "finalize"
+    >(null);
     const valid = isAddress(next.trim()) && next.trim() !== zeroAddress;
 
-    const onSubmit = async () => {
+    const refetchAll = async () => {
+        await Promise.all([signerQ.refetch(), pendingQ.refetch(), notBeforeQ.refetch()]);
+    };
+
+    const onRequest = async () => {
         if (!valid) return;
-        if (!window.confirm(`Rotate trusted signer to ${next.trim()}? Existing pending claims authorized with the old signer will still be valid until they consume.`)) return;
-        setSubmitting(true);
+        if (
+            !window.confirm(
+                `Stage trusted signer rotation to ${next.trim()}? The 24h timelock starts now. The old signer stays active until you call finalize after the window elapses.`,
+            )
+        )
+            return;
+        setSubmitting("request");
         try {
             await writeContractAsync({
                 address: escrow,
                 abi: TWITTER_ESCROW_V3_ABI,
-                functionName: "setTrustedSigner",
+                functionName: "requestTrustedSignerRotation",
                 args: [next.trim() as Address],
             });
-            await signerQ.refetch();
+            await refetchAll();
             setNext("");
+            pushToast({
+                kind: "info",
+                title: "Rotation requested",
+                message: "Timelock starts now; finalize in 24h.",
+            });
+        } catch (e: any) {
+            pushToast({ kind: "error", title: "Request failed", message: e?.shortMessage ?? e?.message });
+        } finally {
+            setSubmitting(null);
+        }
+    };
+
+    const onCancel = async () => {
+        if (!window.confirm("Cancel pending rotation? Pending signer will be reset to zero.")) return;
+        setSubmitting("cancel");
+        try {
+            await writeContractAsync({
+                address: escrow,
+                abi: TWITTER_ESCROW_V3_ABI,
+                functionName: "cancelTrustedSignerRotation",
+                args: [],
+            });
+            await refetchAll();
+            pushToast({ kind: "info", title: "Rotation cancelled" });
+        } catch (e: any) {
+            pushToast({ kind: "error", title: "Cancel failed", message: e?.shortMessage ?? e?.message });
+        } finally {
+            setSubmitting(null);
+        }
+    };
+
+    const onFinalize = async () => {
+        if (
+            !window.confirm(
+                `Finalize rotation? The trusted signer will be replaced with ${pending} immediately on the next block. Existing already-authorized claims signed by the old signer remain valid until their timelock window elapses.`,
+            )
+        )
+            return;
+        setSubmitting("finalize");
+        try {
+            await writeContractAsync({
+                address: escrow,
+                abi: TWITTER_ESCROW_V3_ABI,
+                functionName: "finalizeTrustedSignerRotation",
+                args: [],
+            });
+            await refetchAll();
             pushToast({ kind: "info", title: "Signer rotated" });
         } catch (e: any) {
-            pushToast({ kind: "error", title: "Failed", message: e?.shortMessage ?? e?.message });
+            pushToast({ kind: "error", title: "Finalize failed", message: e?.shortMessage ?? e?.message });
         } finally {
-            setSubmitting(false);
+            setSubmitting(null);
         }
     };
 
     return (
         <Card title="Trusted signer" icon={<UserCog className="h-4 w-4" />}>
             <p className="text-xs text-arc-text-muted">
-                The EIP-712 backend signer. Rotate when the Vercel key is suspected
-                compromised. <span className="font-medium text-arc-warn">In-flight pending
-                claims that have already passed authorize remain executable</span> until the
-                timelock window elapses; pause + veto each one if needed.
+                The EIP-712 backend signer. Rotation is 2-step with a 24h timelock.
+                <span className="font-medium text-arc-warn"> In-flight pending
+                claims that have already passed authorize remain executable</span> until
+                their timelock window elapses; pause + veto each one if needed.
             </p>
-            <Row label="Current" value={current ?? "(loading)"} mono />
-            <div className="mt-4 flex items-center gap-2">
-                <input
-                    aria-label="New signer address"
-                    type="text"
-                    placeholder="0x… new signer address"
-                    value={next}
-                    onChange={(e) => setNext(e.target.value)}
-                    className="arc-input flex-1 rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2 font-mono text-xs"
-                />
-                <button type="button"
-                    onClick={onSubmit}
-                    disabled={!valid || submitting}
-                    className={cn("arc-button-primary px-4 py-2 text-sm", (!valid || submitting) && "opacity-60")}
-                >
-                    {submitting ? "Sending…" : "Rotate"}
-                </button>
-            </div>
+            <Row label="Current signer" value={current ?? "(loading)"} mono />
+            {hasPending ? (
+                <>
+                    <Row label="Pending signer" value={pending} mono />
+                    <Row
+                        label={timerElapsed ? "Timelock" : "Time remaining"}
+                        value={
+                            timerElapsed
+                                ? "Elapsed, ready to finalize"
+                                : formatDuration(secondsLeft)
+                        }
+                    />
+                    <div className="mt-4 flex flex-wrap items-center gap-2">
+                        <button
+                            type="button"
+                            onClick={onFinalize}
+                            disabled={!timerElapsed || submitting !== null}
+                            className={cn(
+                                "arc-button-primary px-4 py-2 text-sm",
+                                (!timerElapsed || submitting !== null) && "opacity-60",
+                            )}
+                        >
+                            {submitting === "finalize" ? "Sending…" : "Finalize rotation"}
+                        </button>
+                        <button
+                            type="button"
+                            onClick={onCancel}
+                            disabled={submitting !== null}
+                            className={cn(
+                                "arc-button-secondary px-4 py-2 text-sm",
+                                submitting !== null && "opacity-60",
+                            )}
+                        >
+                            {submitting === "cancel" ? "Sending…" : "Cancel rotation"}
+                        </button>
+                    </div>
+                </>
+            ) : (
+                <div className="mt-4 flex items-center gap-2">
+                    <input
+                        aria-label="New signer address"
+                        type="text"
+                        placeholder="0x… new signer address"
+                        value={next}
+                        onChange={(e) => setNext(e.target.value)}
+                        className="arc-input flex-1 rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2 font-mono text-xs"
+                    />
+                    <button
+                        type="button"
+                        onClick={onRequest}
+                        disabled={!valid || submitting !== null}
+                        className={cn(
+                            "arc-button-primary px-4 py-2 text-sm",
+                            (!valid || submitting !== null) && "opacity-60",
+                        )}
+                    >
+                        {submitting === "request" ? "Sending…" : "Request rotation"}
+                    </button>
+                </div>
+            )}
         </Card>
     );
+}
+
+function formatDuration(seconds: number): string {
+    if (seconds <= 0) return "0s";
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = seconds % 60;
+    if (h > 0) return `${h}h ${m}m ${s}s`;
+    if (m > 0) return `${m}m ${s}s`;
+    return `${s}s`;
 }
 
 // ===================== Pull from locker =====================
