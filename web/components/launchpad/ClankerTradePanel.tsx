@@ -280,10 +280,7 @@ export function ClankerTradePanel({ token, symbol, pool, image, onTradeSuccess }
       <button type="button"
         onClick={onTrade}
         disabled={!account || amountRaw === 0n || fee === 0 || tx.status === "pending"}
-        className={cn(
-          "mt-4 w-full py-3 text-base",
-          side === "buy" ? "arc-button-primary" : "arc-button-secondary",
-        )}
+        className="arc-button-primary mt-4 w-full py-3 text-base"
       >
         {!account
           ? "Connect wallet"

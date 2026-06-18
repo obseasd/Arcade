@@ -696,10 +696,31 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
   const feePct = Number(feePips) / 10_000;
   const feePctLabel = `${feePct.toFixed(feePct < 1 ? 2 : 1)}%`;
   // Total loss % includes price impact + AMM fee (already baked into out amount)
-  const lossPct =
+  const lossPctRaw =
     inUsd.usd !== undefined && outUsd.usd !== undefined && inUsd.usd > 0
       ? ((outUsd.usd - inUsd.usd) / inUsd.usd) * 100
       : undefined;
+  // Audit 2026-06-18c: the value-delta badge next to the For amount used
+  // to flash garbage in two situations the user hit:
+  //   1. MID-FETCH: while the aggregator / legacy quote is still
+  //      resolving, inUsd (from amountIn, instant) and outUsd (from the
+  //      not-yet-settled amountOut) momentarily describe different trade
+  //      sizes, producing transient values like "+4402%".
+  //   2. EXOTIC TOKEN MIS-PRICING: tokens with no real USDC reference
+  //      (the 18-dec community USDT, EURC without a feed) get a spot
+  //      price that can value the output several × the input, surfacing
+  //      an impossible "+350%" gain.
+  // A real swap never GAINS meaningful value (you always pay fee +
+  // impact), so any positive delta above a small noise band is a pricing
+  // artefact, not information. Suppress the badge while quotes are
+  // settling and whenever the delta is implausibly positive; genuine
+  // negative slippage/fee losses still show.
+  const quotesSettling =
+    routeQuotes.loading || quoteOut.isFetching || quoteIn.isFetching;
+  const lossPct =
+    lossPctRaw === undefined || quotesSettling || lossPctRaw > 1
+      ? undefined
+      : lossPctRaw;
 
   // Pool-depth price impact: fire a SECOND aggregator quote with 1% of the
   // user's amountIn as a "before-impact" reference. The active route's
