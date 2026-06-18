@@ -68,6 +68,24 @@ export function poolFraction(c: SimulatorConfig): number {
  * pctOfPool * poolSupply; liquidity = tokens / (1/sqrt(pLow) - 1/sqrt(pHigh)).
  */
 export function buildPool(c: SimulatorConfig): PoolState {
+  // Audit 2026-06-18b illogical-logic: every price in this module is
+  // `mcap / totalSupply`. A zero / negative / NaN totalSupply (the LP
+  // simulator's supply field is free user input) divides by zero and
+  // cascades Infinity/NaN into sqrtPrice, liquidity, and every chart
+  // sample. Guard at the root so degenerate input yields an empty pool
+  // (which sampleDistribution / sampleCumulativeSold already short-
+  // circuit to []) instead of a NaN-filled chart. `!(x > 0)` also
+  // catches NaN.
+  if (!(c.totalSupply > 0)) {
+    return {
+      positions: [],
+      sqrtPrice: 0,
+      tokensSold: 0,
+      quoteSpent: 0,
+      poolSupply: 0,
+      totalSupply: c.totalSupply,
+    };
+  }
   const poolSupply = c.totalSupply * poolFraction(c);
   const startingPrice = c.startingMcap / c.totalSupply;
   const positions: ResolvedPosition[] = c.positions

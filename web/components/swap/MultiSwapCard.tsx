@@ -2,7 +2,7 @@
 
 import { ArrowDown, ChevronDown, Plus } from "lucide-react";
 import { CrossIcon } from "@/components/ui/MaskIcon";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Address, erc20Abi, formatUnits, maxUint256, parseUnits } from "viem";
 import {
   useAccount,
@@ -284,10 +284,23 @@ export function MultiSwapCard({ tab, onTabChange }: MultiSwapCardProps) {
       return capped;
     });
   };
-  const removeRow = (i: number) =>
-    setInputs((prev) => prev.filter((_, idx) => idx !== i));
-  const setRowAmount = (i: number, v: string) =>
-    setInputs((prev) => prev.map((row, idx) => (idx === i ? { ...row, amountStr: v } : row)));
+  // Audit 2026-06-18b render-perf: useCallback so the handlers passed to
+  // each memoized InputBox keep a stable identity across re-renders.
+  // Both use the setState updater form (no captured state), so empty
+  // deps are correct with zero stale-closure risk. Combined with the
+  // memoized InputBox below, typing in one input no longer re-renders
+  // the sibling input rows.
+  const removeRow = useCallback(
+    (i: number) => setInputs((prev) => prev.filter((_, idx) => idx !== i)),
+    [],
+  );
+  const setRowAmount = useCallback(
+    (i: number, v: string) =>
+      setInputs((prev) => prev.map((row, idx) => (idx === i ? { ...row, amountStr: v } : row))),
+    [],
+  );
+  // Stable handler for the memoized OutputBox's token-picker trigger.
+  const openOutputPicker = useCallback(() => setPickerOpen("output"), []);
 
   // ----- Execute -----
   const onSwap = async () => {
@@ -421,11 +434,12 @@ export function MultiSwapCard({ tab, onTabChange }: MultiSwapCardProps) {
           inputs.map((row, i) => (
             <InputBox
               key={row.token.address}
+              index={i}
               row={row}
               balance={balancesRaw[i] ?? 0n}
               insufficient={insufficientByIndex[i]}
-              onAmountChange={(v) => setRowAmount(i, v)}
-              onRemove={() => removeRow(i)}
+              onAmountChange={setRowAmount}
+              onRemove={removeRow}
             />
           ))
         )}
@@ -453,7 +467,7 @@ export function MultiSwapCard({ tab, onTabChange }: MultiSwapCardProps) {
       <OutputBox
         token={outputToken}
         amountStr={outputAmountStr}
-        onTokenClick={() => setPickerOpen("output")}
+        onTokenClick={openOutputPicker}
       />
 
       {/* Status line */}
@@ -548,18 +562,26 @@ export function MultiSwapCard({ tab, onTabChange }: MultiSwapCardProps) {
 
 // ===== Sub-components =====
 
-function InputBox({
+// Audit 2026-06-18b render-perf: memoized so typing in one input row
+// does not re-render its siblings. The parent passes stable
+// (useCallback) handlers + the row's index; row/balance/insufficient
+// are referentially stable for unchanged rows because setRowAmount only
+// rebuilds the edited row's object. token0-style props are primitives
+// compared by value, so React.memo's shallow compare skips correctly.
+const InputBox = memo(function InputBox({
+  index,
   row,
   balance,
   insufficient,
   onAmountChange,
   onRemove,
 }: {
+  index: number;
   row: InputRow;
   balance: bigint;
   insufficient: boolean;
-  onAmountChange: (v: string) => void;
-  onRemove: () => void;
+  onAmountChange: (i: number, v: string) => void;
+  onRemove: (i: number) => void;
 }) {
   const decimals = row.token.decimals ?? 18;
   const balLabel =
@@ -584,7 +606,7 @@ function InputBox({
             const v = e.target.value.replace(/[^0-9.]/g, "");
             const parts = v.split(".");
             if (parts.length > 2) return;
-            onAmountChange(v);
+            onAmountChange(index, v);
           }}
           className={cn(
             "arc-input w-0 min-w-0 flex-1 bg-transparent font-medium leading-tight tabular-nums",
@@ -600,7 +622,7 @@ function InputBox({
             {row.token.symbol ?? "-"}
           </span>
           <button type="button"
-            onClick={onRemove}
+            onClick={() => onRemove(index)}
             className="flex h-8 w-8 items-center justify-center rounded-full bg-arc-surface-2/60 text-arc-text-muted opacity-70 transition-all hover:bg-arc-danger/20 hover:text-arc-danger hover:opacity-100 sm:h-6 sm:w-6"
             title="Remove this token"
           >
@@ -616,13 +638,13 @@ function InputBox({
         </span>
         <div className="flex items-center gap-1.5">
           <QuickButton
-            onClick={() => onAmountChange(formatUnits(balance / 2n, decimals))}
+            onClick={() => onAmountChange(index, formatUnits(balance / 2n, decimals))}
             disabled={balance === 0n}
           >
             HALF
           </QuickButton>
           <QuickButton
-            onClick={() => onAmountChange(formatUnits(balance, decimals))}
+            onClick={() => onAmountChange(index, formatUnits(balance, decimals))}
             disabled={balance === 0n}
           >
             MAX
@@ -631,7 +653,7 @@ function InputBox({
       </div>
     </div>
   );
-}
+});
 
 /** Empty-state input row, rendered when no tokens have been selected yet.
  * Visually mirrors a real InputBox so the layout stays stable, but the
@@ -658,7 +680,7 @@ function PlaceholderInputBox({ onClick }: { onClick: () => void }) {
   );
 }
 
-function OutputBox({
+const OutputBox = memo(function OutputBox({
   token,
   amountStr,
   onTokenClick,
@@ -699,7 +721,7 @@ function OutputBox({
       </div>
     </div>
   );
-}
+});
 
 /**
  * Step the output font size down as the rendered amount grows. Mirrors

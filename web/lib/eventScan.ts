@@ -22,7 +22,15 @@ import { Address } from "viem";
  *  metrics dashboard (24% throughput-limited, 52% success-rate).
  *  10k matches Alchemy's documented free-tier filtered-getLogs cap. */
 export const CHUNK_SMALL = 10_000n;
-/** Mid-window for holders / candles where we walk wider history. */
+/**
+ * Mid-window alias used by useTokenHolders. Audit 2026-06-18b
+ * stale-naming: this is CURRENTLY equal to CHUNK_SMALL (10k) — the name
+ * implies a wider window than CHUNK_SMALL, but after the Alchemy 10k
+ * filtered-getLogs cap landed (see CHUNK_SMALL above) there is no safe
+ * "medium" window between 10k and the thirdweb-only 50k CHUNK_LARGE.
+ * Kept as a distinct export so holders-scan call sites read intentionally
+ * and can be bumped independently if a dedicated RPC raises the cap.
+ */
 export const CHUNK_MEDIUM = 10_000n;
 /** Largest window we attempt. Use only on the thirdweb proxy. */
 export const CHUNK_LARGE = 50_000n;
