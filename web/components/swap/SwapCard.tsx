@@ -456,14 +456,39 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
   // executes through SwapRouter02. Disable on launchpad-router paths
   // (post-migration royalty) because the migrated quoter has its own
   // accounting that the generic V2 provider doesn't reproduce.
+  // Audit 2026-06-18c: input the aggregator quotes against. In
+  // exact-input mode this is the typed amountInRaw. In exact-output
+  // mode (user typed in the For field) amountInRaw is 0, so we
+  // back-derive the input from the cached forward ratio (same formula
+  // as derivedAmountIn below, but available here before that memo) so
+  // the routes COMPARISON panel can populate. The aggregator is
+  // exact-input only, so its quotes in exact-output mode are a
+  // comparison aid; execution stays on the legacy exact-output path
+  // (see activeRoute gating below) to avoid any Permit2-amount /
+  // exact-in-vs-out mismatch on the fund-handling path.
+  const aggregatorAmountIn = useMemo<bigint>(() => {
+    if (lastEdited === "in") return amountInRaw;
+    const r = lastForwardRatioRef.current;
+    if (!r || r.amountOut === 0n || amountOutRawTyped === 0n) return 0n;
+    if (
+      r.tokenIn !== tokenIn.address.toLowerCase() ||
+      r.tokenOut !== (tokenOut?.address ?? "").toLowerCase()
+    ) {
+      return 0n;
+    }
+    return (amountOutRawTyped * r.amountIn) / r.amountOut;
+    // ratioVersion bumps when the probe seeds/refreshes the ratio.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lastEdited, amountInRaw, amountOutRawTyped, ratioVersion, tokenIn.address, tokenOut?.address]);
+
   const aggregatorEnabled =
-    !route.useLaunchpadRouter && !v3Unsupported && !isLaunchpadCurveSwap && decimalsKnown && amountInRaw > 0n && !!tokenOut && !!account;
+    !route.useLaunchpadRouter && !v3Unsupported && !isLaunchpadCurveSwap && decimalsKnown && aggregatorAmountIn > 0n && !!tokenOut && !!account;
   const routeQuotes = useRouteQuotes({
     tokenIn: tokenIn.address,
     tokenOut: tokenOut?.address,
     decimalsIn,
     decimalsOut,
-    amountIn: amountInRaw,
+    amountIn: aggregatorAmountIn,
     recipient: account,
     slippageBps,
     enabled: aggregatorEnabled,
@@ -515,7 +540,17 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
         : undefined,
     [selectedProvider, routeQuotes.quotes],
   );
-  const activeRoute: RouteQuote | null = selectedRoute ?? routeQuotes.best ?? null;
+  // Audit 2026-06-18c: activeRoute drives BOTH display (For value, "via"
+  // label, price impact) AND execution. It is gated to exact-input mode
+  // only. In exact-output mode the aggregator quotes are exact-input
+  // approximations at a back-derived amount — fine for the comparison
+  // panel below, but routing execution through them would mismatch the
+  // Permit2 sign amount (finalAmountIn, V2-getAmountsIn-derived) against
+  // the executor's input (ratio-derived). Keeping activeRoute null in
+  // exact-output means execution + all activeRoute-driven labels stay on
+  // the proven legacy exact-output path, exactly as before this change.
+  const activeRoute: RouteQuote | null =
+    lastEdited === "in" ? (selectedRoute ?? routeQuotes.best ?? null) : null;
   const isExternalRoute =
     !!activeRoute &&
     (activeRoute.provider === "synthra-v3" ||
@@ -1531,6 +1566,19 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
               : undefined)
           }
         />
+      )}
+
+      {/* Audit 2026-06-18c: in exact-output mode the routes above are a
+          read-only comparison (the aggregator is exact-input only and
+          execution stays on the Arcade exact-output path). Tell the user
+          how to actually route through the best DEX so the BEST badge
+          isn't misleading. */}
+      {aggregatorEnabled && tokenOut && lastEdited === "out" && (
+        <div className="mt-2 text-[11px] leading-snug text-arc-text-faint">
+          Routes shown for comparison. This trade executes on Arcade. To
+          route through another DEX, enter an amount in the{" "}
+          <span className="text-arc-text-muted">From</span> field instead.
+        </div>
       )}
 
       <button type="button"
