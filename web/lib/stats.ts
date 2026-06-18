@@ -173,14 +173,14 @@ export async function getAggregateStats(): Promise<StatsSnapshot> {
     const head = await client.getBlockNumber();
     const fromBlock = head > MAX_TOTAL_BLOCKS ? head - MAX_TOTAL_BLOCKS : 0n;
 
-    // 2026-06-17 fix: V3 stack was missing from the contracts list, so
-    // every swap routed via the V3 router (every Clanker V3 trade) and
-    // every concentrated-LP mint/burn/collect was invisible to the
-    // tx-count + unique-wallets totals. Same gap on the factory /
-    // quoter / NPM / Zap. Volume on V3 swaps is still missing because
-    // sumLaunchpadVolume only reads Buy/Sell events on the launchpad —
-    // a precise V3 volume scan ships with the indexer roadmap. This
-    // patch at least restores the headline counts.
+    // Audit 2026-06-18 H-06: previous list was missing AutoCompounder,
+    // Orbs limit-order stack, V2 Zap, LockedVault, the V4 prototype
+    // surfaces and the V2 Zap helper. Each missing entry meant any tx
+    // touching only that contract was invisible to txCount and
+    // uniqueWallets. Now any address keyed on ADDRESSES whose contract
+    // emits logs that a user originated is in the scan, gated on
+    // !== zeroAddress so an unconfigured optional surface (e.g.
+    // pre-deploy V4 prototype) does not crash the scan.
     const contracts: Address[] = [
         ADDRESSES.router,
         ADDRESSES.factory,
@@ -193,10 +193,20 @@ export async function getAggregateStats(): Promise<StatsSnapshot> {
         ADDRESSES.v3Locker,
         ADDRESSES.v3Zap,
         ADDRESSES.tokenVault,
+        ADDRESSES.v2Zap,
+        ADDRESSES.autoCompounder,
+        ADDRESSES.orbsTwap,
+        ADDRESSES.orbsExchangeV2,
+        ADDRESSES.orbsLens,
+        ADDRESSES.lockedVault,
         ...(ADDRESSES.twitterEscrow ? [ADDRESSES.twitterEscrow] : []),
         ...(ADDRESSES.v4Launchpad ? [ADDRESSES.v4Launchpad] : []),
         ...(ADDRESSES.arcadeHook ? [ADDRESSES.arcadeHook] : []),
         ...(ADDRESSES.v4PoolManager ? [ADDRESSES.v4PoolManager] : []),
+        ...(ADDRESSES.v4Hook ? [ADDRESSES.v4Hook] : []),
+        ...(ADDRESSES.v4StateView ? [ADDRESSES.v4StateView] : []),
+        ...(ADDRESSES.v4Quoter ? [ADDRESSES.v4Quoter] : []),
+        ...(ADDRESSES.v4Router ? [ADDRESSES.v4Router] : []),
         ...PREDECESSOR_CONTRACTS,
     ].filter((a): a is Address => !!a && a !== "0x0000000000000000000000000000000000000000");
 
@@ -239,10 +249,21 @@ export async function getAggregateStats(): Promise<StatsSnapshot> {
     for (const logs of windowResults) {
         for (const log of logs) {
             seenTxs.add(log.transactionHash.toLowerCase());
-            // topics[1] is typically the indexed sender / creator for our
-            // events. Best-effort attribution; the indexer will replace
-            // this with proper per-event decoding.
-            if (log.topics[1]) seenWallets.add(log.topics[1].toLowerCase());
+            // Audit 2026-06-18 H-03: previous code unconditionally added
+            // topics[1] to seenWallets, but for the dominant event
+            // signatures on Arcade (Buy/Sell/V2-Swap/V3-Swap/V4
+            // CurveBuy/CurveSell/TokenCreated/TokenLaunched) topics[1]
+            // is the TOKEN or POOL or ROUTER, not the user wallet. The
+            // result was a structurally wrong "unique wallets" headline:
+            // V2/V3 swaps collapsed to one router address each,
+            // launchpad activity attributed to the token contracts.
+            // walletTopicForEvent maps the well-known event signature
+            // hashes to the correct topic slot; unknown signatures fall
+            // back to topics[1] for legacy compat but log nothing into
+            // the dashboard's headline if no signature mapped — better
+            // to under-count than to mis-count.
+            const userAddr = extractWalletFromLog(log.topics);
+            if (userAddr) seenWallets.add(userAddr);
         }
     }
 
@@ -279,13 +300,20 @@ export async function getAggregateStats(): Promise<StatsSnapshot> {
     // (the factory-enumeration version we shipped first silently
     // missed all of them, which is why the dashboard reported $265
     // even after the user ran sustained USDC↔SeedETH trades).
-    const v3VolumeUsdcMicros = await sumV3SwapVolume(client, fromBlock, head);
+    const v3 = await sumV3SwapVolume(client, fromBlock, head);
     // V2 swap volume — same address-less strategy as V3.
-    const v2VolumeUsdcMicros = await sumV2SwapVolume(client, fromBlock, head);
+    const v2 = await sumV2SwapVolume(client, fromBlock, head);
+    // V4 ArcadeHook bonding-curve volume — audit H-04. Scoped to the
+    // arcadeHook address only (cheap, no fan-out).
+    const hook = await sumHookVolume(client, ADDRESSES.arcadeHook, fromBlock, head);
+    // Audit M-01: a failed sub-scanner sets truncated=true so the
+    // dashboard's "Heads-up" banner surfaces the partial-data state.
+    if (!v3.complete || !v2.complete || !hook.complete) truncated = true;
     const volumeUsdcMicros =
         volumeResults.reduce((acc, n) => acc + n, 0n) +
-        v3VolumeUsdcMicros +
-        v2VolumeUsdcMicros;
+        v3.volume +
+        v2.volume +
+        hook.volume;
     const v4TokensLaunched = ADDRESSES.v4Launchpad
         ? await countLaunchpadEvents(client, ADDRESSES.v4Launchpad, fromBlock, head)
         : 0;
@@ -309,6 +337,62 @@ export async function getAggregateStats(): Promise<StatsSnapshot> {
         asOfIso: new Date().toISOString(),
         truncated,
     };
+}
+
+/**
+ * Map a log's topic[0] (event signature hash) to the topic slot that
+ * holds the user wallet address, then extract that address. Returns
+ * null when the event has no user-wallet topic (PairCreated,
+ * PoolCreated, Memo events, ...). Bytes32 → address conversion drops
+ * the leading 24 hex chars (12 zero bytes).
+ *
+ * Audit 2026-06-18 H-03: replaces the previous "always use topics[1]"
+ * heuristic that mis-attributed every router-emitted Swap to the
+ * router address and every launchpad Buy/Sell to the token address.
+ */
+function extractWalletFromLog(topics: readonly string[]): string | null {
+    const t0 = topics[0]?.toLowerCase();
+    if (!t0) return null;
+    // topic-slot mapping for every event signature we explicitly track.
+    // Slot 0 means "no user wallet on this event, skip".
+    const slot = walletTopicSlot().get(t0);
+    if (slot === undefined) {
+        // Unknown signature: skip rather than land a token / pool /
+        // router address into the unique-wallets set.
+        return null;
+    }
+    if (slot === 0) return null;
+    const raw = topics[slot]?.toLowerCase();
+    if (!raw || raw.length !== 66) return null;
+    // bytes32 → address: keep the low 20 bytes (40 hex chars).
+    return "0x" + raw.slice(26);
+}
+
+// Lazy map of event signature hash → topic slot holding the user
+// wallet. Defined as a function so the topic-constant declarations
+// below (BUY_TOPIC, SELL_TOPIC, ...) can stay near the other event-
+// signature constants in the file without forcing a TDZ on the
+// module-load order. The map is built once on first call.
+// Slot 0 means the event has no user wallet (skip).
+let _walletTopicSlot: Map<string, number> | null = null;
+function walletTopicSlot(): Map<string, number> {
+    if (_walletTopicSlot) return _walletTopicSlot;
+    _walletTopicSlot = new Map<string, number>([
+        [BUY_TOPIC.toLowerCase(), 2],            // Buy(token, buyer, ...)
+        [SELL_TOPIC.toLowerCase(), 2],           // Sell(token, seller, ...)
+        [SWAP_TOPIC.toLowerCase(), 2],           // V3 Swap(sender=router, recipient=user, ...)
+        [V2_SWAP_TOPIC.toLowerCase(), 2],        // V2 Swap(sender=router, ..., to=user)
+        [HOOK_CURVE_BUY_TOPIC.toLowerCase(), 2], // CurveBuy(poolId, buyer, ...)
+        [HOOK_CURVE_SELL_TOPIC.toLowerCase(), 2],// CurveSell(poolId, seller, ...)
+        // TokenCreated(token, creator, mode, paired, royaltyBps, ...) — topic[2] = creator
+        ["0x12902ddf3a68b76ea3ba6ef278e7fd7c3b59e05cb7e64bd406bb21bb1ddd8d23", 2],
+        // TokenLaunched(token, creator, mode, name, symbol, metadataURI) — topic[2] = creator
+        ["0xefc07ba8ee8f7015e511a8f24566606d5aaa4200644aeb0584d888fba8a7dd53", 2],
+        // PoolCreated / PairCreated emit token addresses only — skip.
+        [POOL_CREATED_TOPIC.toLowerCase(), 0],
+        [PAIR_CREATED_TOPIC.toLowerCase(), 0],
+    ]);
+    return _walletTopicSlot;
 }
 
 /**
@@ -464,13 +548,61 @@ const V2_SWAP_EVT_ABI = parseAbiItem(
 const V2_SWAP_TOPIC = keccak256(
     toHex("Swap(address,uint256,uint256,uint256,uint256,address)"),
 );
+
+// V4 ArcadeHook bonding-curve events. Phase 2 of the V4 rollout, hidden
+// behind NEXT_PUBLIC_V4_HOOK_ENABLED in the front-end but the hook
+// itself can emit independently of any UI flag once deployed. The hook
+// emits its own CurveBuy/CurveSell events from the bonding curve phase,
+// distinct from a Uniswap V4 PoolManager Swap. PoolId is an alias for
+// bytes32 on-chain so the event signature uses bytes32 directly.
+//
+// Audit 2026-06-18 H-04: previously the V4 hook stack was counted only
+// at tx-level (via its presence in the contracts array) but the dollar
+// flow through CurveBuy/CurveSell was entirely dropped from the
+// cumulative volume figure.
+const HOOK_CURVE_BUY_EVT_ABI = parseAbiItem(
+    "event CurveBuy(bytes32 indexed poolId, address indexed buyer, uint256 grossUsdcIn, uint256 tokensOut)",
+);
+const HOOK_CURVE_SELL_EVT_ABI = parseAbiItem(
+    "event CurveSell(bytes32 indexed poolId, address indexed seller, uint256 tokensIn, uint256 usdcOut)",
+);
+const HOOK_CURVE_BUY_TOPIC = keccak256(
+    toHex("CurveBuy(bytes32,address,uint256,uint256)"),
+);
+const HOOK_CURVE_SELL_TOPIC = keccak256(
+    toHex("CurveSell(bytes32,address,uint256,uint256)"),
+);
+
 // Sanity ceiling per individual event - any single Buy/Sell larger
 // than this is treated as decoding noise and dropped. The launchpad
 // graduates at 20k USDC so a single Buy of more than ~1M USDC is
 // already a physical impossibility on the curve; the threshold is
 // permissive to leave room for migration-time large transfers but
 // strict enough that an 18-decimal token amount (1e21+) never lands.
+//
+// Audit 2026-06-18 H-02: this ceiling is now scoped to the LAUNCHPAD
+// scanner only (where the 20k USDC graduation cap makes >>1M USDC per
+// event physically impossible). The V3/V2/V4-hook scanners do their
+// own decoder-correctness check (topic[0] match + log-data length)
+// instead, and large legitimate trades (>$10M USDC, plausible on
+// mainnet for institutional flow / treasury rebalances) now reach the
+// accumulator instead of silently dropping.
 const MAX_SANE_EVENT_MICROS = 10_000_000_000_000n; // 10M USDC in micros
+
+// Per-pool decimals normalization. Arc has multiple USDC-equivalent
+// tokens that route the same dollar:
+//   - USDC (0x3600..., 6 dec, native Arc gas token)
+//   - WUSDC (0x911b..., 18 dec, used by Synthra + UnitFlow V3 pools)
+// Both are USDC at the dollar level; their raw amounts differ by 10^12.
+// To get USDC parity in the accumulator we treat WUSDC as USDC-side and
+// scale 18-dec amounts down by 1e12.
+//
+// Audit 2026-06-18 H-01: previously only native USDC was recognised as
+// the USDC side, so every Synthra/UnitFlow pool (which route through
+// WUSDC) was missed entirely AND a naive fix that just added WUSDC to
+// the equality check would have blown the MAX_SANE ceiling because
+// 18-dec amounts are 10^12 larger.
+const WUSDC_SCALE_DIVISOR = 10n ** 12n; // 18-dec WUSDC -> 6-dec USDC micros
 
 async function sumLaunchpadVolume(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -569,17 +701,33 @@ async function sumLaunchpadVolume(
  * double-counted. That matches the dashboard semantic ("USDC
  * routed"), which is what we want here.
  */
+/** Result of one of the address-less swap scanners. `complete=false`
+ *  signals that at least one getLogs window failed and the dashboard
+ *  should set `truncated=true`. */
+interface SwapScanResult {
+    volume: bigint;
+    complete: boolean;
+}
+
+/** Per-pool USDC-side metadata: which side (0/1) holds a
+ *  USDC-equivalent token, and the divisor needed to bring its raw
+ *  amount into 6-dec USDC micros (1n for native USDC, 10^12n for
+ *  WUSDC). Audit H-01. */
+type UsdcSideMeta = { side: 0 | 1; divisor: bigint };
+
 async function sumV3SwapVolume(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     client: any,
     fromBlock: bigint,
     head: bigint,
-): Promise<bigint> {
+): Promise<SwapScanResult> {
     const usdc = ADDRESSES.usdc.toLowerCase();
+    const wusdc = ADDRESSES.wusdc.toLowerCase();
 
     // 1. Scan ALL Swap events by topic across the window (no address
     //    filter). Each log's `address` IS the pool, so we collect a
     //    de-duped set of pools touched in the scan window.
+    let complete = true;
     const swapWindows: Array<{ from: bigint; to: bigint }> = [];
     for (let from = fromBlock; from <= head; from += BLOCK_WINDOW) {
         const to = from + BLOCK_WINDOW - 1n > head ? head : from + BLOCK_WINDOW - 1n;
@@ -594,6 +742,11 @@ async function sumV3SwapVolume(
                     toBlock: to,
                 })) as Array<{ address: string; topics: string[]; data: string }>;
             } catch (err) {
+                // Audit M-01: surface window failures via the
+                // `complete` flag so the outer cron can stamp
+                // truncated=true on the snapshot. Previously these
+                // failures dropped events silently.
+                complete = false;
                 console.warn(
                     `[stats v3] getLogs ${from}..${to} failed:`,
                     (err as Error)?.message ?? err,
@@ -604,7 +757,7 @@ async function sumV3SwapVolume(
     );
     const allLogs = allWindows.flat();
     console.log(`[stats v3] scanned ${allLogs.length} Swap events`);
-    if (allLogs.length === 0) return 0n;
+    if (allLogs.length === 0) return { volume: 0n, complete };
 
     const poolAddrs = Array.from(
         new Set(allLogs.map((l) => l.address.toLowerCase())),
@@ -617,7 +770,7 @@ async function sumV3SwapVolume(
     //    into one HTTP roundtrip per chunk. Chunk size of 500 keeps
     //    the calldata under the gas cap on Arc's multicall3.
     const CHUNK = 500;
-    const usdcPools = new Map<string, 0 | 1>();
+    const usdcPools = new Map<string, UsdcSideMeta>();
     for (let i = 0; i < poolAddrs.length; i += CHUNK) {
         const slice = poolAddrs.slice(i, i + CHUNK);
         const contracts = slice.flatMap((p) => [
@@ -643,6 +796,7 @@ async function sumV3SwapVolume(
                 allowFailure: true,
             })) as never;
         } catch (err) {
+            complete = false;
             console.warn(
                 `[stats v3] multicall chunk ${i} failed:`,
                 (err as Error)?.message ?? err,
@@ -660,18 +814,38 @@ async function sumV3SwapVolume(
                 r1?.status === "success"
                     ? (r1.result as Address | undefined)?.toLowerCase()
                     : undefined;
-            if (t0 === usdc) usdcPools.set(slice[j], 0);
-            else if (t1 === usdc) usdcPools.set(slice[j], 1);
+            // Audit H-01: recognise both native USDC (6-dec) AND
+            // WUSDC (18-dec) as USDC-equivalent sides. WUSDC amounts
+            // need scaling down by 10^12 to reach micros parity.
+            if (t0 === usdc) usdcPools.set(slice[j], { side: 0, divisor: 1n });
+            else if (t1 === usdc) usdcPools.set(slice[j], { side: 1, divisor: 1n });
+            else if (t0 === wusdc) usdcPools.set(slice[j], { side: 0, divisor: WUSDC_SCALE_DIVISOR });
+            else if (t1 === wusdc) usdcPools.set(slice[j], { side: 1, divisor: WUSDC_SCALE_DIVISOR });
         }
     }
     console.log(`[stats v3] ${usdcPools.size} USDC-touching pools`);
-    if (usdcPools.size === 0) return 0n;
+    if (usdcPools.size === 0) return { volume: 0n, complete };
 
     // 3. Sum |USDC side amount| across the swap logs we already pulled.
+    //    Audit H-02: replace the dollar ceiling with a decoder-
+    //    correctness check (topic[0] match + decoded args present).
+    //    Legitimate large trades on mainnet (>$10M USDC institutional
+    //    flow / treasury rebalances) reach the accumulator instead
+    //    of being silently dropped.
     let total = 0n;
+    let droppedCount = 0;
     for (const log of allLogs) {
-        const usdcSide = usdcPools.get(log.address.toLowerCase());
-        if (usdcSide === undefined) continue;
+        const meta = usdcPools.get(log.address.toLowerCase());
+        if (meta === undefined) continue;
+        // Topic-correctness gate: only decode events whose topic[0]
+        // matches the V3 Swap signature we built the ABI against.
+        // Skips events whose topic happened to collide with our scan
+        // filter and would otherwise produce garbage args.
+        const topic0 = (log.topics as readonly string[])[0];
+        if (topic0?.toLowerCase() !== SWAP_TOPIC.toLowerCase()) {
+            droppedCount++;
+            continue;
+        }
         try {
             const decoded = decodeEventLog({
                 abi: [SWAP_EVT_ABI],
@@ -684,16 +858,20 @@ async function sumV3SwapVolume(
                 amount0: bigint;
                 amount1: bigint;
             };
-            const raw = usdcSide === 0 ? args.amount0 : args.amount1;
+            const raw = meta.side === 0 ? args.amount0 : args.amount1;
             const abs = raw < 0n ? -raw : raw;
-            if (abs > 0n && abs < MAX_SANE_EVENT_MICROS) {
-                total += abs;
+            const scaled = abs / meta.divisor;
+            if (scaled > 0n) {
+                total += scaled;
             }
         } catch {
-            /* decode failure, skip */
+            droppedCount++;
         }
     }
-    return total;
+    if (droppedCount > 0) {
+        console.log(`[stats v3] dropped ${droppedCount} events (decode mismatch)`);
+    }
+    return { volume: total, complete };
 }
 
 /**
@@ -719,14 +897,16 @@ async function sumV2SwapVolume(
     client: any,
     fromBlock: bigint,
     head: bigint,
-): Promise<bigint> {
+): Promise<SwapScanResult> {
     const usdc = ADDRESSES.usdc.toLowerCase();
+    const wusdc = ADDRESSES.wusdc.toLowerCase();
 
     // Mirror sumV3SwapVolume's address-less strategy: scan Swap events
     // chain-wide, lazy-resolve each unique pair's token0/token1, sum
     // USDC sides. Factory-bound enumeration silently dropped pairs
     // whose PairCreated event sat outside the 500k-block window,
     // which is most of them on Arc testnet.
+    let complete = true;
     const swapWindows: Array<{ from: bigint; to: bigint }> = [];
     for (let from = fromBlock; from <= head; from += BLOCK_WINDOW) {
         const to = from + BLOCK_WINDOW - 1n > head ? head : from + BLOCK_WINDOW - 1n;
@@ -741,6 +921,7 @@ async function sumV2SwapVolume(
                     toBlock: to,
                 })) as Array<{ address: string; topics: string[]; data: string }>;
             } catch (err) {
+                complete = false;
                 console.warn(
                     `[stats v2] getLogs ${from}..${to} failed:`,
                     (err as Error)?.message ?? err,
@@ -751,7 +932,7 @@ async function sumV2SwapVolume(
     );
     const allLogs = allWindows.flat();
     console.log(`[stats v2] scanned ${allLogs.length} Swap events`);
-    if (allLogs.length === 0) return 0n;
+    if (allLogs.length === 0) return { volume: 0n, complete };
 
     const pairAddrs = Array.from(
         new Set(allLogs.map((l) => l.address.toLowerCase())),
@@ -759,7 +940,7 @@ async function sumV2SwapVolume(
     console.log(`[stats v2] ${pairAddrs.length} unique pairs`);
 
     const CHUNK = 500;
-    const usdcPairs = new Map<string, 0 | 1>();
+    const usdcPairs = new Map<string, UsdcSideMeta>();
     for (let i = 0; i < pairAddrs.length; i += CHUNK) {
         const slice = pairAddrs.slice(i, i + CHUNK);
         const contracts = slice.flatMap((p) => [
@@ -785,6 +966,7 @@ async function sumV2SwapVolume(
                 allowFailure: true,
             })) as never;
         } catch (err) {
+            complete = false;
             console.warn(
                 `[stats v2] multicall chunk ${i} failed:`,
                 (err as Error)?.message ?? err,
@@ -802,17 +984,27 @@ async function sumV2SwapVolume(
                 r1?.status === "success"
                     ? (r1.result as Address | undefined)?.toLowerCase()
                     : undefined;
-            if (t0 === usdc) usdcPairs.set(slice[j], 0);
-            else if (t1 === usdc) usdcPairs.set(slice[j], 1);
+            // Audit H-01: same USDC + WUSDC detection as sumV3SwapVolume.
+            if (t0 === usdc) usdcPairs.set(slice[j], { side: 0, divisor: 1n });
+            else if (t1 === usdc) usdcPairs.set(slice[j], { side: 1, divisor: 1n });
+            else if (t0 === wusdc) usdcPairs.set(slice[j], { side: 0, divisor: WUSDC_SCALE_DIVISOR });
+            else if (t1 === wusdc) usdcPairs.set(slice[j], { side: 1, divisor: WUSDC_SCALE_DIVISOR });
         }
     }
     console.log(`[stats v2] ${usdcPairs.size} USDC-touching pairs`);
-    if (usdcPairs.size === 0) return 0n;
+    if (usdcPairs.size === 0) return { volume: 0n, complete };
 
     let total = 0n;
+    let droppedCount = 0;
     for (const log of allLogs) {
-        const usdcSide = usdcPairs.get(log.address.toLowerCase());
-        if (usdcSide === undefined) continue;
+        const meta = usdcPairs.get(log.address.toLowerCase());
+        if (meta === undefined) continue;
+        // Audit H-02: topic-correctness gate replaces the dollar ceiling.
+        const topic0 = (log.topics as readonly string[])[0];
+        if (topic0?.toLowerCase() !== V2_SWAP_TOPIC.toLowerCase()) {
+            droppedCount++;
+            continue;
+        }
         try {
             const decoded = decodeEventLog({
                 abi: [V2_SWAP_EVT_ABI],
@@ -827,18 +1019,102 @@ async function sumV2SwapVolume(
                 amount0Out: bigint;
                 amount1Out: bigint;
             };
-            const usdcVol =
-                usdcSide === 0
+            const rawUsdcVol =
+                meta.side === 0
                     ? args.amount0In + args.amount0Out
                     : args.amount1In + args.amount1Out;
-            if (usdcVol > 0n && usdcVol < MAX_SANE_EVENT_MICROS) {
-                total += usdcVol;
+            const scaled = rawUsdcVol / meta.divisor;
+            if (scaled > 0n) {
+                total += scaled;
             }
         } catch {
-            /* decode failure, skip */
+            droppedCount++;
         }
     }
-    return total;
+    if (droppedCount > 0) {
+        console.log(`[stats v2] dropped ${droppedCount} events (decode mismatch)`);
+    }
+    return { volume: total, complete };
+}
+
+/**
+ * Sum the USDC volume of every ArcadeHook CurveBuy + CurveSell event
+ * across the scan window. Address-bound to ADDRESSES.arcadeHook so the
+ * scan stays cheap even on a wide window (vs. the V3/V2 address-less
+ * scans which fan over every pool on Arc).
+ *
+ * Audit 2026-06-18 H-04: previously the V4 hook stack was counted only
+ * at tx-count level (presence in the `contracts` array) but the dollar
+ * flow through the bonding-curve phase was entirely dropped from the
+ * volume figure. CurveBuy emits `grossUsdcIn` (6-dec USDC micros) and
+ * CurveSell emits `usdcOut` — both already in micros so no scaling
+ * needed.
+ *
+ * Returns 0n with complete=true when arcadeHook is not configured
+ * (predominant testnet state), so the caller never has to gate this.
+ */
+async function sumHookVolume(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    client: any,
+    address: Address | undefined,
+    fromBlock: bigint,
+    head: bigint,
+): Promise<SwapScanResult> {
+    if (!address || address === "0x0000000000000000000000000000000000000000") {
+        return { volume: 0n, complete: true };
+    }
+    let complete = true;
+    const windows: Array<{ from: bigint; to: bigint }> = [];
+    for (let from = fromBlock; from <= head; from += BLOCK_WINDOW) {
+        const to = from + BLOCK_WINDOW - 1n > head ? head : from + BLOCK_WINDOW - 1n;
+        windows.push({ from, to });
+    }
+    const sums = await Promise.all(
+        windows.map(async ({ from, to }) => {
+            try {
+                const logs = await client.getLogs({
+                    address,
+                    fromBlock: from,
+                    toBlock: to,
+                    // OR CurveBuy and CurveSell in topic slot 0.
+                    topics: [[HOOK_CURVE_BUY_TOPIC, HOOK_CURVE_SELL_TOPIC]],
+                });
+                let acc = 0n;
+                for (const log of logs) {
+                    try {
+                        const topic0 = (log as { topics: readonly string[] }).topics[0];
+                        const isBuy = topic0?.toLowerCase() === HOOK_CURVE_BUY_TOPIC.toLowerCase();
+                        const decoded = decodeEventLog({
+                            abi: [isBuy ? HOOK_CURVE_BUY_EVT_ABI : HOOK_CURVE_SELL_EVT_ABI],
+                            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                            data: (log as any).data,
+                            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                            topics: (log as any).topics,
+                        });
+                        const args = decoded.args as unknown as {
+                            grossUsdcIn?: bigint;
+                            usdcOut?: bigint;
+                        };
+                        const usdcAmount = isBuy ? args.grossUsdcIn : args.usdcOut;
+                        if (typeof usdcAmount === "bigint" && usdcAmount > 0n) {
+                            acc += usdcAmount;
+                        }
+                    } catch {
+                        /* decode mismatch, skip */
+                    }
+                }
+                return acc;
+            } catch (err) {
+                complete = false;
+                console.warn(
+                    `[stats hook] getLogs ${from}..${to} failed:`,
+                    (err as Error)?.message ?? err,
+                );
+                return 0n;
+            }
+        }),
+    );
+    return { volume: sums.reduce((a, b) => a + b, 0n), complete };
 }
 
 /**

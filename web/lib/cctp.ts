@@ -20,7 +20,27 @@ import { Address } from "viem";
 export const CCTP_V2_TOKEN_MESSENGER: Address = "0x8FE6B999Dc680CcFDD5Bf7EB0974218be2542DAA";
 export const CCTP_V2_MESSAGE_TRANSMITTER: Address = "0xE737e5cEBEEBa77EFE34D4aa090756590b1CE275";
 
-const IRIS_BASE_TESTNET = "https://iris-api-sandbox.circle.com";
+/**
+ * Circle Iris attestation service hosts. The path
+ * `/v2/messages/{srcDomain}?transactionHash=...` is identical on both
+ * environments; only the host differs.
+ *
+ * Audit C-01 (2026-06-18): previously this was a single `IRIS_BASE_TESTNET`
+ * constant pointed at the sandbox host with NO production switch. Every
+ * mainnet bridge would have stalled at "Waiting for Circle attestation"
+ * forever because sandbox never sees mainnet burns. Now env-gated via
+ * `NEXT_PUBLIC_CCTP_NETWORK` (defaults to testnet so existing testnet
+ * deployments keep working without a config flip).
+ */
+const IRIS_HOSTS = {
+  testnet: "https://iris-api-sandbox.circle.com",
+  mainnet: "https://iris-api.circle.com",
+} as const;
+
+function irisBase(): string {
+  const env = (process.env.NEXT_PUBLIC_CCTP_NETWORK ?? "").toLowerCase();
+  return env === "mainnet" ? IRIS_HOSTS.mainnet : IRIS_HOSTS.testnet;
+}
 
 export interface CctpChainConfig {
   /** EVM chain ID */
@@ -284,7 +304,7 @@ export async function fetchAttestationDetailed(
   srcDomain: number,
   txHash: string,
 ): Promise<IrisResult> {
-  const url = `${IRIS_BASE_TESTNET}/v2/messages/${srcDomain}?transactionHash=${txHash}`;
+  const url = `${irisBase()}/v2/messages/${srcDomain}?transactionHash=${txHash}`;
   try {
     const res = await fetch(url);
     if (res.status === 404) return { kind: "missing" };
@@ -327,7 +347,7 @@ export async function fetchAttestation(
   // null fields with status: "complete") would land the user in the
   // 'minting' state with `null` hex blobs, the wallet rejection on
   // signing would be the only signal it ever went wrong.
-  const url = `${IRIS_BASE_TESTNET}/v2/messages/${srcDomain}?transactionHash=${txHash}`;
+  const url = `${irisBase()}/v2/messages/${srcDomain}?transactionHash=${txHash}`;
   try {
     const res = await fetch(url);
     if (!res.ok) return null;

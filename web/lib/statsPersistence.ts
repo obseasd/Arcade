@@ -72,6 +72,26 @@ function rowToSnapshot(r: RawRow): PersistedSnapshot {
     };
 }
 
+/**
+ * Audit 2026-06-18 H-05: the MAX-across-all-history strategy used to
+ * lock the public counters to ANY single corrupted row forever. The
+ * team already hit this once on `volume_usdc_micros` (a corrupted row
+ * landed 2.6e25 micros = $26 quadrillion in the table — preserved as
+ * a comment below) but the FILTER clause was applied to ONLY the
+ * volume column. The other six monotonic columns (tx_count,
+ * unique_wallets, tokens_launched, v4_tokens_launched, v4_hook_launches,
+ * estimated_usdc_gas_micros) were unfiltered — a single bad scan could
+ * stamp an impossible value into any of them and the dashboard would
+ * display that forever with no recovery path short of a manual DELETE.
+ *
+ * Mitigation: cap the MAX to the most recent N hours of cron-tagged
+ * snapshots. Transient anomalies age out automatically. The window is
+ * generous (default 168h = 7 days, covers a week of cron outage) so the
+ * headline stays cumulative across normal operations but a single bad
+ * row stops affecting the dashboard ~7 days later.
+ */
+const PERSISTED_MAX_WINDOW_HOURS = 168;
+
 /** Returns the most recent persisted snapshot, or null when the DB is
  *  empty or not configured. Used by /stats as the primary read. */
 export async function getLatestPersistedSnapshot(): Promise<PersistedSnapshot | null> {
@@ -88,46 +108,76 @@ export async function getLatestPersistedSnapshot(): Promise<PersistedSnapshot | 
         // like they were *shrinking* over time even though every
         // metric is monotonically growing on chain.
         //
-        // Take the global MAX of every monotonic column across every
-        // snapshot we've ever persisted (the table is a time-series of
-        // append-only rows, so the MAX is the cumulative truth). Pair
-        // it with the latest row's snapshot_at / as_of_block /
-        // truncated / source for the freshness signal. The result is
-        // the headline figure visitors expect: "this is the total
-        // activity Arcade has seen since launch, refreshed hourly".
+        // Take the MAX of every monotonic column across the cron-tagged
+        // rows of the last PERSISTED_MAX_WINDOW_HOURS (the table is a
+        // time-series of append-only rows so the MAX over that window
+        // is the cumulative truth at the time of the latest snapshot,
+        // ignoring older rows that may have been written by buggy
+        // pre-fix scans). Pair it with the latest row's snapshot_at /
+        // as_of_block / truncated / source for the freshness signal.
         const rows = (await sql`
             WITH latest AS (
                 SELECT snapshot_at, as_of_block, truncated, source
                 FROM stats_snapshots
                 ORDER BY snapshot_at DESC
                 LIMIT 1
+            ),
+            recent AS (
+                SELECT *
+                FROM stats_snapshots
+                WHERE snapshot_at >= NOW() - (${PERSISTED_MAX_WINDOW_HOURS}::text || ' hours')::interval
+                  AND source = 'cron'
             )
             SELECT
                 latest.snapshot_at,
                 latest.as_of_block,
-                MAX(s.tx_count)                  AS tx_count,
-                MAX(s.unique_wallets)            AS unique_wallets,
-                MAX(s.tokens_launched)           AS tokens_launched,
-                MAX(s.v4_tokens_launched)        AS v4_tokens_launched,
-                MAX(s.v4_hook_launches)          AS v4_hook_launches,
+                MAX(r.tx_count)                  AS tx_count,
+                MAX(r.unique_wallets)            AS unique_wallets,
+                MAX(r.tokens_launched)           AS tokens_launched,
+                MAX(r.v4_tokens_launched)        AS v4_tokens_launched,
+                MAX(r.v4_hook_launches)          AS v4_hook_launches,
                 -- Pre-fix snapshots (before the decodeEventLog + 10M-USDC
                 -- sanity ceiling shipped in 7f7716b) wrote inflated
                 -- volume figures up to 2.6e25 micros = $26 quadrillion.
-                -- Filtering those rows out of the MAX here cleans the
-                -- headline number without requiring a manual DELETE in
-                -- Postgres. 1e15 micros = $1B, well above any realistic
-                -- testnet volume and well below the corrupted values.
-                MAX(s.volume_usdc_micros)
-                    FILTER (WHERE s.volume_usdc_micros < 1000000000000000)
+                -- The 7-day MAX window plus the original < 1e15
+                -- (less-than-$1B) FILTER keep the headline clean even
+                -- if a fresh bug ever lands an inflated row inside the
+                -- window.
+                MAX(r.volume_usdc_micros)
+                    FILTER (WHERE r.volume_usdc_micros < 1000000000000000)
                                                   AS volume_usdc_micros,
-                MAX(s.estimated_usdc_gas_micros) AS estimated_usdc_gas_micros,
+                MAX(r.estimated_usdc_gas_micros) AS estimated_usdc_gas_micros,
                 latest.truncated,
                 latest.source
-            FROM stats_snapshots s
+            FROM recent r
             CROSS JOIN latest
             GROUP BY latest.snapshot_at, latest.as_of_block, latest.truncated, latest.source
         `) as unknown as RawRow[];
-        if (rows.length === 0) return null;
+        if (rows.length === 0) {
+            // Fallback: no cron-tagged rows in the recent window. The
+            // table may still have a bootstrap fallback row; surface
+            // the latest row verbatim so the page never collapses to
+            // zeros when the cron is paused or freshly attached.
+            const latest = (await sql`
+                SELECT
+                    snapshot_at,
+                    as_of_block,
+                    tx_count,
+                    unique_wallets,
+                    tokens_launched,
+                    v4_tokens_launched,
+                    v4_hook_launches,
+                    volume_usdc_micros,
+                    estimated_usdc_gas_micros,
+                    truncated,
+                    source
+                FROM stats_snapshots
+                ORDER BY snapshot_at DESC
+                LIMIT 1
+            `) as unknown as RawRow[];
+            if (latest.length === 0) return null;
+            return rowToSnapshot(latest[0]);
+        }
         return rowToSnapshot(rows[0]);
     } catch (err) {
         // Most likely cause: migration not run yet on a fresh attach.
@@ -214,6 +264,36 @@ export async function insertSnapshot(
     } catch (err) {
         console.error("[stats] insertSnapshot failed:", err);
         return false;
+    }
+}
+
+/**
+ * Audit 2026-06-18 M-02: idempotency guard against concurrent cron
+ * runs. Returns the ISO timestamp of the most recent row, or null when
+ * the table is empty. The cron route checks this BEFORE running the
+ * expensive RPC scan: if the last row is younger than the dedup window
+ * we skip the scan entirely instead of stamping a near-duplicate row.
+ *
+ * Honest about source: only cron-tagged rows count toward the dedup
+ * window. A manual replay (source='manual') or fallback row
+ * (source='fallback') does not block the next cron run.
+ */
+export async function lastCronSnapshotIso(): Promise<string | null> {
+    if (!isDbConfigured()) return null;
+    try {
+        const sql = getSql();
+        const rows = (await sql`
+            SELECT snapshot_at
+            FROM stats_snapshots
+            WHERE source = 'cron'
+            ORDER BY snapshot_at DESC
+            LIMIT 1
+        `) as unknown as { snapshot_at: string }[];
+        if (rows.length === 0) return null;
+        return new Date(rows[0].snapshot_at).toISOString();
+    } catch (err) {
+        console.warn("[stats] lastCronSnapshotIso failed:", err);
+        return null;
     }
 }
 

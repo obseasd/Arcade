@@ -1,7 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAggregateStats } from "@/lib/stats";
-import { insertSnapshot } from "@/lib/statsPersistence";
+import { insertSnapshot, lastCronSnapshotIso } from "@/lib/statsPersistence";
 import { isDbConfigured } from "@/lib/db";
+
+/**
+ * Audit 2026-06-18 M-02: idempotency window. If a cron-tagged row was
+ * written within the last MIN_CRON_INTERVAL_MS, refuse to run the next
+ * scan and return 200 with `skipped:true`. Protects against two
+ * concurrent cron firings (GitHub Actions cron + manual replay) both
+ * inserting near-duplicate rows that pollute the time-series.
+ * Generous (45 min) so the hourly cron cadence always passes; only a
+ * second cron call inside the hour bounces.
+ */
+const MIN_CRON_INTERVAL_MS = 45 * 60 * 1000;
 
 /**
  * Hourly cron endpoint that snapshots the live /stats aggregate into
@@ -67,6 +78,26 @@ export async function POST(req: NextRequest) {
             },
             { status: 200 },
         );
+    }
+
+    // Audit M-02: idempotency check. Cheap (1 SELECT) and runs BEFORE
+    // the ~30-60s RPC scan, so a redundant cron call returns in
+    // sub-second instead of burning a full scan + insert.
+    const lastIso = await lastCronSnapshotIso();
+    if (lastIso) {
+        const sinceMs = Date.now() - new Date(lastIso).getTime();
+        if (sinceMs < MIN_CRON_INTERVAL_MS) {
+            return NextResponse.json(
+                {
+                    persisted: false,
+                    skipped: true,
+                    reason: "Previous cron row too recent",
+                    lastCronAt: lastIso,
+                    sinceMs,
+                },
+                { status: 200 },
+            );
+        }
     }
 
     let snap;

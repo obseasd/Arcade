@@ -54,16 +54,33 @@ const ARC_CHAIN = {
     },
 } as const;
 
-/** Returns the on-chain depositor address (i.e. who owns the auto-
- *  management slot for this tokenId), or null if the position is not
- *  currently held by the Compounder. The null case covers (a) a fresh
- *  tokenId never deposited and (b) a withdrawn one, both of which must
- *  be rejected by the write paths. */
-async function readDepositor(tokenId: string): Promise<Address | null> {
+/**
+ * Result of reading the on-chain depositor for a tokenId. The
+ * discriminated union is load-bearing: under the previous design any
+ * RPC failure also returned `null`, which was indistinguishable from
+ * "position not held by Compounder" and let an attacker bypass the
+ * depositor gate by triggering (or timing) a transient RPC error.
+ *
+ * Audit 2026-06-18 M-10:
+ *   - "depositor": position is held; only the address may write to it.
+ *   - "absent":    position is not held (never deposited or already
+ *                  withdrawn on chain). Write paths handle this
+ *                  explicitly — `withdraw` is allowed (it mirrors a tx
+ *                  that already executed), `upsert` is rejected.
+ *   - "rpc-failed": transient RPC failure. Write paths MUST refuse with
+ *                   a 503 so the caller retries; never fall through to
+ *                   the unauthenticated path.
+ */
+type DepositorRead =
+    | { kind: "depositor"; depositor: Address }
+    | { kind: "absent" }
+    | { kind: "rpc-failed" };
+
+async function readDepositor(tokenId: string): Promise<DepositorRead> {
     const compounderAddress = ADDRESSES.autoCompounder as Address;
-    if (!isAddress(compounderAddress, { strict: false })) return null;
+    if (!isAddress(compounderAddress, { strict: false })) return { kind: "absent" };
     if (compounderAddress === "0x0000000000000000000000000000000000000000") {
-        return null;
+        return { kind: "absent" };
     }
     try {
         const client = createPublicClient({
@@ -87,11 +104,15 @@ async function readDepositor(tokenId: string): Promise<Address | null> {
             !depositor ||
             depositor === "0x0000000000000000000000000000000000000000"
         ) {
-            return null;
+            return { kind: "absent" };
         }
-        return depositor;
-    } catch {
-        return null;
+        return { kind: "depositor", depositor };
+    } catch (err) {
+        console.warn(
+            `[compounder/positions] readDepositor RPC failed for tokenId=${tokenId}:`,
+            (err as Error)?.message ?? err,
+        );
+        return { kind: "rpc-failed" };
     }
 }
 
@@ -161,25 +182,28 @@ export async function POST(req: NextRequest) {
     }
 
     // Audit C2 anchor: every write path resolves the canonical
-    // depositor on chain BEFORE touching the DB. Withdraw is allowed
-    // when the position is no longer held by the Compounder (the
-    // on-chain withdrawPosition deleted the config — depositor reads
-    // as zero — so the DB row stamp is the mirror of a tx that
-    // already executed). Upsert always requires the on-chain
-    // depositor to match the claimed owner, which closes both the
-    // owner-overwrite and the withdraw-anyones-position attacks.
-    const onChainDepositor = await readDepositor(body.tokenId);
+    // depositor on chain BEFORE touching the DB. Audit 2026-06-18 M-10
+    // refinement: a transient RPC failure now returns a 503 instead of
+    // falling through to the unauthenticated path that previously let
+    // an attacker bypass the depositor gate by timing a flaky RPC.
+    const depositorRead = await readDepositor(body.tokenId);
+    if (depositorRead.kind === "rpc-failed") {
+        return NextResponse.json(
+            { error: "Could not verify position depositor; retry shortly" },
+            { status: 503 },
+        );
+    }
 
     if (body.action === "withdraw") {
         // The frontend calls withdraw RIGHT AFTER submitting the
         // on-chain withdrawPosition tx. By the time the DB mirror
         // happens, the contract has either deleted the config
-        // (depositor reads as zero) or the tx hasn't mined yet
-        // (depositor still points at the caller). We accept both
-        // cases — anyone CAN withdraw their own position; nobody
-        // CAN withdraw someone else's because the contract refuses
-        // any caller who isn't the recorded depositor.
-        if (onChainDepositor !== null) {
+        // (depositorRead.kind === "absent") or the tx hasn't mined
+        // yet (kind === "depositor" still pointing at the caller).
+        // We accept both cases — anyone CAN withdraw their own
+        // position; nobody CAN withdraw someone else's because the
+        // contract refuses any caller who isn't the recorded depositor.
+        if (depositorRead.kind === "depositor") {
             // Position is still custodied — only the recorded
             // depositor may stamp `withdrawn_at`. Without this gate a
             // griefer could DoS the cron by enumerating tokenIds and
@@ -189,7 +213,7 @@ export async function POST(req: NextRequest) {
                 !body.ownerAddress ||
                 !isAddress(body.ownerAddress, { strict: false }) ||
                 body.ownerAddress.toLowerCase() !==
-                    onChainDepositor.toLowerCase()
+                    depositorRead.depositor.toLowerCase()
             ) {
                 return NextResponse.json(
                     { error: "Not the position depositor" },
@@ -231,9 +255,9 @@ export async function POST(req: NextRequest) {
         // ownership rows for other users — full off-chain ownership
         // takeover even though the NFT custody stayed honest.
         if (
-            onChainDepositor === null ||
+            depositorRead.kind !== "depositor" ||
             body.ownerAddress.toLowerCase() !==
-                onChainDepositor.toLowerCase()
+                depositorRead.depositor.toLowerCase()
         ) {
             return NextResponse.json(
                 { error: "Not the position depositor" },

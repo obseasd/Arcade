@@ -222,13 +222,31 @@ async function handleIntent(
         return;
     }
 
-    // pendingClaims returns a tuple. We only need a handful of fields
-    // for the decision; the type is intentionally widened to readonly
-    // unknown[] so a small ABI revision does not break the cron loudly.
+    // pendingClaims returns the tuple defined by the ABI (see
+    // web/lib/abis/twitterEscrowV3.ts):
+    //   [0] recipient (address)
+    //   [1] pairedToken (address)
+    //   [2] pairedAmount (uint256)
+    //   [3] clankerToken (address)
+    //   [4] clankerAmount (uint256)
+    //   [5] positionId (uint256)
+    //   [6] slotIndex (uint256)
+    //   [7] executeAfter (uint256)
+    //   [8] deadline (uint256)
+    //   [9] consumed (bool)
+    //   [10] vetoed (bool)
+    //
+    // Audit 2026-06-18 H-14: previous code read [6] as consumed, [7] as
+    // vetoed, [3] as executeAfter — i.e. it was reading slotIndex,
+    // executeAfter, clankerToken instead. slotIndex is almost always
+    // non-zero so `consumed` was effectively always true, the cron
+    // stamped every intent as "succeeded" and never called
+    // claimByTwitter. Auto-claim was silently dead since ship. Indices
+    // now derive directly from the ABI order above.
     const tuple = onChain as readonly unknown[];
-    const consumed = Boolean(tuple[6]);
-    const vetoed = Boolean(tuple[7]);
-    const executeAfter = BigInt(tuple[3] as bigint);
+    const executeAfter = BigInt(tuple[7] as bigint);
+    const consumed = Boolean(tuple[9]);
+    const vetoed = Boolean(tuple[10]);
     const nowSec = BigInt(Math.floor(Date.now() / 1000));
 
     if (consumed) {

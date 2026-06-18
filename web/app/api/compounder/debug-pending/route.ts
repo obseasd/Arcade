@@ -17,8 +17,24 @@ import { computePendingFees } from "@/lib/v3-fee-math";
  * Server-side replica of the client's pending-fees math. Lets us tell
  * "the UI shows 0 because the math returns 0" from "the math is right
  * and the UI is dropping it on the floor" with one curl.
+ *
+ * Audit 2026-06-18 M-09: previously unauthenticated. Each request fires
+ * 6+ Arc RPC reads (NPM.positions + factory.getPool + slot0 +
+ * feeGrowthGlobal0/1 + ticks(lower) + ticks(upper)). A loop hitting
+ * `?tokenId=N` for incrementing N would burn the Arc public RPC
+ * quota cleanly. Now gated behind `STATS_CRON_SECRET`; the endpoint is
+ * a developer-only debug surface and no legitimate end-user flow calls
+ * it.
  */
 export const dynamic = "force-dynamic";
+
+function isAuthed(req: NextRequest): boolean {
+    const secret = process.env.STATS_CRON_SECRET;
+    if (!secret) return false;
+    const auth = req.headers.get("authorization");
+    const expected = `Bearer ${secret}`;
+    return auth?.length === expected.length && auth === expected;
+}
 
 const ARC_RPC_LIST: readonly string[] = [
     "https://5042002.rpc.thirdweb.com",
@@ -36,6 +52,10 @@ const ARC_CHAIN = {
 } as const;
 
 export async function GET(req: NextRequest) {
+    if (!isAuthed(req)) {
+        return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
     const tokenId = req.nextUrl.searchParams.get("tokenId");
     if (!tokenId || !/^\d+$/.test(tokenId)) {
         return NextResponse.json(

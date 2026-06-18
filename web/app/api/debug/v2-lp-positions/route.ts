@@ -14,8 +14,23 @@ import { ADDRESSES } from "@/lib/constants";
  * Lists every V2 pair the wallet has LP in, plus where the LP came
  * from. Used to track down "mystery" LP positions that show up in
  * MyPositions even though the user does not remember providing.
+ *
+ * Audit 2026-06-18 H-13: previously unauthenticated. An attacker could
+ * hit this endpoint in a loop with arbitrary `owner` addresses and
+ * burn through Arc RPC bandwidth (one `allPairs` walk + 4 reads per
+ * non-zero pair). Now gated behind `STATS_CRON_SECRET` so only the
+ * operator can call it. The endpoint is only useful for support /
+ * debug, no legitimate end-user surface depends on it.
  */
 export const dynamic = "force-dynamic";
+
+function isAuthed(req: NextRequest): boolean {
+    const secret = process.env.STATS_CRON_SECRET;
+    if (!secret) return false;
+    const auth = req.headers.get("authorization");
+    const expected = `Bearer ${secret}`;
+    return auth?.length === expected.length && auth === expected;
+}
 
 const ARC_RPC_LIST: readonly string[] = [
     "https://5042002.rpc.thirdweb.com",
@@ -33,6 +48,10 @@ const ARC_CHAIN = {
 } as const;
 
 export async function GET(req: NextRequest) {
+    if (!isAuthed(req)) {
+        return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
     const owner = req.nextUrl.searchParams.get("owner");
     if (!owner || !/^0x[a-fA-F0-9]{40}$/.test(owner)) {
         return NextResponse.json(
