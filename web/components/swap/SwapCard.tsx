@@ -468,6 +468,16 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
   // exact-in-vs-out mismatch on the fund-handling path.
   const aggregatorAmountIn = useMemo<bigint>(() => {
     if (lastEdited === "in") return amountInRaw;
+    // exact-output: prefer the V2 getAmountsIn result (`amountsIn[0]`),
+    // which is the exact input the user's typed output needs and is
+    // populated for every V2 pair (EURC, USDT, etc.) — this is what
+    // drives the From field. The cached forward ratio is only a
+    // fallback for V3 / launchpad paths where getAmountsIn doesn't run.
+    // (The earlier version relied solely on the ratio ref, which is
+    // never seeded for a plain V2 pair in exact-output, so the routes
+    // panel stayed empty — the bug the user hit.)
+    const fromV2 = amountsIn?.[0];
+    if (fromV2 && fromV2 > 0n) return fromV2;
     const r = lastForwardRatioRef.current;
     if (!r || r.amountOut === 0n || amountOutRawTyped === 0n) return 0n;
     if (
@@ -479,7 +489,7 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
     return (amountOutRawTyped * r.amountIn) / r.amountOut;
     // ratioVersion bumps when the probe seeds/refreshes the ratio.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lastEdited, amountInRaw, amountOutRawTyped, ratioVersion, tokenIn.address, tokenOut?.address]);
+  }, [lastEdited, amountInRaw, amountsIn, amountOutRawTyped, ratioVersion, tokenIn.address, tokenOut?.address]);
 
   const aggregatorEnabled =
     !route.useLaunchpadRouter && !v3Unsupported && !isLaunchpadCurveSwap && decimalsKnown && aggregatorAmountIn > 0n && !!tokenOut && !!account;
@@ -1541,6 +1551,17 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
           loading={routeQuotes.loading}
           selected={selectedRoute ?? routeQuotes.best ?? undefined}
           onSelect={(q) => {
+            // Audit 2026-06-18c (b): tapping a route while in
+            // exact-output mode converts the trade to exact-input at
+            // the back-derived amount, so the chosen DEX route actually
+            // executes (providers are exact-input only; we don't fake
+            // exact-output through them). The From field becomes the
+            // derived input and the For field recomputes to that
+            // route's real output — honest exact-input semantics.
+            if (lastEdited === "out" && aggregatorAmountIn > 0n && decimalsKnown) {
+              setAmountInStr(formatUnits(aggregatorAmountIn, decimalsIn));
+              setLastEdited("in");
+            }
             setSelectedProvider(q.provider);
             setUserPickedProvider(true);
           }}
@@ -1575,9 +1596,13 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
           isn't misleading. */}
       {aggregatorEnabled && tokenOut && lastEdited === "out" && (
         <div className="mt-2 text-[11px] leading-snug text-arc-text-faint">
-          Routes shown for comparison. This trade executes on Arcade. To
-          route through another DEX, enter an amount in the{" "}
-          <span className="text-arc-text-muted">From</span> field instead.
+          Comparing routes for ≈
+          {" "}
+          <span className="text-arc-text-muted tabular-nums">
+            {formatTokenAmount(aggregatorAmountIn, decimalsIn, 4)} {symIn}
+          </span>
+          . Tap a route to trade through it (switches to an exact-input
+          swap); otherwise this executes on Arcade.
         </div>
       )}
 
@@ -1806,7 +1831,10 @@ function TokenBox({
         <div className="flex min-w-0 items-center gap-2 text-arc-text-muted">
           {usdLabel && <span className="truncate">{usdLabel}</span>}
           {lossPct !== undefined && (
-            <span className={cn("tabular-nums", lossClass)}>
+            <span
+              className={cn("tabular-nums", lossClass)}
+              title="Value change vs the pool mid-price (price impact + fee). Negative means this trade moves a thin pool, so you get less than the spot rate — compare the routes below for a better venue."
+            >
               ({lossPct >= 0 ? "+" : ""}
               {lossPct.toFixed(2)}%)
             </span>
