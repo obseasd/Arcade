@@ -4,8 +4,18 @@ import { ArrowLeft, Check, Copy, QrCode } from "lucide-react";
 import { CrossIcon } from "@/components/ui/MaskIcon";
 import { useState } from "react";
 import Image from "next/image";
-import { QRCodeSVG } from "qrcode.react";
+import dynamic from "next/dynamic";
 import { Address } from "viem";
+
+// Audit 2026-06-18b bundle-weight: qrcode.react is only needed once the
+// user opens the QR view (a secondary action behind a button click).
+// Defer it via next/dynamic so the library is code-split out of the
+// initial route bundle that ships the Receive button. ssr:false because
+// the QR canvas is client-only anyway. Rendered output is identical.
+const QRCodeSVG = dynamic(
+    () => import("qrcode.react").then((m) => m.QRCodeSVG),
+    { ssr: false },
+);
 import { useEnsName } from "wagmi";
 import { mainnet } from "wagmi/chains";
 import { Modal } from "@/components/ui/Modal";

@@ -49,7 +49,15 @@ export function useClankerClaimable(token: Address | undefined, refreshKey?: num
       : [],
     // Poll on a 15s interval so the panel stays current without a page
     // refresh as new swaps accrue fees in the locked V3 position.
-    query: { enabled: positionId > 0n, refetchInterval: 15_000 },
+    // Audit 2026-06-18b rpc-efficiency: refetchIntervalInBackground is
+    // false (react-query default, made explicit here) so the 15s poll
+    // pauses while the tab is backgrounded — no RPC burn on a token
+    // page left open in an inactive tab.
+    query: {
+      enabled: positionId > 0n,
+      refetchInterval: 15_000,
+      refetchIntervalInBackground: false,
+    },
   });
 
   // When the parent bumps refreshKey (eg a live Swap arrived) re-pull fees

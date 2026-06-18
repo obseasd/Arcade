@@ -37,35 +37,35 @@ export function useV3Volume24h(pool: Address | undefined): {
     gcTime: TTL_MS * 5,
     queryFn: async () => {
       if (!publicClient || !pool) return undefined;
-      const latest = await publicClient.getBlockNumber();
-      const t0Raw = await publicClient.readContract({
-        address: pool,
-        abi: [
-          {
-            type: "function",
-            name: "token0",
-            stateMutability: "view",
-            inputs: [],
-            outputs: [{ type: "address" }],
-          },
-        ] as const,
-        functionName: "token0",
-      });
+      // Audit 2026-06-18b data-fetch: latest block + token0 + token1 are
+      // three independent reads. Fire them in parallel instead of three
+      // sequential awaits; identical data, one round-trip of latency
+      // instead of three.
+      const token0Abi = [
+        {
+          type: "function",
+          name: "token0",
+          stateMutability: "view",
+          inputs: [],
+          outputs: [{ type: "address" }],
+        },
+      ] as const;
+      const token1Abi = [
+        {
+          type: "function",
+          name: "token1",
+          stateMutability: "view",
+          inputs: [],
+          outputs: [{ type: "address" }],
+        },
+      ] as const;
+      const [latest, t0Raw, t1Raw] = await Promise.all([
+        publicClient.getBlockNumber(),
+        publicClient.readContract({ address: pool, abi: token0Abi, functionName: "token0" }),
+        publicClient.readContract({ address: pool, abi: token1Abi, functionName: "token1" }),
+      ]);
       const usdcIsToken0 =
         (t0Raw as Address).toLowerCase() === ADDRESSES.usdc.toLowerCase();
-      const t1Raw = await publicClient.readContract({
-        address: pool,
-        abi: [
-          {
-            type: "function",
-            name: "token1",
-            stateMutability: "view",
-            inputs: [],
-            outputs: [{ type: "address" }],
-          },
-        ] as const,
-        functionName: "token1",
-      });
       const usdcIsToken1 =
         (t1Raw as Address).toLowerCase() === ADDRESSES.usdc.toLowerCase();
       if (!usdcIsToken0 && !usdcIsToken1) {

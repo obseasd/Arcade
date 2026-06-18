@@ -83,6 +83,12 @@ export function AutoCompounderPanel() {
         setLoading(true);
         try {
             const res = await fetch(`/api/compounder/positions?owner=${account}`);
+            // Audit 2026-06-18b error-handling: guard res.ok before
+            // res.json(). On an HTTP 500 the body may be an error page
+            // that fails to parse and throws; this coalesces it into the
+            // existing catch (positions = []) instead of an uncaught
+            // rejection. No user-visible change on the success path.
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const data = (await res.json()) as { positions?: ManagedPosition[] };
             setPositions(data.positions ?? []);
         } catch {

@@ -302,14 +302,6 @@ export const arcadeV3Provider: RouteProvider = {
   },
 };
 
-// Helper for the SwapCard to short-circuit when both sides are clearly V3:
-// callers pre-check this so we skip a doomed quote on pure-V2 pairs.
-// Kept around for backwards compat with the SwapCard's V3-specific
-// gating; the auto-discovery fan-out above ignores this check.
-export function pairLooksV3(tokenIn: Address, tokenOut: Address, isV3Token: (a: Address) => boolean): boolean {
-  return isV3Token(tokenIn) || isV3Token(tokenOut);
-}
-
 /**
  * Probe the V3 pool's max swappable amount via a fixed-iteration
  * binary search. Used as a fallback when the user's typed amountIn

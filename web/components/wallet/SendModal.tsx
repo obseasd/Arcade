@@ -465,6 +465,7 @@ function FormView({
                     <input
                         inputMode="decimal"
                         autoFocus
+                        aria-label="Send amount"
                         value={amount}
                         onChange={(e) => {
                             const v = e.target.value.replace(/,/g, ".");
@@ -567,6 +568,7 @@ function FormView({
                             0x
                         </div>
                         <input
+                            aria-label="Recipient address or ENS name"
                             value={recipientInput}
                             onChange={(e) => setRecipientInput(e.target.value.trim())}
                             placeholder="Wallet address or ENS name"

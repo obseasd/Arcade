@@ -81,7 +81,11 @@ export function SidebarPanel({ config, presetId, onPreset, onConfigChange, onRes
 
       <div className="arc-card p-5">
         <h3 className="mb-3 text-sm font-semibold">Supply Allocations</h3>
-        <div className="grid grid-cols-3 gap-2">
+        {/* Audit 2026-06-18b responsive: stack the three allocation
+            inputs vertically below sm so they stay tappable on a 360px
+            viewport; restore the 3-column row at sm+. Desktop layout
+            unchanged. */}
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
           <AllocInput
             label="Airdrop %"
             value={config.airdropPct * 100}
