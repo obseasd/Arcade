@@ -70,7 +70,9 @@ async function buildKitAndParams(opts: FxSwapOpts) {
         ? { percentageBps: FX_FEE_BPS, recipientAddress: FX_FEE_RECIPIENT }
         : undefined;
     const params = {
-        from: { adapter, chain: Blockchain.Arc_Testnet, address: opts.address },
+        // User-controlled adapter: the SDK resolves the address from the
+        // connected wallet, so `address` must NOT be passed here.
+        from: { adapter, chain: Blockchain.Arc_Testnet },
         tokenIn: opts.tokenIn,
         tokenOut: opts.tokenOut,
         amountIn: opts.amountIn,

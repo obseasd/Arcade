@@ -69,16 +69,10 @@ async function buildKitAndBridgeParams(opts: KitBridgeOpts) {
         provider: opts.solanaProvider as any,
     });
 
-    const arc = {
-        adapter: evmAdapter,
-        chain: "Arc_Testnet",
-        address: opts.evmAddress,
-    };
-    const sol = {
-        adapter: solanaAdapter,
-        chain: "Solana_Devnet",
-        address: opts.solanaAddress,
-    };
+    // User-controlled adapters: the SDK resolves each address from the
+    // connected wallet, so `address` must NOT be passed in the contexts.
+    const arc = { adapter: evmAdapter, chain: "Arc_Testnet" };
+    const sol = { adapter: solanaAdapter, chain: "Solana_Devnet" };
     const from = opts.direction === "arc-to-solana" ? arc : sol;
     const to = opts.direction === "arc-to-solana" ? sol : arc;
 
