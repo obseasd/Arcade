@@ -26,7 +26,11 @@ export function Footer() {
       className="mt-16 border-t"
       style={{ borderTopColor: "rgba(142, 147, 143, 0.10)", borderTopWidth: "1px" }}
     >
-      <div className="mx-auto grid max-w-7xl grid-cols-3 items-center px-4 py-4 text-sm sm:px-6">
+      {/* Audit 2026-06-18b responsive: stack the three sections
+          vertically and centered below sm so they don't cram into a
+          360px row; restore the 3-column layout at sm+ (desktop
+          unchanged). */}
+      <div className="mx-auto flex max-w-7xl flex-col items-center gap-4 px-4 py-4 text-sm sm:grid sm:grid-cols-3 sm:items-center sm:gap-0 sm:px-6">
         {/* Left: logo + version */}
         <div className="flex items-center gap-2.5">
           <Image
@@ -79,8 +83,9 @@ export function Footer() {
           </Link>
         </div>
 
-        {/* Right: legal + copyright */}
-        <div className="flex flex-col items-end gap-1 font-display text-xs text-arc-gray">
+        {/* Right: legal + copyright. Centered on mobile (stacked
+            layout), right-aligned at sm+ (3-col layout). */}
+        <div className="flex flex-col items-center gap-1 font-display text-xs text-arc-gray sm:items-end">
           <div className="flex items-center gap-3">
             <Link href="/terms" className="hover:text-arc-cta-hover">Terms</Link>
             <Link href="/privacy" className="hover:text-arc-cta-hover">Privacy</Link>
