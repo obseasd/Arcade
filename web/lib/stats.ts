@@ -589,6 +589,17 @@ const HOOK_CURVE_SELL_TOPIC = keccak256(
 // accumulator instead of silently dropping.
 const MAX_SANE_EVENT_MICROS = 10_000_000_000_000n; // 10M USDC in micros
 
+// Audit 2026-06-19: per-SWAP outlier ceiling for the address-less V3/V2
+// scanners. Removing the ceiling in H-02 let occasional outlier swaps
+// inflate a single cron snapshot to absurd values (an observed
+// $914,488 spike from one large/mis-scaled WUSDC swap), which the
+// MAX-over-snapshots persistence then pinned as the public headline.
+// A single swap above this on Arc TESTNET is a bot outlier, not
+// organic protocol volume, so we drop it from the dashboard total.
+// NOTE: this is a testnet-grade filter — RAISE or remove it for
+// mainnet where a single >$100k swap can be legitimate.
+const MAX_SANE_SWAP_MICROS = 100_000_000_000n; // 100k USDC in micros
+
 // Per-pool decimals normalization. Arc has multiple USDC-equivalent
 // tokens that route the same dollar:
 //   - USDC (0x3600..., 6 dec, native Arc gas token)
@@ -861,15 +872,20 @@ async function sumV3SwapVolume(
             const raw = meta.side === 0 ? args.amount0 : args.amount1;
             const abs = raw < 0n ? -raw : raw;
             const scaled = abs / meta.divisor;
-            if (scaled > 0n) {
+            // Audit 2026-06-19: drop single-swap outliers above the
+            // testnet ceiling so one bot/mis-scaled WUSDC swap can't
+            // spike the public volume (see MAX_SANE_SWAP_MICROS).
+            if (scaled > 0n && scaled < MAX_SANE_SWAP_MICROS) {
                 total += scaled;
+            } else if (scaled >= MAX_SANE_SWAP_MICROS) {
+                droppedCount++;
             }
         } catch {
             droppedCount++;
         }
     }
     if (droppedCount > 0) {
-        console.log(`[stats v3] dropped ${droppedCount} events (decode mismatch)`);
+        console.log(`[stats v3] dropped ${droppedCount} events (decode mismatch or >$100k outlier)`);
     }
     return { volume: total, complete };
 }
@@ -1024,15 +1040,18 @@ async function sumV2SwapVolume(
                     ? args.amount0In + args.amount0Out
                     : args.amount1In + args.amount1Out;
             const scaled = rawUsdcVol / meta.divisor;
-            if (scaled > 0n) {
+            // Audit 2026-06-19: same testnet outlier ceiling as V3.
+            if (scaled > 0n && scaled < MAX_SANE_SWAP_MICROS) {
                 total += scaled;
+            } else if (scaled >= MAX_SANE_SWAP_MICROS) {
+                droppedCount++;
             }
         } catch {
             droppedCount++;
         }
     }
     if (droppedCount > 0) {
-        console.log(`[stats v2] dropped ${droppedCount} events (decode mismatch)`);
+        console.log(`[stats v2] dropped ${droppedCount} events (decode mismatch or >$100k outlier)`);
     }
     return { volume: total, complete };
 }
@@ -1096,7 +1115,12 @@ async function sumHookVolume(
                             usdcOut?: bigint;
                         };
                         const usdcAmount = isBuy ? args.grossUsdcIn : args.usdcOut;
-                        if (typeof usdcAmount === "bigint" && usdcAmount > 0n) {
+                        // Audit 2026-06-19: same testnet outlier ceiling.
+                        if (
+                            typeof usdcAmount === "bigint" &&
+                            usdcAmount > 0n &&
+                            usdcAmount < MAX_SANE_SWAP_MICROS
+                        ) {
                             acc += usdcAmount;
                         }
                     } catch {
