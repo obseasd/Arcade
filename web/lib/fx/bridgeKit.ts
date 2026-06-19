@@ -61,11 +61,10 @@ async function buildKitAndBridgeParams(opts: KitBridgeOpts) {
     const { createSolanaAdapterFromProvider } = await import(
         "@circle-fin/adapter-solana"
     );
-    const evmAdapter = createViemAdapterFromProvider({
+    const evmAdapter = await createViemAdapterFromProvider({
         provider: opts.evmProvider,
     });
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const solanaAdapter = createSolanaAdapterFromProvider({
+    const solanaAdapter = await createSolanaAdapterFromProvider({
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         provider: opts.solanaProvider as any,
     });

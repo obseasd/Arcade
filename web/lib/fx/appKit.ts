@@ -62,7 +62,9 @@ async function buildKitAndParams(opts: FxSwapOpts) {
     const { createViemAdapterFromProvider } = await import(
         "@circle-fin/adapter-viem-v2"
     );
-    const adapter = createViemAdapterFromProvider({ provider: opts.provider });
+    const adapter = await createViemAdapterFromProvider({
+        provider: opts.provider,
+    });
     const kit = new AppKit();
     const customFee = FX_FEE_RECIPIENT
         ? { percentageBps: FX_FEE_BPS, recipientAddress: FX_FEE_RECIPIENT }
