@@ -1388,6 +1388,16 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
         }}
         onTokenClick={() => setPickerOpen("out")}
         balanceRaw={balOutRaw}
+        // Audit 2026-06-18d: while the aggregator is still resolving in
+        // exact-input mode, the For amount + USD shown are the fast
+        // legacy Arcade quote, which can update once the best route
+        // lands. Dim + pulse so the user reads it as preliminary
+        // instead of final (answers "why is a value shown while routes
+        // load?"). Not applied in exact-output (the For value is the
+        // user's typed amount, not a quote).
+        pending={
+          aggregatorEnabled && routeQuotes.loading && lastEdited === "in"
+        }
         usdValue={
           // outUsd.usd from the trade-ratio fallback equals inUsd.usd
           // exactly because spotUsdPerToken = inUsd / outAmount. Subtract
@@ -1758,6 +1768,11 @@ interface TokenBoxProps {
    *  slippageTone so callers don't have to hand-thread Tailwind classes. */
   slippageLabel?: string;
   slippageTone?: "normal" | "warn" | "danger";
+  /** When true the amount + USD read as preliminary (dimmed + pulsing):
+   *  used on the "For" box while the multi-DEX aggregator is still
+   *  resolving, so the fast first quote doesn't look final right before
+   *  it can update to the best route. */
+  pending?: boolean;
 }
 
 function TokenBox({
@@ -1775,6 +1790,7 @@ function TokenBox({
   feeLabel,
   slippageLabel,
   slippageTone,
+  pending,
 }: TokenBoxProps) {
   const decimals = token?.decimals ?? 18;
   // formatToken now surfaces "<0.0001" for sub-0.0001 non-zero balances
@@ -1825,7 +1841,8 @@ function TokenBox({
         </button>
       </div>
 
-      {/* Amount */}
+      {/* Amount. While `pending`, dim + pulse so the preliminary quote
+          shown before the aggregator settles doesn't read as final. */}
       <input
         type="text"
         inputMode="decimal"
@@ -1837,7 +1854,10 @@ function TokenBox({
           if (parts.length > 2) return;
           onAmountChange(v);
         }}
-        className="arc-input w-full truncate bg-transparent text-2xl font-medium leading-tight sm:text-4xl"
+        className={cn(
+          "arc-input w-full truncate bg-transparent text-2xl font-medium leading-tight transition-opacity sm:text-4xl",
+          pending && "animate-pulse opacity-50",
+        )}
         aria-label="Amount"
       />
 
@@ -1846,7 +1866,11 @@ function TokenBox({
           doesn't push HALF/MAX off-screen on a 375px viewport. */}
       <div className="mt-3 flex flex-wrap items-center justify-between gap-y-1 text-xs">
         <div className="flex min-w-0 items-center gap-2 text-arc-text-muted">
-          {usdLabel && <span className="truncate">{usdLabel}</span>}
+          {usdLabel && (
+            <span className={cn("truncate", pending && "animate-pulse opacity-50")}>
+              {usdLabel}
+            </span>
+          )}
           {lossPct !== undefined && (
             <span
               className={cn("tabular-nums", lossClass)}

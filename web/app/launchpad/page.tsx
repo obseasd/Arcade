@@ -95,8 +95,24 @@ export default function LaunchpadIndexPage() {
       list = list.filter((t) => t.migrated);
     }
 
-    // Sort default: newest first
-    if (filter === "all" || filter === "new") {
+    // Sort. The main "all" view is ordered by market-cap proxy
+    // (descending) so the biggest tokens surface first; the "new"
+    // filter stays newest-first because that's its whole point.
+    //
+    // MC proxy = realUsdcReserve: the USDC raised on the bonding curve
+    // (or locked at graduation). On a bonding curve price rises with
+    // USDC raised, so reserve is monotonic with market cap — it's the
+    // best MC signal available on LaunchpadTokenInfo (we don't carry
+    // the post-migration V2 pool value here). Ties fall back to
+    // newest-first. Compared with bigint operators, not Number(b - a),
+    // so a large reserve delta never overflows the 2^53 float range.
+    if (filter === "all") {
+      list = list.sort((a, b) => {
+        if (b.realUsdcReserve > a.realUsdcReserve) return 1;
+        if (b.realUsdcReserve < a.realUsdcReserve) return -1;
+        return Number(b.createdAt - a.createdAt);
+      });
+    } else if (filter === "new") {
       list = list.sort((a, b) => Number(b.createdAt - a.createdAt));
     }
 
