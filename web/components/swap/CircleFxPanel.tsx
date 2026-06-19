@@ -77,10 +77,11 @@ export function CircleFxPanel() {
           slippageBps: 50,
         });
         if (cancelled) return;
-        // SwapEstimate.estimatedOutput is a human-readable decimal string.
+        // SwapEstimate.estimatedOutput is a TokenAmount { token, amount },
+        // amount being the human-readable decimal string.
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const out = (est as any)?.estimatedOutput ?? (est as any)?.amountOut;
-        setQuote(typeof out === "string" ? out : out ? String(out) : null);
+        const out = (est as any)?.estimatedOutput?.amount;
+        setQuote(typeof out === "string" ? out : null);
         setPhase("idle");
       } catch (err) {
         if (cancelled) return;
