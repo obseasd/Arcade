@@ -757,13 +757,30 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
   //      an impossible "+350%" gain.
   // A real swap never GAINS meaningful value (you always pay fee +
   // impact), so any positive delta above a small noise band is a pricing
-  // artefact, not information. Suppress the badge while quotes are
-  // settling and whenever the delta is implausibly positive; genuine
-  // negative slippage/fee losses still show.
+  // artefact, not information.
+  //
+  // Audit 2026-06-18d (oracle option 1): the value-delta relies on the
+  // per-token USDC-pool spot price, which on Arc testnet is unreliable
+  // for tokens with thin / imbalanced pools (EURC priced ~$1.65, the
+  // 18-dec community USDT mis-priced). When the delta is LARGE in
+  // either direction the number is no longer trustworthy as a clean
+  // "value change": a big positive is a pricing artefact, and a big
+  // negative is either a thin-pool oracle artefact OR genuine heavy
+  // impact that the dedicated "Price impact" line + the route
+  // comparison panel already surface reliably. So we only show the
+  // value-delta for small, plausible swings (a normal fee + light
+  // impact lands in [-8%, +1%]); outside that band we suppress it
+  // rather than show a misleading figure. Quotes still settling are
+  // also suppressed to avoid the mid-fetch flash.
+  const VALUE_DELTA_FLOOR_PCT = -8;
+  const VALUE_DELTA_CEIL_PCT = 1;
   const quotesSettling =
     routeQuotes.loading || quoteOut.isFetching || quoteIn.isFetching;
   const lossPct =
-    lossPctRaw === undefined || quotesSettling || lossPctRaw > 1
+    lossPctRaw === undefined ||
+    quotesSettling ||
+    lossPctRaw > VALUE_DELTA_CEIL_PCT ||
+    lossPctRaw < VALUE_DELTA_FLOOR_PCT
       ? undefined
       : lossPctRaw;
 
