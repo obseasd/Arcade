@@ -1,22 +1,10 @@
-import { BridgeCard } from "@/components/bridge/BridgeCard";
-import { BridgeHistory } from "@/components/bridge/BridgeHistory";
-import { SolanaBridgePanel } from "@/components/bridge/SolanaBridgePanel";
+import { BridgeContainer } from "@/components/bridge/BridgeContainer";
 
 /**
- * Bridge page — CCTP V2 burn-mint only. The Gateway / Unified
- * Balance preview tab was removed 2026-06-17 after live testing
- * showed the Circle SDK's testnet path was unreliable (balance
- * stayed pending indefinitely) and the spend-side wasn't wired,
- * so the feature wasn't usable end-to-end.
+ * Bridge page. EVM <-> Arc runs through the audited CCTP BridgeCard;
+ * Solana <-> Arc runs through Circle App Kit. The network-family toggle
+ * + history live in BridgeContainer.
  */
 export default function BridgePage() {
-  return (
-    <div className="mx-auto max-w-[490px] px-4 py-8 sm:px-6 sm:py-20">
-      <BridgeCard />
-      {/* Solana<->Arc leg via Circle App Kit (scaffold). Self-renders null
-          unless a Kit Key is configured, so this is a no-op without it. */}
-      <SolanaBridgePanel />
-      <BridgeHistory />
-    </div>
-  );
+  return <BridgeContainer />;
 }

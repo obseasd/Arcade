@@ -117,14 +117,14 @@ export function SolanaBridgePanel() {
   const ready = !!evmAddress && !!solAddress && Number(amount) > 0;
 
   return (
-    <div className="mt-4 rounded-2xl border border-arc-border bg-arc-surface p-4">
+    <div className="arc-card relative p-5">
       <div className="mb-3 flex items-center justify-between">
-        <span className="font-display text-sm font-semibold text-arc-text">
+        <h2 className="text-lg font-semibold text-arc-text">
           Solana bridge{" "}
-          <span className="rounded bg-arc-primary-soft px-1.5 py-0.5 text-[10px] text-arc-gray">
+          <span className="ml-1 rounded bg-arc-primary-soft px-1.5 py-0.5 align-middle text-[10px] text-arc-gray">
             beta
           </span>
-        </span>
+        </h2>
         <span className="text-[11px] text-arc-gray">
           {evmIsSource ? "Arc → Solana" : "Solana → Arc"} · USDC
         </span>
