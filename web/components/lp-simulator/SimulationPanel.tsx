@@ -83,7 +83,10 @@ export function SimulationPanel({ config, quotePriceUsd, quoteSymbol }: Props) {
           <Zap className="h-4 w-4 text-amber-400" />
           <h3 className="text-sm font-semibold">Simulate Buys</h3>
         </div>
-        <div className="grid grid-cols-3 gap-2">
+        {/* Audit 2026-06-18b responsive: 2 columns below sm so the
+            quick-buy buttons stay comfortably tappable on a 360px
+            viewport, 3 columns at sm+ (desktop unchanged). */}
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
           {QUICK_BUYS.map((amount) => (
             <button type="button"
               key={amount}
@@ -166,6 +169,8 @@ export function SimulationPanel({ config, quotePriceUsd, quoteSymbol }: Props) {
         </div>
         <div className="mb-3">
           <label className="text-xs text-arc-text-muted">Pool fee tier</label>
+          {/* 3 short fee buttons fit on one row even on mobile, but
+              keep them robust to the narrowest viewport. */}
           <div className="mt-1 grid grid-cols-3 gap-1.5">
             {[100, 200, 300].map((b) => (
               <button type="button"

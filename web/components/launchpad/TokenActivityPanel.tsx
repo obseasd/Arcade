@@ -109,19 +109,27 @@ function TransactionsTab({
   }
 
   return (
-    <div className="overflow-hidden">
-      <div className="grid grid-cols-[60px_minmax(0,1fr)_100px_100px_80px_20px] gap-2 border-b border-arc-border pb-2 text-[10px] uppercase tracking-wider text-arc-text-faint">
-        <div>Type</div>
-        <div>Wallet</div>
-        <div className="text-right">USDC</div>
-        <div className="text-right">{symbol}</div>
-        <div className="text-right">Time</div>
-        <div />
-      </div>
-      <div className="max-h-[420px] divide-y divide-arc-border/40 overflow-y-auto">
-        {trades.map((t) => (
-          <TradeRow key={t.txHash} trade={t} symbol={symbol} explorerUrl={explorerUrl} />
-        ))}
+    // Audit 2026-06-18b responsive: the row grid has ~400px of fixed
+    // columns. The old `overflow-hidden` CLIPPED those columns on a
+    // 360px viewport (the Time / chevron columns vanished). Switch to
+    // horizontal scroll with a shared min-width so the table scrolls as
+    // a unit on mobile — the standard table-on-mobile pattern. Desktop
+    // is unaffected (min-w sits below the card width).
+    <div className="overflow-x-auto">
+      <div className="min-w-[440px]">
+        <div className="grid grid-cols-[60px_minmax(0,1fr)_100px_100px_80px_20px] gap-2 border-b border-arc-border pb-2 text-[10px] uppercase tracking-wider text-arc-text-faint">
+          <div>Type</div>
+          <div>Wallet</div>
+          <div className="text-right">USDC</div>
+          <div className="text-right">{symbol}</div>
+          <div className="text-right">Time</div>
+          <div />
+        </div>
+        <div className="max-h-[420px] divide-y divide-arc-border/40 overflow-y-auto">
+          {trades.map((t) => (
+            <TradeRow key={t.txHash} trade={t} symbol={symbol} explorerUrl={explorerUrl} />
+          ))}
+        </div>
       </div>
     </div>
   );
