@@ -39,6 +39,7 @@ import {
     useSignPermit2,
 } from "@/lib/permit2";
 import { encodePermit2PermitInput } from "@/lib/routing/universalRouter";
+import { buildBatchedApproveAndSwap, type BatchSwapCall } from "@/lib/routing/batchSwap";
 import { cn, formatToken, formatUSDC } from "@/lib/utils";
 
 const USDC_TOKEN: TokenOption = {
@@ -961,7 +962,10 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
       : route.useLaunchpadRouter
         ? ADDRESSES.launchpad
         : ADDRESSES.router;
-  const { ensureAllowance } = useApproveIfNeeded(tokenIn.address, swapSpender);
+  const { allowance: currentAllowance, ensureAllowance } = useApproveIfNeeded(
+    tokenIn.address,
+    swapSpender,
+  );
 
   // Permit2 wiring. Always runs (cheap reads) so the hook order stays
   // stable across renders even when the user toggles between Permit2
@@ -1058,13 +1062,27 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
     if (!account || !tokenOut) return;
     setTx({ status: "pending", message: "Approving…" });
     try {
+      const deadline = BigInt(Math.floor(Date.now() / 1000) + 600);
+      // HIGH#6: under partial-fill we only approve the amount the
+      // executor will actually pull, not the user-typed amount.
+      const approvalAmount = exactIn ? effectiveFinalAmountIn : maxIn;
+      // Arc batch (#3): for the classic-approval Arcade routes (V2 / V3 /
+      // launchpad) we fold the ERC20 approve and the swap into ONE
+      // signature via Multicall3From when an approval is actually needed.
+      // Validated on-chain 2026-06-19 (sender-preserving callFrom). The
+      // external UR/Permit2 routes never batch (they settle in a single
+      // execute() with an off-chain permit), and value-bearing variants
+      // are excluded because the precompile can't forward value.
+      const willBatch = !isExternalRoute && currentAllowance < approvalAmount;
+
       // Permit2-backed external routes (Synthra UR, UnitFlow UR) need a
       // one-time max approve to Permit2 instead of per-router approves.
       // After that, the per-swap "approval" is an off-chain EIP-712 sig
       // the user signs once per swap and we bake into the executor args.
       // Non-Permit2 routes (Arcade V2/V3, XyloNet, UnitFlow WRAP_ETH
       // variant where USDC is paid via msg.value) still use the legacy
-      // ensureAllowance path.
+      // ensureAllowance path — except the batchable Arcade routes, whose
+      // approve is folded into the aggregate3 below.
       if (usesPermit2 && activeRoute) {
         if (permit2Approval.needsApproval) {
           setTx({ status: "pending", message: "Approving Permit2 (one-time)…" });
@@ -1076,15 +1094,12 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
       ) {
         // WRAP_ETH variant — no ERC20 allowance needed, value is sent
         // with the tx. Skip ensureAllowance entirely.
-      } else {
-        // HIGH#6: under partial-fill we only need to approve the amount
-        // the executor will actually pull, not the user-typed amount.
-        // Over-approval to v3Router is harmless (trusted contract) but
+      } else if (!willBatch) {
+        // Over-approval to the router is harmless (trusted contract) but
         // the smaller amount keeps the allowance footprint honest.
-        await ensureAllowance(exactIn ? effectiveFinalAmountIn : maxIn);
+        await ensureAllowance(approvalAmount);
       }
       setTx({ status: "pending", message: "Submitting swap…" });
-      const deadline = BigInt(Math.floor(Date.now() / 1000) + 600);
       let hash: `0x${string}`;
       if (isExternalRoute && activeRoute) {
         // Route the swap through the selected provider's pre-built
@@ -1127,118 +1142,152 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
           value: activeRoute.executor.value,
           chainId: arcTestnet.id,
         });
-      } else if (isV3Swap) {
-        // CLANKER_V3 token: trade on the V3 pool via our V3 router. Exact-in
-        // only (the effect above forces lastEdited="in"). Single hop if one
-        // side is USDC, else 2-hop through USDC.
-        //
-        // Audit H3 + H4 fix: for arcade-v3 routes we ALWAYS use the
-        // provider's pre-built executor.args verbatim — single-hop AND
-        // double-hop. Rebuilding from finalAmountIn here was the
-        // partial-fill regression: when the provider clamped a
-        // pool-exhausting input down to `effectiveAmountIn`, the
-        // executor's args[4] already carried the clamped value but the
-        // single-hop branch threw that away and signed the user's typed
-        // amount, which the V3 pool then reverted because the typed
-        // amount was exactly the input that exhausted active-tick
-        // liquidity in the first place. Now both branches respect
-        // whatever the provider built — partial-fill works, multi-tier
-        // selection works, and the on-chain tx matches the quote shown
-        // in the UI 1:1.
-        const useProviderArgs =
-          isExternalRoute === false && activeRoute?.provider === "arcade-v3";
-        hash = await writeContractAsync({
-          address: ADDRESSES.v3Router,
-          abi: V3_ROUTER_ABI,
-          functionName: v3DoubleHop ? "exactInputThroughUsdc" : "exactInputSingle",
-          args:
-            (v3DoubleHop || useProviderArgs) && activeRoute
-              ? (activeRoute.executor.args as unknown as readonly [
-                  `0x${string}`,
-                  `0x${string}`,
-                  number,
-                  `0x${string}`,
-                  bigint,
-                  bigint,
-                  bigint,
-                  bigint,
-                ])
-              : [
-                  tokenIn.address,
-                  tokenOut.address,
-                  v3Fee,
-                  account,
-                  finalAmountIn,
-                  minOut,
-                  deadline,
-                ],
-          chainId: arcTestnet.id,
-        });
-      } else if (route.useLaunchpadRouter) {
-        // Multi-hop through the launchpad's router so post-migration royalties
-        // are charged on each leg whose token is a migrated launchpad token.
-        // Only exact-in is supported; the effect above forces lastEdited="in".
-        // Deadline param added in audit fixes (Medium #6).
-        // Audit 2026-06-11 contract #10: derive a usdcMidMin floor from
-        // the quoter's totalRoyaltyUsdc so the new launchpad MID_SLIPPAGE
-        // gate has something to enforce.
-        //
-        // Audit 2026-06-11 v2 G9-5 fix: MIGRATED_ROYALTY_BPS is 30
-        // (not 60 — see ArcadeLaunchpad.sol:85). Total royalty across N
-        // migrated legs is `usdcMid_original * 30 * N / 10_000`, so
-        // `usdcMid_original = totalRoyalty * 10_000 / (30 * N)`. The
-        // prior coefficient `60n * migratedLegs` was off by 2x, leaving
-        // the floor at ~48% of the real mid — half the protection.
-        //
-        // Audit 2026-06-11 v2 ADVR-3 fix: scale the floor with the user's
-        // slippage tolerance instead of hardcoding 97%. A user on a thin
-        // pair who set slippage to 5% should get the same 5% tolerance
-        // on the mid leg, not a tighter 3%.
-        let usdcMidMinForRoute = 0n;
-        if (quoteMigratedOut.data) {
-          const totalRoyaltyUsdc = (quoteMigratedOut.data as readonly bigint[])[1];
-          if (totalRoyaltyUsdc > 0n) {
-            const migratedLegs = (route.inMigrated ? 1n : 0n) + (route.outMigrated ? 1n : 0n);
-            if (migratedLegs > 0n) {
-              const usdcMidEstimate = (totalRoyaltyUsdc * 10_000n) / (30n * migratedLegs);
-              const tolerance = 10_000n - BigInt(slippageBps);
-              usdcMidMinForRoute = (usdcMidEstimate * tolerance) / 10_000n;
+      } else {
+        // ===== Classic-approval Arcade routes (V3 / launchpad / V2) =====
+        // Each branch builds a `swapCall` descriptor; the single
+        // execution point below either folds approve+swap into one
+        // Multicall3From signature (willBatch) or sends the swap direct
+        // (allowance already sufficient). The router + args logic is
+        // unchanged from the previous inline writeContract calls.
+        let swapCall: BatchSwapCall;
+        if (isV3Swap) {
+          // CLANKER_V3 token: trade on the V3 pool via our V3 router. Exact-in
+          // only (the effect above forces lastEdited="in"). Single hop if one
+          // side is USDC, else 2-hop through USDC.
+          //
+          // Audit H3 + H4 fix: for arcade-v3 routes we ALWAYS use the
+          // provider's pre-built executor.args verbatim — single-hop AND
+          // double-hop. Rebuilding from finalAmountIn here was the
+          // partial-fill regression: when the provider clamped a
+          // pool-exhausting input down to `effectiveAmountIn`, the
+          // executor's args[4] already carried the clamped value but the
+          // single-hop branch threw that away and signed the user's typed
+          // amount, which the V3 pool then reverted because the typed
+          // amount was exactly the input that exhausted active-tick
+          // liquidity in the first place. Now both branches respect
+          // whatever the provider built — partial-fill works, multi-tier
+          // selection works, and the on-chain tx matches the quote shown
+          // in the UI 1:1.
+          const useProviderArgs =
+            isExternalRoute === false && activeRoute?.provider === "arcade-v3";
+          swapCall = {
+            address: ADDRESSES.v3Router,
+            abi: V3_ROUTER_ABI,
+            functionName: v3DoubleHop
+              ? "exactInputThroughUsdc"
+              : "exactInputSingle",
+            args:
+              (v3DoubleHop || useProviderArgs) && activeRoute
+                ? (activeRoute.executor.args as unknown as readonly [
+                    `0x${string}`,
+                    `0x${string}`,
+                    number,
+                    `0x${string}`,
+                    bigint,
+                    bigint,
+                    bigint,
+                    bigint,
+                  ])
+                : [
+                    tokenIn.address,
+                    tokenOut.address,
+                    v3Fee,
+                    account,
+                    finalAmountIn,
+                    minOut,
+                    deadline,
+                  ],
+          };
+        } else if (route.useLaunchpadRouter) {
+          // Multi-hop through the launchpad's router so post-migration royalties
+          // are charged on each leg whose token is a migrated launchpad token.
+          // Only exact-in is supported; the effect above forces lastEdited="in".
+          // Deadline param added in audit fixes (Medium #6).
+          // Audit 2026-06-11 contract #10: derive a usdcMidMin floor from
+          // the quoter's totalRoyaltyUsdc so the new launchpad MID_SLIPPAGE
+          // gate has something to enforce.
+          //
+          // Audit 2026-06-11 v2 G9-5 fix: MIGRATED_ROYALTY_BPS is 30
+          // (not 60 — see ArcadeLaunchpad.sol:85). Total royalty across N
+          // migrated legs is `usdcMid_original * 30 * N / 10_000`, so
+          // `usdcMid_original = totalRoyalty * 10_000 / (30 * N)`. The
+          // prior coefficient `60n * migratedLegs` was off by 2x, leaving
+          // the floor at ~48% of the real mid — half the protection.
+          //
+          // Audit 2026-06-11 v2 ADVR-3 fix: scale the floor with the user's
+          // slippage tolerance instead of hardcoding 97%. A user on a thin
+          // pair who set slippage to 5% should get the same 5% tolerance
+          // on the mid leg, not a tighter 3%.
+          let usdcMidMinForRoute = 0n;
+          if (quoteMigratedOut.data) {
+            const totalRoyaltyUsdc = (quoteMigratedOut.data as readonly bigint[])[1];
+            if (totalRoyaltyUsdc > 0n) {
+              const migratedLegs = (route.inMigrated ? 1n : 0n) + (route.outMigrated ? 1n : 0n);
+              if (migratedLegs > 0n) {
+                const usdcMidEstimate = (totalRoyaltyUsdc * 10_000n) / (30n * migratedLegs);
+                const tolerance = 10_000n - BigInt(slippageBps);
+                usdcMidMinForRoute = (usdcMidEstimate * tolerance) / 10_000n;
+              }
             }
           }
+          // G9-5 fix (cont): refuse to sign a swap whose mid-leg floor would
+          // collapse to 0 (quote race, single-side-non-migrated edge). The
+          // contract-side `revert MidSlippage()` would otherwise be inert
+          // and the swap exposes the user to the exact mid-leg sandwich
+          // the gate was added to close.
+          if (usdcMidMinForRoute === 0n) {
+            throw new Error(
+              "Cannot compute a mid-leg slippage floor for the migrated route — please refresh the quote and try again.",
+            );
+          }
+          swapCall = {
+            address: ADDRESSES.launchpad,
+            abi: LAUNCHPAD_ABI,
+            functionName: "swapMigratedRoute",
+            args: [tokenIn.address, tokenOut.address, finalAmountIn, minOut, usdcMidMinForRoute, deadline],
+          };
+        } else if (exactIn) {
+          swapCall = {
+            address: ADDRESSES.router,
+            abi: ROUTER_ABI,
+            functionName: "swapExactTokensForTokens",
+            args: [finalAmountIn, minOut, path, account, deadline],
+          };
+        } else {
+          swapCall = {
+            address: ADDRESSES.router,
+            abi: ROUTER_ABI,
+            functionName: "swapTokensForExactTokens",
+            args: [finalAmountOut, maxIn, path, account, deadline],
+          };
         }
-        // G9-5 fix (cont): refuse to sign a swap whose mid-leg floor would
-        // collapse to 0 (quote race, single-side-non-migrated edge). The
-        // contract-side `revert MidSlippage()` would otherwise be inert
-        // and the swap exposes the user to the exact mid-leg sandwich
-        // the gate was added to close.
-        if (usdcMidMinForRoute === 0n) {
-          throw new Error(
-            "Cannot compute a mid-leg slippage floor for the migrated route — please refresh the quote and try again.",
-          );
+
+        if (willBatch) {
+          // Fold approve + swap into a single sender-preserving signature.
+          setTx({ status: "pending", message: "Approve + swap (1 signature)…" });
+          const batched = buildBatchedApproveAndSwap({
+            token: tokenIn.address,
+            spender: swapSpender,
+            swap: swapCall,
+          });
+          hash = await writeContractAsync({
+            address: batched.address,
+            abi: batched.abi,
+            functionName: batched.functionName,
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            args: batched.args as any,
+            chainId: arcTestnet.id,
+          });
+        } else {
+          hash = await writeContractAsync({
+            address: swapCall.address,
+            abi: swapCall.abi,
+            functionName: swapCall.functionName,
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            args: swapCall.args as any,
+            chainId: arcTestnet.id,
+          });
         }
-        hash = await writeContractAsync({
-          address: ADDRESSES.launchpad,
-          abi: LAUNCHPAD_ABI,
-          functionName: "swapMigratedRoute",
-          args: [tokenIn.address, tokenOut.address, finalAmountIn, minOut, usdcMidMinForRoute, deadline],
-          chainId: arcTestnet.id,
-        });
-      } else if (exactIn) {
-        hash = await writeContractAsync({
-          address: ADDRESSES.router,
-          abi: ROUTER_ABI,
-          functionName: "swapExactTokensForTokens",
-          args: [finalAmountIn, minOut, path, account, deadline],
-          chainId: arcTestnet.id,
-        });
-      } else {
-        hash = await writeContractAsync({
-          address: ADDRESSES.router,
-          abi: ROUTER_ABI,
-          functionName: "swapTokensForExactTokens",
-          args: [finalAmountOut, maxIn, path, account, deadline],
-          chainId: arcTestnet.id,
-        });
       }
       // Audit high [26]: viem's waitForTransactionReceipt returns a
       // receipt for BOTH success and revert. Without an explicit status
