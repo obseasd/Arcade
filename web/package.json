@@ -16,6 +16,7 @@
     "doctor": "npx react-doctor@latest"
   },
   "dependencies": {
+    "@circle-fin/adapter-solana": "^1.5.10",
     "@circle-fin/adapter-viem-v2": "^1.11.2",
     "@circle-fin/app-kit": "^1.7.0",
     "@neondatabase/serverless": "^0.10.4",

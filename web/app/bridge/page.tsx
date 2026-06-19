@@ -1,5 +1,6 @@
 import { BridgeCard } from "@/components/bridge/BridgeCard";
 import { BridgeHistory } from "@/components/bridge/BridgeHistory";
+import { SolanaBridgePanel } from "@/components/bridge/SolanaBridgePanel";
 
 /**
  * Bridge page — CCTP V2 burn-mint only. The Gateway / Unified
@@ -12,6 +13,9 @@ export default function BridgePage() {
   return (
     <div className="mx-auto max-w-[490px] px-4 py-8 sm:px-6 sm:py-20">
       <BridgeCard />
+      {/* Solana<->Arc leg via Circle App Kit (scaffold). Self-renders null
+          unless a Kit Key is configured, so this is a no-op without it. */}
+      <SolanaBridgePanel />
       <BridgeHistory />
     </div>
   );
