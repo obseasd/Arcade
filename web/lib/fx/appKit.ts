@@ -56,7 +56,46 @@ export interface FxSwapOpts {
     slippageBps: number;
 }
 
+// The SDK calls https://api.circle.com/v1/stablecoinKits/* straight from
+// the browser, which fails on CORS (no allow-origin header) and on auth
+// (needs a server-side Bearer Kit Key). We install a one-time fetch shim
+// that reroutes ONLY those calls to our same-origin proxy
+// (app/api/fx/circle), which injects the Authorization header server-side.
+// Everything else passes through untouched.
+let proxyInstalled = false;
+function installCircleProxy() {
+    if (proxyInstalled || typeof window === "undefined") return;
+    proxyInstalled = true;
+    const PREFIX = "https://api.circle.com/v1/stablecoinKits";
+    const orig = window.fetch.bind(window);
+    window.fetch = async (
+        input: RequestInfo | URL,
+        init?: RequestInit,
+    ): Promise<Response> => {
+        const url =
+            typeof input === "string"
+                ? input
+                : input instanceof URL
+                  ? input.toString()
+                  : input.url;
+        if (url && url.startsWith(PREFIX)) {
+            const proxied = "/api/fx/circle?target=" + encodeURIComponent(url);
+            if (typeof input === "string" || input instanceof URL) {
+                return orig(proxied, init);
+            }
+            const reqBody = input.body ? await input.clone().text() : undefined;
+            return orig(proxied, {
+                method: input.method,
+                body: reqBody ?? init?.body,
+                headers: { "Content-Type": "application/json" },
+            });
+        }
+        return orig(input, init);
+    };
+}
+
 async function buildKitAndParams(opts: FxSwapOpts) {
+    installCircleProxy();
     // Lazy import keeps the SDK out of the SSR bundle / non-FX users.
     const { AppKit, Blockchain } = await import("@circle-fin/app-kit");
     const { createViemAdapterFromProvider } = await import(
