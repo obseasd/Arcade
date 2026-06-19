@@ -180,9 +180,14 @@ export async function POST(req: NextRequest) {
     const operatorKey = process.env.COMPOUNDER_OPERATOR_PRIVATE_KEY as
         | Hex
         | undefined;
-    if (!operatorKey || !operatorKey.startsWith("0x")) {
+    // Audit 2026-06-18b M-26: validate the full 0x + 64-hex shape, not
+    // just a "0x" prefix. The old check passed "0x", "0xabc", etc.
+    // straight into privateKeyToAccount which then threw a cryptic
+    // low-level error mid-request; a precise upfront check returns a
+    // clear "not configured" instead.
+    if (!operatorKey || !/^0x[0-9a-fA-F]{64}$/.test(operatorKey)) {
         return NextResponse.json(
-            { ran: false, reason: "COMPOUNDER_OPERATOR_PRIVATE_KEY not configured" },
+            { ran: false, reason: "COMPOUNDER_OPERATOR_PRIVATE_KEY missing or malformed" },
             { status: 200 },
         );
     }

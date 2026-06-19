@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo } from "react";
 import { Address, erc20Abi } from "viem";
 import { useReadContract, useReadContracts } from "wagmi";
 import { FACTORY_ABI, PAIR_ABI } from "@/lib/abis/dex";
@@ -32,8 +33,18 @@ export function useV2Tokens() {
     query: { enabled: pairsLength > 0n },
   });
 
-  const pairs = (pairAddrCalls.data ?? []).flatMap((c) =>
-    c.status === "success" ? [c.result as unknown as Address] : [],
+  // Audit 2026-06-18b M-22: memoize the derived arrays. react-query's
+  // .data is referentially stable across renders (structural sharing),
+  // so keying these useMemos on .data means `pairs` / `tokens` keep a
+  // stable identity until the underlying chain data actually changes —
+  // which stops every consumer (SwapCard's allTokens, pickers, etc.)
+  // from re-deriving + re-rendering on each parent render.
+  const pairs = useMemo(
+    () =>
+      (pairAddrCalls.data ?? []).flatMap((c) =>
+        c.status === "success" ? [c.result as unknown as Address] : [],
+      ),
+    [pairAddrCalls.data],
   );
 
   // Read token0 + token1 for each pair (to identify the non-USDC side)
@@ -45,18 +56,20 @@ export function useV2Tokens() {
     query: { enabled: pairs.length > 0 },
   });
 
-  const tokenAddresses = new Set<Address>();
-  if (tokenCalls.data) {
-    for (let i = 0; i < pairs.length; i++) {
-      const t0 = tokenCalls.data[2 * i]?.result as Address | undefined;
-      const t1 = tokenCalls.data[2 * i + 1]?.result as Address | undefined;
-      if (t0 && t1) {
-        if (t0.toLowerCase() !== ADDRESSES.usdc.toLowerCase()) tokenAddresses.add(t0);
-        if (t1.toLowerCase() !== ADDRESSES.usdc.toLowerCase()) tokenAddresses.add(t1);
+  const tokenList = useMemo(() => {
+    const tokenAddresses = new Set<Address>();
+    if (tokenCalls.data) {
+      for (let i = 0; i < pairs.length; i++) {
+        const t0 = tokenCalls.data[2 * i]?.result as Address | undefined;
+        const t1 = tokenCalls.data[2 * i + 1]?.result as Address | undefined;
+        if (t0 && t1) {
+          if (t0.toLowerCase() !== ADDRESSES.usdc.toLowerCase()) tokenAddresses.add(t0);
+          if (t1.toLowerCase() !== ADDRESSES.usdc.toLowerCase()) tokenAddresses.add(t1);
+        }
       }
     }
-  }
-  const tokenList = Array.from(tokenAddresses);
+    return Array.from(tokenAddresses);
+  }, [tokenCalls.data, pairs]);
 
   // Read metadata for each token
   const metaCalls = useReadContracts({
@@ -75,28 +88,34 @@ export function useV2Tokens() {
   // happens). The right answer is to omit the token from the swap /
   // select UI until decimals come back from a successful read; the
   // symbol fallback is still acceptable because it's display-only.
-  const tokens = tokenList
-    .map((address, i) => {
-      const sym = metaCalls.data?.[3 * i]?.result as string | undefined;
-      const nm = metaCalls.data?.[3 * i + 1]?.result as string | undefined;
-      const dec = metaCalls.data?.[3 * i + 2]?.result as number | undefined;
-      if (dec === undefined) {
-        // Skip until decimals are confirmed; the next refetch tick will
-        // surface the token once the read lands.
-        return undefined;
-      }
-      return {
-        address,
-        symbol: sym && sym.length > 0 ? sym : `${address.slice(0, 6)}…${address.slice(-4)}`,
-        name: nm,
-        decimals: dec,
-      };
-    })
-    .filter(<T,>(v: T | undefined): v is T => v !== undefined);
+  const tokens = useMemo(
+    () =>
+      tokenList
+        .map((address, i) => {
+          const sym = metaCalls.data?.[3 * i]?.result as string | undefined;
+          const nm = metaCalls.data?.[3 * i + 1]?.result as string | undefined;
+          const dec = metaCalls.data?.[3 * i + 2]?.result as number | undefined;
+          if (dec === undefined) {
+            // Skip until decimals are confirmed; the next refetch tick will
+            // surface the token once the read lands.
+            return undefined;
+          }
+          return {
+            address,
+            symbol: sym && sym.length > 0 ? sym : `${address.slice(0, 6)}…${address.slice(-4)}`,
+            name: nm,
+            decimals: dec,
+          };
+        })
+        .filter(<T,>(v: T | undefined): v is T => v !== undefined),
+    [tokenList, metaCalls.data],
+  );
 
-  return {
-    isLoading: pairsLengthQ.isLoading || pairAddrCalls.isLoading || tokenCalls.isLoading || metaCalls.isLoading,
-    pairs,
-    tokens,
-  };
+  const isLoading =
+    pairsLengthQ.isLoading || pairAddrCalls.isLoading || tokenCalls.isLoading || metaCalls.isLoading;
+
+  return useMemo(
+    () => ({ isLoading, pairs, tokens }),
+    [isLoading, pairs, tokens],
+  );
 }

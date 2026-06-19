@@ -17,7 +17,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { Address, isAddress, parseUnits, zeroAddress } from "viem";
+import { Address, erc20Abi, isAddress, parseUnits, zeroAddress } from "viem";
 import { useAccount, useReadContract, useWriteContract } from "wagmi";
 import { TWITTER_ESCROW_V3_ABI } from "@/lib/abis/twitterEscrowV3";
 import { ADDRESSES, USDC_DECIMALS } from "@/lib/constants";
@@ -899,21 +899,40 @@ function RescueCard() {
     const [amountStr, setAmountStr] = useState("");
     const [submitting, setSubmitting] = useState(false);
 
-    const isUsdc = tokenInput.trim().toLowerCase() === ADDRESSES.usdc.toLowerCase();
-    const decimals = isUsdc ? USDC_DECIMALS : 18;
+    const tokenAddr = tokenInput.trim();
+    const tokenIsValid = isAddress(tokenAddr);
+    const isUsdc = tokenIsValid && tokenAddr.toLowerCase() === ADDRESSES.usdc.toLowerCase();
+
+    // Audit 2026-06-18b M-25: previously `decimals = isUsdc ? 6 : 18`,
+    // which silently signed 10^(18-actual) too much when rescuing any
+    // non-18-dec token — cirBTC (8 dec) would have been off by 10^10.
+    // Read the token's real decimals() on-chain. While it is loading or
+    // unreadable the form is disabled (decimalsKnown=false) so a wrong
+    // amount can never be signed.
+    const decimalsQ = useReadContract({
+        address: tokenIsValid ? (tokenAddr as Address) : undefined,
+        abi: erc20Abi,
+        functionName: "decimals",
+        query: { enabled: tokenIsValid && !isUsdc },
+    });
+    const decimals: number | undefined = isUsdc
+        ? USDC_DECIMALS
+        : (decimalsQ.data as number | undefined);
+    const decimalsKnown = typeof decimals === "number";
     let amountRaw = 0n;
     try {
-        amountRaw = amountStr ? parseUnits(amountStr, decimals) : 0n;
+        amountRaw = amountStr && decimalsKnown ? parseUnits(amountStr, decimals) : 0n;
     } catch {}
 
     const valid =
-        isAddress(tokenInput.trim())
+        tokenIsValid
         && isAddress(toInput.trim())
+        && decimalsKnown
         && amountRaw > 0n;
 
     const onSubmit = async () => {
         if (!valid) return;
-        if (!window.confirm(`Rescue ${amountStr} ${isUsdc ? "USDC" : "tokens"} to ${toInput.trim()}? The contract enforces that this can't touch credited slot balances, but double-check the inputs.`)) return;
+        if (!window.confirm(`Rescue ${amountStr} ${isUsdc ? "USDC" : "tokens"} (${decimals} decimals) to ${toInput.trim()}? The contract enforces that this can't touch credited slot balances, but double-check the inputs.`)) return;
         setSubmitting(true);
         try {
             await writeContractAsync({

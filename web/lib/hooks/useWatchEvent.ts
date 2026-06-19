@@ -28,6 +28,16 @@ export function useWatchEvent({ address, event, args, enabled = true, onLogs }: 
     cb.current = onLogs;
   }, [onLogs]);
 
+  // Audit 2026-06-18b M-23: depending on the `args` object identity
+  // tore down + re-created the WS subscription on every render whenever
+  // a caller passed an inline `args={{ token }}` literal. Derive a
+  // stable string key from the args' contents (bigint-safe) and depend
+  // on THAT, so we only resubscribe when the actual filter values
+  // change, not when the parent re-renders. `args` itself is still read
+  // inside the effect (captured); argsKey only gates re-runs.
+  const argsKey = args
+    ? JSON.stringify(args, (_k, v) => (typeof v === "bigint" ? v.toString() : v))
+    : "";
   useEffect(() => {
     if (!client || !address || !enabled) return;
     const unwatch = client.watchEvent({
@@ -39,5 +49,6 @@ export function useWatchEvent({ address, event, args, enabled = true, onLogs }: 
     return () => {
       unwatch();
     };
-  }, [client, address, event, args, enabled]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [client, address, event, argsKey, enabled]);
 }
