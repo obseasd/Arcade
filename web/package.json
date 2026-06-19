@@ -16,6 +16,8 @@
     "doctor": "npx react-doctor@latest"
   },
   "dependencies": {
+    "@circle-fin/adapter-viem-v2": "^1.11.2",
+    "@circle-fin/app-kit": "^1.7.0",
     "@neondatabase/serverless": "^0.10.4",
     "@rainbow-me/rainbowkit": "^2.2.0",
     "@tanstack/react-query": "^5.59.0",

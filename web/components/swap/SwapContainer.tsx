@@ -6,6 +6,7 @@ import { useAccount } from "wagmi";
 import { LIMIT_ORDERS_ENABLED } from "@/lib/constants";
 import { SwapCard } from "./SwapCard";
 import { MultiSwapCard } from "./MultiSwapCard";
+import { CircleFxPanel } from "./CircleFxPanel";
 import { LimitCard } from "./LimitCard";
 import { LimitOrdersPanel } from "./LimitOrdersPanel";
 import type { SwapTab } from "./SwapTabs";
@@ -57,6 +58,10 @@ function SwapContainerInner() {
         ) : (
           <MultiSwapCard tab={tab} onTabChange={setTab} />
         )}
+
+        {/* Circle FX (USDC<->EURC native rate). Self-renders null unless a
+            Kit Key is configured, so this is a no-op without the key. */}
+        {tab === "swap" && <CircleFxPanel />}
 
         {tab === "limit" && account && LIMIT_ORDERS_ENABLED && (
           <div className="mt-4 xl:hidden">
