@@ -8,6 +8,8 @@ import {
     ERC_8004_IDENTITY_ADDRESS,
 } from "@/lib/abis/erc8004Identity";
 import { ARCADE_IDENTITY_ISSUER_ABI } from "@/lib/abis/arcadeIdentityIssuer";
+import { encodeFunctionData } from "viem";
+import { buildAggregate3 } from "@/lib/routing/batchSwap";
 import { ADDRESSES } from "@/lib/constants";
 import { useCreatorTier, type CreatorTier } from "@/lib/hooks/useCreatorTier";
 import { pushToast } from "@/lib/toast";
@@ -186,42 +188,52 @@ export function DiamondIdentityMint() {
                 functionName: "tokenOfOwnerByIndex",
                 args: [account, balance - 1n],
             })) as bigint;
-            const burnHash = await writeContractAsync({
-                address: ERC_8004_IDENTITY_ADDRESS,
+            const useIssuer =
+                ADDRESSES.identityIssuer !== "0x0000000000000000000000000000000000000000";
+            const burnData = encodeFunctionData({
                 abi: ERC_8004_IDENTITY_ABI,
                 functionName: "burn",
                 args: [tokenId],
             });
-            const burnReceipt = await publicClient.waitForTransactionReceipt({ hash: burnHash });
-            if (burnReceipt.status !== "success") {
-                throw new Error("Burn reverted; aborting upgrade.");
-            }
-            pushToast({ kind: "info", title: "Old Identity burned", message: "Minting fresh tier metadata…" });
-            const useIssuer =
-                ADDRESSES.identityIssuer !== "0x0000000000000000000000000000000000000000";
-            const mintHash = useIssuer
-                ? await writeContractAsync({
-                      address: ADDRESSES.identityIssuer,
+            const mintData = useIssuer
+                ? encodeFunctionData({
                       abi: ARCADE_IDENTITY_ISSUER_ABI,
                       functionName: "mint",
                       args: [TIER_CODE[tier], metadataUri],
                   })
-                : await writeContractAsync({
-                      address: ERC_8004_IDENTITY_ADDRESS,
+                : encodeFunctionData({
                       abi: ERC_8004_IDENTITY_ABI,
                       functionName: "mint",
                       args: [account, metadataUri],
                   });
-            const mintReceipt = await publicClient.waitForTransactionReceipt({ hash: mintHash });
-            if (mintReceipt.status !== "success") {
-                throw new Error(
-                    "Re-mint reverted on-chain. The burn already executed; retry the mint manually.",
-                );
+            // Burn + re-mint in ONE atomic, sender-preserving signature
+            // (Arc Multicall3From). allowFailure=false → if the mint
+            // reverts the burn rolls back too, closing the old 2-tx gap
+            // where a failed re-mint left the user with no NFT.
+            const batched = buildAggregate3([
+                { target: ERC_8004_IDENTITY_ADDRESS, callData: burnData },
+                {
+                    target: useIssuer
+                        ? (ADDRESSES.identityIssuer as `0x${string}`)
+                        : ERC_8004_IDENTITY_ADDRESS,
+                    callData: mintData,
+                },
+            ]);
+            const hash = await writeContractAsync({
+                address: batched.address,
+                abi: batched.abi,
+                functionName: batched.functionName,
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                args: batched.args as any,
+            });
+            const receipt = await publicClient.waitForTransactionReceipt({ hash });
+            if (receipt.status !== "success") {
+                throw new Error("Identity refresh reverted on-chain.");
             }
             pushToast({
                 kind: "info",
                 title: `${tierLabel} Identity refreshed`,
-                message: "Old tier burned, new tier metadata minted.",
+                message: "Old tier burned + new tier minted — one signature.",
             });
             void balanceOfQ.refetch();
         } catch (e: unknown) {
