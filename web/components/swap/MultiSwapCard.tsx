@@ -237,6 +237,26 @@ export function MultiSwapCard({ tab, onTabChange }: MultiSwapCardProps) {
     return out;
   }, [inputs, mergedQuote.perOut]);
 
+  // Per-row "no route": an amount is entered, the quote has settled, but
+  // this leg's output is 0 — the aggregator found no path from this token
+  // to the output (e.g. a V3-only input to a V2-only output). We surface
+  // it on the row instead of silently dropping the leg (which made the
+  // total look frozen) and block the swap so it can't revert on-chain.
+  const noRouteByIndex: boolean[] = useMemo(() => {
+    if (quoteQ.isFetching) return inputs.map(() => false);
+    return inputs.map((row, i) => {
+      let raw = 0n;
+      try {
+        raw = row.amountStr ? parseUnits(row.amountStr, row.token.decimals ?? 18) : 0n;
+      } catch {
+        raw = 0n;
+      }
+      if (raw === 0n) return false;
+      return perRowOut[i] === 0n;
+    });
+  }, [inputs, perRowOut, quoteQ.isFetching]);
+  const anyNoRoute = noRouteByIndex.some(Boolean);
+
   // ----- Slippage helpers -----
   const onSlippagePreset = (bps: number) => {
     setSlippageBps(bps);
@@ -276,6 +296,7 @@ export function MultiSwapCard({ tab, onTabChange }: MultiSwapCardProps) {
     !!outputToken &&
     hasAnyAmount &&
     !anyInsufficient &&
+    !anyNoRoute &&
     !quoteQ.isFetching &&
     totalOutRaw > 0n &&
     tx.status !== "pending";
@@ -478,6 +499,7 @@ export function MultiSwapCard({ tab, onTabChange }: MultiSwapCardProps) {
               row={row}
               balance={balancesRaw[i] ?? 0n}
               insufficient={insufficientByIndex[i]}
+              noRoute={noRouteByIndex[i] ?? false}
               onAmountChange={setRowAmount}
               onRemove={removeRow}
             />
@@ -516,6 +538,10 @@ export function MultiSwapCard({ tab, onTabChange }: MultiSwapCardProps) {
           <div className="text-arc-text-muted">
             {quoteQ.isFetching ? (
               <span>Fetching prices…</span>
+            ) : anyNoRoute ? (
+              <span className="text-arc-warn">
+                Remove the inputs marked &quot;No route found&quot; to continue
+              </span>
             ) : totalOutRaw === 0n ? (
               hasEmptyRow ? (
                 <span>Enter amounts for all inputs</span>
@@ -552,11 +578,13 @@ export function MultiSwapCard({ tab, onTabChange }: MultiSwapCardProps) {
                   ? "Insufficient balance"
                   : quoteQ.isFetching
                     ? "Fetching prices…"
-                    : totalOutRaw === 0n
-                      ? hasEmptyRow
-                        ? "Enter amounts"
-                        : "No valid trades to execute"
-                      : `Swap ${tupleArgs.length} tokens`}
+                    : anyNoRoute
+                      ? "No route for some tokens"
+                      : totalOutRaw === 0n
+                        ? hasEmptyRow
+                          ? "Enter amounts"
+                          : "No valid trades to execute"
+                        : `Swap ${tupleArgs.length} tokens`}
       </button>
 
       {tx.status !== "idle" && <TxStatus state={tx} className="mt-3" />}
@@ -613,6 +641,7 @@ const InputBox = memo(function InputBox({
   row,
   balance,
   insufficient,
+  noRoute,
   onAmountChange,
   onRemove,
 }: {
@@ -620,6 +649,7 @@ const InputBox = memo(function InputBox({
   row: InputRow;
   balance: bigint;
   insufficient: boolean;
+  noRoute: boolean;
   onAmountChange: (i: number, v: string) => void;
   onRemove: (i: number) => void;
 }) {
@@ -631,7 +661,11 @@ const InputBox = memo(function InputBox({
     <div
       className={cn(
         "group relative rounded-2xl border bg-white/[0.015] p-4 transition-colors focus-within:border-arc-border-strong",
-        insufficient ? "border-arc-danger/50" : "border-arc-border",
+        noRoute
+          ? "border-arc-warn/50"
+          : insufficient
+            ? "border-arc-danger/50"
+            : "border-arc-border",
       )}
     >
       {/* Top: amount on the left, token chip on the right */}
@@ -673,8 +707,17 @@ const InputBox = memo(function InputBox({
 
       {/* Footer */}
       <div className="mt-2 flex items-center justify-between text-xs">
-        <span className={cn("tabular-nums", insufficient ? "text-arc-danger" : "text-arc-text-muted")}>
-          {balLabel} {row.token.symbol}
+        <span
+          className={cn(
+            "tabular-nums",
+            noRoute
+              ? "font-medium text-arc-warn"
+              : insufficient
+                ? "text-arc-danger"
+                : "text-arc-text-muted",
+          )}
+        >
+          {noRoute ? "No route found" : `${balLabel} ${row.token.symbol}`}
         </span>
         <div className="flex items-center gap-1.5">
           <QuickButton
