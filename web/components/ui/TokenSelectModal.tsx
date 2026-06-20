@@ -48,9 +48,11 @@ const PINNED: PinnedTemplate[] = [
   { symbol: "USDC", name: "USD Coin", decimals: 6 },
   { symbol: "ETH", name: "Wrapped Ether", decimals: 18 },
   { symbol: "EURC", name: "Euro Coin", decimals: 6 },
-  // Community USDT on Arc testnet uses 18 decimals, not the canonical 6.
-  { symbol: "USDT", name: "Tether", decimals: 18 },
-  { symbol: "cirBTC", name: "Circle Wrapped BTC", decimals: 8 },
+  // NB: USDT and cirBTC are intentionally NOT pinned — they have no
+  // liquidity pool on Arc testnet, so the contract's quoteSwapToSingle
+  // returns a phantom non-zero value (e.g. ~0.857 for 10 USDC) and any
+  // swap reverts with InsufficientOutput. They stay importable by pasted
+  // address for when pools exist (mainnet); re-pin them then.
 ];
 
 export function TokenSelectModal({ open, onClose, tokens, onSelect, selectedAddress, excludeAddress }: Props) {
@@ -83,8 +85,6 @@ export function TokenSelectModal({ open, onClose, tokens, onSelect, selectedAddr
       }
       // Canonical Circle tokens on Arc testnet are hardcoded in constants.
       if (p.symbol === "EURC") return { ...p, address: ADDRESSES.eurc };
-      if (p.symbol === "cirBTC") return { ...p, address: ADDRESSES.cirBtc };
-      if (p.symbol === "USDT") return { ...p, address: ADDRESSES.usdt };
       return p;
     });
   }, []);
