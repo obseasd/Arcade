@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import {
     createPublicClient,
     createWalletClient,
+    encodeFunctionData,
     http,
     isAddress,
     type Address,
@@ -10,6 +11,10 @@ import {
 import { privateKeyToAccount } from "viem/accounts";
 import { ADDRESSES } from "@/lib/constants";
 import { TWITTER_ESCROW_V3_ABI } from "@/lib/abis/twitterEscrowV3";
+import {
+    MULTICALL3_ADDRESS,
+    MULTICALL3_AGGREGATE3_ABI,
+} from "@/lib/multicall3";
 import { isDbConfigured } from "@/lib/db";
 import {
     getReadyClaimIntents,
@@ -174,16 +179,19 @@ export async function POST(req: NextRequest) {
         notes: [],
     };
 
+    // Phase 1 — pre-flight each intent (on-chain pendingClaims read +
+    // consumed/vetoed/timelock gates + pre-stamp "claiming"). Collect the
+    // nonces that are actually claimable.
+    const eligible: ClaimIntent[] = [];
     for (const intent of ready) {
         try {
-            await handleIntent(
+            const ok = await prepareIntent(
                 intent,
                 escrowAddress,
                 publicClient,
-                walletClient,
-                account,
                 summary,
             );
+            if (ok) eligible.push(intent);
         } catch (err) {
             summary.failed++;
             const msg = err instanceof Error ? err.message : String(err);
@@ -195,17 +203,93 @@ export async function POST(req: NextRequest) {
         }
     }
 
+    // Phase 2 — batch ALL eligible claimByTwitter into ONE transaction via
+    // the standard Multicall3 (claimByTwitter is permissionless, so the
+    // multicall being msg.sender is fine). allowFailure:true so a single
+    // nonce that became stale between phase 1 and execution doesn't sink
+    // every other user's claim.
+    if (eligible.length > 0) {
+        const calls = eligible.map((it) => ({
+            target: escrowAddress,
+            allowFailure: true,
+            callData: encodeFunctionData({
+                abi: TWITTER_ESCROW_V3_ABI,
+                functionName: "claimByTwitter",
+                args: [it.nonce as Hex],
+            }),
+        }));
+        let batchHash: Hex | null = null;
+        try {
+            batchHash = await walletClient.writeContract({
+                address: MULTICALL3_ADDRESS,
+                abi: MULTICALL3_AGGREGATE3_ABI,
+                functionName: "aggregate3",
+                args: [calls],
+                chain: ARC_CHAIN,
+                account,
+                maxFeePerGas: MAX_FEE_PER_GAS_WEI,
+            });
+            await publicClient.waitForTransactionReceipt({ hash: batchHash });
+        } catch (err) {
+            // The batch tx failed to submit/confirm. Leave the intents
+            // pre-stamped "claiming"; the next run re-reads pendingClaims
+            // and retries (claimByTwitter is idempotent on consumed nonces).
+            const msg = err instanceof Error ? err.message : String(err);
+            summary.notes.push(`batch-submit error=${msg}`);
+        }
+
+        // Phase 3 — settle the DB per nonce from on-chain truth. The
+        // Claimed event carries no nonce, so `consumed == true` is the
+        // authoritative per-nonce success signal (an allowFailure subcall
+        // that reverted leaves the nonce unconsumed).
+        for (const it of eligible) {
+            const onChain = await withTimeout(
+                publicClient.readContract({
+                    address: escrowAddress,
+                    abi: TWITTER_ESCROW_V3_ABI,
+                    functionName: "pendingClaims",
+                    args: [it.nonce as Hex],
+                }),
+                RPC_TIMEOUT_MS,
+            );
+            const consumed = onChain
+                ? Boolean((onChain as readonly unknown[])[9])
+                : false;
+            if (consumed) {
+                summary.triggered++;
+                await markIntentResult(it.nonce, {
+                    status: "succeeded",
+                    txHash: batchHash,
+                });
+                await stampLastClaim(it.twitterHandle);
+            } else {
+                summary.failed++;
+                await markIntentResult(it.nonce, {
+                    status: "failed",
+                    txHash: batchHash,
+                    error: "claim-not-consumed-after-batch",
+                });
+            }
+        }
+    }
+
     return NextResponse.json({ ran: true, ...summary });
 }
 
-async function handleIntent(
+/**
+ * Pre-flight a single intent: read on-chain pendingClaims, apply the
+ * consumed/vetoed/timelock gates, and (for claimable ones) pre-stamp the
+ * DB row "claiming". Returns true when the nonce should be included in the
+ * batched claimByTwitter, false when it was skipped/settled here. The
+ * actual claim + DB settle happen in the batched phases of the POST
+ * handler — this function never submits a transaction.
+ */
+async function prepareIntent(
     intent: ClaimIntent,
     escrowAddress: Address,
     publicClient: ReturnType<typeof createPublicClient>,
-    walletClient: ReturnType<typeof createWalletClient>,
-    account: ReturnType<typeof privateKeyToAccount>,
     summary: RunSummary,
-): Promise<void> {
+): Promise<boolean> {
     // Pre-flight: read the on-chain pendingClaims[nonce]. If executeAfter
     // > now OR claimed flag is set OR consumed, we skip without burning
     // gas. Also handles the "DB thinks authorized but chain doesn't"
@@ -222,7 +306,7 @@ async function handleIntent(
     if (!onChain) {
         summary.skipped++;
         summary.notes.push(`nonce=${intent.nonce} reason=onchain-read-timeout`);
-        return;
+        return false;
     }
 
     // pendingClaims returns the tuple defined by the ABI (see
@@ -261,7 +345,7 @@ async function handleIntent(
         });
         summary.skipped++;
         summary.notes.push(`nonce=${intent.nonce} reason=already-consumed`);
-        return;
+        return false;
     }
     if (vetoed) {
         await markIntentResult(intent.nonce, {
@@ -270,48 +354,21 @@ async function handleIntent(
         });
         summary.skipped++;
         summary.notes.push(`nonce=${intent.nonce} reason=vetoed`);
-        return;
+        return false;
     }
     if (executeAfter > nowSec) {
         summary.skipped++;
         summary.notes.push(`nonce=${intent.nonce} reason=timelock-not-elapsed`);
-        return;
+        return false;
     }
 
-    // Mark claiming BEFORE submission so a duplicate cron run cannot
-    // both fire claimByTwitter for the same nonce. The contract is
-    // idempotent (claimByTwitter reverts on a consumed nonce) so the
-    // worst case is one wasted gas estimate per duplicate, but
-    // pre-stamping cuts that out.
+    // Mark claiming BEFORE the batch so a duplicate cron run cannot queue
+    // the same nonce twice. claimByTwitter is idempotent (reverts on a
+    // consumed nonce) and the batch uses allowFailure, so a duplicate is
+    // harmless — pre-stamping just avoids the wasted slot.
     await markIntentResult(intent.nonce, {
         status: "claiming",
         error: null,
     });
-
-    const hash = await walletClient.writeContract({
-        address: escrowAddress,
-        abi: TWITTER_ESCROW_V3_ABI,
-        functionName: "claimByTwitter",
-        args: [intent.nonce as Hex],
-        chain: ARC_CHAIN,
-        account,
-        maxFeePerGas: MAX_FEE_PER_GAS_WEI,
-    });
-
-    const receipt = await publicClient.waitForTransactionReceipt({ hash });
-    if (receipt.status === "success") {
-        summary.triggered++;
-        await markIntentResult(intent.nonce, {
-            status: "succeeded",
-            txHash: hash,
-        });
-        await stampLastClaim(intent.twitterHandle);
-    } else {
-        summary.failed++;
-        await markIntentResult(intent.nonce, {
-            status: "failed",
-            txHash: hash,
-            error: "tx-reverted",
-        });
-    }
+    return true;
 }
