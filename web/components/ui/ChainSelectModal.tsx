@@ -14,9 +14,11 @@ interface Props {
   selectedChainId?: number;
   excludeChainId?: number;
   title?: string;
-  /** Non-CCTP chains appended to the list (e.g. Solana). Rendered with a
-   *  letter-badge fallback since they have no ChainIcon. */
+  /** Non-CCTP chains appended to the list (e.g. Solana). */
   extraChains?: { id: number; name: string }[];
+  /** When set, only these chain ids are selectable (others hidden). Used
+   *  to constrain the opposite side to Arc once Solana is picked. */
+  allowedChainIds?: number[];
 }
 
 export function ChainSelectModal({
@@ -27,7 +29,9 @@ export function ChainSelectModal({
   excludeChainId,
   title = "Select a chain",
   extraChains = [],
+  allowedChainIds,
 }: Props) {
+  const allowed = (id: number) => !allowedChainIds || allowedChainIds.includes(id);
   return (
     <Modal
       open={open}
@@ -44,7 +48,7 @@ export function ChainSelectModal({
       </div>
 
       <ul className="max-h-[60vh] overflow-y-auto p-3">
-        {CCTP_CHAINS.map((chain) => {
+        {CCTP_CHAINS.filter((c) => allowed(c.id)).map((chain) => {
           const isSelected = chain.id === selectedChainId;
           const isExcluded = chain.id === excludeChainId;
           return (
@@ -80,7 +84,7 @@ export function ChainSelectModal({
           );
         })}
 
-        {extraChains.map((chain) => {
+        {extraChains.filter((c) => allowed(c.id)).map((chain) => {
           const isSelected = chain.id === selectedChainId;
           const isExcluded = chain.id === excludeChainId;
           return (
@@ -102,9 +106,7 @@ export function ChainSelectModal({
                       : "hover:bg-white/5",
                 )}
               >
-                <span className="flex h-9 w-9 items-center justify-center rounded-full bg-gradient-to-br from-[#9945FF] to-[#14F195] text-sm font-bold text-black">
-                  {chain.name.charAt(0)}
-                </span>
+                <ChainIcon chainId={chain.id} size={36} />
                 <div className="min-w-0 flex-1">
                   <div className="text-sm font-medium">{chain.name}</div>
                 </div>

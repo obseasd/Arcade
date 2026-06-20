@@ -45,6 +45,33 @@ export function isSolanaBridgeConfigured(): boolean {
     return isFxConfigured();
 }
 
+// Circle's USDC mint on Solana Devnet (what CCTP mints when bridging in).
+const SOLANA_DEVNET_RPC = "https://api.devnet.solana.com";
+const SOLANA_USDC_DEVNET_MINT =
+    "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
+
+/** Sum the connected Phantom wallet's devnet USDC (uiAmount), or 0. */
+export async function getSolanaUsdcBalance(owner: string): Promise<number> {
+    try {
+        const { Connection, PublicKey } = await import("@solana/web3.js");
+        const conn = new Connection(SOLANA_DEVNET_RPC, "confirmed");
+        const res = await conn.getParsedTokenAccountsByOwner(
+            new PublicKey(owner),
+            { mint: new PublicKey(SOLANA_USDC_DEVNET_MINT) },
+        );
+        let total = 0;
+        for (const acc of res.value) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const ui = (acc.account.data as any)?.parsed?.info?.tokenAmount
+                ?.uiAmount;
+            if (typeof ui === "number") total += ui;
+        }
+        return total;
+    } catch {
+        return 0;
+    }
+}
+
 /** Read Phantom from the window, if present. */
 export function getPhantom(): SolanaInjectedProvider | null {
     if (typeof window === "undefined") return null;

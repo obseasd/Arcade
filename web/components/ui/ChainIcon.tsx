@@ -1,5 +1,6 @@
 import Image from "next/image";
 import { cn } from "@/lib/utils";
+import { SOLANA_BRIDGE_ID } from "@/lib/cctp";
 
 /** Known PNG logos shipped with the app, keyed by EVM chain ID. */
 const CHAIN_LOGOS: Record<number, string> = {
@@ -9,6 +10,7 @@ const CHAIN_LOGOS: Record<number, string> = {
   11_155_420: "/optimism.png",
   43_113: "/avalanche.png",
   5_042_002: "/arc.jpg",
+  [SOLANA_BRIDGE_ID]: "/solana.png",
 };
 
 /** Fallback styled badge for chains without a PNG. */

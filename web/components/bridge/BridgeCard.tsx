@@ -28,7 +28,11 @@ import {
   SOLANA_PSEUDO_CHAIN,
 } from "@/lib/cctp";
 import { Address, type EIP1193Provider } from "viem";
-import { executeKitBridge, getPhantom } from "@/lib/fx/bridgeKit";
+import {
+  executeKitBridge,
+  getPhantom,
+  getSolanaUsdcBalance,
+} from "@/lib/fx/bridgeKit";
 import { ChainIcon } from "@/components/ui/ChainIcon";
 import { ChainSelectModal } from "@/components/ui/ChainSelectModal";
 import { TokenIcon } from "@/components/ui/TokenIcon";
@@ -333,6 +337,7 @@ export function BridgeCard() {
   const [solAddress, setSolAddress] = useState<string | null>(null);
   const [solBusy, setSolBusy] = useState(false);
   const [solMsg, setSolMsg] = useState<string>("");
+  const [solBalance, setSolBalance] = useState<number | null>(null);
 
   // Source-chain USDC balance
   const srcBalance = useReadContract({
@@ -361,6 +366,31 @@ export function BridgeCard() {
     },
   });
   const dstBalRaw = (dstBalance.data as bigint | undefined) ?? 0n;
+
+  // Solana-side USDC (SPL) balance, fetched when Solana is the source.
+  const srcIsSolana = isSolanaBridgeId(srcChainId);
+  useEffect(() => {
+    if (!srcIsSolana || !solAddress) {
+      setSolBalance(null);
+      return;
+    }
+    let cancelled = false;
+    const load = () =>
+      getSolanaUsdcBalance(solAddress).then((b) => {
+        if (!cancelled) setSolBalance(b);
+      });
+    load();
+    const t = setInterval(load, 15_000);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, [srcIsSolana, solAddress]);
+  const solBalRaw =
+    solBalance != null ? BigInt(Math.floor(solBalance * 1e6)) : 0n;
+  // Balance shown in the From box: Solana SPL balance when Solana is the
+  // source, otherwise the EVM-read USDC balance.
+  const effBalRaw = srcIsSolana ? solBalRaw : balRaw;
 
   const amountRaw = useMemo(() => {
     try {
@@ -1029,14 +1059,14 @@ export function BridgeCard() {
         onAmountChange={(v) => setAmountStr(v)}
         onChainClick={() => setPicker("from")}
         disabled={isProcessing}
-        balanceRaw={balRaw}
+        balanceRaw={effBalRaw}
         showHalfMax
         onHalf={
-          account && balRaw > 0n
-            ? () => setAmountStr(formatUnits(balRaw / 2n, 6))
+          effBalRaw > 0n
+            ? () => setAmountStr(formatUnits(effBalRaw / 2n, 6))
             : undefined
         }
-        onMax={account && balRaw > 0n ? () => setAmountStr(formatUnits(balRaw, 6)) : undefined}
+        onMax={effBalRaw > 0n ? () => setAmountStr(formatUnits(effBalRaw, 6)) : undefined}
       />
 
       {/* Flip */}
@@ -1130,31 +1160,37 @@ export function BridgeCard() {
       <div className="mt-4">
         {solanaMode ? (
           <div className="space-y-2">
-            {!solAddress && (
+            {!solAddress ? (
               <button
                 type="button"
                 onClick={connectPhantom}
-                className="arc-button-secondary w-full py-3.5 text-base"
+                className="arc-button-primary flex w-full items-center justify-center gap-2 py-3.5 text-base"
               >
-                Connect Phantom (Solana)
+                Connect
+                <Image
+                  src="/phantom.webp"
+                  alt="Phantom"
+                  width={20}
+                  height={20}
+                  className="h-5 w-5 rounded"
+                />
               </button>
-            )}
-            <button
-              type="button"
-              onClick={doSolanaBridge}
-              disabled={!account || !solAddress || amountRaw === 0n || solBusy}
-              className="arc-button-primary w-full py-3.5 text-base"
-            >
-              {!account
-                ? "Connect wallet"
-                : !solAddress
-                  ? "Connect Phantom first"
+            ) : (
+              <button
+                type="button"
+                onClick={doSolanaBridge}
+                disabled={!account || amountRaw === 0n || solBusy}
+                className="arc-button-primary w-full py-3.5 text-base"
+              >
+                {!account
+                  ? "Connect wallet"
                   : amountRaw === 0n
                     ? "Enter amount"
                     : solBusy
                       ? "Bridging…"
                       : `Bridge to ${dstChain.name}`}
-            </button>
+              </button>
+            )}
             {solMsg && (
               <p className="text-xs text-arc-text-muted">{solMsg}</p>
             )}
@@ -1265,7 +1301,14 @@ export function BridgeCard() {
         selectedChainId={srcChainId}
         excludeChainId={dstChainId}
         title="Select source chain"
-        extraChains={[{ id: SOLANA_BRIDGE_ID, name: "Solana Devnet" }]}
+        extraChains={
+          isSolanaBridgeId(dstChainId)
+            ? []
+            : [{ id: SOLANA_BRIDGE_ID, name: "Solana Devnet" }]
+        }
+        allowedChainIds={
+          isSolanaBridgeId(dstChainId) ? [ARC_CHAIN_ID] : undefined
+        }
       />
       <ChainSelectModal
         open={picker === "to"}
@@ -1274,7 +1317,14 @@ export function BridgeCard() {
         selectedChainId={dstChainId}
         excludeChainId={srcChainId}
         title="Select destination chain"
-        extraChains={[{ id: SOLANA_BRIDGE_ID, name: "Solana Devnet" }]}
+        extraChains={
+          isSolanaBridgeId(srcChainId)
+            ? []
+            : [{ id: SOLANA_BRIDGE_ID, name: "Solana Devnet" }]
+        }
+        allowedChainIds={
+          isSolanaBridgeId(srcChainId) ? [ARC_CHAIN_ID] : undefined
+        }
       />
 
       {/* Glow at bottom border when ready */}
