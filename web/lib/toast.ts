@@ -19,6 +19,9 @@ export interface SwapToastPayload {
   amountFormatted: string;
   /** Optional block-explorer URL for the receive/mint tx. */
   explorerUrl?: string;
+  /** Optional chain id — renders a small chain badge over the token logo
+   *  (the chain where the funds landed), like the Activity tab. */
+  chainId?: number;
 }
 
 export interface InfoToastPayload {

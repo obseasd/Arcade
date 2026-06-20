@@ -8,6 +8,7 @@ import { createPortal } from "react-dom";
 import { subscribeToToasts, type ToastPayload } from "@/lib/toast";
 import { TokenIcon } from "./TokenIcon";
 import { AutoTokenIcon } from "./AutoTokenIcon";
+import { ChainIcon } from "./ChainIcon";
 
 interface ToastItem extends Object {
   id: string;
@@ -220,13 +221,20 @@ function ToastCard({ payload, onClose }: { payload: ToastPayload; onClose: () =>
   if (payload.kind === "swap") {
     return (
       <div className="pointer-events-auto flex w-72 items-center gap-3 rounded-2xl border border-arc-gray/40 bg-black/60 p-3 shadow-arc-card backdrop-blur-xl animate-in slide-in-from-right">
-        {payload.tokenImage ? (
-          <TokenIcon symbol={payload.tokenSymbol} image={payload.tokenImage} size={36} />
-        ) : (
-          // Fall back to auto-resolving the logo from on-chain metadata when the
-          // caller didn't pass a direct image (eg the swap card's toast).
-          <AutoTokenIcon address={payload.tokenAddress} symbol={payload.tokenSymbol} size={36} />
-        )}
+        <div className="relative shrink-0">
+          {payload.tokenImage ? (
+            <TokenIcon symbol={payload.tokenSymbol} image={payload.tokenImage} size={36} />
+          ) : (
+            // Fall back to auto-resolving the logo from on-chain metadata when the
+            // caller didn't pass a direct image (eg the swap card's toast).
+            <AutoTokenIcon address={payload.tokenAddress} symbol={payload.tokenSymbol} size={36} />
+          )}
+          {payload.chainId != null && (
+            <span className="absolute -bottom-1 -right-1 rounded-full ring-2 ring-black/70">
+              <ChainIcon chainId={payload.chainId} size={16} />
+            </span>
+          )}
+        </div>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5 text-xs text-arc-text-muted">
             <span>Confirmed</span>

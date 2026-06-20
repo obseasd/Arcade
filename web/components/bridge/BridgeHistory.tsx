@@ -234,7 +234,15 @@ function Row({
     }
   })();
   const ago = formatAgo(entry.burnedAt, { suffix: "ago" });
-  const explorerTx = src?.explorer ? `${src.explorer}/tx/${entry.burnTxHash}` : undefined;
+  // Suppress the explorer link for entries with no real source tx hash
+  // (e.g. the App Kit Solana bridge, recorded with a zero-hash placeholder)
+  // so it doesn't point at a 404.
+  const ZERO_HASH = `0x${"0".repeat(64)}`;
+  const hasRealTx = !!entry.burnTxHash && entry.burnTxHash !== ZERO_HASH;
+  const explorerTx =
+    src?.explorer && hasRealTx
+      ? `${src.explorer}/tx/${entry.burnTxHash}`
+      : undefined;
 
   return (
     <div className="flex items-center gap-3 px-4 py-2.5 text-xs">
@@ -272,7 +280,9 @@ function Row({
           Retry
         </button>
       )}
-      {explorerTx && (
+      {/* Reserve the link slot even when there's no tx, so the trailing
+          timestamp / dismiss column stays aligned across rows. */}
+      {explorerTx ? (
         <a
           href={explorerTx}
           target="_blank"
@@ -282,6 +292,8 @@ function Row({
         >
           <ExternalLink className="h-3 w-3" />
         </a>
+      ) : (
+        <span className="inline-block h-3 w-3" aria-hidden />
       )}
       {/* Dismiss: hide a stuck entry locally. Useful when the burn was made
           before the burnTxHash auto-patch shipped and the entry is stranded

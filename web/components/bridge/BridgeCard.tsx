@@ -515,6 +515,7 @@ export function BridgeCard() {
         tokenSymbol: "USDC",
         amountFormatted: formatUSDC(amountSnapshot, 6, 2),
         explorerUrl: destExplorer,
+        chainId: dstChainId,
       });
       // Record in Recent bridges so the Solana leg shows alongside CCTP.
       try {
@@ -1204,7 +1205,19 @@ export function BridgeCard() {
       <div className="mt-4">
         {solanaMode ? (
           <div className="space-y-2">
-            {!solAddress ? (
+            {solStep === "done" ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setSolStep("idle");
+                  setSolMsg("");
+                  setAmountStr("");
+                }}
+                className="arc-button-secondary w-full py-3.5 text-base"
+              >
+                Bridge another
+              </button>
+            ) : !solAddress ? (
               <button
                 type="button"
                 onClick={connectPhantom}
@@ -1302,18 +1315,18 @@ export function BridgeCard() {
               solanaDirection === "arc-to-solana"
                 ? [
                     { key: "burn", label: "Sign on Arc" },
-                    { key: "attest", label: "Bridging" },
-                    { key: "mint", label: "Receive on Solana" },
+                    { key: "attest", label: "Sign on Solana" },
+                    { key: "mint", label: "Receive" },
                   ]
                 : [
                     { key: "burn", label: "Sign on Solana" },
-                    { key: "attest", label: "Bridging" },
-                    { key: "mint", label: "Receive on Arc" },
+                    { key: "attest", label: "Sign on Arc" },
+                    { key: "mint", label: "Receive" },
                   ]
             }
             detail={
               solStep === "done"
-                ? "Bridge complete — your USDC has been sent."
+                ? undefined
                 : "Confirm in your wallet(s); CCTP settles in ~1-2 min…"
             }
           />
