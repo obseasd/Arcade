@@ -3,11 +3,16 @@ import {
     createPublicClient,
     createWalletClient,
     decodeEventLog,
+    encodeFunctionData,
     http,
     isAddress,
     type Address,
     type Hex,
 } from "viem";
+import {
+    MULTICALL3_ADDRESS,
+    MULTICALL3_AGGREGATE3_ABI,
+} from "@/lib/multicall3";
 import { privateKeyToAccount } from "viem/accounts";
 import {
     getActivePositions,
@@ -236,16 +241,20 @@ export async function POST(req: NextRequest) {
         notes: [],
     };
 
+    // Phase 1 — prepare each position (cooldown + fee-bps read + per-mode
+    // simulation + skips). Returns the encoded compound()/pushFees() call
+    // for positions that should fire; skip paths settle their own DB state.
+    const prepared: PreparedCall[] = [];
     for (const position of work) {
         try {
-            await handleOne(
+            const p = await prepareOne(
                 position,
                 compounderAddress,
                 publicClient,
-                walletClient,
                 account,
                 summary,
             );
+            if (p) prepared.push(p);
         } catch (err) {
             summary.failed++;
             summary.notes.push(
@@ -256,20 +265,79 @@ export async function POST(req: NextRequest) {
         }
     }
 
+    // Phase 2 — batch every prepared call into ONE Multicall3 transaction
+    // (compound/pushFees are permissionless; allowFailure:true so one
+    // position whose ticks moved between sim and exec can't revert the
+    // others).
+    if (prepared.length > 0) {
+        const calls = prepared.map((p) => ({
+            target: compounderAddress,
+            allowFailure: true,
+            callData: p.callData,
+        }));
+        let batchHash: Hex | null = null;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        let receipt: any = null;
+        try {
+            batchHash = await walletClient.writeContract({
+                address: MULTICALL3_ADDRESS,
+                abi: MULTICALL3_AGGREGATE3_ABI,
+                functionName: "aggregate3",
+                args: [calls],
+                chain: ARC_CHAIN,
+                account,
+                maxFeePerGas: MAX_FEE_PER_GAS_WEI,
+            });
+            receipt = await publicClient.waitForTransactionReceipt({
+                hash: batchHash,
+            });
+        } catch (err) {
+            summary.notes.push(
+                `batch-submit error=${
+                    err instanceof Error ? err.message : String(err)
+                }`,
+            );
+        }
+
+        // Phase 3 — settle the DB per position from the SHARED receipt.
+        // Success = the position's own Compounded/FeesPushed event is
+        // present (an allowFailure subcall that reverted emits no event).
+        // The (tx_hash, token_id) unique key (migration 005) lets all N
+        // rows share the batch hash.
+        if (receipt) {
+            for (const p of prepared) {
+                await recordOutcome(
+                    p,
+                    receipt,
+                    batchHash as Hex,
+                    summary,
+                    publicClient,
+                );
+            }
+        }
+    }
+
     return NextResponse.json({
         ran: true,
         ...summary,
     });
 }
 
-async function handleOne(
+interface PreparedCall {
+    kind: "compound" | "pushFees";
+    position: CompounderPosition;
+    fee0: bigint;
+    fee1: bigint;
+    callData: Hex;
+}
+
+async function prepareOne(
     position: CompounderPosition,
     compounderAddress: Address,
     publicClient: ReturnType<typeof createPublicClient>,
-    walletClient: ReturnType<typeof createWalletClient>,
     account: ReturnType<typeof privateKeyToAccount>,
     summary: RunSummary,
-): Promise<void> {
+): Promise<PreparedCall | null> {
     const tokenId = BigInt(position.tokenId);
 
     // Cooldown read stays cheap. The pendingFees pre-check was REMOVED
@@ -295,7 +363,7 @@ async function handleOne(
     if (nextAt > nowSec) {
         summary.skipped++;
         summary.notes.push(`token=${position.tokenId} reason=cooldown`);
-        return;
+        return null;
     }
 
     // Surface the post-collect amounts in the summary so the
@@ -376,7 +444,7 @@ async function handleOne(
             summary.notes.push(
                 `token=${position.tokenId} reason=push-sim-timed-out`,
             );
-            return;
+            return null;
         }
         if ("skip" in sim) {
             summary.skipped++;
@@ -402,29 +470,21 @@ async function handleOne(
                     // best-effort - the reconcile cron will retry
                 }
             }
-            return;
+            return null;
         }
         fee0 = sim[0];
         fee1 = sim[1];
-        const hash = await walletClient.writeContract({
-            address: compounderAddress,
-            abi: AUTO_COMPOUNDER_ABI,
-            functionName: "pushFees",
-            args: [tokenId, currentProtocolFeeBps, deadline],
-            chain: ARC_CHAIN,
-            account,
-            maxFeePerGas: MAX_FEE_PER_GAS_WEI,
-        });
-        await onTxSubmitted({
+        return {
             kind: "pushFees",
             position,
-            hash,
             fee0,
             fee1,
-            summary,
-            publicClient,
-        });
-        return;
+            callData: encodeFunctionData({
+                abi: AUTO_COMPOUNDER_ABI,
+                functionName: "pushFees",
+                args: [tokenId, currentProtocolFeeBps, deadline],
+            }),
+        };
     }
 
     if (modeId === 2 /* COMPOUND */) {
@@ -489,7 +549,7 @@ async function handleOne(
             summary.notes.push(
                 `token=${position.tokenId} reason=compound-sim-timed-out`,
             );
-            return;
+            return null;
         }
         if ("skip" in sim) {
             summary.skipped++;
@@ -513,7 +573,7 @@ async function handleOne(
                     // best-effort
                 }
             }
-            return;
+            return null;
         }
 
         // sim = [liquidityAdded, amount0Used, amount1Used]
@@ -522,31 +582,23 @@ async function handleOne(
         const amount0Min = (amount0Used * (10_000n - slippageBps)) / 10_000n;
         const amount1Min = (amount1Used * (10_000n - slippageBps)) / 10_000n;
 
-        const hash = await walletClient.writeContract({
-            address: compounderAddress,
-            abi: AUTO_COMPOUNDER_ABI,
-            functionName: "compound",
-            args: [
-                tokenId,
-                amount0Min,
-                amount1Min,
-                currentProtocolFeeBps,
-                deadline,
-            ],
-            chain: ARC_CHAIN,
-            account,
-            maxFeePerGas: MAX_FEE_PER_GAS_WEI,
-        });
-        await onTxSubmitted({
+        return {
             kind: "compound",
             position,
-            hash,
             fee0,
             fee1,
-            summary,
-            publicClient,
-        });
-        return;
+            callData: encodeFunctionData({
+                abi: AUTO_COMPOUNDER_ABI,
+                functionName: "compound",
+                args: [
+                    tokenId,
+                    amount0Min,
+                    amount1Min,
+                    currentProtocolFeeBps,
+                    deadline,
+                ],
+            }),
+        };
     }
 
     // NORMAL mode should never reach here because getActivePositions
@@ -554,158 +606,120 @@ async function handleOne(
     // edited in a way that breaks the invariant.
     summary.skipped++;
     summary.notes.push(`token=${position.tokenId} reason=mode-normal`);
+    return null;
 }
 
-interface SubmittedContext {
-    kind: "compound" | "pushFees";
-    position: CompounderPosition;
-    hash: Hex;
-    fee0: bigint;
-    fee1: bigint;
-    summary: RunSummary;
-    publicClient: ReturnType<typeof createPublicClient>;
-}
-
-async function onTxSubmitted(ctx: SubmittedContext): Promise<void> {
-    // Block until the receipt lands so we know whether to flip the DB
-    // row to succeeded / failed. The Vercel function maxDuration is
-    // 60s and Arc blocks are ~0.5s — even a 6-tx scan with one block
-    // confirmation each stays under budget.
-    const receipt = await ctx.publicClient.waitForTransactionReceipt({
-        hash: ctx.hash,
-    });
-
-    const nowIso = new Date().toISOString();
-    if (receipt.status === "success") {
-        ctx.summary.triggered++;
-        await stampLastAction(ctx.position.tokenId, nowIso);
-
-        // 2026-06-15 audit HIGH#1 fix: the COMPOUND branch's ctx.fee0 / fee1
-        // are 0n because compound() returns (liquidityAdded, amount0Used,
-        // amount1Used) — never the actual fees collected. The cron's
-        // simulation in handlePosition therefore writes 0/0 into
-        // compounder_events, which was the root cause of the "Total earned
-        // = $0 forever for every auto-compound user" symptom even though
-        // fees were correctly reinvested on-chain. Parse the Compounded
-        // event log from the receipt and pull fee0Collected/fee1Collected
-        // off the decoded args BEFORE the insertEvent call. Failure to
-        // decode falls through to the existing ctx values so the row still
-        // lands (zero) — the persistence reconciler healing path then
-        // takes over.
-        let resolvedFee0 = ctx.fee0;
-        let resolvedFee1 = ctx.fee1;
-        if (ctx.kind === "compound") {
-            for (const lg of receipt.logs) {
-                try {
-                    const decoded = decodeEventLog({
-                        abi: AUTO_COMPOUNDER_ABI,
-                        data: lg.data,
-                        topics: lg.topics,
-                        eventName: "Compounded",
-                    });
-                    const args = decoded.args as unknown as {
-                        tokenId: bigint;
-                        fee0Collected?: bigint;
-                        fee1Collected?: bigint;
-                    };
-                    if (args && args.tokenId === BigInt(ctx.position.tokenId)) {
-                        resolvedFee0 = args.fee0Collected ?? 0n;
-                        resolvedFee1 = args.fee1Collected ?? 0n;
-                        break;
-                    }
-                } catch {
-                    // not a Compounded log on this entry — keep scanning.
-                }
-            }
-        }
-        // Audit H2 fix: compute the USDC-equivalent of fee0 + fee1 via
-        // the V3 quoter so the dashboard's "Total claimed" headline is
-        // a live number instead of the dead 0 the column shipped with
-        // for every event ever written. The same quoter the swap UI
-        // uses handles arbitrary V3 fee tiers (see arcadeV3Provider),
-        // and the failure mode is intentionally permissive: any
-        // quoting error contributes 0 to the sum so the metric
-        // undercounts honestly rather than refusing to write the row.
-        //
-        // Audit I10 sup fix: also read the block's chain-authoritative
-        // timestamp and pass it through to insertEvent so the
-        // dashboard's time-series aggregations bin by the canonical
-        // clock instead of the server wall clock. The read is wrapped
-        // in withTimeout so a slow RPC cannot push the receipt path
-        // past the function ceiling; failure falls back to NULL,
-        // which the SUM query handles via COALESCE.
-        // 2026-06-15 audit follow-up: the promised "quoting error
-        // contributes 0 to the sum" guarantee was never implemented
-        // — quoteUsdcValueForPair has thrown paths (V3 quoter missing,
-        // RPC timeout, no pool for the pair) and Promise.all rejecting
-        // would silently skip insertEvent entirely, leaving stamped
-        // last_action_at rows with no corresponding event row. Caught
-        // here so insertEvent always lands, with the event amounts the
-        // receipt-log decode produced (the metric we actually care
-        // about). Same defensive .catch on the block timestamp path
-        // — a 503 from the timestamp read should never erase the event.
-        const [usdValueMicros, chainBlockAtIso] = await Promise.all([
-            quoteUsdcValueForPair(
-                ctx.publicClient,
-                ctx.position.token0Address,
-                ctx.position.token1Address,
-                resolvedFee0,
-                resolvedFee1,
-            ).catch((err) => {
-                // eslint-disable-next-line no-console
-                console.warn(
-                    "[cron] quoteUsdcValueForPair threw, defaulting to 0",
-                    ctx.position.tokenId,
-                    err,
-                );
-                return 0n;
-            }),
-            withTimeout(
-                ctx.publicClient
-                    .getBlock({ blockNumber: receipt.blockNumber })
-                    .then(
-                        (b: { timestamp: bigint }) =>
-                            new Date(Number(b.timestamp) * 1000).toISOString() as string,
-                    )
-                    .catch((): string | null => null),
-                RPC_TIMEOUT_MS,
-            )
-                .then((v) => (v as string | null) ?? null)
-                .catch(() => null as string | null),
-        ]);
-        // 2026-06-16: insertEvent now throws on schema errors instead of
-        // returning false silently. Catch here so a single bad row does
-        // not blow up the rest of onTxSubmitted (lastActionAt already
-        // stamped, summary.triggered already incremented). The
-        // reconcile cron will heal the missing row on its next sweep
-        // via the ON CONFLICT (tx_hash) heal path.
+async function recordOutcome(
+    p: PreparedCall,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    receipt: any,
+    batchHash: Hex,
+    summary: RunSummary,
+    publicClient: ReturnType<typeof createPublicClient>,
+): Promise<void> {
+    // Settle THIS position's outcome from the SHARED batch receipt. With
+    // allowFailure:true a reverted subcall emits no event for its tokenId,
+    // so the presence of the position's Compounded / FeesPushed event is
+    // the per-position success signal. compound() returns liquidity used —
+    // not fees — so the real fees come off the event (2026-06-15 audit
+    // HIGH#1); pushFees uses the sim figures already captured in p.fee*.
+    const eventNameForKind = p.kind === "compound" ? "Compounded" : "FeesPushed";
+    let succeeded = false;
+    let resolvedFee0 = p.fee0;
+    let resolvedFee1 = p.fee1;
+    for (const lg of receipt.logs) {
         try {
-            await insertEvent({
-                tokenId: ctx.position.tokenId,
-                eventType: ctx.kind === "compound" ? "Compounded" : "FeesPushed",
-                amount0: resolvedFee0.toString(),
-                amount1: resolvedFee1.toString(),
-                usdValueMicros: usdValueMicros.toString(),
-                txHash: ctx.hash,
-                blockNumber: receipt.blockNumber.toString(),
-                chainBlockAtIso,
+            const decoded = decodeEventLog({
+                abi: AUTO_COMPOUNDER_ABI,
+                data: lg.data,
+                topics: lg.topics,
+                eventName: eventNameForKind,
             });
-        } catch (err) {
-            // eslint-disable-next-line no-console
-            console.error(
-                "[cron] insertEvent throw — row missing, will reconcile later:",
-                ctx.position.tokenId,
-                ctx.hash,
-                err,
-            );
+            const args = decoded.args as unknown as {
+                tokenId: bigint;
+                fee0Collected?: bigint;
+                fee1Collected?: bigint;
+            };
+            if (args && args.tokenId === BigInt(p.position.tokenId)) {
+                succeeded = true;
+                if (p.kind === "compound") {
+                    resolvedFee0 = args.fee0Collected ?? p.fee0;
+                    resolvedFee1 = args.fee1Collected ?? p.fee1;
+                }
+                break;
+            }
+        } catch {
+            // not this event on this log — keep scanning.
         }
-    } else {
-        ctx.summary.failed++;
-        await enqueueAction(ctx.position.tokenId, ctx.kind, {
-            error: "tx-reverted",
-            txHash: ctx.hash,
+    }
+
+    if (!succeeded) {
+        summary.failed++;
+        await enqueueAction(p.position.tokenId, p.kind, {
+            error: "subcall-reverted-in-batch",
+            txHash: batchHash,
             blockNumber: receipt.blockNumber.toString(),
         });
+        return;
+    }
+
+    summary.triggered++;
+    await stampLastAction(p.position.tokenId, new Date().toISOString());
+    // USDC-equivalent of the fees (V3 quoter) + chain-authoritative block
+    // timestamp. Both .catch to a safe default so a quoting / timestamp
+    // failure never erases the event row (the metric we care about is the
+    // receipt-decoded fee amounts, not the USD quote).
+    const [usdValueMicros, chainBlockAtIso] = await Promise.all([
+        quoteUsdcValueForPair(
+            publicClient,
+            p.position.token0Address,
+            p.position.token1Address,
+            resolvedFee0,
+            resolvedFee1,
+        ).catch((err) => {
+            // eslint-disable-next-line no-console
+            console.warn(
+                "[cron] quoteUsdcValueForPair threw, defaulting to 0",
+                p.position.tokenId,
+                err,
+            );
+            return 0n;
+        }),
+        withTimeout(
+            publicClient
+                .getBlock({ blockNumber: receipt.blockNumber })
+                .then(
+                    (b: { timestamp: bigint }) =>
+                        new Date(Number(b.timestamp) * 1000).toISOString() as string,
+                )
+                .catch((): string | null => null),
+            RPC_TIMEOUT_MS,
+        )
+            .then((v) => (v as string | null) ?? null)
+            .catch(() => null as string | null),
+    ]);
+    // insertEvent keys on (tx_hash, token_id) (migration 005), so all N
+    // positions sharing the batch hash each get their own row. Throw is
+    // caught — the reconcile cron heals a missing row on its next sweep.
+    try {
+        await insertEvent({
+            tokenId: p.position.tokenId,
+            eventType: p.kind === "compound" ? "Compounded" : "FeesPushed",
+            amount0: resolvedFee0.toString(),
+            amount1: resolvedFee1.toString(),
+            usdValueMicros: usdValueMicros.toString(),
+            txHash: batchHash,
+            blockNumber: receipt.blockNumber.toString(),
+            chainBlockAtIso,
+        });
+    } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error(
+            "[cron] insertEvent throw — row missing, will reconcile later:",
+            p.position.tokenId,
+            batchHash,
+            err,
+        );
     }
 }
 
