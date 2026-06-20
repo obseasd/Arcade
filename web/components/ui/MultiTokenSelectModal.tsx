@@ -36,9 +36,8 @@ const PINNED: PinnedTemplate[] = [
   { symbol: "USDC", name: "USD Coin" },
   { symbol: "WUSDC", name: "Wrapped USDC" },
   { symbol: "ETH", name: "Wrapped Ether" },
-  // USDT and BTC (cirBTC) dropped: no liquidity pool on Arc testnet, so a
-  // multi-swap touching them reverts InsufficientOutput (the contract
-  // quote returns a phantom value for pool-less pairs). Re-add at mainnet.
+  { symbol: "USDT", name: "Tether" },
+  { symbol: "BTC", name: "Wrapped BTC" },
 ];
 
 export function MultiTokenSelectModal({
