@@ -117,6 +117,35 @@ export const CCTP_CHAINS: CctpChainConfig[] = [
   },
 ];
 
+/**
+ * Sentinel "chain id" for the Solana bridge family (non-EVM). It is
+ * deliberately NOT in CCTP_CHAINS, so every EVM iteration / getCctpChain
+ * lookup ignores it. The BridgeCard adds it to the chain picker and, when
+ * a side equals this id, branches to the Circle App Kit Solana flow
+ * instead of the EVM CCTP burn/mint path. Solana only bridges with Arc.
+ */
+export const SOLANA_BRIDGE_ID = 9_999_990_005;
+
+export function isSolanaBridgeId(id: number): boolean {
+  return id === SOLANA_BRIDGE_ID;
+}
+
+/**
+ * Display-only pseudo-config so the BridgeCard chain boxes can render
+ * Solana without `getCctpChain` returning undefined. The EVM fields are
+ * dummies and must never drive an EVM op — the BridgeCard gates all EVM
+ * reads/writes on `!solanaMode`.
+ */
+export const SOLANA_PSEUDO_CHAIN: CctpChainConfig = {
+  id: SOLANA_BRIDGE_ID,
+  name: "Solana Devnet",
+  cctpDomain: 5,
+  usdc: "0x0000000000000000000000000000000000000000",
+  rpc: "",
+  explorer: "https://explorer.solana.com",
+  confirmations: 0,
+};
+
 export function getCctpChain(chainId: number): CctpChainConfig | undefined {
   return CCTP_CHAINS.find((c) => c.id === chainId);
 }

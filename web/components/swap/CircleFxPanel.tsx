@@ -129,7 +129,12 @@ export function CircleFxPanel() {
     }
   };
 
-  if (!isFxConfigured()) return null;
+  // Circle's stablecoin FX swap service currently returns "No route
+  // available" for USDC<->EURC on Arc testnet, so the panel is hidden
+  // unless explicitly enabled (it should light up on mainnet where the FX
+  // routes are live). The bridge uses the same Kit Key and works today.
+  if (!isFxConfigured() || process.env.NEXT_PUBLIC_FX_SWAP_ENABLED !== "true")
+    return null;
 
   const busy = phase === "quoting" || phase === "swapping";
 

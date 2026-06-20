@@ -23,8 +23,12 @@ import {
   fetchAttestationDetailed,
   getCctpChain,
   parseCctpV2Message,
+  isSolanaBridgeId,
+  SOLANA_BRIDGE_ID,
+  SOLANA_PSEUDO_CHAIN,
 } from "@/lib/cctp";
-import { Address } from "viem";
+import { Address, type EIP1193Provider } from "viem";
+import { executeKitBridge, getPhantom } from "@/lib/fx/bridgeKit";
 import { ChainIcon } from "@/components/ui/ChainIcon";
 import { ChainSelectModal } from "@/components/ui/ChainSelectModal";
 import { TokenIcon } from "@/components/ui/TokenIcon";
@@ -119,7 +123,7 @@ function expectedAttestUpperSec(srcChainId: number, fast: boolean): number {
 }
 
 export function BridgeCard() {
-  const { address: account } = useAccount();
+  const { address: account, connector } = useAccount();
   const chainId = useChainId();
   const config = useConfig();
   const { switchChainAsync } = useSwitchChain();
@@ -305,8 +309,30 @@ export function BridgeCard() {
   // Effective recipient = override if set, otherwise the connected wallet.
   const recipient: Address | undefined = recipientOverride ?? account;
 
-  const srcChain = useMemo(() => getCctpChain(srcChainId)!, [srcChainId]);
-  const dstChain = useMemo(() => getCctpChain(dstChainId)!, [dstChainId]);
+  // Solana is non-EVM; getCctpChain returns undefined for its sentinel id,
+  // so fall back to a display-only pseudo-config. EVM reads/writes below
+  // are all gated on `!solanaMode`, so the dummy fields never drive an op.
+  const srcChain = useMemo(
+    () => getCctpChain(srcChainId) ?? SOLANA_PSEUDO_CHAIN,
+    [srcChainId],
+  );
+  const dstChain = useMemo(
+    () => getCctpChain(dstChainId) ?? SOLANA_PSEUDO_CHAIN,
+    [dstChainId],
+  );
+
+  // Solana bridge mode: one side is the Solana sentinel. App Kit only
+  // bridges Solana <-> Arc, so the pickers force Arc on the opposite side.
+  const solanaMode =
+    isSolanaBridgeId(srcChainId) || isSolanaBridgeId(dstChainId);
+  const solanaDirection: "arc-to-solana" | "solana-to-arc" = isSolanaBridgeId(
+    dstChainId,
+  )
+    ? "arc-to-solana"
+    : "solana-to-arc";
+  const [solAddress, setSolAddress] = useState<string | null>(null);
+  const [solBusy, setSolBusy] = useState(false);
+  const [solMsg, setSolMsg] = useState<string>("");
 
   // Source-chain USDC balance
   const srcBalance = useReadContract({
@@ -315,7 +341,10 @@ export function BridgeCard() {
     functionName: "balanceOf",
     args: account ? [account] : undefined,
     chainId: srcChain.id,
-    query: { enabled: !!account, refetchInterval: 10_000 },
+    query: {
+      enabled: !!account && !isSolanaBridgeId(srcChainId),
+      refetchInterval: 10_000,
+    },
   });
   const balRaw = (srcBalance.data as bigint | undefined) ?? 0n;
 
@@ -326,7 +355,10 @@ export function BridgeCard() {
     functionName: "balanceOf",
     args: account ? [account] : undefined,
     chainId: dstChain.id,
-    query: { enabled: !!account, refetchInterval: 10_000 },
+    query: {
+      enabled: !!account && !isSolanaBridgeId(dstChainId),
+      refetchInterval: 10_000,
+    },
   });
   const dstBalRaw = (dstBalance.data as bigint | undefined) ?? 0n;
 
@@ -363,18 +395,83 @@ export function BridgeCard() {
   };
 
   const handleSrcPick = (id: number) => {
-    if (id === dstChainId) setDstChainId(srcChainId);
-    setSrcChainId(id);
+    if (isSolanaBridgeId(id)) {
+      // Solana only bridges with Arc → force Arc as destination.
+      setSrcChainId(SOLANA_BRIDGE_ID);
+      setDstChainId(ARC_CHAIN_ID);
+    } else {
+      setSrcChainId(id);
+      if (isSolanaBridgeId(dstChainId) && id !== ARC_CHAIN_ID) {
+        // dst was Solana but new src isn't Arc → not a route, reset to Arc.
+        setDstChainId(ARC_CHAIN_ID);
+      } else if (id === dstChainId) {
+        setDstChainId(srcChainId);
+      }
+    }
     // Always clear any prior error/done state when chains change so the
     // user can retry immediately without a page refresh.
     setStep({ kind: "idle" });
     setAmountStr("");
   };
   const handleDstPick = (id: number) => {
-    if (id === srcChainId) setSrcChainId(dstChainId);
-    setDstChainId(id);
+    if (isSolanaBridgeId(id)) {
+      setDstChainId(SOLANA_BRIDGE_ID);
+      setSrcChainId(ARC_CHAIN_ID);
+    } else {
+      setDstChainId(id);
+      if (isSolanaBridgeId(srcChainId) && id !== ARC_CHAIN_ID) {
+        setSrcChainId(ARC_CHAIN_ID);
+      } else if (id === srcChainId) {
+        setSrcChainId(dstChainId);
+      }
+    }
     setStep({ kind: "idle" });
     setAmountStr("");
+  };
+
+  const connectPhantom = async () => {
+    const sol = getPhantom();
+    if (!sol) {
+      setSolMsg("Phantom wallet not found — install it to bridge Solana.");
+      return;
+    }
+    try {
+      const res = await sol.connect();
+      setSolAddress(res.publicKey.toString());
+      setSolMsg("");
+    } catch {
+      setSolMsg("Phantom connection rejected.");
+    }
+  };
+
+  const doSolanaBridge = async () => {
+    if (!account || !solAddress || amountRaw === 0n) return;
+    const sol = getPhantom();
+    const evmProvider = (await connector?.getProvider?.()) as
+      | EIP1193Provider
+      | undefined;
+    if (!sol || !evmProvider) {
+      setSolMsg("Wallet provider unavailable.");
+      return;
+    }
+    setSolBusy(true);
+    setSolMsg("Confirm in your wallet(s)…");
+    try {
+      await executeKitBridge({
+        direction: solanaDirection,
+        evmProvider,
+        evmAddress: account,
+        solanaProvider: sol,
+        solanaAddress: solAddress,
+        amount: amountStr,
+      });
+      setSolMsg("Bridge submitted — your USDC will arrive shortly.");
+      setAmountStr("");
+    } catch (err) {
+      setSolMsg(err instanceof Error ? err.message : "Bridge failed");
+    } finally {
+      setSolBusy(false);
+    }
   };
 
   const doBurn = async () => {
@@ -957,7 +1054,13 @@ export function BridgeCard() {
       <ChainBox
         label="To"
         chain={dstChain}
-        amount={amountRaw > 0n ? formatUnits(estReceived, 6) : ""}
+        amount={
+          solanaMode
+            ? amountStr
+            : amountRaw > 0n
+              ? formatUnits(estReceived, 6)
+              : ""
+        }
         onChainClick={() => setPicker("to")}
         disabled={isProcessing}
         balanceRaw={dstBalRaw}
@@ -978,7 +1081,17 @@ export function BridgeCard() {
           chain pair is valid, even before the user types an amount.
           Fixed height so the row doesn't grow when the flash badge appears,
           which would otherwise push the CTA button down. */}
-      {!sameChain && (
+      {solanaMode && (
+        <div className="mt-3 flex h-[18px] items-center justify-between text-xs">
+          <div className="flex h-full items-center gap-1.5 text-arc-text-muted">
+            <Image src="/route.png" alt="" width={14} height={14} className="h-3.5 w-3.5 opacity-75" />
+            <span>via</span>
+            <span className="font-medium text-arc-text">Circle App Kit</span>
+          </div>
+          <div className="text-arc-text-muted">USDC · ~1-2 min</div>
+        </div>
+      )}
+      {!sameChain && !solanaMode && (
         <div className="mt-3 flex h-[18px] items-center justify-between text-xs">
           <div className="flex h-full items-center gap-1.5 text-arc-text-muted">
             <Image src="/route.png" alt="" width={14} height={14} className="h-3.5 w-3.5 opacity-75" />
@@ -1015,7 +1128,38 @@ export function BridgeCard() {
 
       {/* CTA */}
       <div className="mt-4">
-        {step.kind === "idle" || step.kind === "error" ? (
+        {solanaMode ? (
+          <div className="space-y-2">
+            {!solAddress && (
+              <button
+                type="button"
+                onClick={connectPhantom}
+                className="arc-button-secondary w-full py-3.5 text-base"
+              >
+                Connect Phantom (Solana)
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={doSolanaBridge}
+              disabled={!account || !solAddress || amountRaw === 0n || solBusy}
+              className="arc-button-primary w-full py-3.5 text-base"
+            >
+              {!account
+                ? "Connect wallet"
+                : !solAddress
+                  ? "Connect Phantom first"
+                  : amountRaw === 0n
+                    ? "Enter amount"
+                    : solBusy
+                      ? "Bridging…"
+                      : `Bridge to ${dstChain.name}`}
+            </button>
+            {solMsg && (
+              <p className="text-xs text-arc-text-muted">{solMsg}</p>
+            )}
+          </div>
+        ) : step.kind === "idle" || step.kind === "error" ? (
           <button type="button"
             onClick={doBurn}
             disabled={!canBridge}
@@ -1121,6 +1265,7 @@ export function BridgeCard() {
         selectedChainId={srcChainId}
         excludeChainId={dstChainId}
         title="Select source chain"
+        extraChains={[{ id: SOLANA_BRIDGE_ID, name: "Solana Devnet" }]}
       />
       <ChainSelectModal
         open={picker === "to"}
@@ -1129,6 +1274,7 @@ export function BridgeCard() {
         selectedChainId={dstChainId}
         excludeChainId={srcChainId}
         title="Select destination chain"
+        extraChains={[{ id: SOLANA_BRIDGE_ID, name: "Solana Devnet" }]}
       />
 
       {/* Glow at bottom border when ready */}
