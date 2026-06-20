@@ -338,6 +338,10 @@ export function BridgeCard() {
   const [solBusy, setSolBusy] = useState(false);
   const [solMsg, setSolMsg] = useState<string>("");
   const [solBalance, setSolBalance] = useState<number | null>(null);
+  // Visual progress for the App Kit Solana bridge: "burn" = in-flight,
+  // "done" = settled. (App Kit is a single call, so we show the first step
+  // active for the whole bridge then mark all done on success.)
+  const [solStep, setSolStep] = useState<"idle" | "burn" | "done">("idle");
 
   // Source-chain USDC balance
   const srcBalance = useReadContract({
@@ -487,9 +491,12 @@ export function BridgeCard() {
       return;
     }
     setSolBusy(true);
+    setSolStep("burn");
     setSolMsg("Confirm in your wallet(s)…");
+    const amountSnapshot = amountRaw;
     try {
-      await executeKitBridge({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const res: any = await executeKitBridge({
         direction: solanaDirection,
         evmProvider,
         evmAddress: account,
@@ -497,9 +504,44 @@ export function BridgeCard() {
         solanaAddress: solAddress,
         amount: amountStr,
       });
-      setSolMsg("Bridge submitted — your USDC will arrive shortly.");
+      setSolStep("done");
+      setSolMsg("");
+      const destExplorer =
+        solanaDirection === "arc-to-solana"
+          ? `https://explorer.solana.com/address/${solAddress}?cluster=devnet`
+          : `https://testnet.arcscan.app/address/${account}`;
+      pushToast({
+        kind: "swap",
+        tokenSymbol: "USDC",
+        amountFormatted: formatUSDC(amountSnapshot, 6, 2),
+        explorerUrl: destExplorer,
+      });
+      // Record in Recent bridges so the Solana leg shows alongside CCTP.
+      try {
+        const srcTx =
+          res?.steps?.find?.((s: { txHash?: string }) => s?.txHash)?.txHash ??
+          res?.sourceTxHash ??
+          res?.txHash;
+        recordBridge(account, {
+          srcChainId,
+          dstChainId,
+          amountRaw6: amountSnapshot.toString(),
+          recipient:
+            solanaDirection === "arc-to-solana" ? solAddress : account,
+          burnTxHash: (typeof srcTx === "string" && srcTx.startsWith("0x")
+            ? srcTx
+            : `0x${"0".repeat(64)}`) as `0x${string}`,
+          status: "minted",
+          burnedAt: Date.now(),
+          mintedAt: Date.now(),
+        });
+        window.dispatchEvent(new Event(BRIDGE_HISTORY_CHANGE_EVENT));
+      } catch {
+        // history is best-effort; never block the success path
+      }
       setAmountStr("");
     } catch (err) {
+      setSolStep("idle");
       setSolMsg(err instanceof Error ? err.message : "Bridge failed");
     } finally {
       setSolBusy(false);
@@ -1171,7 +1213,7 @@ export function BridgeCard() {
               >
                 Connect
                 <Image
-                  src="/phantom.png"
+                  src="/phantom.jpg"
                   alt="Phantom"
                   width={20}
                   height={20}
@@ -1183,15 +1225,19 @@ export function BridgeCard() {
                 type="button"
                 onClick={doSolanaBridge}
                 disabled={!account || amountRaw === 0n || solBusy}
-                className="arc-button-primary w-full py-3.5 text-base"
+                className="arc-button-primary flex w-full items-center justify-center gap-2 py-3.5 text-base"
               >
-                {!account
-                  ? "Connect wallet"
-                  : amountRaw === 0n
-                    ? "Enter amount"
-                    : solBusy
-                      ? "Bridging…"
-                      : `Bridge to ${dstChain.name}`}
+                {solBusy ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" /> Bridging…
+                  </>
+                ) : !account ? (
+                  "Connect wallet"
+                ) : amountRaw === 0n ? (
+                  "Enter amount"
+                ) : (
+                  `Bridge to ${dstChain.name}`
+                )}
               </button>
             )}
             {solMsg && (
@@ -1246,6 +1292,33 @@ export function BridgeCard() {
           </button>
         )}
       </div>
+
+      {/* Solana (App Kit) visual flow — Sign / Bridging / Receive. */}
+      {solanaMode && solStep !== "idle" && (
+        <div className="mt-4">
+          <BridgeStepsProgress
+            current={solStep}
+            steps={
+              solanaDirection === "arc-to-solana"
+                ? [
+                    { key: "burn", label: "Sign on Arc" },
+                    { key: "attest", label: "Bridging" },
+                    { key: "mint", label: "Receive on Solana" },
+                  ]
+                : [
+                    { key: "burn", label: "Sign on Solana" },
+                    { key: "attest", label: "Bridging" },
+                    { key: "mint", label: "Receive on Arc" },
+                  ]
+            }
+            detail={
+              solStep === "done"
+                ? "Bridge complete — your USDC has been sent."
+                : "Confirm in your wallet(s); CCTP settles in ~1-2 min…"
+            }
+          />
+        </div>
+      )}
 
       {/* Visual stepper for the burn → attest → mint flow. Replaces the old
           plain text list with connected dots so users on slow chains (eg

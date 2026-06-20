@@ -14,13 +14,16 @@ interface Props {
   current: StepKey;
   /** Optional human-readable detail under the active step. */
   detail?: string;
+  /** Override the step labels (e.g. the Solana App Kit flow uses
+   *  Sign / Bridging / Receive instead of Send / Attestation / Claim). */
+  steps?: { key: Exclude<StepKey, "idle">; label: string }[];
 }
 
 /** Labels avoid the technical CCTP term "Burn" - users read that as
  *  destructive ("my USDC is gone"). "Send" makes the source-side action
  *  feel like a normal transfer. The hook keys still reflect CCTP semantics
  *  so the BridgeCard state machine doesn't change. */
-const STEPS: { key: Exclude<StepKey, "idle">; label: string }[] = [
+const DEFAULT_STEPS: { key: Exclude<StepKey, "idle">; label: string }[] = [
   { key: "burn", label: "Send" },
   { key: "attest", label: "Attestation" },
   { key: "mint", label: "Claim" },
@@ -29,7 +32,11 @@ const STEPS: { key: Exclude<StepKey, "idle">; label: string }[] = [
 const DOT_SIZE = 32;
 const DOT_CENTER = DOT_SIZE / 2;
 
-export function BridgeStepsProgress({ current, detail }: Props) {
+export function BridgeStepsProgress({
+  current,
+  detail,
+  steps: STEPS = DEFAULT_STEPS,
+}: Props) {
   if (current === "idle") return null;
 
   // Index of the active step; done = all three completed.
