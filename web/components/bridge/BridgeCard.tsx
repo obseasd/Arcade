@@ -367,10 +367,12 @@ export function BridgeCard() {
   });
   const dstBalRaw = (dstBalance.data as bigint | undefined) ?? 0n;
 
-  // Solana-side USDC (SPL) balance, fetched when Solana is the source.
+  // Solana-side USDC (SPL) balance, fetched whenever Solana is involved
+  // (source or destination) and Phantom is connected.
   const srcIsSolana = isSolanaBridgeId(srcChainId);
+  const dstIsSolana = isSolanaBridgeId(dstChainId);
   useEffect(() => {
-    if (!srcIsSolana || !solAddress) {
+    if (!(srcIsSolana || dstIsSolana) || !solAddress) {
       setSolBalance(null);
       return;
     }
@@ -385,7 +387,7 @@ export function BridgeCard() {
       cancelled = true;
       clearInterval(t);
     };
-  }, [srcIsSolana, solAddress]);
+  }, [srcIsSolana, dstIsSolana, solAddress]);
   const solBalRaw =
     solBalance != null ? BigInt(Math.floor(solBalance * 1e6)) : 0n;
   // Balance shown in the From box: Solana SPL balance when Solana is the
@@ -1093,7 +1095,7 @@ export function BridgeCard() {
         }
         onChainClick={() => setPicker("to")}
         disabled={isProcessing}
-        balanceRaw={dstBalRaw}
+        balanceRaw={dstIsSolana ? solBalRaw : dstBalRaw}
         readOnlyAmount
         recipientLabel={recipient ? formatAddress(recipient) : undefined}
         onRecipientClick={!isProcessing ? () => setRecipientModalOpen(true) : undefined}
@@ -1164,11 +1166,12 @@ export function BridgeCard() {
               <button
                 type="button"
                 onClick={connectPhantom}
-                className="arc-button-primary flex w-full items-center justify-center gap-2 py-3.5 text-base"
+                style={{ backgroundColor: "#AB9FF2", color: "#000" }}
+                className="flex w-full items-center justify-center gap-2 rounded-xl py-3.5 text-base font-semibold transition-opacity hover:opacity-90"
               >
                 Connect
                 <Image
-                  src="/phantom.webp"
+                  src="/phantom.png"
                   alt="Phantom"
                   width={20}
                   height={20}

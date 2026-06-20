@@ -10,7 +10,7 @@ const CHAIN_LOGOS: Record<number, string> = {
   11_155_420: "/optimism.png",
   43_113: "/avalanche.png",
   5_042_002: "/arc.jpg",
-  [SOLANA_BRIDGE_ID]: "/solana.png",
+  [SOLANA_BRIDGE_ID]: "/solana.jpg",
 };
 
 /** Fallback styled badge for chains without a PNG. */
