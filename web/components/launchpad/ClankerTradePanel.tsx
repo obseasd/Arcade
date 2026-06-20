@@ -11,6 +11,7 @@ import { AmountInput } from "@/components/ui/AmountInput";
 import { TokenIcon } from "@/components/ui/TokenIcon";
 import { TxStatus, type TxState } from "@/components/ui/TxStatus";
 import { useApproveIfNeeded } from "@/lib/hooks/useApproveIfNeeded";
+import { buildApproveAndCall } from "@/lib/routing/batchSwap";
 import { pushToast } from "@/lib/toast";
 import { addActivity } from "@/lib/activityFeed";
 import { cn, formatToken, formatUSDC } from "@/lib/utils";
@@ -109,26 +110,45 @@ export function ClankerTradePanel({ token, symbol, pool, image, onTradeSuccess }
   const minOut = (estimatedOut * BigInt(10_000 - slippageBps)) / 10_000n;
   const snipeSkim = amountRaw - netAmountIn;
 
-  const { ensureAllowance } = useApproveIfNeeded(side === "buy" ? ADDRESSES.usdc : token, ADDRESSES.v3Router);
+  const { allowance } = useApproveIfNeeded(side === "buy" ? ADDRESSES.usdc : token, ADDRESSES.v3Router);
   const { writeContractAsync } = useWriteContract();
 
   const onTrade = async () => {
     if (!account || amountRaw === 0n || !isUsdcPaired || fee === 0) return;
     setTx({ status: "pending", message: "Approving…" });
     try {
-      await ensureAllowance(amountRaw);
-      setTx({ status: "pending", message: "Submitting trade…" });
       const deadline = BigInt(Math.floor(Date.now() / 1000) + 600);
       const args =
         side === "buy"
           ? ([ADDRESSES.usdc, token, fee, account, amountRaw, minOut, deadline] as const)
           : ([token, ADDRESSES.usdc, fee, account, amountRaw, minOut, deadline] as const);
-      const hash = await writeContractAsync({
-        address: ADDRESSES.v3Router,
-        abi: V3_ROUTER_ABI,
-        functionName: "exactInputSingle",
-        args,
-      });
+      const approveToken = side === "buy" ? ADDRESSES.usdc : token;
+
+      let hash: `0x${string}`;
+      if (allowance < amountRaw) {
+        // First trade of this token: approve + swap in one signature.
+        setTx({ status: "pending", message: "Approve + trade" });
+        const batched = buildApproveAndCall({
+          token: approveToken,
+          spender: ADDRESSES.v3Router,
+          call: { address: ADDRESSES.v3Router, abi: V3_ROUTER_ABI, functionName: "exactInputSingle", args },
+        });
+        hash = await writeContractAsync({
+          address: batched.address,
+          abi: batched.abi,
+          functionName: batched.functionName,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          args: batched.args as any,
+        });
+      } else {
+        setTx({ status: "pending", message: "Submitting trade…" });
+        hash = await writeContractAsync({
+          address: ADDRESSES.v3Router,
+          abi: V3_ROUTER_ABI,
+          functionName: "exactInputSingle",
+          args,
+        });
+      }
       // Audit 2026-06-11 UX-C-2: receipt.status check. Without this gate
       // a reverted CLANKER_V3 buy/sell (anti-sniper skim slippage,
       // pool ratio drift) still cleared the form and pushed a green toast.

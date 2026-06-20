@@ -46,6 +46,39 @@ export interface RawBatchCall {
 }
 
 /**
+ * Fold a single ERC20 `approve(spender, max)` + an arbitrary contract call
+ * into one sender-preserving signature. The generic building block behind
+ * every "first interaction with token X" flow (curve/clanker trade, limit
+ * order, etc.): the action's `transferFrom(msg.sender)` still pulls from
+ * the user because Multicall3From preserves the sender. allowFailure stays
+ * false so the batch is atomic.
+ */
+export function buildApproveAndCall(params: {
+    /** ERC20 the action will pull. */
+    token: Address;
+    /** Contract that pulls `token` (the approve spender). */
+    spender: Address;
+    /** The action to run after the approve. */
+    call: BatchSwapCall;
+}) {
+    const approveData = encodeFunctionData({
+        abi: erc20Abi,
+        functionName: "approve",
+        args: [params.spender, maxUint256],
+    });
+    const callData = encodeFunctionData({
+        abi: params.call.abi,
+        functionName: params.call.functionName,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        args: params.call.args as any,
+    });
+    return buildAggregate3([
+        { target: params.token, callData: approveData },
+        { target: params.call.address, callData },
+    ]);
+}
+
+/**
  * Generic variadic Multicall3From batch: runs N pre-encoded calls in one
  * sender-preserving transaction. Use for flows that fold several approves
  * + an action into one signature (e.g. MultiSwap's N approvals + the

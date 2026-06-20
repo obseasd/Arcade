@@ -10,6 +10,7 @@ import { AmountInput } from "@/components/ui/AmountInput";
 import { TokenIcon } from "@/components/ui/TokenIcon";
 import { TxStatus, type TxState } from "@/components/ui/TxStatus";
 import { useApproveIfNeeded } from "@/lib/hooks/useApproveIfNeeded";
+import { buildApproveAndCall } from "@/lib/routing/batchSwap";
 import { pushToast } from "@/lib/toast";
 import { addActivity } from "@/lib/activityFeed";
 import { cn, formatToken, formatUSDC } from "@/lib/utils";
@@ -112,16 +113,13 @@ export function TradePanel({ token, symbol, migrated, image, onTradeSuccess }: P
 
   const minOut = (estimatedOut * BigInt(10_000 - slippageBps)) / 10_000n;
 
-  const { ensureAllowance } = useApproveIfNeeded(side === "buy" ? ADDRESSES.usdc : token, spender);
+  const { allowance } = useApproveIfNeeded(side === "buy" ? ADDRESSES.usdc : token, spender);
   const { writeContractAsync } = useWriteContract();
 
   const onTrade = async () => {
     if (!account || amountRaw === 0n) return;
     setTx({ status: "pending", message: "Approving…" });
     try {
-      await ensureAllowance(amountRaw);
-      setTx({ status: "pending", message: "Submitting trade…" });
-
       const fn = migrated
         ? side === "buy"
           ? "buyMigrated"
@@ -134,12 +132,34 @@ export function TradePanel({ token, symbol, migrated, image, onTradeSuccess }: P
       const args = migrated
         ? ([token, amountRaw, minOut, deadline] as const)
         : ([token, amountRaw, minOut] as const);
-      const hash = await writeContractAsync({
-        address: ADDRESSES.launchpad,
-        abi: LAUNCHPAD_ABI,
-        functionName: fn,
-        args: args as unknown as readonly [`0x${string}`, bigint, bigint],
-      });
+      const approveToken = side === "buy" ? ADDRESSES.usdc : token;
+
+      let hash: `0x${string}`;
+      if (allowance < amountRaw) {
+        // First trade of this token: fold approve + buy/sell into one
+        // sender-preserving signature (Arc Multicall3From).
+        setTx({ status: "pending", message: "Approve + trade" });
+        const batched = buildApproveAndCall({
+          token: approveToken,
+          spender,
+          call: { address: ADDRESSES.launchpad, abi: LAUNCHPAD_ABI, functionName: fn, args },
+        });
+        hash = await writeContractAsync({
+          address: batched.address,
+          abi: batched.abi,
+          functionName: batched.functionName,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          args: batched.args as any,
+        });
+      } else {
+        setTx({ status: "pending", message: "Submitting trade…" });
+        hash = await writeContractAsync({
+          address: ADDRESSES.launchpad,
+          abi: LAUNCHPAD_ABI,
+          functionName: fn,
+          args: args as unknown as readonly [`0x${string}`, bigint, bigint],
+        });
+      }
       // Audit 2026-06-11 UX-C-1: receipt.status check. waitForTransactionReceipt
       // returns a receipt for both success and revert; without this gate a
       // reverted tx still cleared the form, pushed a green toast, and wrote

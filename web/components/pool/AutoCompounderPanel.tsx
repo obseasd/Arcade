@@ -3,7 +3,8 @@
 import { Sparkles, Plus, Power, RefreshCw, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAccount, useReadContract, useReadContracts, useWriteContract } from "wagmi";
-import { Address, isAddress } from "viem";
+import { Address, encodeFunctionData, isAddress } from "viem";
+import { buildAggregate3 } from "@/lib/routing/batchSwap";
 
 import { ADDRESSES } from "@/lib/constants";
 import { V3_NPM_ABI } from "@/lib/abis/v3-npm";
@@ -439,30 +440,33 @@ function DepositModal({
         }
         setBusy(true);
         try {
-            // Step 1: approve NPM. We use approve(tokenId) so the
-            // Compounder's safeTransferFrom inside depositPosition
-            // pulls the NFT atomically. setApprovalForAll would
-            // also work but is broader than needed.
+            // Fold the ERC-721 approve(tokenId) + depositPosition into a
+            // single sender-preserving signature (Arc Multicall3From). The
+            // compounder's safeTransferFrom(msg.sender) inside
+            // depositPosition still pulls from the user because callFrom
+            // preserves the sender across both subcalls.
             setStep("approving");
-            await writeContractAsync({
-                address: ADDRESSES.v3PositionManager,
+            const approveData = encodeFunctionData({
                 abi: ERC721_APPROVE_ABI,
                 functionName: "approve",
                 args: [ADDRESSES.autoCompounder as Address, BigInt(tokenIdToUse)],
             });
-
-            // Step 2: depositPosition on the Compounder.
-            setStep("depositing");
-            await writeContractAsync({
-                address: ADDRESSES.autoCompounder,
+            const depositData = encodeFunctionData({
                 abi: AUTO_COMPOUNDER_ABI,
                 functionName: "depositPosition",
-                args: [
-                    BigInt(tokenIdToUse),
-                    mode,
-                    thresholdMicros,
-                    slippageBps,
-                ],
+                args: [BigInt(tokenIdToUse), mode, thresholdMicros, slippageBps],
+            });
+            setStep("depositing");
+            const batched = buildAggregate3([
+                { target: ADDRESSES.v3PositionManager, callData: approveData },
+                { target: ADDRESSES.autoCompounder as Address, callData: depositData },
+            ]);
+            await writeContractAsync({
+                address: batched.address,
+                abi: batched.abi,
+                functionName: batched.functionName,
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                args: batched.args as any,
             });
 
             // Step 3: mirror to DB so the cron picks it up immediately
