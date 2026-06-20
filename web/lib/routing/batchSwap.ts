@@ -37,6 +37,35 @@ export interface BatchSwapCall {
     args: readonly any[];
 }
 
+/** A pre-encoded subcall for a Multicall3From batch. */
+export interface RawBatchCall {
+    target: Address;
+    callData: `0x${string}`;
+    /** Default false: a sub-call revert reverts the whole batch (atomic). */
+    allowFailure?: boolean;
+}
+
+/**
+ * Generic variadic Multicall3From batch: runs N pre-encoded calls in one
+ * sender-preserving transaction. Use for flows that fold several approves
+ * + an action into one signature (e.g. MultiSwap's N approvals + the
+ * swapToSingle). Returns the writeContract payload.
+ */
+export function buildAggregate3(calls: RawBatchCall[]) {
+    return {
+        address: MULTICALL3_FROM_ADDRESS as Address,
+        abi: MULTICALL3_FROM_ABI,
+        functionName: "aggregate3" as const,
+        args: [
+            calls.map((c) => ({
+                target: c.target,
+                allowFailure: c.allowFailure ?? false,
+                callData: c.callData,
+            })),
+        ] as const,
+    };
+}
+
 /**
  * Build the `writeContract` payload for an atomic approve+swap through
  * Multicall3From. The approve is for `maxUint256` to match the existing

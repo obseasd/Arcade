@@ -3,7 +3,14 @@
 import { ArrowDown, ChevronDown, Plus } from "lucide-react";
 import { CrossIcon } from "@/components/ui/MaskIcon";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Address, erc20Abi, formatUnits, maxUint256, parseUnits } from "viem";
+import {
+  Address,
+  encodeFunctionData,
+  erc20Abi,
+  formatUnits,
+  maxUint256,
+  parseUnits,
+} from "viem";
 import {
   useAccount,
   usePublicClient,
@@ -12,6 +19,7 @@ import {
   useWriteContract,
 } from "wagmi";
 import { MULTISWAP_ABI } from "@/lib/abis/multiSwap";
+import { buildAggregate3 } from "@/lib/routing/batchSwap";
 import { ADDRESSES, MULTISWAP_MAX_INPUTS, USDC_DECIMALS } from "@/lib/constants";
 import { TransactionSettings } from "@/components/ui/TransactionSettings";
 import { QuickButton } from "@/components/swap/QuickButton";
@@ -307,9 +315,14 @@ export function MultiSwapCard({ tab, onTabChange }: MultiSwapCardProps) {
     if (!account || !outputToken || tupleArgs.length === 0) return;
     setTx({ status: "pending", message: "Checking approvals…" });
     try {
-      // Approve each input token to the multi-swap contract if needed.
-      for (let i = 0; i < tupleArgs.length; ++i) {
-        const t = tupleArgs[i];
+      const deadline = BigInt(Math.floor(Date.now() / 1000) + 600);
+
+      // Collect approve calls for the inputs whose allowance is short.
+      // The previous flow signed one approve tx PER short input (then one
+      // more for the swap). Arc's Multicall3From folds all of them + the
+      // swap into a SINGLE sender-preserving signature.
+      const approveCalls: { target: Address; callData: `0x${string}` }[] = [];
+      for (const t of tupleArgs) {
         const allowance = (await publicClient!.readContract({
           address: t.token,
           abi: erc20Abi,
@@ -317,24 +330,51 @@ export function MultiSwapCard({ tab, onTabChange }: MultiSwapCardProps) {
           args: [account, ADDRESSES.multiSwap],
         })) as bigint;
         if (allowance < t.amount) {
-          setTx({ status: "pending", message: `Approving ${shortSym(t.token, inputs)} (${i + 1}/${tupleArgs.length})…` });
-          const approveHash = await writeContractAsync({
-            address: t.token,
-            abi: erc20Abi,
-            functionName: "approve",
-            args: [ADDRESSES.multiSwap, maxUint256],
+          approveCalls.push({
+            target: t.token,
+            callData: encodeFunctionData({
+              abi: erc20Abi,
+              functionName: "approve",
+              args: [ADDRESSES.multiSwap, maxUint256],
+            }),
           });
-          await publicClient!.waitForTransactionReceipt({ hash: approveHash });
         }
       }
-      setTx({ status: "pending", message: "Submitting multi-swap…" });
-      const deadline = BigInt(Math.floor(Date.now() / 1000) + 600);
-      const hash = await writeContractAsync({
-        address: ADDRESSES.multiSwap,
+
+      const swapCallData = encodeFunctionData({
         abi: MULTISWAP_ABI,
         functionName: "swapToSingle",
         args: [tupleArgs, outputToken.address, minTotalOut, deadline],
       });
+
+      let hash: `0x${string}`;
+      if (approveCalls.length > 0) {
+        // approve(s) + swap in one signature. allowFailure defaults to
+        // false → the whole batch reverts atomically if any leg fails.
+        setTx({
+          status: "pending",
+          message: `Approve ${approveCalls.length} + swap (1 signature)…`,
+        });
+        const batched = buildAggregate3([
+          ...approveCalls,
+          { target: ADDRESSES.multiSwap, callData: swapCallData },
+        ]);
+        hash = await writeContractAsync({
+          address: batched.address,
+          abi: batched.abi,
+          functionName: batched.functionName,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          args: batched.args as any,
+        });
+      } else {
+        setTx({ status: "pending", message: "Submitting multi-swap…" });
+        hash = await writeContractAsync({
+          address: ADDRESSES.multiSwap,
+          abi: MULTISWAP_ABI,
+          functionName: "swapToSingle",
+          args: [tupleArgs, outputToken.address, minTotalOut, deadline],
+        });
+      }
       // 2026-06-15 audit HIGH#3 fix: capture the receipt return value and
       // gate success on receipt.status. Before this, a reverted on-chain
       // tx flowed through the happy path: form cleared, balances refetched,
