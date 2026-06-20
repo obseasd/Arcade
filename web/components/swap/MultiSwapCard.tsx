@@ -353,7 +353,7 @@ export function MultiSwapCard({ tab, onTabChange }: MultiSwapCardProps) {
         // false → the whole batch reverts atomically if any leg fails.
         setTx({
           status: "pending",
-          message: `Approve ${approveCalls.length} + swap (1 signature)…`,
+          message: `Approve ${approveCalls.length} + swap`,
         });
         const batched = buildAggregate3([
           ...approveCalls,
