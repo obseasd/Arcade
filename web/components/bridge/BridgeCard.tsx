@@ -1306,32 +1306,10 @@ export function BridgeCard() {
         )}
       </div>
 
-      {/* Solana (App Kit) visual flow — Sign / Bridging / Receive. */}
-      {solanaMode && solStep !== "idle" && (
-        <div className="mt-4">
-          <BridgeStepsProgress
-            current={solStep}
-            steps={
-              solanaDirection === "arc-to-solana"
-                ? [
-                    { key: "burn", label: "Sign on Arc" },
-                    { key: "attest", label: "Sign on Solana" },
-                    { key: "mint", label: "Receive" },
-                  ]
-                : [
-                    { key: "burn", label: "Sign on Solana" },
-                    { key: "attest", label: "Sign on Arc" },
-                    { key: "mint", label: "Receive" },
-                  ]
-            }
-            detail={
-              solStep === "done"
-                ? undefined
-                : "Confirm in your wallet(s); CCTP settles in ~1-2 min…"
-            }
-          />
-        </div>
-      )}
+      {/* No App Kit step tracker: bridge() is a single SDK call with no
+          per-step callback, so a stepper would just sit on step 1 the whole
+          time (misleading). The "Bridging…" spinner conveys progress; the
+          toast + Recent bridges confirm completion. */}
 
       {/* Visual stepper for the burn → attest → mint flow. Replaces the old
           plain text list with connected dots so users on slow chains (eg
