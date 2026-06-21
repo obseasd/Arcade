@@ -48,7 +48,12 @@ const USDC_TOKEN: TokenOption = {
 // SwapCard.tsx for the rationale (audit 2026-06-06).
 
 const PRESETS_BPS = [10, 50, 100];
-const DEFAULT_BPS = 10;
+// 0.5% default: the multi-swap routes the pooled USDC through whichever DEX
+// prices the output best, which on testnet can be a mispriced + actively
+// arbitraged pool (e.g. Synthra USDC/USDT drifting toward 1:1). A 0.1%
+// tolerance reverts (V3TooLittleReceived) when the price drifts during the
+// Permit2 sign + send latency; 0.5% absorbs that without being loose.
+const DEFAULT_BPS = 50;
 
 interface InputRow {
   token: TokenOption;
