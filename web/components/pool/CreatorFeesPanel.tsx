@@ -2,9 +2,10 @@
 
 import { useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Address, erc20Abi, zeroAddress } from "viem";
+import { Address, encodeFunctionData, erc20Abi, zeroAddress } from "viem";
 import { useAccount, usePublicClient, useReadContract, useReadContracts, useWriteContract } from "wagmi";
 import { V3_LOCKER_ABI } from "@/lib/abis/v3";
+import { buildAggregate3 } from "@/lib/routing/batchSwap";
 import { ADDRESSES, USDC_DECIMALS } from "@/lib/constants";
 import { useV3Tokens } from "@/lib/hooks/useV3Tokens";
 import { useTokenImage } from "@/lib/hooks/useTokenImage";
@@ -107,10 +108,90 @@ export function CreatorFeesPanel() {
 
   return (
     <div className="space-y-3">
+      {mine.length > 1 && (
+        <ClaimAllFeesButton positions={mine} />
+      )}
       {mine.map((p) => (
         <PositionRow key={p.token} position={p} />
       ))}
     </div>
+  );
+}
+
+/* ----------------------------- Claim-all (batched) ----------------------- */
+
+/**
+ * Collects fees from EVERY creator position in ONE signature via
+ * Multicall3From (aggregate3 of N collectFees, sender-preserving so the
+ * locker's per-recipient accounting credits the right wallet). allowFailure
+ * is true so a position with zero accrued fees can't sink the batch.
+ * Validated on-chain 2026-06-21: a 2-position collectFees batch simulates
+ * clean through the precompile (the nested-callFrom that killed the Memo
+ * wrap does NOT recur here).
+ */
+function ClaimAllFeesButton({ positions }: { positions: CreatorPosition[] }) {
+  const publicClient = usePublicClient();
+  const qc = useQueryClient();
+  const { writeContractAsync } = useWriteContract();
+  const [claiming, setClaiming] = useState(false);
+  const claimable = positions.filter((p) => p.positionId > 0n);
+
+  const claimAll = async () => {
+    if (claimable.length === 0) return;
+    setClaiming(true);
+    try {
+      const batched = buildAggregate3(
+        claimable.map((p) => ({
+          target: ADDRESSES.v3Locker,
+          allowFailure: true,
+          callData: encodeFunctionData({
+            abi: V3_LOCKER_ABI,
+            functionName: "collectFees",
+            args: [p.positionId],
+          }),
+        })),
+      );
+      const hash = await writeContractAsync({
+        address: batched.address,
+        abi: batched.abi,
+        functionName: batched.functionName,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        args: batched.args as any,
+      });
+      if (publicClient) {
+        const receipt = await publicClient.waitForTransactionReceipt({ hash });
+        if (receipt.status !== "success") {
+          throw new Error(`Claim-all reverted (tx ${hash.slice(0, 10)}…).`);
+        }
+      }
+      pushToast({
+        kind: "info",
+        title: `Claimed fees from ${claimable.length} positions`,
+      });
+      qc.invalidateQueries();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } catch (e: any) {
+      pushToast({
+        kind: "error",
+        title: "Claim all failed",
+        message: e?.shortMessage || e?.message,
+      });
+    } finally {
+      setClaiming(false);
+    }
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={claimAll}
+      disabled={claiming || claimable.length === 0}
+      className="arc-button-primary w-full py-2.5 text-sm disabled:cursor-not-allowed disabled:opacity-50"
+    >
+      {claiming
+        ? "Claiming…"
+        : `Claim all fees (${claimable.length} positions, 1 signature)`}
+    </button>
   );
 }
 
