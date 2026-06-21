@@ -20,6 +20,7 @@ import { V4_QUOTER_ABI } from "@/lib/abis/v4Quoter";
 import { V4_ROUTER_ABI } from "@/lib/abis/v4Router";
 import { ADDRESSES, USDC_DECIMALS } from "@/lib/constants";
 import { useApproveIfNeeded } from "@/lib/hooks/useApproveIfNeeded";
+import { buildBatchedApproveAndSwap } from "@/lib/routing/batchSwap";
 import { useTokenImage } from "@/lib/hooks/useTokenImage";
 import { pushToast } from "@/lib/toast";
 import { AmountInput } from "@/components/ui/AmountInput";
@@ -111,7 +112,7 @@ export function V4SwapPanel({ token, symbol }: Props) {
     const balance = (balanceQ.data as bigint | undefined) ?? 0n;
 
     // --- Allowance for the router (USDC or token, whichever is input) ----
-    const { ensureAllowance } = useApproveIfNeeded(inputAddr, router);
+    const { allowance } = useApproveIfNeeded(inputAddr, router);
 
     // --- Quote via V4Quoter ---------------------------------------------
     const [quote, setQuote] = useState<bigint | undefined>();
@@ -205,28 +206,56 @@ export function V4SwapPanel({ token, symbol }: Props) {
             return;
         }
         try {
-            setSwapState({ status: "pending", message: "Approving input..." });
-            await ensureAllowance(amountInBigInt);
-            setSwapState({ status: "pending", message: "Submitting swap..." });
-            const hash = await writeContractAsync({
-                address: router,
-                abi: V4_ROUTER_ABI,
-                functionName: "exactInputSingle",
-                args: [
-                    {
-                        currency0: poolKey.currency0,
-                        currency1: poolKey.currency1,
-                        fee: poolKey.fee,
-                        tickSpacing: poolKey.tickSpacing,
-                        hooks: poolKey.hooks,
+            const swapArgs = [
+                {
+                    currency0: poolKey.currency0,
+                    currency1: poolKey.currency1,
+                    fee: poolKey.fee,
+                    tickSpacing: poolKey.tickSpacing,
+                    hooks: poolKey.hooks,
+                },
+                zeroForOne,
+                amountInBigInt,
+                minAmountOut,
+                user,
+                0n, // sqrtPriceLimitX96 = unlimited within tick range
+            ] as const;
+            // First swap of this token through the V4 router? Fold the
+            // ERC20 approve + exactInputSingle into ONE Multicall3From
+            // signature (same path as the main SwapCard; the router's
+            // transferFrom still pulls from the user because callFrom
+            // preserves the sender). Later swaps skip the approve
+            // (allowance already max) and go direct.
+            const willBatch = allowance < amountInBigInt;
+            let hash: `0x${string}`;
+            if (willBatch) {
+                setSwapState({ status: "pending", message: "Approve + swap..." });
+                const batched = buildBatchedApproveAndSwap({
+                    token: inputAddr,
+                    spender: router,
+                    swap: {
+                        address: router,
+                        abi: V4_ROUTER_ABI,
+                        functionName: "exactInputSingle",
+                        args: swapArgs,
                     },
-                    zeroForOne,
-                    amountInBigInt,
-                    minAmountOut,
-                    user,
-                    0n, // sqrtPriceLimitX96 = unlimited within tick range
-                ],
-            });
+                });
+                hash = await writeContractAsync({
+                    address: batched.address,
+                    abi: batched.abi,
+                    functionName: batched.functionName,
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    args: batched.args as any,
+                });
+            } else {
+                setSwapState({ status: "pending", message: "Submitting swap..." });
+                hash = await writeContractAsync({
+                    address: router,
+                    abi: V4_ROUTER_ABI,
+                    functionName: "exactInputSingle",
+                    args: swapArgs,
+                });
+            }
             setSwapState({ status: "pending", message: "Waiting for confirmation..." });
             await publicClient?.waitForTransactionReceipt({ hash });
             setSwapState({ status: "success", hash, message: "Swap confirmed" });
