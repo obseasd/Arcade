@@ -203,8 +203,16 @@ export function MultiSwapCard({ tab, onTabChange }: MultiSwapCardProps) {
         v3Cursor += 1;
         const v3Amount =
           r?.status === "success" ? ((r.result as bigint) ?? 0n) : 0n;
-        perOut.push(v3Amount);
-        total += v3Amount;
+        // Take the BETTER of the V3 quoter and the contract's own (V2)
+        // route, not just the V3 one. A token can be classified as "V3"
+        // yet have no V3 pool (e.g. seedETH: V2 pair only) — the V3 quoter
+        // then returns 0 and the old code discarded the contract's valid
+        // V2 quote, showing a false "No route found". max() keeps whichever
+        // path actually has liquidity.
+        const contractAmount = per?.[i] ?? 0n;
+        const best = v3Amount > contractAmount ? v3Amount : contractAmount;
+        perOut.push(best);
+        total += best;
       } else {
         const fallback = per?.[i] ?? 0n;
         perOut.push(fallback);
