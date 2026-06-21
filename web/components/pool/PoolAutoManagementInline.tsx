@@ -309,12 +309,18 @@ export function PoolAutoManagementInline({
                 <h2 className="text-lg font-semibold text-arc-text">
                     Auto-management
                 </h2>
-                <DepositInline
-                    tokenId={BigInt(focusTokenId)}
-                    account={account}
+                <ManagedRowCard
+                    row={{
+                        tokenId: BigInt(focusTokenId),
+                        mode: "NORMAL",
+                        minFeeMicros: 1_000_000n,
+                        maxSlippageBps: 50,
+                    }}
+                    onSaved={bumpRefresh}
                     writeContractAsync={writeContractAsync}
                     publicClient={publicClient}
-                    onDeposited={bumpRefresh}
+                    ownerAddress={account}
+                    unmanaged
                 />
             </section>
         );
@@ -341,173 +347,24 @@ export function PoolAutoManagementInline({
     );
 }
 
-/**
- * One-click deposit of an existing (un-managed) position into the
- * auto-compounder, with a mode picker — on the pool page itself. Folds
- * the ERC-721 approve(tokenId) + depositPosition into ONE Multicall3From
- * signature (the compounder's safeTransferFrom(msg.sender) still pulls
- * from the user because callFrom preserves the sender), then mirrors the
- * row to the DB so the keeper picks it up on the next tick.
- */
-function DepositInline({
-    tokenId,
-    account,
-    writeContractAsync,
-    publicClient,
-    onDeposited,
-}: {
-    tokenId: bigint;
-    account: Address | undefined;
-    writeContractAsync: ReturnType<typeof useWriteContract>["writeContractAsync"];
-    publicClient: ReturnType<typeof usePublicClient>;
-    onDeposited: () => void;
-}) {
-    const [mode, setMode] = useState<1 | 2>(1); // 1 = RECEIVE, 2 = COMPOUND
-    const [thresholdUsdc, setThresholdUsdc] = useState("0.10");
-    const [slippagePct, setSlippagePct] = useState("0.50");
-    const [busy, setBusy] = useState(false);
-
-    const deposit = async () => {
-        if (!account) return;
-        const thresholdMicros = BigInt(
-            Math.max(0, Math.floor((Number(thresholdUsdc) || 0) * 1_000_000)),
-        );
-        const slippageBps = Math.min(
-            10_000,
-            Math.max(0, Math.floor((Number(slippagePct) || 0.5) * 100)),
-        );
-        setBusy(true);
-        try {
-            const approveData = encodeFunctionData({
-                abi: ERC721_APPROVE_ABI,
-                functionName: "approve",
-                args: [ADDRESSES.autoCompounder as Address, tokenId],
-            });
-            const depositData = encodeFunctionData({
-                abi: AUTO_COMPOUNDER_ABI,
-                functionName: "depositPosition",
-                args: [tokenId, mode, thresholdMicros, slippageBps],
-            });
-            const batched = buildAggregate3([
-                { target: ADDRESSES.v3PositionManager, callData: approveData },
-                { target: ADDRESSES.autoCompounder as Address, callData: depositData },
-            ]);
-            const hash = await writeContractAsync({
-                address: batched.address,
-                abi: batched.abi,
-                functionName: batched.functionName,
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                args: batched.args as any,
-            });
-            if (publicClient) {
-                const receipt = await publicClient.waitForTransactionReceipt({ hash });
-                if (receipt.status !== "success") {
-                    throw new Error(`Deposit reverted (tx ${hash.slice(0, 10)}…).`);
-                }
-            }
-            // Mirror to the DB so the keeper scans it on the next tick.
-            await fetch("/api/compounder/positions", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    action: "upsert",
-                    tokenId: tokenId.toString(),
-                    ownerAddress: account,
-                    mode: modeLabelFromId(mode),
-                    minFeeMicros: thresholdMicros.toString(),
-                    maxSlippageBps: slippageBps,
-                }),
-            }).catch(() => {});
-            pushToast({
-                kind: "info",
-                title: "Position under auto-management",
-                message: `NFT #${tokenId.toString()} is now ${modeLabelFromId(mode).toLowerCase()}.`,
-            });
-            onDeposited();
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        } catch (e: any) {
-            pushToast({
-                kind: "error",
-                title: "Deposit failed",
-                message: e?.shortMessage || e?.message || "Deposit failed",
-            });
-        } finally {
-            setBusy(false);
-        }
-    };
-
-    return (
-        <div className="space-y-3 rounded-2xl border border-arc-border bg-white/[0.015] p-5">
-            <div className="text-sm font-semibold text-arc-text">
-                NFT #{tokenId.toString()} — enable auto-management
-            </div>
-            <div className="flex gap-2">
-                {([
-                    [1, "Auto-receive", "push fees to your wallet"],
-                    [2, "Auto-compound", "reinvest into the position"],
-                ] as const).map(([m, label, sub]) => (
-                    <button
-                        key={m}
-                        type="button"
-                        onClick={() => setMode(m)}
-                        className={cn(
-                            "flex-1 rounded-xl border px-3 py-2 text-left text-xs transition-colors",
-                            mode === m
-                                ? "border-arc-cta-hover bg-arc-cta-hover/15 text-arc-text"
-                                : "border-arc-border text-arc-text-muted hover:text-arc-text",
-                        )}
-                    >
-                        <span className="font-medium">{label}</span>
-                        <span className="block text-[10px] text-arc-text-faint">{sub}</span>
-                    </button>
-                ))}
-            </div>
-            <div className="flex gap-2">
-                <label className="flex-1 text-[11px] text-arc-text-muted">
-                    Min fee to act (USDC)
-                    <input
-                        value={thresholdUsdc}
-                        onChange={(e) => setThresholdUsdc(e.target.value.replace(/[^0-9.]/g, ""))}
-                        className="mt-1 w-full rounded-lg border border-arc-border bg-arc-bg px-2 py-1.5 text-sm text-arc-text outline-none"
-                    />
-                </label>
-                {mode === 2 && (
-                    <label className="flex-1 text-[11px] text-arc-text-muted">
-                        Max slippage (%)
-                        <input
-                            value={slippagePct}
-                            onChange={(e) => setSlippagePct(e.target.value.replace(/[^0-9.]/g, ""))}
-                            className="mt-1 w-full rounded-lg border border-arc-border bg-arc-bg px-2 py-1.5 text-sm text-arc-text outline-none"
-                        />
-                    </label>
-                )}
-            </div>
-            <button
-                type="button"
-                onClick={deposit}
-                disabled={busy || !account}
-                className="arc-button-primary w-full py-2.5 text-sm disabled:cursor-not-allowed disabled:opacity-50"
-            >
-                {busy ? "Depositing…" : "Enable auto-management (1 signature)"}
-            </button>
-        </div>
-    );
-}
-
 function ManagedRowCard({
     row,
     onSaved,
     writeContractAsync,
     publicClient,
     ownerAddress,
+    unmanaged = false,
 }: {
     row: ManagedPositionRow;
     onSaved: () => void;
     writeContractAsync: ReturnType<typeof useWriteContract>["writeContractAsync"];
     publicClient: ReturnType<typeof usePublicClient>;
     ownerAddress: Address | undefined;
+    /** True for a not-yet-deposited position: Save folds approve +
+     *  depositPosition instead of calling setMode. */
+    unmanaged?: boolean;
 }) {
-    const [mode, setMode] = useState<Mode>(row.mode);
+    const [mode, setMode] = useState<Mode>(unmanaged ? "RECEIVE" : row.mode);
     const initialThresholdStr = useMemo(
         () => (Number(row.minFeeMicros) / 1_000_000).toFixed(2),
         [row.minFeeMicros],
@@ -552,12 +409,41 @@ function ManagedRowCard({
     const handleSave = useCallback(async () => {
         setSaving(true);
         try {
-            const hash = await writeContractAsync({
-                address: ADDRESSES.autoCompounder,
-                abi: AUTO_COMPOUNDER_ABI,
-                functionName: "setMode",
-                args: [row.tokenId, modeId, thresholdMicros, slippageBps],
-            });
+            let hash: `0x${string}`;
+            if (unmanaged) {
+                // Depositing an un-managed position: fold the ERC-721
+                // approve(tokenId) + depositPosition into ONE Multicall3From
+                // signature. thresholdMicros is already clamped to the
+                // 1-USDC floor above, so this can't hit MIN_FEE_TOO_LOW.
+                const approveData = encodeFunctionData({
+                    abi: ERC721_APPROVE_ABI,
+                    functionName: "approve",
+                    args: [ADDRESSES.autoCompounder as Address, row.tokenId],
+                });
+                const depositData = encodeFunctionData({
+                    abi: AUTO_COMPOUNDER_ABI,
+                    functionName: "depositPosition",
+                    args: [row.tokenId, modeId, thresholdMicros, slippageBps],
+                });
+                const batched = buildAggregate3([
+                    { target: ADDRESSES.v3PositionManager, callData: approveData },
+                    { target: ADDRESSES.autoCompounder as Address, callData: depositData },
+                ]);
+                hash = await writeContractAsync({
+                    address: batched.address,
+                    abi: batched.abi,
+                    functionName: batched.functionName,
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    args: batched.args as any,
+                });
+            } else {
+                hash = await writeContractAsync({
+                    address: ADDRESSES.autoCompounder,
+                    abi: AUTO_COMPOUNDER_ABI,
+                    functionName: "setMode",
+                    args: [row.tokenId, modeId, thresholdMicros, slippageBps],
+                });
+            }
             // Wait for the receipt before declaring success. Without this
             // wait, the user sees a "Saved" toast the moment the wallet
             // popup closes, but the chain state and our DB mirror are
@@ -604,7 +490,9 @@ function ManagedRowCard({
             }
             pushToast({
                 kind: "info",
-                title: "Auto-management updated",
+                title: unmanaged
+                    ? "Position under auto-management"
+                    : "Auto-management updated",
                 message: `Mode ${modeLabelFromId(modeId as 0 | 1 | 2).toLowerCase()} · threshold ${(Number(thresholdMicros) / 1_000_000).toFixed(2)} USDC · slippage ${(slippageBps / 100).toFixed(2)}%.`,
             });
             onSaved();
@@ -620,6 +508,7 @@ function ManagedRowCard({
             setSaving(false);
         }
     }, [
+        unmanaged,
         writeContractAsync,
         publicClient,
         ownerAddress,
@@ -733,10 +622,18 @@ function ManagedRowCard({
                 <button
                     type="button"
                     onClick={() => void handleSave()}
-                    disabled={busy || !dirty}
+                    disabled={busy || (!unmanaged && !dirty)}
                     className="arc-button-primary px-5 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                    {saving ? "Saving…" : dirty ? "Save changes" : "Save"}
+                    {saving
+                        ? unmanaged
+                            ? "Depositing…"
+                            : "Saving…"
+                        : unmanaged
+                          ? "Enable auto-management"
+                          : dirty
+                            ? "Save changes"
+                            : "Save"}
                 </button>
             </div>
         </div>
