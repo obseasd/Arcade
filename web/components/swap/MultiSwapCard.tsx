@@ -14,18 +14,19 @@ import {
 import {
   useAccount,
   usePublicClient,
-  useReadContract,
   useReadContracts,
   useWriteContract,
 } from "wagmi";
-import { MULTISWAP_ABI } from "@/lib/abis/multiSwap";
 import { buildAggregate3 } from "@/lib/routing/batchSwap";
+import { quoteBestLegs } from "@/lib/routing/multiLegQuote";
+import type { RouteQuote } from "@/lib/routing/types";
+import { useSignPermit2, PERMIT2_ADDRESS } from "@/lib/permit2";
+import { encodePermit2PermitInput } from "@/lib/routing/universalRouter";
 import { ADDRESSES, MULTISWAP_MAX_INPUTS, USDC_DECIMALS } from "@/lib/constants";
 import { TransactionSettings } from "@/components/ui/TransactionSettings";
 import { QuickButton } from "@/components/swap/QuickButton";
 import { useV2Tokens } from "@/lib/hooks/useV2Tokens";
 import { useV3Tokens } from "@/lib/hooks/useV3Tokens";
-import { V3_QUOTER_ABI } from "@/lib/abis/v3";
 import { pushToast } from "@/lib/toast";
 import { addActivity } from "@/lib/activityFeed";
 import { TokenIcon } from "@/components/ui/TokenIcon";
@@ -67,8 +68,9 @@ export function MultiSwapCard({ tab, onTabChange }: MultiSwapCardProps) {
   // Clanker V3 tokens have no V2 pair, so they're absent from useV2Tokens.
   // The MultiSwap contract routes them via the V3SwapRouter (and now V4 too,
   // via the V4 leg added in feat(swap)), so we surface them in the picker.
-  const { tokens: v3Tokens, isV3Token, feeOf } = useV3Tokens();
+  const { tokens: v3Tokens } = useV3Tokens();
   const { writeContractAsync } = useWriteContract();
+  const signPermit2 = useSignPermit2();
 
   const allTokens: TokenOption[] = useMemo(() => {
     // Dedup by lowercase address (a token could theoretically have BOTH a
@@ -114,14 +116,14 @@ export function MultiSwapCard({ tab, onTabChange }: MultiSwapCardProps) {
   // ----- Quote: build the (token, amount) tuples then call quoteSwapToSingle -----
   // We filter out zero-amount rows so a half-filled UI doesn't revert the read.
   const tupleArgs = useMemo(() => {
-    const out: { token: Address; amount: bigint }[] = [];
+    const out: { token: Address; decimals: number; amount: bigint }[] = [];
     for (const row of inputs) {
       const decimals = row.token.decimals ?? 18;
       try {
         if (!row.amountStr) continue;
         const raw = parseUnits(row.amountStr, decimals);
         if (raw === 0n) continue;
-        out.push({ token: row.token.address, amount: raw });
+        out.push({ token: row.token.address, decimals, amount: raw });
       } catch {
         /* swallow parse error */
       }
@@ -129,121 +131,104 @@ export function MultiSwapCard({ tab, onTabChange }: MultiSwapCardProps) {
     return out;
   }, [inputs]);
 
-  const quoteQ = useReadContract({
-    address: ADDRESSES.multiSwap,
-    abi: MULTISWAP_ABI,
-    functionName: "quoteSwapToSingle",
-    args:
-      outputToken && tupleArgs.length > 0
-        ? [tupleArgs, outputToken.address]
-        : undefined,
-    query: { enabled: !!outputToken && tupleArgs.length > 0 },
-  });
-  const quoteData = quoteQ.data as readonly [bigint, readonly bigint[]] | undefined;
+  // ----- Quote: best route PER LEG across the classic-approve providers
+  // (Arcade V2, Arcade V3, XyloNet StableSwap). This replaces the old
+  // ArcadeMultiSwap.quoteSwapToSingle, which only saw Arcade pools — so a
+  // USDC->USDT leg priced off a thin Arcade pair instead of Xylo's 1:1
+  // stable pool. Each leg now takes the best amountOut of every route it
+  // can fold into the single Multicall3From batch at swap time. Permit2
+  // routes (Synthra / UnitFlow via UniversalRouter) are excluded because
+  // they can't share the approve+aggregate3 model.
+  const [legRoutes, setLegRoutes] = useState<(RouteQuote | null)[]>([]);
+  const [quoting, setQuoting] = useState(false);
 
-  // The contract's quoteSwapToSingle returns 0 for legs that touch a V3
-  // Clanker token (the comment in the contract spells this out: V3 routes
-  // need a separate quoter call, UI fills in). We fan out a V3 quoter call
-  // per leg whose input OR output is a V3 token, and merge the results
-  // into the totals below.
-  const v3QuoteContracts = useMemo(() => {
-    if (!outputToken) return [] as const;
-    const out: {
-      address: Address;
-      abi: typeof V3_QUOTER_ABI;
-      functionName: "quoteExactInputSingle" | "quoteExactInputThroughUsdc";
-      args: readonly [Address, Address, number, bigint];
-    }[] = [];
-    for (const t of tupleArgs) {
-      const inIsV3 = isV3Token(t.token);
-      const outIsV3 = isV3Token(outputToken.address);
-      if (!inIsV3 && !outIsV3) {
-        out.push(null as never); // placeholder so indices line up with tupleArgs
-        continue;
-      }
-      const v3Token = inIsV3 ? t.token : outputToken.address;
-      const fee = feeOf(v3Token);
-      const isUsdcHop =
-        t.token.toLowerCase() === ADDRESSES.usdc.toLowerCase() ||
-        outputToken.address.toLowerCase() === ADDRESSES.usdc.toLowerCase();
-      out.push({
-        address: ADDRESSES.v3Quoter,
-        abi: V3_QUOTER_ABI,
-        functionName: isUsdcHop
-          ? ("quoteExactInputSingle" as const)
-          : ("quoteExactInputThroughUsdc" as const),
-        args: [t.token, outputToken.address, fee, t.amount],
-      });
+  // tupleArgs holds the amounts, so a debounce keeps each keystroke from
+  // firing N×3 provider fan-outs. Key folds the inputs the quote depends on.
+  const quoteKey = useMemo(
+    () =>
+      outputToken
+        ? `${outputToken.address}|${slippageBps}|${tupleArgs
+            .map((t) => `${t.token}:${t.amount}`)
+            .join(",")}`
+        : "",
+    [outputToken, slippageBps, tupleArgs],
+  );
+
+  useEffect(() => {
+    if (!outputToken || tupleArgs.length === 0 || !publicClient || !account) {
+      setLegRoutes([]);
+      setQuoting(false);
+      return;
     }
-    return out;
-  }, [tupleArgs, outputToken, isV3Token, feeOf]);
+    let cancelled = false;
+    const ctrl = new AbortController();
+    setQuoting(true);
+    const handle = setTimeout(() => {
+      void (async () => {
+        const deadline = BigInt(Math.floor(Date.now() / 1000) + 600);
+        try {
+          const routes = await quoteBestLegs(
+            tupleArgs.map((t) => ({
+              tokenIn: t.token,
+              decimalsIn: t.decimals,
+              amountIn: t.amount,
+            })),
+            {
+              tokenOut: outputToken.address,
+              decimalsOut: outputToken.decimals ?? 18,
+              recipient: account,
+              slippageBps,
+              deadline,
+              signal: ctrl.signal,
+            },
+            publicClient,
+          );
+          if (!cancelled) setLegRoutes(routes);
+        } finally {
+          if (!cancelled) setQuoting(false);
+        }
+      })();
+    }, 250);
+    return () => {
+      cancelled = true;
+      ctrl.abort();
+      clearTimeout(handle);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [quoteKey, publicClient, account]);
 
-  const v3QuoteCalls = useReadContracts({
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    contracts: v3QuoteContracts.filter(Boolean) as any,
-    query: {
-      enabled:
-        ADDRESSES.v3Quoter !== "0x0000000000000000000000000000000000000000" &&
-        v3QuoteContracts.some((c) => !!c),
-    },
-  });
-
-  // Merge: for each leg, prefer the V3 quoter result when this leg involves
-  // a V3 token, otherwise use the contract's perInput value.
-  const mergedQuote = useMemo(() => {
-    const per = quoteData?.[1];
-    const v3Results = v3QuoteCalls.data;
-    let total = 0n;
-    const perOut: bigint[] = [];
-    let v3Cursor = 0;
-    for (let i = 0; i < tupleArgs.length; i++) {
-      const v3Spec = v3QuoteContracts[i];
-      if (v3Spec) {
-        const r = v3Results?.[v3Cursor];
-        v3Cursor += 1;
-        const v3Amount =
-          r?.status === "success" ? ((r.result as bigint) ?? 0n) : 0n;
-        // Take the BETTER of the V3 quoter and the contract's own (V2)
-        // route, not just the V3 one. A token can be classified as "V3"
-        // yet have no V3 pool (e.g. seedETH: V2 pair only) — the V3 quoter
-        // then returns 0 and the old code discarded the contract's valid
-        // V2 quote, showing a false "No route found". max() keeps whichever
-        // path actually has liquidity.
-        const contractAmount = per?.[i] ?? 0n;
-        const best = v3Amount > contractAmount ? v3Amount : contractAmount;
-        perOut.push(best);
-        total += best;
-      } else {
-        const fallback = per?.[i] ?? 0n;
-        perOut.push(fallback);
-        total += fallback;
-      }
-    }
-    return { total, perOut };
-  }, [quoteData, v3QuoteCalls.data, v3QuoteContracts, tupleArgs.length]);
-
-  const totalOutRaw: bigint = mergedQuote.total;
-  // Note: `perInput` indexes into `tupleArgs`, not `inputs` (zero-amount rows were filtered).
-  // We re-map back so each visible row knows its contribution.
-  const perRowOut: (bigint | undefined)[] = useMemo(() => {
-    const per = mergedQuote.perOut;
-    if (per.length === 0) return inputs.map(() => undefined);
-    const out: (bigint | undefined)[] = [];
+  // legRoutes is index-aligned with tupleArgs (the non-zero legs).
+  const totalOutRaw: bigint = useMemo(
+    () => legRoutes.reduce((sum, r) => sum + (r?.amountOut ?? 0n), 0n),
+    [legRoutes],
+  );
+  // Map per-leg routes back onto the visible rows. legRoutes is aligned
+  // with tupleArgs (non-zero legs), so we walk inputs and pull the next
+  // route for each row that carries an amount. undefined = empty row,
+  // null = an amount with no route, RouteQuote = routed.
+  const perRowRoute = useMemo(() => {
+    const out: (RouteQuote | null | undefined)[] = [];
     let cursor = 0;
     for (const row of inputs) {
+      let raw = 0n;
       try {
-        const raw = row.amountStr ? parseUnits(row.amountStr, row.token.decimals ?? 18) : 0n;
-        if (raw === 0n) out.push(undefined);
-        else {
-          out.push(per[cursor]);
-          cursor += 1;
-        }
+        raw = row.amountStr ? parseUnits(row.amountStr, row.token.decimals ?? 18) : 0n;
       } catch {
-        out.push(undefined);
+        raw = 0n;
       }
+      if (raw === 0n) {
+        out.push(undefined);
+        continue;
+      }
+      out.push(legRoutes[cursor] ?? null);
+      cursor += 1;
     }
     return out;
-  }, [inputs, mergedQuote.perOut]);
+  }, [inputs, legRoutes]);
+  const perRowOut: (bigint | undefined)[] = useMemo(
+    () => perRowRoute.map((r) => (r ? r.amountOut : undefined)),
+    [perRowRoute],
+  );
 
   // Per-row "no route": an amount is entered, the quote has settled, but
   // this leg's output is 0 — the aggregator found no path from this token
@@ -251,19 +236,26 @@ export function MultiSwapCard({ tab, onTabChange }: MultiSwapCardProps) {
   // it on the row instead of silently dropping the leg (which made the
   // total look frozen) and block the swap so it can't revert on-chain.
   const noRouteByIndex: boolean[] = useMemo(() => {
-    if (quoteQ.isFetching) return inputs.map(() => false);
-    return inputs.map((row, i) => {
-      let raw = 0n;
-      try {
-        raw = row.amountStr ? parseUnits(row.amountStr, row.token.decimals ?? 18) : 0n;
-      } catch {
-        raw = 0n;
-      }
-      if (raw === 0n) return false;
-      return perRowOut[i] === 0n;
-    });
-  }, [inputs, perRowOut, quoteQ.isFetching]);
+    // Only flag a row once the quote has settled AND the routes line up
+    // with the current legs, so an in-flight re-quote doesn't flash a
+    // false "No route found".
+    if (quoting || legRoutes.length !== tupleArgs.length) {
+      return inputs.map(() => false);
+    }
+    return perRowRoute.map((r) => r === null);
+  }, [inputs, perRowRoute, legRoutes.length, tupleArgs.length, quoting]);
   const anyNoRoute = noRouteByIndex.some(Boolean);
+
+  // Wallet prompts the swap will ask for: ONE batch covering every
+  // classic-approve leg (Arcade V2/V3, XyloNet) + a sign AND a send for
+  // each Permit2 leg (Synthra / UnitFlow), which can't share the batch.
+  // Surfaced so a multi-DEX route doesn't surprise the user with extra
+  // prompts.
+  const sigCount = useMemo(() => {
+    const classic = legRoutes.filter((r) => r && !r.permit2).length;
+    const permit2 = legRoutes.filter((r) => r?.permit2).length;
+    return (classic > 0 ? 1 : 0) + permit2 * 2;
+  }, [legRoutes]);
 
   // ----- Slippage helpers -----
   const onSlippagePreset = (bps: number) => {
@@ -305,7 +297,7 @@ export function MultiSwapCard({ tab, onTabChange }: MultiSwapCardProps) {
     hasAnyAmount &&
     !anyInsufficient &&
     !anyNoRoute &&
-    !quoteQ.isFetching &&
+    !quoting &&
     totalOutRaw > 0n &&
     tx.status !== "pending";
 
@@ -342,85 +334,158 @@ export function MultiSwapCard({ tab, onTabChange }: MultiSwapCardProps) {
   // ----- Execute -----
   const onSwap = async () => {
     if (!account || !outputToken || tupleArgs.length === 0) return;
-    setTx({ status: "pending", message: "Checking approvals…" });
+    setTx({ status: "pending", message: "Finding best routes…" });
     try {
       const deadline = BigInt(Math.floor(Date.now() / 1000) + 600);
 
-      // Collect approve calls for the inputs whose allowance is short.
-      // The previous flow signed one approve tx PER short input (then one
-      // more for the swap). Arc's Multicall3From folds all of them + the
-      // swap into a SINGLE sender-preserving signature.
-      const approveCalls: { target: Address; callData: `0x${string}` }[] = [];
-      for (const t of tupleArgs) {
+      // Re-quote every leg fresh at execution time (current prices + a
+      // fresh deadline), then fold each leg's best route into ONE
+      // Multicall3From signature: per leg, approve(token -> its router) +
+      // the route's executor call. Each executor bakes in recipient +
+      // PER-LEG amountOutMinimum + deadline, so a thin pool on one leg
+      // can't drag another leg's slippage (per-leg minOut, audit H-07).
+      const routes = await quoteBestLegs(
+        tupleArgs.map((t) => ({
+          tokenIn: t.token,
+          decimalsIn: t.decimals,
+          amountIn: t.amount,
+        })),
+        {
+          tokenOut: outputToken.address,
+          decimalsOut: outputToken.decimals ?? 18,
+          recipient: account,
+          slippageBps,
+          deadline,
+        },
+        publicClient!,
+      );
+      if (routes.some((r) => !r)) {
+        throw new Error("No route found for one or more inputs.");
+      }
+      const expectedTotal = routes.reduce(
+        (s, r) => s + (r as RouteQuote).amountOut,
+        0n,
+      );
+
+      // Pair every chosen route with its leg (token + amount) so a Permit2
+      // leg can sign for the right token, then split by settlement model.
+      const execLegs = tupleArgs.map((t, i) => ({
+        token: t.token,
+        amount: t.amount,
+        route: routes[i] as RouteQuote,
+      }));
+      const classicLegs = execLegs.filter((l) => !l.route.permit2);
+      const permit2Legs = execLegs.filter((l) => !!l.route.permit2);
+
+      // Phase 1 — ONE Multicall3From signature: every classic leg's
+      // approve + swap, plus a token->Permit2 approve for each Permit2 leg
+      // that still needs one (so its UR.execute in phase 2 can pull).
+      const calls: { target: Address; callData: `0x${string}` }[] = [];
+      for (const l of classicLegs) {
+        if ((l.route.executor.value ?? 0n) > 0n) {
+          throw new Error("A value-bearing route can't be batched.");
+        }
+        calls.push({
+          target: l.route.approval.token,
+          callData: encodeFunctionData({
+            abi: erc20Abi,
+            functionName: "approve",
+            args: [l.route.approval.spender, maxUint256],
+          }),
+        });
+        calls.push({
+          target: l.route.executor.router,
+          callData: encodeFunctionData({
+            abi: l.route.executor.abi,
+            functionName: l.route.executor.functionName,
+            args: l.route.executor.args,
+          }),
+        });
+      }
+      for (const l of permit2Legs) {
         const allowance = (await publicClient!.readContract({
-          address: t.token,
+          address: l.token,
           abi: erc20Abi,
           functionName: "allowance",
-          args: [account, ADDRESSES.multiSwap],
+          args: [account, PERMIT2_ADDRESS],
         })) as bigint;
-        if (allowance < t.amount) {
-          approveCalls.push({
-            target: t.token,
+        if (allowance < l.amount) {
+          calls.push({
+            target: l.token,
             callData: encodeFunctionData({
               abi: erc20Abi,
               functionName: "approve",
-              args: [ADDRESSES.multiSwap, maxUint256],
+              args: [PERMIT2_ADDRESS, maxUint256],
             }),
           });
         }
       }
 
-      const swapCallData = encodeFunctionData({
-        abi: MULTISWAP_ABI,
-        functionName: "swapToSingle",
-        args: [tupleArgs, outputToken.address, minTotalOut, deadline],
-      });
+      // Signatures the user will be asked for: the batch (if non-empty) +
+      // one sign + one send per Permit2 leg.
+      const sigTotal = (calls.length > 0 ? 1 : 0) + permit2Legs.length * 2;
+      let sigN = 0;
+      let lastHash: `0x${string}` | undefined;
 
-      let hash: `0x${string}`;
-      if (approveCalls.length > 0) {
-        // approve(s) + swap in one signature. allowFailure defaults to
-        // false → the whole batch reverts atomically if any leg fails.
-        setTx({
-          status: "pending",
-          message: `Approve ${approveCalls.length} + swap`,
-        });
-        const batched = buildAggregate3([
-          ...approveCalls,
-          { target: ADDRESSES.multiSwap, callData: swapCallData },
-        ]);
-        hash = await writeContractAsync({
+      if (calls.length > 0) {
+        sigN += 1;
+        setTx({ status: "pending", message: `Approve + swap (${sigN}/${sigTotal})` });
+        const batched = buildAggregate3(calls);
+        const h = await writeContractAsync({
           address: batched.address,
           abi: batched.abi,
           functionName: batched.functionName,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           args: batched.args as any,
         });
-      } else {
-        setTx({ status: "pending", message: "Submitting multi-swap…" });
-        hash = await writeContractAsync({
-          address: ADDRESSES.multiSwap,
-          abi: MULTISWAP_ABI,
-          functionName: "swapToSingle",
-          args: [tupleArgs, outputToken.address, minTotalOut, deadline],
+        const r = await publicClient!.waitForTransactionReceipt({ hash: h });
+        if (r.status !== "success") {
+          throw new Error(`Multi-swap batch reverted on-chain. Tx: ${h}`);
+        }
+        lastHash = h;
+      }
+
+      // Phase 2 — each Permit2 leg settles on its own: sign the PermitSingle
+      // for (token, the route's UR), inject it into the execute() inputs at
+      // the provider-declared slot, send. Sequential so a revert stops the
+      // rest before the user signs more.
+      for (const l of permit2Legs) {
+        const p2 = l.route.permit2!;
+        sigN += 1;
+        setTx({ status: "pending", message: `Sign ${l.route.provider} (${sigN}/${sigTotal})` });
+        const { permit, signature } = await signPermit2({
+          token: l.token,
+          spender: p2.permitSpender,
+          amount: l.amount,
         });
+        const encoded = encodePermit2PermitInput(permit, signature);
+        const inputs = [...(l.route.executor.args[1] as `0x${string}`[])];
+        if (p2.permitInputIndex < 0 || p2.permitInputIndex >= inputs.length) {
+          throw new Error(`Provider ${l.route.provider} set an invalid permitInputIndex.`);
+        }
+        inputs[p2.permitInputIndex] = encoded;
+        const execArgs = [l.route.executor.args[0], inputs, l.route.executor.args[2]];
+        sigN += 1;
+        setTx({ status: "pending", message: `Swap ${l.route.provider} (${sigN}/${sigTotal})` });
+        const h = await writeContractAsync({
+          address: l.route.executor.router,
+          abi: l.route.executor.abi,
+          functionName: l.route.executor.functionName,
+          args: execArgs,
+          value: l.route.executor.value,
+        });
+        const r = await publicClient!.waitForTransactionReceipt({ hash: h });
+        if (r.status !== "success") {
+          throw new Error(`${l.route.provider} leg reverted on-chain. Tx: ${h}`);
+        }
+        lastHash = h;
       }
-      // 2026-06-15 audit HIGH#3 fix: capture the receipt return value and
-      // gate success on receipt.status. Before this, a reverted on-chain
-      // tx flowed through the happy path: form cleared, balances refetched,
-      // a green swap toast fired, and an activity row was written with
-      // the quoted total - all while the user's tokens stayed untouched.
-      // Throwing here routes the failure through the catch block, which
-      // now also fires an error toast so navigated-away failures are
-      // visible. Mirrors the same shape audit fix already deployed on
-      // SwapCard.tsx (M1+H3+H4, commit 7aa13a1).
-      const receipt = await publicClient!.waitForTransactionReceipt({ hash });
-      if (receipt.status !== "success") {
-        throw new Error(`Multi-swap reverted on-chain. Tx: ${hash}`);
-      }
+
+      if (!lastHash) throw new Error("Nothing to execute.");
       setTx({ status: "idle" });
       setInputs([]);
       balanceCalls.refetch();
-      const outFormatted = formatTokenAmount(totalOutRaw, decimalsOut, 6);
+      const outFormatted = formatTokenAmount(expectedTotal, decimalsOut, 6);
       addActivity({
         type: tupleArgs.length > 1 ? "multiswap" : "swap",
         account,
@@ -429,7 +494,7 @@ export function MultiSwapCard({ tab, onTabChange }: MultiSwapCardProps) {
           ? `Multi-swap to $${outputToken.symbol}`
           : `Swapped to $${outputToken.symbol}`,
         value: `${outFormatted} ${outputToken.symbol}`,
-        txHash: hash,
+        txHash: lastHash,
       });
       pushToast({
         kind: "swap",
@@ -544,7 +609,7 @@ export function MultiSwapCard({ tab, onTabChange }: MultiSwapCardProps) {
       {hasAnyAmount && (
         <div className="mt-3 flex items-center justify-between text-xs">
           <div className="text-arc-text-muted">
-            {quoteQ.isFetching ? (
+            {quoting ? (
               <span>Fetching prices…</span>
             ) : anyNoRoute ? (
               <span className="text-arc-warn">
@@ -563,6 +628,9 @@ export function MultiSwapCard({ tab, onTabChange }: MultiSwapCardProps) {
                   {formatTokenAmount(minTotalOut, decimalsOut, 4)} {outputToken?.symbol}
                 </span>{" "}
                 · slippage {(slippageBps / 100).toFixed(slippageBps % 100 === 0 ? 0 : 2)}%
+                {sigCount > 1 && (
+                  <span className="text-arc-text-muted"> · {sigCount} signatures</span>
+                )}
               </span>
             )}
           </div>
@@ -584,7 +652,7 @@ export function MultiSwapCard({ tab, onTabChange }: MultiSwapCardProps) {
                 ? "Enter amounts"
                 : anyInsufficient
                   ? "Insufficient balance"
-                  : quoteQ.isFetching
+                  : quoting
                     ? "Fetching prices…"
                     : anyNoRoute
                       ? "No route for some tokens"
@@ -592,7 +660,9 @@ export function MultiSwapCard({ tab, onTabChange }: MultiSwapCardProps) {
                         ? hasEmptyRow
                           ? "Enter amounts"
                           : "No valid trades to execute"
-                        : `Swap ${tupleArgs.length} tokens`}
+                        : sigCount > 1
+                          ? `Swap ${tupleArgs.length} tokens · ${sigCount} signatures`
+                          : `Swap ${tupleArgs.length} tokens`}
       </button>
 
       {tx.status !== "idle" && <TxStatus state={tx} className="mt-3" />}
