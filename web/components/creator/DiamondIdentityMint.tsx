@@ -7,7 +7,6 @@ import {
     ERC_8004_IDENTITY_ABI,
     ERC_8004_IDENTITY_ADDRESS,
 } from "@/lib/abis/erc8004Identity";
-import { ARCADE_IDENTITY_ISSUER_ABI } from "@/lib/abis/arcadeIdentityIssuer";
 import { encodeFunctionData } from "viem";
 import { buildAggregate3 } from "@/lib/routing/batchSwap";
 import { ADDRESSES } from "@/lib/constants";
@@ -21,13 +20,6 @@ import { pushToast } from "@/lib/toast";
  * the ERC-8004 Registry. Otherwise we fall back to direct
  * Registry.mint (legacy behavior; tier gate is client-side only).
  */
-const TIER_CODE: Record<CreatorTier, number> = {
-    none: 0,
-    silver: 1,
-    gold: 2,
-    diamond: 3,
-};
-
 /**
  * Mints an Arcade Creator Identity NFT (ERC-8004) for the connected
  * wallet, gated on the wallet's bonded-launch tier (Silver / Gold /
@@ -113,24 +105,22 @@ export function DiamondIdentityMint() {
         if (!account) return;
         setMinting(true);
         try {
-            // H-09: prefer the Issuer when wired so the tier is
-            // verified on-chain. Otherwise fall back to direct
-            // Registry mint (testnet legacy).
-            const useIssuer =
-                ADDRESSES.identityIssuer !== "0x0000000000000000000000000000000000000000";
-            const hash = useIssuer
-                ? await writeContractAsync({
-                      address: ADDRESSES.identityIssuer,
-                      abi: ARCADE_IDENTITY_ISSUER_ABI,
-                      functionName: "mint",
-                      args: [TIER_CODE[tier], metadataUri],
-                  })
-                : await writeContractAsync({
-                      address: ERC_8004_IDENTITY_ADDRESS,
-                      abi: ERC_8004_IDENTITY_ABI,
-                      functionName: "mint",
-                      args: [account, metadataUri],
-                  });
+            // 2026-06-21: the live Arc registry gates mint(address,string)
+            // to an internal authorized minter — it reverts for EOAs AND
+            // for our Issuer (which forwards to registry.mint), so both
+            // the Issuer path and the legacy direct-mint path never
+            // worked (verified on-chain). The standard's permissionless
+            // self-registration register(uri) mints to msg.sender and is
+            // the only working path. Called straight from the creator's
+            // wallet; tier stays verified client-side (the registry is
+            // permissionless by design, so on-chain tier gating through
+            // it isn't possible regardless).
+            const hash = await writeContractAsync({
+                address: ERC_8004_IDENTITY_ADDRESS,
+                abi: ERC_8004_IDENTITY_ABI,
+                functionName: "register",
+                args: [metadataUri],
+            });
             if (publicClient) {
                 const receipt = await publicClient.waitForTransactionReceipt({ hash });
                 if (receipt.status !== "success") {
@@ -188,36 +178,28 @@ export function DiamondIdentityMint() {
                 functionName: "tokenOfOwnerByIndex",
                 args: [account, balance - 1n],
             })) as bigint;
-            const useIssuer =
-                ADDRESSES.identityIssuer !== "0x0000000000000000000000000000000000000000";
             const burnData = encodeFunctionData({
                 abi: ERC_8004_IDENTITY_ABI,
                 functionName: "burn",
                 args: [tokenId],
             });
-            const mintData = useIssuer
-                ? encodeFunctionData({
-                      abi: ARCADE_IDENTITY_ISSUER_ABI,
-                      functionName: "mint",
-                      args: [TIER_CODE[tier], metadataUri],
-                  })
-                : encodeFunctionData({
-                      abi: ERC_8004_IDENTITY_ABI,
-                      functionName: "mint",
-                      args: [account, metadataUri],
-                  });
-            // Burn + re-mint in ONE atomic, sender-preserving signature
-            // (Arc Multicall3From). allowFailure=false → if the mint
-            // reverts the burn rolls back too, closing the old 2-tx gap
-            // where a failed re-mint left the user with no NFT.
+            // register(uri) self-registers for msg.sender — which
+            // Multicall3From preserves as the user across both subcalls,
+            // so the fresh NFT lands in the creator's wallet (the Issuer
+            // can't do this: register would register the Issuer itself).
+            const mintData = encodeFunctionData({
+                abi: ERC_8004_IDENTITY_ABI,
+                functionName: "register",
+                args: [metadataUri],
+            });
+            // Burn + re-register in ONE atomic, sender-preserving
+            // signature (Arc Multicall3From). allowFailure=false → if the
+            // re-register reverts the burn rolls back too, closing the
+            // old 2-tx gap where a failed re-mint left the user with no
+            // NFT.
             const batched = buildAggregate3([
                 { target: ERC_8004_IDENTITY_ADDRESS, callData: burnData },
-                {
-                    target: useIssuer
-                        ? (ADDRESSES.identityIssuer as `0x${string}`)
-                        : ERC_8004_IDENTITY_ADDRESS,
-                    callData: mintData,
-                },
+                { target: ERC_8004_IDENTITY_ADDRESS, callData: mintData },
             ]);
             const hash = await writeContractAsync({
                 address: batched.address,

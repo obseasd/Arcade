@@ -51,10 +51,23 @@ export const ERC_8004_IDENTITY_ABI = [
         ],
         outputs: [{ name: "", type: "uint256" }],
     },
-    // Mint surface. ERC-8004 doesn't mandate a single signature, so
-    // we ship the canonical `mint(address to, string uri)` shape Arc
-    // ships with — most callers (and our /api/identity/mint backend)
-    // line up with this.
+    // Registration surface. The live Arc registry gates `mint(address,
+    // string)` to an internal authorized minter (reverts for both EOAs
+    // and our Issuer — verified on-chain 2026-06-21), so that path never
+    // worked. The standard's permissionless self-registration is
+    // `register(string uri)`, which mints to msg.sender and returns the
+    // agentId — verified working on-chain from a fresh EOA. This is the
+    // function the UI must call (directly from the creator's wallet; a
+    // third party can't register on someone's behalf).
+    {
+        type: "function",
+        name: "register",
+        stateMutability: "nonpayable",
+        inputs: [{ name: "uri", type: "string" }],
+        outputs: [{ name: "agentId", type: "uint256" }],
+    },
+    // Legacy gated mint — kept for ABI completeness / reads, but the UI
+    // no longer calls it (it reverts on the live registry).
     {
         type: "function",
         name: "mint",
