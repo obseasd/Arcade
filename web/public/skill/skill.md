@@ -4,6 +4,11 @@ Deploy and trade tokens on **Arcade** — a USDC-native DEX + launchpad on **Arc
 (Circle's EVM L1). This skill lets an agent launch a token, trade it, and claim
 creator fees programmatically with a funded wallet.
 
+> ⚠️ **Security (Audit C-9):** Arc **Testnet only**. This skill signs
+> transactions with the private key you supply — use a **throwaway,
+> testnet-only key**, never one that holds mainnet funds or is reused on a
+> production chain. Treat any key handed to an agent as disposable.
+
 > **Chain:** Arc Testnet · chainId **5042002** · RPC `https://5042002.rpc.thirdweb.com`
 > · explorer `https://testnet.arcscan.app` · gas + default quote token is **USDC**.
 > A (non-official) **WETH** at `A.WETH` is also available as a Clanker pool pairing.

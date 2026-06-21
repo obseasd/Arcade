@@ -104,6 +104,18 @@ contract DeploySecurityV3 is Script {
         cfg.usdc = vm.envAddress("ARC_USDC_ADDRESS");
         cfg.signer = vm.envAddress("ARCADE_BACKEND_SIGNER");
         cfg.treasury = vm.envOr("TREASURY_ADDRESS", cfg.deployer);
+        // Audit C-4: never silently deploy to a production chain with the
+        // platform-fee treasury defaulted to the deployer EOA — fees would
+        // accrue to a hot key with no rotation. The deployer default is
+        // allowed only on local (31337) and Arc testnet (5042002); any
+        // other chain must set TREASURY_ADDRESS explicitly to a multisig.
+        if (cfg.treasury == cfg.deployer) {
+            uint256 cid = block.chainid;
+            require(
+                cid == 31337 || cid == 5042002,
+                "C-4: set TREASURY_ADDRESS (!= deployer) for production deploys"
+            );
+        }
         cfg.escrowOwner = vm.envOr("ESCROW_OWNER", cfg.deployer);
         cfg.weth = vm.envOr("ARC_WETH_ADDRESS", address(0x9570EBA9eE39Aa4933f64d6add280faAB289a847));
         cfg.v4Router = vm.envOr("V4_ROUTER", address(0));
