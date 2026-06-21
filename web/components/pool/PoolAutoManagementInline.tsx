@@ -1,15 +1,32 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Address } from "viem";
+import { Address, encodeFunctionData } from "viem";
 import type { PublicClient } from "viem";
 import { useAccount, usePublicClient, useWriteContract } from "wagmi";
 
 import { AUTO_COMPOUNDER_ABI, modeLabelFromId } from "@/lib/abis/autoCompounder";
 import { V3_NPM_ABI } from "@/lib/abis/v3-npm";
+import { buildAggregate3 } from "@/lib/routing/batchSwap";
 import { ADDRESSES } from "@/lib/constants";
 import { pushToast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
+
+// Minimal ERC-721 approve fragment (V3_NPM_ABI's approve overload isn't
+// exposed here). Used to fold approve(tokenId) + depositPosition into one
+// Multicall3From signature.
+const ERC721_APPROVE_ABI = [
+  {
+    type: "function",
+    name: "approve",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "to", type: "address" },
+      { name: "tokenId", type: "uint256" },
+    ],
+    outputs: [],
+  },
+] as const;
 
 /**
  * Inline replacement for the old in-modal "Manage" form on /positions.
@@ -292,23 +309,13 @@ export function PoolAutoManagementInline({
                 <h2 className="text-lg font-semibold text-arc-text">
                     Auto-management
                 </h2>
-                <div className="rounded-2xl border border-arc-border bg-white/[0.015] p-5">
-                    <div className="text-sm font-semibold text-arc-text">
-                        NFT #{focusTokenId} is not auto-managed yet
-                    </div>
-                    <p className="mt-1.5 text-xs text-arc-text-muted">
-                        Deposit this position into the auto-compounder to
-                        enable Auto-receive (push fees to your wallet) or
-                        Auto-compound (reinvest into the position with
-                        anti-MEV cooldown and slippage cap).
-                    </p>
-                    <p className="mt-3 text-xs text-arc-text-faint">
-                        Coming soon: a one-click deposit + mode picker on
-                        this page. For now you can create a fresh managed
-                        position via the V3 add-liquidity flow with the
-                        Auto-receive / Auto-compound toggles.
-                    </p>
-                </div>
+                <DepositInline
+                    tokenId={BigInt(focusTokenId)}
+                    account={account}
+                    writeContractAsync={writeContractAsync}
+                    publicClient={publicClient}
+                    onDeposited={bumpRefresh}
+                />
             </section>
         );
     }
@@ -331,6 +338,159 @@ export function PoolAutoManagementInline({
                 />
             ))}
         </section>
+    );
+}
+
+/**
+ * One-click deposit of an existing (un-managed) position into the
+ * auto-compounder, with a mode picker — on the pool page itself. Folds
+ * the ERC-721 approve(tokenId) + depositPosition into ONE Multicall3From
+ * signature (the compounder's safeTransferFrom(msg.sender) still pulls
+ * from the user because callFrom preserves the sender), then mirrors the
+ * row to the DB so the keeper picks it up on the next tick.
+ */
+function DepositInline({
+    tokenId,
+    account,
+    writeContractAsync,
+    publicClient,
+    onDeposited,
+}: {
+    tokenId: bigint;
+    account: Address | undefined;
+    writeContractAsync: ReturnType<typeof useWriteContract>["writeContractAsync"];
+    publicClient: ReturnType<typeof usePublicClient>;
+    onDeposited: () => void;
+}) {
+    const [mode, setMode] = useState<1 | 2>(1); // 1 = RECEIVE, 2 = COMPOUND
+    const [thresholdUsdc, setThresholdUsdc] = useState("0.10");
+    const [slippagePct, setSlippagePct] = useState("0.50");
+    const [busy, setBusy] = useState(false);
+
+    const deposit = async () => {
+        if (!account) return;
+        const thresholdMicros = BigInt(
+            Math.max(0, Math.floor((Number(thresholdUsdc) || 0) * 1_000_000)),
+        );
+        const slippageBps = Math.min(
+            10_000,
+            Math.max(0, Math.floor((Number(slippagePct) || 0.5) * 100)),
+        );
+        setBusy(true);
+        try {
+            const approveData = encodeFunctionData({
+                abi: ERC721_APPROVE_ABI,
+                functionName: "approve",
+                args: [ADDRESSES.autoCompounder as Address, tokenId],
+            });
+            const depositData = encodeFunctionData({
+                abi: AUTO_COMPOUNDER_ABI,
+                functionName: "depositPosition",
+                args: [tokenId, mode, thresholdMicros, slippageBps],
+            });
+            const batched = buildAggregate3([
+                { target: ADDRESSES.v3PositionManager, callData: approveData },
+                { target: ADDRESSES.autoCompounder as Address, callData: depositData },
+            ]);
+            const hash = await writeContractAsync({
+                address: batched.address,
+                abi: batched.abi,
+                functionName: batched.functionName,
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                args: batched.args as any,
+            });
+            if (publicClient) {
+                const receipt = await publicClient.waitForTransactionReceipt({ hash });
+                if (receipt.status !== "success") {
+                    throw new Error(`Deposit reverted (tx ${hash.slice(0, 10)}…).`);
+                }
+            }
+            // Mirror to the DB so the keeper scans it on the next tick.
+            await fetch("/api/compounder/positions", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    action: "upsert",
+                    tokenId: tokenId.toString(),
+                    ownerAddress: account,
+                    mode: modeLabelFromId(mode),
+                    minFeeMicros: thresholdMicros.toString(),
+                    maxSlippageBps: slippageBps,
+                }),
+            }).catch(() => {});
+            pushToast({
+                kind: "info",
+                title: "Position under auto-management",
+                message: `NFT #${tokenId.toString()} is now ${modeLabelFromId(mode).toLowerCase()}.`,
+            });
+            onDeposited();
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        } catch (e: any) {
+            pushToast({
+                kind: "error",
+                title: "Deposit failed",
+                message: e?.shortMessage || e?.message || "Deposit failed",
+            });
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    return (
+        <div className="space-y-3 rounded-2xl border border-arc-border bg-white/[0.015] p-5">
+            <div className="text-sm font-semibold text-arc-text">
+                NFT #{tokenId.toString()} — enable auto-management
+            </div>
+            <div className="flex gap-2">
+                {([
+                    [1, "Auto-receive", "push fees to your wallet"],
+                    [2, "Auto-compound", "reinvest into the position"],
+                ] as const).map(([m, label, sub]) => (
+                    <button
+                        key={m}
+                        type="button"
+                        onClick={() => setMode(m)}
+                        className={cn(
+                            "flex-1 rounded-xl border px-3 py-2 text-left text-xs transition-colors",
+                            mode === m
+                                ? "border-arc-cta-hover bg-arc-cta-hover/15 text-arc-text"
+                                : "border-arc-border text-arc-text-muted hover:text-arc-text",
+                        )}
+                    >
+                        <span className="font-medium">{label}</span>
+                        <span className="block text-[10px] text-arc-text-faint">{sub}</span>
+                    </button>
+                ))}
+            </div>
+            <div className="flex gap-2">
+                <label className="flex-1 text-[11px] text-arc-text-muted">
+                    Min fee to act (USDC)
+                    <input
+                        value={thresholdUsdc}
+                        onChange={(e) => setThresholdUsdc(e.target.value.replace(/[^0-9.]/g, ""))}
+                        className="mt-1 w-full rounded-lg border border-arc-border bg-arc-bg px-2 py-1.5 text-sm text-arc-text outline-none"
+                    />
+                </label>
+                {mode === 2 && (
+                    <label className="flex-1 text-[11px] text-arc-text-muted">
+                        Max slippage (%)
+                        <input
+                            value={slippagePct}
+                            onChange={(e) => setSlippagePct(e.target.value.replace(/[^0-9.]/g, ""))}
+                            className="mt-1 w-full rounded-lg border border-arc-border bg-arc-bg px-2 py-1.5 text-sm text-arc-text outline-none"
+                        />
+                    </label>
+                )}
+            </div>
+            <button
+                type="button"
+                onClick={deposit}
+                disabled={busy || !account}
+                className="arc-button-primary w-full py-2.5 text-sm disabled:cursor-not-allowed disabled:opacity-50"
+            >
+                {busy ? "Depositing…" : "Enable auto-management (1 signature)"}
+            </button>
+        </div>
     );
 }
 
