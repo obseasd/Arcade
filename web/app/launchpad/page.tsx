@@ -10,6 +10,7 @@ import { useLaunchpadTokens, LaunchpadTokenInfo } from "@/lib/hooks/useLaunchpad
 import { getLaunchpadGenerations } from "@/lib/launchpadGenerations";
 import { useV4LaunchpadTokens } from "@/lib/hooks/useV4LaunchpadTokens";
 import { useArcadeHookTokens, type ArcadeHookTokenInfo } from "@/lib/hooks/useArcadeHookTokens";
+import { useClankerSortMcaps } from "@/lib/hooks/useClankerSortMcaps";
 import { useTokenImage } from "@/lib/hooks/useTokenImage";
 import { TokenIcon } from "@/components/ui/TokenIcon";
 import { parseInlineMetadata } from "@/lib/metadata";
@@ -30,6 +31,10 @@ export default function LaunchpadIndexPage() {
   const { tokens, isLoading } = useLaunchpadTokens();
   const { tokens: v4Tokens } = useV4LaunchpadTokens();
   const { tokens: v4HookTokens } = useArcadeHookTokens();
+  // Clankers have no bonding curve so their realUsdcReserve is 0 and they
+  // sorted last even at a big mcap. This gives USDC-paired Clankers a real
+  // sort key = their implied FDV in USDC micros (one multicall over slot0).
+  const clankerMcaps = useClankerSortMcaps(tokens);
   const [filter, setFilter] = useState<Filter>("all");
   const [q, setQ] = useState("");
   const [launchOpen, setLaunchOpen] = useState(false);
@@ -84,11 +89,22 @@ export default function LaunchpadIndexPage() {
     };
     let list: LaunchpadTokenInfo[] = tokens.filter(isCurrentGen);
 
+    // Unified market-cap sort key. For curve tokens it's realUsdcReserve
+    // (monotonic with mcap on a bonding curve). For USDC-paired Clankers
+    // (no curve → reserve 0) it's the implied FDV in USDC micros, so they
+    // rank by actual size instead of always sinking to the bottom.
+    const mcKey = (t: LaunchpadTokenInfo): bigint =>
+      t.mode === 2
+        ? clankerMcaps.get(t.address.toLowerCase()) ?? 0n
+        : t.realUsdcReserve;
+
     // Filter
     if (filter === "new") {
       list = list.filter((t) => !t.migrated && t.tokensSold === 0n);
     } else if (filter === "trending") {
-      list = list.filter((t) => !t.migrated && t.tokensSold > 0n).sort((a, b) => Number(b.realUsdcReserve - a.realUsdcReserve));
+      list = list
+        .filter((t) => !t.migrated && t.tokensSold > 0n)
+        .sort((a, b) => (mcKey(b) > mcKey(a) ? 1 : mcKey(b) < mcKey(a) ? -1 : 0));
     } else if (filter === "migrating") {
       list = list.filter((t) => !t.migrated && (t.tokensSold * 100n) / LAUNCHPAD_CURVE_SUPPLY > 80n);
     } else if (filter === "migrated") {
@@ -108,8 +124,10 @@ export default function LaunchpadIndexPage() {
     // so a large reserve delta never overflows the 2^53 float range.
     if (filter === "all") {
       list = list.sort((a, b) => {
-        if (b.realUsdcReserve > a.realUsdcReserve) return 1;
-        if (b.realUsdcReserve < a.realUsdcReserve) return -1;
+        const ka = mcKey(a);
+        const kb = mcKey(b);
+        if (kb > ka) return 1;
+        if (kb < ka) return -1;
         return Number(b.createdAt - a.createdAt);
       });
     } else if (filter === "new") {
@@ -137,7 +155,7 @@ export default function LaunchpadIndexPage() {
       list = [...featured, ...others];
     }
     return list;
-  }, [tokens, filter, q]);
+  }, [tokens, filter, q, clankerMcaps]);
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-10 sm:px-6">
