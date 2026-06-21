@@ -246,17 +246,6 @@ export function MultiSwapCard({ tab, onTabChange }: MultiSwapCardProps) {
   }, [inputs, perRowRoute, legRoutes.length, tupleArgs.length, quoting]);
   const anyNoRoute = noRouteByIndex.some(Boolean);
 
-  // Wallet prompts the swap will ask for: ONE batch covering every
-  // classic-approve leg (Arcade V2/V3, XyloNet) + a sign AND a send for
-  // each Permit2 leg (Synthra / UnitFlow), which can't share the batch.
-  // Surfaced so a multi-DEX route doesn't surprise the user with extra
-  // prompts.
-  const sigCount = useMemo(() => {
-    const classic = legRoutes.filter((r) => r && !r.permit2).length;
-    const permit2 = legRoutes.filter((r) => r?.permit2).length;
-    return (classic > 0 ? 1 : 0) + permit2 * 2;
-  }, [legRoutes]);
-
   // ----- Slippage helpers -----
   const onSlippagePreset = (bps: number) => {
     setSlippageBps(bps);
@@ -628,9 +617,6 @@ export function MultiSwapCard({ tab, onTabChange }: MultiSwapCardProps) {
                   {formatTokenAmount(minTotalOut, decimalsOut, 4)} {outputToken?.symbol}
                 </span>{" "}
                 · slippage {(slippageBps / 100).toFixed(slippageBps % 100 === 0 ? 0 : 2)}%
-                {sigCount > 1 && (
-                  <span className="text-arc-text-muted"> · {sigCount} signatures</span>
-                )}
               </span>
             )}
           </div>
@@ -660,9 +646,7 @@ export function MultiSwapCard({ tab, onTabChange }: MultiSwapCardProps) {
                         ? hasEmptyRow
                           ? "Enter amounts"
                           : "No valid trades to execute"
-                        : sigCount > 1
-                          ? `Swap ${tupleArgs.length} tokens · ${sigCount} signatures`
-                          : `Swap ${tupleArgs.length} tokens`}
+                        : `Swap ${tupleArgs.length} tokens`}
       </button>
 
       {tx.status !== "idle" && <TxStatus state={tx} className="mt-3" />}

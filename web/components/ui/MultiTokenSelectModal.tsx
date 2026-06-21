@@ -69,7 +69,22 @@ export function MultiTokenSelectModal({
   }
 
   const pinnedTemplates: PinnedTemplate[] = useMemo(
-    () => PINNED.map((p, i) => (i === 0 ? { ...p, address: ADDRESSES.usdc } : p)),
+    () =>
+      PINNED.map((p) => ({
+        ...p,
+        address:
+          p.symbol === "USDC"
+            ? ADDRESSES.usdc
+            : p.symbol === "WUSDC"
+              ? ADDRESSES.wusdc
+              : p.symbol === "ETH"
+                ? ADDRESSES.seedEth
+                : p.symbol === "USDT"
+                  ? ADDRESSES.usdt
+                  : p.symbol === "BTC"
+                    ? ADDRESSES.cirBtc
+                    : undefined,
+      })),
     [],
   );
 
