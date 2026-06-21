@@ -4,9 +4,10 @@ import { X } from "lucide-react";
 import { RefreshIcon } from "@/components/ui/MaskIcon";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import type { Address } from "viem";
+import { encodeFunctionData, type Address } from "viem";
 import { usePublicClient, useReadContract, useReadContracts, useWriteContract } from "wagmi";
 import { ORBS_TWAP_ABI, decodeOrderStatus } from "@/lib/abis/orbsTwap";
+import { buildAggregate3 } from "@/lib/routing/batchSwap";
 import { ADDRESSES, USDC_DECIMALS } from "@/lib/constants";
 import { useV2Tokens } from "@/lib/hooks/useV2Tokens";
 import { useV3Tokens } from "@/lib/hooks/useV3Tokens";
@@ -227,53 +228,50 @@ export function LimitOrdersPanel({ account, variant = "card", className }: Props
         pushToast({
             kind: "info",
             title: `Cancelling ${openOrders.length} order${openOrders.length === 1 ? "" : "s"}`,
-            message: "Confirm each tx in your wallet.",
+            message: "Confirm in your wallet.",
         });
-        // RACE-011: writeContractAsync resolves on WALLET CONFIRMATION,
-        // not on mining. If a keeper fills order N+1 while the user is
-        // signing the cancel for N, the next cancel will revert on-chain
-        // even though we already counted it as submitted. Two fixes:
-        //  - Wait for the receipt between iterations so a fill in-between
-        //    surfaces as a per-order error before we move on.
-        //  - Refetch the orders + ids list each loop so the final toast
-        //    reads the actual on-chain remaining count.
-        // Also re-word the final toast to "Submitted N cancel txs" - we
-        // can confirm the user pressed Approve, not that the cancels
-        // landed.
-        let submitted = 0;
-        for (const o of openOrders) {
-            try {
-                const hash = await writeContractAsync({
-                    address: ADDRESSES.orbsTwap,
-                    abi: ORBS_TWAP_ABI,
-                    functionName: "cancel",
-                    args: [o.id],
-                });
-                submitted++;
-                // Wait for the receipt before submitting the next cancel
-                // so the order book reflects what's already cancelled. If
-                // the tx reverts (keeper filled in the meantime), the
-                // throw lands in catch and we surface it.
-                if (publicClient) {
-                    await publicClient.waitForTransactionReceipt({ hash });
-                }
-            } catch (e) {
-                const msg = e instanceof Error ? e.message : "Cancel failed";
-                pushToast({
-                    kind: "error",
-                    title: `Cancel #${Number(o.id)} failed`,
-                    message: msg.slice(0, 120),
-                });
-                break;
+        // Cancel every open order in ONE signature via Multicall3From.
+        // RACE-011 superseded: the old per-cancel loop waited for each
+        // receipt so a keeper fill mid-loop surfaced per-order; now
+        // allowFailure:true makes one just-filled order's cancel revert
+        // only its own subcall while the rest still cancel atomically.
+        // cancel() gates on maker == msg.sender, which the precompile
+        // preserves.
+        try {
+            const batched = buildAggregate3(
+                openOrders.map((o) => ({
+                    target: ADDRESSES.orbsTwap,
+                    allowFailure: true,
+                    callData: encodeFunctionData({
+                        abi: ORBS_TWAP_ABI,
+                        functionName: "cancel",
+                        args: [o.id],
+                    }),
+                })),
+            );
+            const hash = await writeContractAsync({
+                address: batched.address,
+                abi: batched.abi,
+                functionName: batched.functionName,
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                args: batched.args as any,
+            });
+            if (publicClient) {
+                await publicClient.waitForTransactionReceipt({ hash });
             }
-        }
-        if (submitted > 0) {
             pushToast({
                 kind: "info",
-                title: `Submitted ${submitted} cancel${submitted === 1 ? "" : "s"}`,
+                title: `Cancelled ${openOrders.length} order${openOrders.length === 1 ? "" : "s"}`,
             });
             ordersQ.refetch();
             idsQ.refetch();
+        } catch (e) {
+            const msg = e instanceof Error ? e.message : "Cancel failed";
+            pushToast({
+                kind: "error",
+                title: "Cancel all failed",
+                message: msg.slice(0, 120),
+            });
         }
     };
 
