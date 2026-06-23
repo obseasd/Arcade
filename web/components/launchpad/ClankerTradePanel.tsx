@@ -37,7 +37,11 @@ export function ClankerTradePanel({ token, symbol, pool, image, onTradeSuccess }
   const publicClient = usePublicClient();
   const [side, setSide] = useState<"buy" | "sell">("buy");
   const [amount, setAmount] = useState("");
-  const [slippageBps, setSlippageBps] = useState(100);
+  // 3% default: a CLANKER_V3 pool is single-sided concentrated liquidity, so
+  // its price moves sharply per trade and drifts between quote and execution.
+  // 1% reverted INSUFFICIENT_OUTPUT on normal buys (the quote moved ~1.4% in
+  // the confirm->land window); 3% absorbs that. Users can still tighten it.
+  const [slippageBps, setSlippageBps] = useState(300);
   const [tx, setTx] = useState<TxState>({ status: "idle" });
 
   // Pool fee + paired-token detection (USDC vs WETH).
