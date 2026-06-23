@@ -285,6 +285,54 @@ export function MultiSwapCard({ tab, onTabChange }: MultiSwapCardProps) {
   const outputAmountStr = totalOutRaw > 0n ? formatUnits(totalOutRaw, decimalsOut) : "";
   const minTotalOut = (totalOutRaw * BigInt(10_000 - slippageBps)) / 10_000n;
 
+  // Per-input breakdown shown above the total ("2 USDC -> 1.7 USDT"). Since
+  // the swap converges every input to USDC then makes one final swap, each
+  // input's share of the output is proportional to the USDC it contributes:
+  //   outShare_i = totalOut * (usdc_i / usdcMid).
+  const breakdown = useMemo(() => {
+    if (
+      !outputToken ||
+      quoting ||
+      usdcMid === 0n ||
+      totalOutRaw === 0n ||
+      inputUsdcRoutes.length !== tupleArgs.length
+    ) {
+      return [] as { label: string; outStr: string }[];
+    }
+    const out: { label: string; outStr: string }[] = [];
+    let cursor = 0;
+    for (const row of inputs) {
+      let raw = 0n;
+      try {
+        raw = row.amountStr ? parseUnits(row.amountStr, row.token.decimals ?? 18) : 0n;
+      } catch {
+        raw = 0n;
+      }
+      if (raw === 0n) continue;
+      const usdcValue =
+        row.token.address.toLowerCase() === usdcLower
+          ? raw
+          : inputUsdcRoutes[cursor]?.amountOut ?? 0n;
+      cursor += 1;
+      const outShare = (totalOutRaw * usdcValue) / usdcMid;
+      out.push({
+        label: `${row.amountStr} ${row.token.symbol}`,
+        outStr: `${formatTokenAmount(outShare, decimalsOut, 4)} ${outputToken.symbol}`,
+      });
+    }
+    return out;
+  }, [
+    inputs,
+    inputUsdcRoutes,
+    tupleArgs.length,
+    usdcMid,
+    totalOutRaw,
+    outputToken,
+    quoting,
+    decimalsOut,
+    usdcLower,
+  ]);
+
   // ----- Validation -----
   const hasAnyAmount = tupleArgs.length > 0;
   // True when at least one input row exists with no amount typed (user is
@@ -648,6 +696,7 @@ export function MultiSwapCard({ tab, onTabChange }: MultiSwapCardProps) {
         token={outputToken}
         amountStr={outputAmountStr}
         onTokenClick={openOutputPicker}
+        breakdown={breakdown}
       />
 
       {/* Status line */}
@@ -891,10 +940,12 @@ const OutputBox = memo(function OutputBox({
   token,
   amountStr,
   onTokenClick,
+  breakdown,
 }: {
   token: TokenOption | null;
   amountStr: string;
   onTokenClick: () => void;
+  breakdown: { label: string; outStr: string }[];
 }) {
   return (
     <div className="rounded-2xl border border-arc-border bg-white/[0.015] p-5">
@@ -918,6 +969,17 @@ const OutputBox = memo(function OutputBox({
           )}
         </button>
       </div>
+      {breakdown.length > 1 && (
+        <div className="mb-2 space-y-0.5 text-xs text-arc-text-muted">
+          {breakdown.map((b, i) => (
+            <div key={i} className="flex items-center gap-1.5 tabular-nums">
+              <span className="text-arc-text">{b.label}</span>
+              <span className="opacity-60">&rarr;</span>
+              <span>{b.outStr}</span>
+            </div>
+          ))}
+        </div>
+      )}
       <div
         className={cn(
           "min-w-0 overflow-x-auto whitespace-nowrap font-medium leading-tight tabular-nums text-arc-text",
