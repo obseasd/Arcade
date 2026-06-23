@@ -957,7 +957,12 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
   const usesPermit2 = isExternalRoute && !!activeRoute?.permit2;
   const swapSpender = isExternalRoute
     ? activeRoute!.approval.spender
-    : isV3Swap
+    : // arcade-v3 best route OR a v3Tokens-list token both settle on the V3
+      // router. The activeRoute check is what catches a token that has a V3
+      // pool but isn't in the v3Tokens list (regular V3 pair, not a
+      // CLANKER_V3 launch) — without it the approve targeted the V2 router
+      // while the swap ran on V3, so the V3 transferFrom failed.
+      isV3Swap || activeRoute?.provider === "arcade-v3"
       ? ADDRESSES.v3Router
       : route.useLaunchpadRouter
         ? ADDRESSES.launchpad
@@ -1150,54 +1155,63 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
         // (allowance already sufficient). The router + args logic is
         // unchanged from the previous inline writeContract calls.
         let swapCall: BatchSwapCall;
-        if (isV3Swap) {
-          // CLANKER_V3 token: trade on the V3 pool via our V3 router. Exact-in
-          // only (the effect above forces lastEdited="in"). Single hop if one
-          // side is USDC, else 2-hop through USDC.
+        if (isV3Swap || (!isExternalRoute && activeRoute?.provider === "arcade-v3")) {
+          // V3 trade via our V3 router. Exact-in only (the effect above
+          // forces lastEdited="in"). Single hop if one side is USDC, else
+          // 2-hop through USDC.
           //
-          // Audit H3 + H4 fix: for arcade-v3 routes we ALWAYS use the
-          // provider's pre-built executor.args verbatim — single-hop AND
-          // double-hop. Rebuilding from finalAmountIn here was the
-          // partial-fill regression: when the provider clamped a
-          // pool-exhausting input down to `effectiveAmountIn`, the
-          // executor's args[4] already carried the clamped value but the
-          // single-hop branch threw that away and signed the user's typed
-          // amount, which the V3 pool then reverted because the typed
-          // amount was exactly the input that exhausted active-tick
-          // liquidity in the first place. Now both branches respect
-          // whatever the provider built — partial-fill works, multi-tier
-          // selection works, and the on-chain tx matches the quote shown
-          // in the UI 1:1.
-          const useProviderArgs =
-            isExternalRoute === false && activeRoute?.provider === "arcade-v3";
-          swapCall = {
-            address: ADDRESSES.v3Router,
-            abi: V3_ROUTER_ABI,
-            functionName: v3DoubleHop
-              ? "exactInputThroughUsdc"
-              : "exactInputSingle",
-            args:
-              (v3DoubleHop || useProviderArgs) && activeRoute
-                ? (activeRoute.executor.args as unknown as readonly [
-                    `0x${string}`,
-                    `0x${string}`,
-                    number,
-                    `0x${string}`,
-                    bigint,
-                    bigint,
-                    bigint,
-                    bigint,
-                  ])
-                : [
-                    tokenIn.address,
-                    tokenOut.address,
-                    v3Fee,
-                    account,
-                    finalAmountIn,
-                    minOut,
-                    deadline,
-                  ],
-          };
+          // When the aggregator's best is an arcade-v3 route we use its
+          // pre-built executor VERBATIM (router + fn + args): it carries the
+          // correct fee tier, the single/double-hop fn, AND any partial-fill
+          // clamp. Two bugs this closes:
+          //  - H3/H4: rebuilding from finalAmountIn threw away the provider's
+          //    clamped (partial-fill) amount and reverted on pool-exhausting
+          //    inputs.
+          //  - Token with a V3 pool but NOT in the v3Tokens list (a regular
+          //    V3 pair, not a CLANKER_V3 launch): isV3Swap is false for it, so
+          //    the old gate fell through to the V2 path and executed a V2 swap
+          //    with the (higher) V3 amountOutMinimum -> InsufficientOutputAmount.
+          //    The activeRoute check now routes it to V3 with V3's own minOut.
+          if (!isExternalRoute && activeRoute?.provider === "arcade-v3") {
+            swapCall = {
+              address: activeRoute.executor.router,
+              abi: activeRoute.executor.abi,
+              functionName: activeRoute.executor.functionName,
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              args: activeRoute.executor.args as any,
+            };
+          } else {
+            // isV3Swap true but no arcade-v3 activeRoute (e.g. exact-output,
+            // where activeRoute is null): build from the typed amounts.
+            swapCall = {
+              address: ADDRESSES.v3Router,
+              abi: V3_ROUTER_ABI,
+              functionName: v3DoubleHop
+                ? "exactInputThroughUsdc"
+                : "exactInputSingle",
+              args:
+                v3DoubleHop && activeRoute
+                  ? (activeRoute.executor.args as unknown as readonly [
+                      `0x${string}`,
+                      `0x${string}`,
+                      number,
+                      `0x${string}`,
+                      bigint,
+                      bigint,
+                      bigint,
+                      bigint,
+                    ])
+                  : [
+                      tokenIn.address,
+                      tokenOut.address,
+                      v3Fee,
+                      account,
+                      finalAmountIn,
+                      minOut,
+                      deadline,
+                    ],
+            };
+          }
         } else if (route.useLaunchpadRouter) {
           // Multi-hop through the launchpad's router so post-migration royalties
           // are charged on each leg whose token is a migrated launchpad token.
@@ -1576,7 +1590,9 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
           <div className="flex flex-wrap items-center gap-1.5 gap-y-1 text-arc-text-muted">
             <Image src="/route.png" alt="" width={14} height={14} className="h-3.5 w-3.5 opacity-75" />
             <span>via</span>
-            <span className="font-medium text-arc-text">{isV3Swap ? "Arcade V3" : "Arcade V2"}</span>
+            <span className="font-medium text-arc-text">
+              {isV3Swap || activeRoute?.provider === "arcade-v3" ? "Arcade V3" : "Arcade V2"}
+            </span>
             {isV3Swap && v3DoubleHop && (
               <span className="ml-1 rounded-full border border-arc-cta-hover/40 bg-arc-cta-hover/10 px-1.5 py-0.5 text-[10px] font-medium text-arc-cta-hover">
                 {symIn} → USDC → {symOut}
