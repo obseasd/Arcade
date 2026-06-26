@@ -30,9 +30,8 @@ name: compounder scan
 # Manual trigger: Actions tab → "compounder scan" → Run workflow.
 
 on:
-  schedule:
-    # Every 5 minutes. cron format: m h dom mon dow.
-    - cron: "*/6 * * * *"
+  # Scheduled runs moved to cron-job.org (free, unlimited) to stay under the
+  # GitHub Actions monthly minute budget. Kept here as a manual fallback only.
   workflow_dispatch: {}
 
 # Cancel an in-flight run if a new one starts. compound()/pushFees()

@@ -22,12 +22,8 @@ name: stats hourly snapshot
 # Useful right after a Postgres attach to backfill the first row.
 
 on:
-  schedule:
-    # Top of every hour, UTC. cron uses POSIX 5-field syntax: m h dom mon dow.
-    # Hourly cadence is intentionally low resolution — the /stats page only
-    # surfaces minute-grain numbers anyway and hourly leaves plenty of
-    # headroom under the GH Actions monthly minute budget.
-    - cron: "0 * * * *"
+  # Scheduled runs moved to cron-job.org (free, unlimited) to stay under the
+  # GitHub Actions monthly minute budget. Kept here as a manual fallback only.
   workflow_dispatch: {}
 
 # Cancel an in-flight run if a new one starts. The scan is idempotent

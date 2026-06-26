@@ -25,9 +25,8 @@ name: compounder reconcile
 #                            COMPOUNDER_CRON_SECRET.
 
 on:
-  schedule:
-    # Top of every hour, UTC.
-    - cron: "0 * * * *"
+  # Scheduled runs moved to cron-job.org (free, unlimited) to stay under the
+  # GitHub Actions monthly minute budget. Kept here as a manual fallback only.
   workflow_dispatch: {}
 
 # Cancel an in-flight run if a new one starts. The scan is idempotent
