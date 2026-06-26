@@ -19,7 +19,7 @@ name: twitter autoclaim
 
 on:
   schedule:
-    - cron: "*/5 * * * *"
+    - cron: "*/6 * * * *"
   workflow_dispatch: {}
 
 concurrency:

@@ -32,7 +32,7 @@ name: compounder scan
 on:
   schedule:
     # Every 5 minutes. cron format: m h dom mon dow.
-    - cron: "*/5 * * * *"
+    - cron: "*/6 * * * *"
   workflow_dispatch: {}
 
 # Cancel an in-flight run if a new one starts. compound()/pushFees()
