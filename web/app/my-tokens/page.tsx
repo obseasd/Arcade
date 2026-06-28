@@ -41,6 +41,7 @@ import { MyPositions } from "@/components/pool/MyPositions";
 import { V3Positions } from "@/components/pool/V3Positions";
 import { CreatorFeesPanel } from "@/components/pool/CreatorFeesPanel";
 import { DiamondIdentityMint } from "@/components/creator/DiamondIdentityMint";
+import { ReferralsPanel } from "@/components/referral/ReferralsPanel";
 import { PendingWithdrawalsCard } from "@/components/pool/PendingWithdrawalsCard";
 import { VaultClaimPanel } from "@/components/pool/VaultClaimPanel";
 import { CreatePoolModal } from "@/components/pool/CreatePoolModal";
@@ -88,12 +89,13 @@ interface ArcadeHookHolding {
     balance: bigint;
 }
 
-type TabKey = "overview" | "tokens" | "positions" | "creator" | "activity";
+type TabKey = "overview" | "tokens" | "positions" | "referrals" | "creator" | "activity";
 
 const TABS: { key: TabKey; label: string }[] = [
     { key: "overview", label: "Overview" },
     { key: "tokens", label: "Tokens" },
     { key: "positions", label: "Positions" },
+    { key: "referrals", label: "Referrals" },
     { key: "creator", label: "Creator" },
     { key: "activity", label: "Activity" },
 ];
@@ -233,6 +235,8 @@ function MyTokensPageInner() {
                 />
             ) : tab === "positions" ? (
                 <PositionsTab />
+            ) : tab === "referrals" ? (
+                <ReferralsPanel account={account} />
             ) : tab === "creator" ? (
                 <CreatorTab mine={mine} v4Mine={myV4Launches} loading={isLoading} />
             ) : (

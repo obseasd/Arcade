@@ -22,6 +22,7 @@ import { useUsdValue } from "@/lib/hooks/useTokenUsdPrice";
 import { useSwapRoute } from "@/lib/hooks/useSwapRoute";
 import { pushToast } from "@/lib/toast";
 import { addActivity } from "@/lib/activityFeed";
+import { reportReferralTrade } from "@/lib/referral";
 import { TokenIcon } from "@/components/ui/TokenIcon";
 import { AutoTokenIcon } from "@/components/ui/AutoTokenIcon";
 import { TokenSelectModal, TokenOption } from "@/components/ui/TokenSelectModal";
@@ -1345,6 +1346,13 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
           account,
           chainId: 5042002,
         });
+        // Referral accrual (fire-and-forget; no effect on the swap). If this
+        // wallet was referred, its referrer earns a share of the protocol
+        // fee on this trade's USD volume.
+        const volUsd = inUsd.usd ?? 0;
+        if (volUsd > 0) {
+          reportReferralTrade(account, BigInt(Math.round(volUsd * 1e6)));
+        }
       }
       pushToast({
         kind: "swap",

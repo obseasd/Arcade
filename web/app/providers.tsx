@@ -8,6 +8,7 @@ import { createSyncStoragePersister } from "@tanstack/query-sync-storage-persist
 import { useMemo, useState, type ReactNode } from "react";
 import { WagmiProvider } from "wagmi";
 import { wagmiConfig } from "@/lib/wagmi";
+import { ReferralCapture } from "@/components/referral/ReferralCapture";
 
 // Bump this when the cache shape changes incompatibly so old localStorage
 // entries get invalidated automatically on the next page load. Without
@@ -118,6 +119,7 @@ export function Providers({ children }: { children: ReactNode }) {
           modalSize="compact"
           showRecentTransactions
         >
+          <ReferralCapture />
           {children}
         </RainbowKitProvider>
       </PersistQueryClientProvider>
