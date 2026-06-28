@@ -121,10 +121,24 @@ export async function getReferralStats(referrer: string): Promise<ReferralStats>
             earnedUsdMicros: earned.toString(),
         };
     });
+    // Sum of settled claims (Phase 2). Wrapped so the dashboard still loads if
+    // the 007_referral_claims migration hasn't been applied yet.
+    let totalClaimed = 0n;
+    try {
+        const claimedRows = (await sql`
+            SELECT COALESCE(SUM(amount_usd_micros), 0) AS claimed
+            FROM referral_claims
+            WHERE referrer_address = ${ref} AND status = 'paid'
+        `) as { claimed: string | number }[];
+        totalClaimed = BigInt(claimedRows[0]?.claimed ?? 0);
+    } catch {
+        /* referral_claims (007) not applied yet — treat as 0 */
+    }
+
     return {
-        // Phase 2 adds a claim/payout keeper; until then everything is pending.
+        // Pending = the display-only accrual; Claimed = actually-settled payouts.
         totalPendingUsdMicros: totalPending.toString(),
-        totalClaimedUsdMicros: "0",
+        totalClaimedUsdMicros: totalClaimed.toString(),
         totalVolumeUsdMicros: totalVolume.toString(),
         referredCount: referred.length,
         referred,

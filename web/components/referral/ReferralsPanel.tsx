@@ -33,6 +33,8 @@ export function ReferralsPanel({ account }: { account: Address | undefined }) {
     const [stats, setStats] = useState<ReferralStats | null>(null);
     const [loading, setLoading] = useState(false);
     const [copied, setCopied] = useState(false);
+    const [claiming, setClaiming] = useState(false);
+    const [claimMsg, setClaimMsg] = useState<string | null>(null);
 
     useEffect(() => {
         if (!account) {
@@ -67,6 +69,33 @@ export function ReferralsPanel({ account }: { account: Address | undefined }) {
         setCopied(true);
         setTimeout(() => setCopied(false), 1500);
     }, [link]);
+
+    const onClaim = useCallback(async () => {
+        if (!account) return;
+        setClaiming(true);
+        setClaimMsg(null);
+        try {
+            const res = await fetch("/api/referral/claim", {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ referrer: account }),
+            });
+            const data = await res.json();
+            if (data.enabled === false) {
+                setClaimMsg("Payouts open at mainnet — earnings are still being verified on-chain.");
+            } else if (data.ok && data.claimed === "0") {
+                setClaimMsg("Nothing to claim yet.");
+            } else if (data.ok && data.txHash) {
+                setClaimMsg(`Claimed ${fmtUsd(data.claimed)} (tx ${String(data.txHash).slice(0, 10)}…)`);
+            } else {
+                setClaimMsg(data.error ?? "Claim unavailable.");
+            }
+        } catch {
+            setClaimMsg("Claim failed. Try again later.");
+        } finally {
+            setClaiming(false);
+        }
+    }, [account]);
 
     if (!account) {
         return (
@@ -107,6 +136,21 @@ export function ReferralsPanel({ account }: { account: Address | undefined }) {
                 <Stat label="Claimed" value={fmtUsd(stats?.totalClaimedUsdMicros ?? "0")} className="text-arc-success" />
                 <Stat label="Pending" value={fmtUsd(stats?.totalPendingUsdMicros ?? "0")} className="text-arc-warn" />
                 <Stat label="Referred volume" value={fmtUsd(stats?.totalVolumeUsdMicros ?? "0")} />
+            </div>
+
+            {/* Claim (Phase 2 — disabled until on-chain verification is wired) */}
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-arc-border bg-white/[0.015] px-5 py-4">
+                <div className="text-xs text-arc-text-muted">
+                    {claimMsg ?? "Earnings become claimable once verified on-chain."}
+                </div>
+                <button
+                    type="button"
+                    onClick={onClaim}
+                    disabled={claiming}
+                    className="arc-button-primary shrink-0 px-4 py-2 text-sm disabled:opacity-50"
+                >
+                    {claiming ? "Claiming…" : "Claim"}
+                </button>
             </div>
 
             {/* Per-referred table */}
