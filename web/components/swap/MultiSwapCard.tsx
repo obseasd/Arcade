@@ -29,6 +29,7 @@ import { useV2Tokens } from "@/lib/hooks/useV2Tokens";
 import { useV3Tokens } from "@/lib/hooks/useV3Tokens";
 import { pushToast } from "@/lib/toast";
 import { addActivity } from "@/lib/activityFeed";
+import { reportReferralTrade } from "@/lib/referral";
 import { TokenIcon } from "@/components/ui/TokenIcon";
 import { MultiTokenSelectModal } from "@/components/ui/MultiTokenSelectModal";
 import { TokenSelectModal, type TokenOption } from "@/components/ui/TokenSelectModal";
@@ -589,6 +590,9 @@ export function MultiSwapCard({ tab, onTabChange }: MultiSwapCardProps) {
         value: `${outFormatted} ${outputToken.symbol}`,
         txHash: lastHash ?? ("0x" as `0x${string}`),
       });
+      // Referral accrual (fire-and-forget). usdcToSwap is the pooled USDC =
+      // the trade's USD volume.
+      if (usdcToSwap > 0n) reportReferralTrade(account, usdcToSwap);
       pushToast({
         kind: "swap",
         tokenAddress: outputToken.address,

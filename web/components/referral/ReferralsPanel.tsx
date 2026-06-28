@@ -6,11 +6,20 @@ import { buildReferralLink } from "@/lib/referral";
 import type { ReferralStats } from "@/lib/referralPersistence";
 import { formatAddress } from "@/lib/utils";
 
-const fmtUsd = (micros: string) =>
-    `$${(Number(BigInt(micros)) / 1e6).toLocaleString(undefined, {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
+// Adaptive precision: sub-cent amounts (common on testnet's tiny volumes)
+// show 4 dp so "earned" isn't a flat $0.00 the moment there's any activity.
+const fmtUsd = (micros: string) => {
+    const n = Number(BigInt(micros)) / 1e6;
+    const dp = n > 0 && n < 0.01 ? 4 : 2;
+    return `$${n.toLocaleString(undefined, {
+        minimumFractionDigits: dp,
+        maximumFractionDigits: dp,
     })}`;
+};
+
+// Hide referred wallets that haven't traded a meaningful amount yet (< $0.01
+// volume) — a wallet that connected via the link but never swapped.
+const MIN_VOLUME_MICROS = 10_000n; // $0.01
 
 /**
  * Referrals dashboard (portfolio tab). Shows the wallet's shareable referral
@@ -46,6 +55,9 @@ export function ReferralsPanel({ account }: { account: Address | undefined }) {
         };
     }, [account]);
 
+    const activeReferred = (stats?.referred ?? []).filter(
+        (r) => BigInt(r.volumeUsdMicros) >= MIN_VOLUME_MICROS,
+    );
     const link = account ? buildReferralLink(account) : "";
     const onCopy = useCallback(() => {
         if (!link) return;
@@ -99,14 +111,14 @@ export function ReferralsPanel({ account }: { account: Address | undefined }) {
             <div className="rounded-2xl border border-arc-border bg-white/[0.015] p-5">
                 <div className="mb-3 flex items-center justify-between">
                     <div className="text-sm font-semibold text-arc-text">
-                        Referred wallets {stats ? `(${stats.referredCount})` : ""}
+                        Referred wallets {stats ? `(${activeReferred.length})` : ""}
                     </div>
                 </div>
                 {loading && !stats ? (
                     <div className="py-6 text-center text-sm text-arc-text-muted">Loading…</div>
-                ) : !stats || stats.referred.length === 0 ? (
+                ) : activeReferred.length === 0 ? (
                     <div className="py-6 text-center text-sm text-arc-text-muted">
-                        No referrals yet. Share your link to start earning.
+                        No active referrals yet. Share your link to start earning.
                     </div>
                 ) : (
                     <div className="overflow-x-auto">
@@ -120,7 +132,7 @@ export function ReferralsPanel({ account }: { account: Address | undefined }) {
                                 </tr>
                             </thead>
                             <tbody>
-                                {stats.referred.map((r) => (
+                                {activeReferred.map((r) => (
                                     <tr key={r.address} className="border-t border-arc-border/60">
                                         <td className="py-2 pr-3 text-arc-text">{formatAddress(r.address)}</td>
                                         <td className="py-2 pr-3 text-right text-arc-text-muted">

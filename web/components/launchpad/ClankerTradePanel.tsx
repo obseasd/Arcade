@@ -14,6 +14,7 @@ import { useApproveIfNeeded } from "@/lib/hooks/useApproveIfNeeded";
 import { buildApproveAndCall } from "@/lib/routing/batchSwap";
 import { pushToast } from "@/lib/toast";
 import { addActivity } from "@/lib/activityFeed";
+import { reportReferralTrade } from "@/lib/referral";
 import { cn, formatToken, formatUSDC } from "@/lib/utils";
 
 interface Props {
@@ -182,6 +183,10 @@ export function ClankerTradePanel({ token, symbol, pool, image, onTradeSuccess }
         value: `${outFormatted} ${outTokenSymbol}`,
         txHash: hash,
       });
+      // Referral accrual (fire-and-forget). USD volume = the USDC leg:
+      // USDC paid on a buy, USDC received on a sell.
+      const refVol = side === "buy" ? amountRaw : estimatedOut;
+      if (refVol > 0n) reportReferralTrade(account, refVol);
       pushToast({
         kind: "swap",
         tokenAddress: side === "buy" ? token : ADDRESSES.usdc,
