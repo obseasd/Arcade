@@ -77,6 +77,21 @@ server.tool(
 );
 
 server.tool(
+    "arcade_swap_finalize",
+    "Permit2 step 2: after signing the typedData from arcade_swap (Circle sign/typedData), inject the signature and get the execute() call. Pass the same swap params plus the echoed permit and the signature.",
+    {
+        tokenIn: z.string(),
+        tokenOut: z.string(),
+        amountIn: z.string(),
+        recipient: z.string(),
+        slippageBps: z.number().optional(),
+        permit: z.any(),
+        signature: z.string(),
+    },
+    async (a) => out(await api("/swap/finalize", post(a))),
+);
+
+server.tool(
     "arcade_launchpad",
     "Build bonding-curve buy/sell or create-token descriptors. action='buy' {token, amountUsdcIn}; action='sell' {token, tokensIn}; action='create' {name, symbol, metadataURI?, mode?}.",
     {

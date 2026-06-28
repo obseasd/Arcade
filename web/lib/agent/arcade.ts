@@ -12,11 +12,28 @@
  *   { contractAddress, abiFunctionSignature, abiParameters }
  */
 
-import { createPublicClient, http, erc20Abi, zeroAddress, type Address } from "viem";
+import {
+    createPublicClient,
+    http,
+    erc20Abi,
+    zeroAddress,
+    maxUint160,
+    maxUint256,
+    toFunctionSignature,
+    getAbiItem,
+    type Address,
+    type Hex,
+} from "viem";
 import { arcTestnet } from "@/lib/chains";
 import { ADDRESSES, CREATION_FEE_USDC } from "@/lib/constants";
 import { quoteBestLeg } from "@/lib/routing/multiLegQuote";
 import { LAUNCHPAD_ABI } from "@/lib/abis/launchpad";
+import { encodePermit2PermitInput, type Permit2PermitSingle } from "@/lib/routing/universalRouter";
+import {
+    PERMIT2_ADDRESS,
+    PERMIT2_ABI,
+    PERMIT2_DEFAULT_EXPIRATION_SECONDS,
+} from "@/lib/abis/permit2";
 
 export const ARC_CHAIN = "ARC-TESTNET" as const;
 
@@ -71,16 +88,6 @@ export function approvalCall(
     };
 }
 
-/** Solidity signatures for the swap executors the router returns. */
-const SWAP_SIG: Record<string, string> = {
-    swapExactTokensForTokens: "swapExactTokensForTokens(uint256,uint256,address[],address,uint256)",
-    swapTokensForExactTokens: "swapTokensForExactTokens(uint256,uint256,address[],address,uint256)",
-    exactInputSingle: "exactInputSingle(address,address,uint24,address,uint256,uint256,uint256)",
-    exactInputThroughUsdc:
-        "exactInputThroughUsdc(address,address,uint24,address,uint256,uint256,uint256,uint256)",
-    swapMigratedRoute: "swapMigratedRoute(address,address,uint256,uint256,uint256,uint256)",
-};
-
 const deadlineFromNow = (secs = 600) => BigInt(Math.floor(Date.now() / 1000) + secs);
 
 async function getDecimals(token: Address): Promise<number> {
@@ -101,10 +108,17 @@ export type SwapPlan = {
     provider?: string;
     amountIn: string;
     amountOut?: string;
-    /** true when the best route executes via a plain contract call an agent
-     *  can sign directly (Arcade V2/V3). Permit2-based external venues need a
-     *  typed-data signature step not yet automated for agents. */
+    /** true when the route executes via plain contract calls the agent can
+     *  sign directly. false for Permit2 venues until /swap/finalize. */
     executable?: boolean;
+    /** Permit2 venues: sign typedData, then call /swap/finalize. */
+    requiresPermit2Signature?: boolean;
+    permit2?: {
+        approve: ContractCall;
+        typedData: unknown;
+        permit: unknown;
+        finalize: string;
+    };
     note?: string;
     /** Ordered calls the agent signs + submits with its Circle Wallet. */
     calls: ContractCall[];
@@ -138,25 +152,50 @@ export async function getSwapPlan(params: {
     if (!route) {
         return { ok: false, reason: "no route found", amountIn: params.amountIn.toString(), calls: [] };
     }
-    const executable = route.provider.startsWith("arcade") && !route.permit2;
-    const sig = SWAP_SIG[route.executor.functionName];
-    if (!executable || !sig) {
+    const baseOut = {
+        ok: true as const,
+        provider: route.provider,
+        amountIn: params.amountIn.toString(),
+        amountOut: route.amountOut.toString(),
+    };
+
+    // Permit2 venue (Synthra, UnitFlow): 2-step flow. The agent approves the
+    // token to Permit2 once, signs the PermitSingle typed-data with its wallet
+    // (Circle sign/typedData), then calls /swap/finalize to get the execute call.
+    if (route.permit2) {
+        const { typedData, permitJson } = await buildPermit2Request(
+            params.tokenIn,
+            route.permit2.permitSpender,
+            params.recipient,
+        );
         return {
-            ok: true,
-            provider: route.provider,
-            amountIn: params.amountIn.toString(),
-            amountOut: route.amountOut.toString(),
+            ...baseOut,
             executable: false,
-            note:
-                "Best price is on an external Permit2 venue, which needs an EIP-712 signature step not yet automated for agents. The quote is informational; execute via an Arcade-native route or await v2 Permit2 agent support.",
+            requiresPermit2Signature: true,
+            note: "Permit2 venue. (1) run permit2.approve once, (2) sign permit2.typedData with your wallet, (3) POST /api/agent/swap/finalize with the same params plus { permit: permit2.permit, signature } to get the execute call.",
+            permit2: {
+                approve: approvalCall(params.tokenIn, PERMIT2_ADDRESS, maxUint256, "Permit2"),
+                typedData,
+                permit: permitJson,
+                finalize: "POST /api/agent/swap/finalize",
+            },
+            calls: [],
+        };
+    }
+
+    // Plain route (Arcade V2/V3, Xylonet): approve + one call. The function
+    // signature is derived from the executor's own ABI so any venue works.
+    const sig = sigFromExecutor(route.executor);
+    if (!sig) {
+        return {
+            ...baseOut,
+            executable: false,
+            note: "could not derive the call signature for this venue",
             calls: [],
         };
     }
     return {
-        ok: true,
-        provider: route.provider,
-        amountIn: params.amountIn.toString(),
-        amountOut: route.amountOut.toString(),
+        ...baseOut,
         executable: true,
         calls: [
             approvalCall(route.approval.token, route.approval.spender, route.approval.amount, "Arcade router"),
@@ -166,6 +205,145 @@ export async function getSwapPlan(params: {
                 abiFunctionSignature: sig,
                 abiParameters: route.executor.args.map(jsonSafe),
                 description: `Swap ${params.amountIn} of ${params.tokenIn} to ${params.tokenOut} via ${route.provider}. Output goes to ${params.recipient}.`,
+            },
+        ],
+    };
+}
+
+// ===== Permit2 (2-step agent flow) =====
+
+const PERMIT_TYPES = {
+    PermitDetails: [
+        { name: "token", type: "address" },
+        { name: "amount", type: "uint160" },
+        { name: "expiration", type: "uint48" },
+        { name: "nonce", type: "uint48" },
+    ],
+    PermitSingle: [
+        { name: "details", type: "PermitDetails" },
+        { name: "spender", type: "address" },
+        { name: "sigDeadline", type: "uint256" },
+    ],
+} as const;
+
+type PermitJson = {
+    details: { token: Address; amount: string; expiration: number; nonce: number };
+    spender: Address;
+    sigDeadline: string;
+};
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function sigFromExecutor(executor: { abi: any; functionName: string }): string | null {
+    try {
+        const item = getAbiItem({ abi: executor.abi, name: executor.functionName });
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        return item ? toFunctionSignature(item as any) : null;
+    } catch {
+        return null;
+    }
+}
+
+async function buildPermit2Request(token: Address, spender: Address, owner: Address) {
+    let nonce = 0;
+    try {
+        const a = (await arc.readContract({
+            address: PERMIT2_ADDRESS,
+            abi: PERMIT2_ABI,
+            functionName: "allowance",
+            args: [owner, token, spender],
+        })) as readonly [bigint, number, number];
+        nonce = Number(a[2]);
+    } catch {
+        /* default nonce 0 */
+    }
+    const now = Math.floor(Date.now() / 1000);
+    const deadline = now + PERMIT2_DEFAULT_EXPIRATION_SECONDS;
+    const permitJson: PermitJson = {
+        details: { token, amount: maxUint160.toString(), expiration: deadline, nonce },
+        spender,
+        sigDeadline: String(deadline),
+    };
+    const typedData = {
+        domain: { name: "Permit2", chainId: arcTestnet.id, verifyingContract: PERMIT2_ADDRESS },
+        types: PERMIT_TYPES,
+        primaryType: "PermitSingle",
+        message: permitJson,
+    };
+    return { typedData, permitJson };
+}
+
+function parsePermit(p: PermitJson): Permit2PermitSingle {
+    return {
+        details: {
+            token: p.details.token,
+            amount: BigInt(p.details.amount),
+            expiration: Number(p.details.expiration),
+            nonce: Number(p.details.nonce),
+        },
+        spender: p.spender,
+        sigDeadline: BigInt(p.sigDeadline),
+    };
+}
+
+/** Step 2 of a Permit2 swap: inject the agent's signature into the Universal
+ *  Router execute call and return the final descriptor to submit. */
+export async function finalizePermit2Swap(params: {
+    tokenIn: Address;
+    tokenOut: Address;
+    amountIn: bigint;
+    recipient: Address;
+    slippageBps?: number;
+    permit: PermitJson;
+    signature: Hex;
+}): Promise<SwapPlan> {
+    const slippageBps = params.slippageBps ?? 50;
+    const [decimalsIn, decimalsOut] = await Promise.all([
+        getDecimals(params.tokenIn),
+        getDecimals(params.tokenOut),
+    ]);
+    const route = await quoteBestLeg(
+        {
+            tokenIn: params.tokenIn,
+            tokenOut: params.tokenOut,
+            decimalsIn,
+            decimalsOut,
+            amountIn: params.amountIn,
+            recipient: params.recipient,
+            slippageBps,
+            deadline: deadlineFromNow(),
+        },
+        arc,
+    );
+    if (!route || !route.permit2) {
+        return {
+            ok: false,
+            reason: "no Permit2 route for these params now (the best route may have shifted)",
+            amountIn: params.amountIn.toString(),
+            calls: [],
+        };
+    }
+    const encoded = encodePermit2PermitInput(parsePermit(params.permit), params.signature);
+    const args = route.executor.args as unknown[];
+    const inputs = [...((args[1] as Hex[]) ?? [])];
+    const idx = route.permit2.permitInputIndex;
+    if (idx < 0 || idx >= inputs.length) {
+        return { ok: false, reason: "invalid permitInputIndex", amountIn: params.amountIn.toString(), calls: [] };
+    }
+    inputs[idx] = encoded;
+    const sig = sigFromExecutor(route.executor) ?? "execute(bytes,bytes[],uint256)";
+    return {
+        ok: true,
+        provider: route.provider,
+        amountIn: params.amountIn.toString(),
+        amountOut: route.amountOut.toString(),
+        executable: true,
+        calls: [
+            {
+                chain: ARC_CHAIN,
+                contractAddress: route.executor.router,
+                abiFunctionSignature: sig,
+                abiParameters: [args[0], inputs, jsonSafe(args[2])],
+                description: `Execute the signed Permit2 swap via ${route.provider}.`,
             },
         ],
     };

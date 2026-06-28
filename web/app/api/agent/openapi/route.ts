@@ -79,6 +79,31 @@ export async function GET(req: NextRequest) {
                     responses: { "200": { description: "ok" } },
                 },
             },
+            "/swap/finalize": {
+                post: {
+                    summary: "Permit2 step 2: inject the signature and return the execute call",
+                    requestBody: {
+                        content: {
+                            "application/json": {
+                                schema: {
+                                    type: "object",
+                                    required: ["tokenIn", "tokenOut", "amountIn", "recipient", "permit", "signature"],
+                                    properties: {
+                                        tokenIn: { type: "string" },
+                                        tokenOut: { type: "string" },
+                                        amountIn: { type: "string" },
+                                        recipient: { type: "string" },
+                                        slippageBps: { type: "integer", default: 50 },
+                                        permit: { type: "object", description: "echoed from /swap permit2.permit" },
+                                        signature: { type: "string", description: "EIP-712 signature of permit2.typedData" },
+                                    },
+                                },
+                            },
+                        },
+                    },
+                    responses: { "200": { description: "ok" } },
+                },
+            },
             "/launchpad": {
                 post: {
                     summary: "Build bonding-curve buy/sell or create-token descriptors",

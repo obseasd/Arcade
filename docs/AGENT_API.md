@@ -47,9 +47,25 @@ Each entry in `calls` maps 1:1 onto Circle's `createContractExecutionTransaction
 ```
 
 `calls` is ordered: run the `approve(address,uint256)` call first, then the
-action call. `executable=false` means the best price is on an external Permit2
-venue that needs an extra typed-data signature (informational quote only for
-now; Arcade-native routes are always executable).
+action call.
+
+### Permit2 venues (2-step)
+
+When the best route is a Permit2 venue (Synthra, UnitFlow), `/swap` returns
+`executable:false` + `requiresPermit2Signature:true` + a `permit2` object:
+
+```
+1. POST /api/agent/swap  -> { requiresPermit2Signature:true, permit2:{ approve, typedData, permit } }
+2. run permit2.approve once (token -> Permit2)        [Circle createContractExecutionTransaction]
+3. sign permit2.typedData with the agent wallet        [Circle sign/typedData]  -> signature
+4. POST /api/agent/swap/finalize { ...same params, permit: permit2.permit, signature }
+        -> { executable:true, calls:[ execute(bytes,bytes[],uint256) ] }   (signature injected)
+5. submit the execute call                             [Circle createContractExecutionTransaction]
+```
+
+This is verified end-to-end (USDC -> USDT via Synthra). With it, every venue is
+agent-executable: Arcade V2/V3 and Xylonet are one-step; Permit2 venues are the
+two-step flow above.
 
 ## Endpoints
 
@@ -115,11 +131,12 @@ the contract-execution API needs no manual calldata encoding, which let us
 expose every Arcade action (swap, curve trade, token launch, basket converge) as
 a uniform descriptor with almost no glue code.
 
-**What could improve.** (1) Typed-data (EIP-712) signing from dev-controlled
-wallets would let agents use Permit2-based venues, which we currently mark
-non-executable. (2) A batch/atomic "approve + action" execution primitive would
-remove the two-step approve dance. (3) Clearer testnet docs on `ARC-TESTNET`
-gas-fee fields (USDC-as-gas) would shorten integration.
+**What could improve.** (1) We use `sign/typedData` to unlock Permit2 venues for
+agents, but it forces a 2-call round-trip (sign, then re-submit the signed
+input); a "sign-and-execute in one call" primitive would collapse it. (2) A
+batch/atomic "approve + action" execution primitive would remove the two-step
+approve dance. (3) Clearer testnet docs on `ARC-TESTNET` gas-fee fields
+(USDC-as-gas) would shorten integration.
 
 **Recommendation.** Ship a first-class "agent session" concept: a scoped wallet
 with a spend policy + an allow-list of contracts, provisioned in one call. That
