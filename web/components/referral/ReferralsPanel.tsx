@@ -6,11 +6,18 @@ import { buildReferralLink } from "@/lib/referral";
 import type { ReferralStats } from "@/lib/referralPersistence";
 import { formatAddress } from "@/lib/utils";
 
-const fmtUsd = (micros: string) =>
-    `$${(Number(BigInt(micros)) / 1e6).toLocaleString(undefined, {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-    })}`;
+// Format USD micros entirely in BigInt — going through Number(...)/1e6 loses
+// precision (and can print Infinity) above ~$9M (audit M-5).
+const fmtUsd = (micros: string) => {
+    const m = BigInt(micros);
+    const neg = m < 0n;
+    const abs = neg ? -m : m;
+    const dollars = abs / 1_000_000n;
+    const cents = (abs % 1_000_000n) / 10_000n; // 2dp, truncated
+    return `${neg ? "-" : ""}$${dollars.toLocaleString()}.${cents
+        .toString()
+        .padStart(2, "0")}`;
+};
 
 // Hide referred wallets that haven't traded a meaningful amount yet (< $0.01
 // volume) — a wallet that connected via the link but never swapped.

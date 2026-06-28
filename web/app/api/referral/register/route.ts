@@ -7,11 +7,17 @@ export const dynamic = "force-dynamic";
 /**
  * POST /api/referral/register  { referred, referrer }
  *
- * Records a first-touch referral. Idempotent + safe to call repeatedly:
- * the persistence layer rejects self-referral and keeps the FIRST referrer
- * a wallet ever had. Public (called from the frontend on wallet connect);
- * a forged registration only ever attributes the CALLER's own future fees,
- * so there's no incentive to spoof it.
+ * Records a first-touch referral. Idempotent: the persistence layer rejects
+ * self-referral and keeps the FIRST referrer a wallet ever had.
+ *
+ * SECURITY (audit 2026-06-28): UNAUTHENTICATED, and the caller chooses BOTH
+ * addresses. Because attribution is first-touch-wins, an attacker can
+ * land-grab a wallet that hasn't registered yet (POST {referred: victim,
+ * referrer: attacker} first) and permanently attribute it to themselves.
+ * Tolerable in Phase 1 (display only — no payout). Phase 2 MUST establish
+ * attribution from the referred wallet's OWN first on-chain action (a
+ * signature or the first trade's tx), not an anonymous POST, and recompute
+ * attribution on-chain before paying anything.
  */
 export async function POST(req: NextRequest) {
     let body: { referred?: string; referrer?: string };

@@ -16,10 +16,16 @@ const REFERRAL_SHARE_BPS = 1000n; // referrer gets 10% of the protocol cut
  * POST /api/referral/track  { trader, volumeUsdMicros }
  *
  * Accrues a trade against the trader's referrer (if the trader has one).
- * Phase 1 trusts the frontend's reported volume — that's fine because a
- * forged trade only inflates the CALLER's own referrer's pending number
- * (no payout happens until Phase 2, where the indexer recomputes from
- * on-chain events before anything is paid).
+ *
+ * SECURITY (audit 2026-06-28): this endpoint is UNAUTHENTICATED and the
+ * caller controls `trader` + `volumeUsdMicros` freely. A malicious caller
+ * can inflate ANY referred wallet's accrual to an arbitrary (bounded)
+ * number, and an honest report can be replayed (no tx-hash dedup yet). This
+ * is acceptable ONLY because in Phase 1 the accrual is DISPLAY-ONLY — no
+ * money moves. The Phase 2 payout MUST recompute earnings exclusively from
+ * on-chain events keyed by UNIQUE tx hashes, capped at fees actually
+ * collected from each referred wallet, with sybil/circularity netting. It
+ * must NEVER pay out `earned_usd_micros` / `pending` read from this table.
  */
 export async function POST(req: NextRequest) {
     let body: { trader?: string; volumeUsdMicros?: string | number };
@@ -32,13 +38,20 @@ export async function POST(req: NextRequest) {
     if (!trader || volumeUsdMicros === undefined) {
         return NextResponse.json({ error: "trader + volumeUsdMicros required" }, { status: 400 });
     }
-    let volume: bigint;
-    try {
-        volume = BigInt(volumeUsdMicros);
-    } catch {
-        return NextResponse.json({ error: "volumeUsdMicros must be an integer" }, { status: 400 });
+    // Strict base-10 integer only (BigInt() would otherwise swallow hex /
+    // whitespace), and a sane per-trade ceiling so a forged report can't
+    // write an absurd accrual. NOTE: this number is DISPLAY-ONLY in Phase 1;
+    // Phase 2 must NOT pay out from it — see audit note above.
+    const rawVol = String(volumeUsdMicros);
+    if (!/^[0-9]+$/.test(rawVol)) {
+        return NextResponse.json({ error: "volumeUsdMicros must be a base-10 integer" }, { status: 400 });
     }
+    const MAX_VOLUME_MICROS = 10_000_000_000_000n; // $10M / trade ceiling
+    const volume = BigInt(rawVol);
     if (volume <= 0n) return NextResponse.json({ ok: true, tracked: false });
+    if (volume > MAX_VOLUME_MICROS) {
+        return NextResponse.json({ error: "volume exceeds per-trade ceiling" }, { status: 400 });
+    }
 
     const earned = (volume * PROTOCOL_FEE_BPS * REFERRAL_SHARE_BPS) / 100_000_000n;
     try {
