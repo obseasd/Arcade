@@ -6,16 +6,11 @@ import { buildReferralLink } from "@/lib/referral";
 import type { ReferralStats } from "@/lib/referralPersistence";
 import { formatAddress } from "@/lib/utils";
 
-// Adaptive precision: sub-cent amounts (common on testnet's tiny volumes)
-// show 4 dp so "earned" isn't a flat $0.00 the moment there's any activity.
-const fmtUsd = (micros: string) => {
-    const n = Number(BigInt(micros)) / 1e6;
-    const dp = n > 0 && n < 0.01 ? 4 : 2;
-    return `$${n.toLocaleString(undefined, {
-        minimumFractionDigits: dp,
-        maximumFractionDigits: dp,
+const fmtUsd = (micros: string) =>
+    `$${(Number(BigInt(micros)) / 1e6).toLocaleString(undefined, {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
     })}`;
-};
 
 // Hide referred wallets that haven't traded a meaningful amount yet (< $0.01
 // volume) — a wallet that connected via the link but never swapped.
