@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { rejectCrossOrigin, rateLimit, rateLimitGlobal } from "@/lib/apiGuard";
 
 /**
  * Circle Stablecoin-Kit swap proxy.
@@ -24,6 +25,23 @@ const ALLOWED_PREFIX = "https://api.circle.com/v1/stablecoinKits";
 const KIT_KEY = process.env.NEXT_PUBLIC_CIRCLE_KIT_KEY;
 
 async function forward(req: NextRequest): Promise<NextResponse> {
+    // Audit 2026-06-28 M-2: this proxy injects the publishable Circle kit key
+    // server-side, which bypasses the Console origin-allowlist (the key's only
+    // protection). Without these guards anyone could curl it in a loop and burn
+    // the operator's Circle quota / billing. Mirror the pin/* routes.
+    //  - rejectCrossOrigin blocks browser cross-site abuse, but fails open for
+    //    non-browser callers (no Sec-Fetch-Site), so the rate limits are the
+    //    load-bearing control here.
+    //  - per-IP cap sized to a real user's quote/swap cadence.
+    //  - global cap = an absolute ceiling on Circle calls regardless of source
+    //    IP, so an IP-rotating attacker still can't drain the quota.
+    const csrf = rejectCrossOrigin(req);
+    if (csrf) return csrf;
+    const perIp = rateLimit(req, "fx-circle", 30, 60_000);
+    if (perIp) return perIp;
+    const global = rateLimitGlobal("fx-circle-global", 300, 60_000);
+    if (global) return global;
+
     const target = req.nextUrl.searchParams.get("target");
     if (!target || !target.startsWith(ALLOWED_PREFIX)) {
         return NextResponse.json(

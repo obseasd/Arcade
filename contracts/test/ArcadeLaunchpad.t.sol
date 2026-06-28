@@ -419,8 +419,8 @@ contract ArcadeLaunchpadTest is Test {
         // sqrt(b0*b1) - 1000 on first mint). This test now verifies the
         // donation IS absorbed into the locked LP rather than sitting on
         // the pair as an attackable balance imbalance, while the
-        // pre-mint hard-revert (audit L-1) is exercised in
-        // test_L1_v2PairPreMintReverts below.
+        // pre-mint case (audit L-1 / H-1) is exercised in
+        // test_H1_v2PairPreMint_migrationStillCompletes below.
         address token = _createToken();
 
         address pair = factory.createPair(address(usdc), token);
@@ -448,31 +448,52 @@ contract ArcadeLaunchpadTest is Test {
         );
     }
 
-    /// @notice Audit L-1: V2 pre-mint LP attack must hard-revert migration.
-    function test_L1_v2PairPreMintReverts() public {
+    /// @notice Audit 2026-06-28 H-1: a pre-minted V2 pair must NOT brick
+    /// migration. The previous hard-revert (audit L-1) was a permanent
+    /// griefing DoS: dust LP on the canonical pair froze migration forever.
+    /// Migration now seeds via the router's addLiquidity, which (a) completes
+    /// despite the poisoned pair and (b) adds only proportional liquidity, so
+    /// the pre-miner never captures the seed (L-1 still defended), with the
+    /// un-seeded USDC refunded to the treasury.
+    function test_H1_v2PairPreMint_migrationStillCompletes() public {
         address token = _createToken();
         address pair = factory.createPair(address(usdc), token);
 
-        // Attacker pre-mints: transfer USDC + token then call mint().
+        // Attacker pre-mints real LP on the canonical pair.
         deal(address(usdc), bob, 1_000 * 10 ** 6);
-        // Give bob a small amount of the launchpad token by buying via curve.
         vm.startPrank(bob);
         usdc.approve(address(launchpad), type(uint256).max);
         launchpad.buy(token, 100 * 10 ** 6, 0);
         uint256 bobTokenBal = IERC20(token).balanceOf(bob);
-        // Stage donation in the right ratio for a V2 first-mint.
         usdc.transfer(pair, 100 * 10 ** 6);
         IERC20(token).transfer(pair, bobTokenBal);
         IArcadeV2Pair(pair).mint(bob);
+        uint256 bobLp = IERC20(pair).balanceOf(bob);
         vm.stopPrank();
 
-        // Now graduate the curve. Migration must revert because the pair
-        // has been pre-minted (totalSupply != 0).
+        uint256 treasuryBefore = usdc.balanceOf(treasury);
+
+        // Graduate the curve. With the H-1 fix this MUST NOT revert.
         vm.startPrank(alice);
         usdc.approve(address(launchpad), type(uint256).max);
-        vm.expectRevert(ArcadeLaunchpad.InvalidRoute.selector);
         launchpad.buy(token, 100_000 * 10 ** 6, 0);
+
+        // Migration completed: any further buy reverts (already migrated).
+        vm.expectRevert();
+        launchpad.buy(token, 1_000 * 10 ** 6, 0);
         vm.stopPrank();
+
+        // The seed went to the locked DEAD LP, not the pre-miner.
+        assertGt(IERC20(pair).balanceOf(launchpad.DEAD()), 0, "DEAD holds the seeded LP");
+        // The pre-miner's LP is unchanged: no seed was donated to bob's position.
+        assertEq(IERC20(pair).balanceOf(bob), bobLp, "pre-miner LP unchanged");
+        // Treasury received at least the migration fee (proves migration ran),
+        // plus the refunded un-seeded USDC.
+        assertGe(
+            usdc.balanceOf(treasury) - treasuryBefore,
+            launchpad.MIGRATION_FEE(),
+            "treasury got fee + refund"
+        );
     }
 
     // ============= L-12: setV3Infra rejects zero addresses ===============

@@ -905,42 +905,45 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
             _safePayUsdc(treasury, platformCut);
         }
 
-        address pair = v2Factory.getPair(address(USDC), tokenAddr);
-        if (pair == address(0)) {
-            pair = v2Factory.createPair(address(USDC), tokenAddr);
-        }
-        // Audit L-1 (CRITICAL): defend against the V2 migration pre-mint
-        // LP attack. An attacker can frontrun the migration by calling
-        // factory.createPair + pair.mint at a skewed ratio, owning up
-        // to 50% of the LP after the launchpad seeds (~$8,750+ loss
-        // per launch). The launchpad cannot burn attacker LP (they hold
-        // the tokens), so the only safe path is to refuse migration
-        // into a corrupted pair. Read totalSupply via assembly to fit
-        // the contract under EIP-170 (the Solidity-emitted IArcadeV2Pair
-        // wrapper would push the runtime size over 24,576 bytes).
-        // Selector 0x18160ddd = bytes4(keccak256("totalSupply()")).
+        // Audit 2026-06-28 H-1: seed liquidity through the router's
+        // addLiquidity with zero min-amounts, instead of a manual
+        // transfer+mint gated on pair.totalSupply()==0.
         //
-        // Donation-only grief vector (raw USDC.transfer to the pair) is
-        // benign with this check in place: the donation is baked into
-        // the DEAD address's first-mint LP via the V2 mint formula
-        // (liquidity = sqrt(balance0*balance1) - 1000), which means the
-        // attacker just burned their USDC. No skim() needed — it was
-        // there to drain donations before the seed, but the mint-to-
-        // DEAD path now absorbs them directly. Removing the skim() call
-        // reclaims the ~50 bytes the assembly check spent.
-        uint256 _ts;
-        assembly {
-            mstore(0x00, 0x18160ddd)
-            let ok := staticcall(gas(), pair, 0x1c, 0x04, 0x00, 0x20)
-            if iszero(ok) { revert(0, 0) }
-            _ts := mload(0x00)
-        }
-        if (_ts != 0) revert InvalidRoute();
-        USDC.safeTransfer(pair, usdcForLP);
-        IERC20(tokenAddr).safeTransfer(pair, tokensForLP);
-        IArcadeV2Pair(pair).mint(DEAD);
+        // The previous guard reverted migration into ANY pre-existing pair to
+        // block the L-1 pre-mint LP-theft. But that turned the deterministic
+        // pair address into a permanent griefing brick: anyone could pre-mint
+        // a few wei of LP on the canonical USDC/token pair and the curve could
+        // then never finish migrating (every fill-buy reverted forever, no LP
+        // seed, no migration fee, late buyers stranded).
+        //
+        // addLiquidity quotes at the CURRENT reserves, which kills BOTH bugs:
+        //  - L-1 (theft): only proportional liquidity is added; nothing is
+        //    donated to a pre-miner's LP. The un-seeded remainder is refunded
+        //    here, not gifted to the pool.
+        //  - H-1 (brick): with amountMin = 0 it never reverts on a poisoned or
+        //    skewed pair, so migration always completes.
+        // For the normal (empty) pair it adds the full seed and refunds nothing.
+        USDC.forceApprove(v2Router, usdcForLP);
+        IERC20(tokenAddr).forceApprove(v2Router, tokensForLP);
+        (uint256 usedUsdc, uint256 usedToken,) = IArcadeV2Router(v2Router).addLiquidity(
+            address(USDC), tokenAddr, usdcForLP, tokensForLP, 0, 0, DEAD, block.timestamp
+        );
+        // Allowance is not reset to 0: addLiquidity consumes the approval down
+        // to the leftover, and v2Router is our own immutable, trusted contract
+        // (it only ever transferFrom's its own caller), so a residual allowance
+        // on the un-seeded remainder is not third-party exploitable. Saves the
+        // bytecode of two resets to stay under EIP-170.
+        // Refund the precise un-seeded remainder (nonzero only when a skewed
+        // pair was pre-minted). USDC to the treasury, leftover tokens burned to
+        // DEAD. Using the router's return values keeps this exact and never
+        // touches other curves' pooled USDC.
+        uint256 leftoverUsdc = usdcForLP - usedUsdc;
+        if (leftoverUsdc > 0) _safePayUsdc(treasury, leftoverUsdc);
+        uint256 leftoverToken = tokensForLP - usedToken;
+        if (leftoverToken > 0) IERC20(tokenAddr).safeTransfer(DEAD, leftoverToken);
+        address pair = v2Factory.getPair(address(USDC), tokenAddr);
         s.v2Pair = pair;
-        emit Migrated(tokenAddr, pair, usdcForLP, tokensForLP);
+        emit Migrated(tokenAddr, pair, usedUsdc, usedToken);
     }
 
     /// @dev Clanker-style immediate launch (no bonding curve): deploy a Uniswap
