@@ -1,0 +1,16 @@
+{
+  "name": "arcade-agent-mcp",
+  "version": "1.0.0",
+  "description": "MCP server that lets any AI agent use Arcade (USDC-native DEX + launchpad on Circle's Arc L1).",
+  "type": "module",
+  "bin": {
+    "arcade-agent-mcp": "index.mjs"
+  },
+  "scripts": {
+    "start": "node index.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.4.0",
+    "zod": "^3.23.8"
+  }
+}
