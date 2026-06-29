@@ -1,10 +1,39 @@
 {
   "name": "arcade-agent-mcp",
   "version": "1.0.0",
-  "description": "MCP server that lets any AI agent use Arcade (USDC-native DEX + launchpad on Circle's Arc L1).",
+  "description": "MCP server: let any AI agent trade and launch tokens on Arcade (USDC-native DEX + bonding-curve launchpad on Circle's Arc L1).",
+  "keywords": [
+    "mcp",
+    "modelcontextprotocol",
+    "agent",
+    "defi",
+    "dex",
+    "circle",
+    "arc",
+    "usdc",
+    "arcade",
+    "launchpad"
+  ],
+  "homepage": "https://www.arcade.trading",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/obseasd/Arcade.git",
+    "directory": "agent-mcp"
+  },
+  "license": "MIT",
   "type": "module",
   "bin": {
     "arcade-agent-mcp": "index.mjs"
+  },
+  "files": [
+    "index.mjs",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "start": "node index.mjs"

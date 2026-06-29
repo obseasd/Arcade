@@ -8,23 +8,16 @@ The agent discovers markets, gets best-execution quotes, and receives
 **own wallet** (e.g. a Circle developer-controlled wallet via
 `createContractExecutionTransaction`). This server never holds keys.
 
-## Install
-
-```bash
-cd agent-mcp
-npm install
-```
-
 ## Configure (Claude Desktop / Claude Code)
 
-Add to your MCP config:
+Add to your MCP config (no install needed, `npx` fetches it):
 
 ```json
 {
   "mcpServers": {
     "arcade": {
-      "command": "node",
-      "args": ["/absolute/path/to/agent-mcp/index.mjs"],
+      "command": "npx",
+      "args": ["-y", "arcade-agent-mcp"],
       "env": { "ARCADE_API_BASE": "https://www.arcade.trading" }
     }
   }
@@ -33,6 +26,9 @@ Add to your MCP config:
 
 `ARCADE_API_BASE` defaults to `https://www.arcade.trading`; point it at
 `http://localhost:3000` for local dev.
+
+**From source** (development): `cd agent-mcp && npm install`, then use
+`"command": "node", "args": ["/absolute/path/to/agent-mcp/index.mjs"]`.
 
 ## Tools
 

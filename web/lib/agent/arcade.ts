@@ -40,7 +40,11 @@ export const ARC_CHAIN = "ARC-TESTNET" as const;
 /** Server-side Arc public client. Uses the same RPC the app resolves to. */
 export const arc = createPublicClient({
     chain: arcTestnet,
-    transport: http(process.env.NEXT_PUBLIC_ARC_RPC_URL || "https://rpc.testnet.arc.network"),
+    // Bound RPC latency so a hung node returns an error instead of stalling
+    // an agent's request forever (audit: no transport timeout).
+    transport: http(process.env.NEXT_PUBLIC_ARC_RPC_URL || "https://rpc.testnet.arc.network", {
+        timeout: 12_000,
+    }),
 });
 
 const isAddr = (a: unknown): a is Address =>
@@ -58,6 +62,28 @@ export const KNOWN_TOKENS = (
     ] as { symbol: string; address: Address; decimals: number; kind: string }[]
 ).filter((t) => isAddr(t.address));
 
+/** Resolve a token reference: a known symbol (USDC, USDT, ...) or a 0x address. */
+export function resolveToken(ref: unknown): Address | null {
+    if (isAddr(ref)) return ref;
+    if (typeof ref !== "string") return null;
+    const k = KNOWN_TOKENS.find((t) => t.symbol.toLowerCase() === ref.trim().toLowerCase());
+    return k ? k.address : null;
+}
+
+/** Human-readable amount for a raw integer (up to 6 significant fractional digits). */
+function fmtAmount(raw: bigint, decimals: number): string {
+    const neg = raw < 0n;
+    const a = neg ? -raw : raw;
+    const base = 10n ** BigInt(decimals);
+    const frac = (a % base).toString().padStart(decimals, "0").slice(0, 6).replace(/0+$/, "");
+    return `${neg ? "-" : ""}${(a / base).toString()}${frac ? "." + frac : ""}`;
+}
+
+const tokenMeta = (addr: Address, decimals: number) => {
+    const k = KNOWN_TOKENS.find((t) => t.address.toLowerCase() === addr.toLowerCase());
+    return { address: addr, symbol: k?.symbol ?? null, decimals };
+};
+
 // ===== Descriptor model =====
 
 export type ContractCall = {
@@ -66,6 +92,8 @@ export type ContractCall = {
     abiFunctionSignature: string;
     /** Ordered args, JSON-safe (bigints serialized to decimal strings). */
     abiParameters: unknown[];
+    /** Native value to send with the call (USDC raw units; usually "0" on Arc). */
+    value?: string;
     description: string;
 };
 
@@ -105,9 +133,21 @@ async function getDecimals(token: Address): Promise<number> {
 export type SwapPlan = {
     ok: boolean;
     reason?: string;
+    /** Stable error code + retryable flag so agents can branch (set on ok:false). */
+    code?: string;
+    retryable?: boolean;
     provider?: string;
     amountIn: string;
+    amountInFmt?: string;
     amountOut?: string;
+    amountOutFmt?: string;
+    /** Slippage floor on amountOut (raw units) the agent is protected to. */
+    minAmountOut?: string;
+    slippageBps?: number;
+    tokenIn?: { address: Address; symbol: string | null; decimals: number };
+    tokenOut?: { address: Address; symbol: string | null; decimals: number };
+    /** What the agent should do next (machine-oriented hint). */
+    nextStep?: string;
     /** true when the route executes via plain contract calls the agent can
      *  sign directly. false for Permit2 venues until /swap/finalize. */
     executable?: boolean;
@@ -149,14 +189,28 @@ export async function getSwapPlan(params: {
         },
         arc,
     );
-    if (!route) {
-        return { ok: false, reason: "no route found", amountIn: params.amountIn.toString(), calls: [] };
+    if (!route || route.amountOut === 0n) {
+        return {
+            ok: false,
+            code: "NO_ROUTE",
+            retryable: false,
+            reason: "no route found for this pair/amount on any Arc venue",
+            amountIn: params.amountIn.toString(),
+            calls: [],
+        };
     }
+    const minAmountOut = (route.amountOut * BigInt(10_000 - slippageBps)) / 10_000n;
     const baseOut = {
         ok: true as const,
         provider: route.provider,
         amountIn: params.amountIn.toString(),
+        amountInFmt: fmtAmount(params.amountIn, decimalsIn),
         amountOut: route.amountOut.toString(),
+        amountOutFmt: fmtAmount(route.amountOut, decimalsOut),
+        minAmountOut: minAmountOut.toString(),
+        slippageBps,
+        tokenIn: tokenMeta(params.tokenIn, decimalsIn),
+        tokenOut: tokenMeta(params.tokenOut, decimalsOut),
     };
 
     // Permit2 venue (Synthra, UnitFlow): 2-step flow. The agent approves the
@@ -172,6 +226,8 @@ export async function getSwapPlan(params: {
             ...baseOut,
             executable: false,
             requiresPermit2Signature: true,
+            nextStep:
+                "Run permit2.approve once (token -> Permit2), sign permit2.typedData with Circle sign/typedData, then POST /api/agent/swap/finalize with the same params plus { permit: permit2.permit, signature }.",
             note: "Permit2 venue. (1) run permit2.approve once, (2) sign permit2.typedData with your wallet, (3) POST /api/agent/swap/finalize with the same params plus { permit: permit2.permit, signature } to get the execute call.",
             permit2: {
                 approve: approvalCall(params.tokenIn, PERMIT2_ADDRESS, maxUint256, "Permit2"),
@@ -197,6 +253,8 @@ export async function getSwapPlan(params: {
     return {
         ...baseOut,
         executable: true,
+        nextStep:
+            "Submit calls[] in order (approve, then swap) via Circle createContractExecutionTransaction on blockchain ARC-TESTNET.",
         calls: [
             approvalCall(route.approval.token, route.approval.spender, route.approval.amount, "Arcade router"),
             {
@@ -204,6 +262,7 @@ export async function getSwapPlan(params: {
                 contractAddress: route.executor.router,
                 abiFunctionSignature: sig,
                 abiParameters: route.executor.args.map(jsonSafe),
+                value: route.executor.value ? route.executor.value.toString() : "0",
                 description: `Swap ${params.amountIn} of ${params.tokenIn} to ${params.tokenOut} via ${route.provider}. Output goes to ${params.recipient}.`,
             },
         ],
@@ -374,27 +433,69 @@ export async function getLaunchpadBuyPlan(params: {
 }): Promise<SwapPlan> {
     const slippageBps = params.slippageBps ?? 100;
     const state = await readTokenState(params.token);
-    if (state?.migrated) {
+    if (state === null) {
         return {
             ok: false,
+            code: "READ_FAILED",
+            retryable: true,
+            reason: "could not read token state (RPC error or not a launchpad token)",
+            amountIn: params.amountUsdcIn.toString(),
+            calls: [],
+        };
+    }
+    if (state.migrated) {
+        return {
+            ok: false,
+            code: "GRADUATED",
+            retryable: false,
             reason: "token has graduated to the DEX; use POST /api/agent/swap (USDC -> token) instead",
             amountIn: params.amountUsdcIn.toString(),
             calls: [],
         };
     }
-    const q = (await arc.readContract({
-        address: ADDRESSES.launchpad,
-        abi: LAUNCHPAD_ABI,
-        functionName: "quoteBuy",
-        args: [params.token, params.amountUsdcIn],
-    })) as readonly [bigint, bigint, bigint];
+    let q: readonly [bigint, bigint, bigint];
+    try {
+        q = (await arc.readContract({
+            address: ADDRESSES.launchpad,
+            abi: LAUNCHPAD_ABI,
+            functionName: "quoteBuy",
+            args: [params.token, params.amountUsdcIn],
+        })) as readonly [bigint, bigint, bigint];
+    } catch {
+        return {
+            ok: false,
+            code: "QUOTE_FAILED",
+            retryable: true,
+            reason: "quoteBuy reverted (bad token or amount)",
+            amountIn: params.amountUsdcIn.toString(),
+            calls: [],
+        };
+    }
+    if (q[0] === 0n) {
+        return {
+            ok: false,
+            code: "NO_CURVE",
+            retryable: false,
+            reason: "token has no active bonding curve (zero quote); verify the token address",
+            amountIn: params.amountUsdcIn.toString(),
+            calls: [],
+        };
+    }
     const minOut = (q[0] * BigInt(10_000 - slippageBps)) / 10_000n;
+    const refund = q[2];
     return {
         ok: true,
         provider: "arcade-launchpad",
         amountIn: params.amountUsdcIn.toString(),
+        amountInFmt: fmtAmount(params.amountUsdcIn, 6),
         amountOut: q[0].toString(),
+        amountOutFmt: fmtAmount(q[0], 18),
+        minAmountOut: minOut.toString(),
+        slippageBps,
         executable: true,
+        nextStep:
+            "Submit calls[] in order (approve USDC, then buy) via Circle createContractExecutionTransaction on ARC-TESTNET.",
+        note: refund > 0n ? `Curve will refund ${refund} USDC (it graduates mid-buy).` : undefined,
         calls: [
             approvalCall(ADDRESSES.usdc, ADDRESSES.launchpad, params.amountUsdcIn, "Arcade launchpad"),
             {
@@ -402,6 +503,7 @@ export async function getLaunchpadBuyPlan(params: {
                 contractAddress: ADDRESSES.launchpad,
                 abiFunctionSignature: "buy(address,uint256,uint256)",
                 abiParameters: [params.token, params.amountUsdcIn.toString(), minOut.toString()],
+                value: "0",
                 description: `Buy ${params.token} on the bonding curve with ${params.amountUsdcIn} USDC (min ${minOut} tokens out).`,
             },
         ],
@@ -415,27 +517,67 @@ export async function getLaunchpadSellPlan(params: {
 }): Promise<SwapPlan> {
     const slippageBps = params.slippageBps ?? 100;
     const state = await readTokenState(params.token);
-    if (state?.migrated) {
+    if (state === null) {
         return {
             ok: false,
+            code: "READ_FAILED",
+            retryable: true,
+            reason: "could not read token state (RPC error or not a launchpad token)",
+            amountIn: params.tokensIn.toString(),
+            calls: [],
+        };
+    }
+    if (state.migrated) {
+        return {
+            ok: false,
+            code: "GRADUATED",
+            retryable: false,
             reason: "token has graduated to the DEX; use POST /api/agent/swap (token -> USDC) instead",
             amountIn: params.tokensIn.toString(),
             calls: [],
         };
     }
-    const usdcOut = (await arc.readContract({
-        address: ADDRESSES.launchpad,
-        abi: LAUNCHPAD_ABI,
-        functionName: "quoteSell",
-        args: [params.token, params.tokensIn],
-    })) as bigint;
+    let usdcOut: bigint;
+    try {
+        usdcOut = (await arc.readContract({
+            address: ADDRESSES.launchpad,
+            abi: LAUNCHPAD_ABI,
+            functionName: "quoteSell",
+            args: [params.token, params.tokensIn],
+        })) as bigint;
+    } catch {
+        return {
+            ok: false,
+            code: "QUOTE_FAILED",
+            retryable: true,
+            reason: "quoteSell reverted (bad token or amount)",
+            amountIn: params.tokensIn.toString(),
+            calls: [],
+        };
+    }
+    if (usdcOut === 0n) {
+        return {
+            ok: false,
+            code: "NO_CURVE",
+            retryable: false,
+            reason: "token has no active bonding curve (zero quote); verify the token address",
+            amountIn: params.tokensIn.toString(),
+            calls: [],
+        };
+    }
     const minOut = (usdcOut * BigInt(10_000 - slippageBps)) / 10_000n;
     return {
         ok: true,
         provider: "arcade-launchpad",
         amountIn: params.tokensIn.toString(),
+        amountInFmt: fmtAmount(params.tokensIn, 18),
         amountOut: usdcOut.toString(),
+        amountOutFmt: fmtAmount(usdcOut, 6),
+        minAmountOut: minOut.toString(),
+        slippageBps,
         executable: true,
+        nextStep:
+            "Submit calls[] in order (approve token, then sell) via Circle createContractExecutionTransaction on ARC-TESTNET.",
         calls: [
             approvalCall(params.token, ADDRESSES.launchpad, params.tokensIn, "Arcade launchpad"),
             {
@@ -443,6 +585,7 @@ export async function getLaunchpadSellPlan(params: {
                 contractAddress: ADDRESSES.launchpad,
                 abiFunctionSignature: "sell(address,uint256,uint256)",
                 abiParameters: [params.token, params.tokensIn.toString(), minOut.toString()],
+                value: "0",
                 description: `Sell ${params.tokensIn} of ${params.token} on the bonding curve (min ${minOut} USDC out).`,
             },
         ],
@@ -486,18 +629,62 @@ export function getCreateTokenPlan(params: {
 
 // ===== MultiSwap (basket -> one output) =====
 
-export function getMultiswapPlan(params: {
+export async function getMultiswapPlan(params: {
     inputs: { token: Address; amount: bigint }[];
     tokenOut: Address;
     minTotalOut?: bigint;
-}): SwapPlan {
-    const minTotalOut = params.minTotalOut ?? 0n;
+    slippageBps?: number;
+}): Promise<SwapPlan> {
+    const slippageBps = params.slippageBps ?? 100;
     const total = params.inputs.reduce((a, i) => a + i.amount, 0n);
+    const decimalsOut = await getDecimals(params.tokenOut);
+
+    // Compute a real slippage floor. Without it the contract runs with
+    // minTotalOut=0 and is fully sandwich-exposed (audit HIGH). Estimate the
+    // expected output by quoting each input -> tokenOut and summing, then apply
+    // slippage. A caller-supplied minTotalOut overrides this.
+    let minTotalOut = params.minTotalOut;
+    let expectedOut: bigint | undefined;
+    if (minTotalOut === undefined) {
+        const quotes = await Promise.all(
+            params.inputs.map(async (i) => {
+                if (i.token.toLowerCase() === params.tokenOut.toLowerCase()) return i.amount;
+                try {
+                    const decimalsIn = await getDecimals(i.token);
+                    const r = await quoteBestLeg(
+                        {
+                            tokenIn: i.token,
+                            tokenOut: params.tokenOut,
+                            decimalsIn,
+                            decimalsOut,
+                            amountIn: i.amount,
+                            recipient: ADDRESSES.multiSwap,
+                            slippageBps,
+                            deadline: deadlineFromNow(),
+                        },
+                        arc,
+                    );
+                    return r ? r.amountOut : 0n;
+                } catch {
+                    return 0n;
+                }
+            }),
+        );
+        expectedOut = quotes.reduce((a, b) => a + b, 0n);
+        minTotalOut = (expectedOut * BigInt(10_000 - slippageBps)) / 10_000n;
+    }
+
     return {
         ok: true,
         provider: "arcade-multiswap",
         amountIn: total.toString(),
+        amountOut: expectedOut?.toString(),
+        amountOutFmt: expectedOut !== undefined ? fmtAmount(expectedOut, decimalsOut) : undefined,
+        minAmountOut: minTotalOut.toString(),
+        slippageBps,
         executable: true,
+        nextStep:
+            "Submit calls[] in order (one approve per input, then swapToSingle) via Circle createContractExecutionTransaction on ARC-TESTNET.",
         calls: [
             ...params.inputs.map((i) =>
                 approvalCall(i.token, ADDRESSES.multiSwap, i.amount, "Arcade MultiSwap"),
@@ -512,6 +699,7 @@ export function getMultiswapPlan(params: {
                     minTotalOut.toString(),
                     deadlineFromNow().toString(),
                 ],
+                value: "0",
                 description: `Converge ${params.inputs.length} inputs into ${params.tokenOut} in one settlement.`,
             },
         ],
@@ -521,27 +709,38 @@ export function getMultiswapPlan(params: {
 // ===== Discovery =====
 
 export async function listKnownMarkets() {
-    return KNOWN_TOKENS.map((t) => ({ ...t }));
+    return KNOWN_TOKENS.map((t) => ({ ...t, tradeable: true }));
 }
 
 export type TrendingToken = {
     token: Address;
     symbol: string;
+    decimals: number;
     marketCapUsdc: string;
+    marketCapUsdcFmt: string;
+    /** Approx USDC price per whole token (FDV / 1B supply). */
+    priceUsdc: string;
     migrated: boolean;
     curveProgressBps: number;
+    /** Which endpoint to trade this token: bonding curve vs the DEX. */
+    tradeVia: "launchpad" | "swap";
 };
 
 /** Launchpad tokens sorted by market cap (USDC). Avoids multicall3 (broken on
- *  Arc) by reading individually via Promise.all. */
+ *  Arc) by reading individually via Promise.all. Returns [] on RPC failure. */
 export async function listTrending(limit = 15): Promise<TrendingToken[]> {
-    const count = Number(
-        (await arc.readContract({
-            address: ADDRESSES.launchpad,
-            abi: LAUNCHPAD_ABI,
-            functionName: "getTokensCount",
-        })) as bigint,
-    );
+    let count = 0;
+    try {
+        count = Number(
+            (await arc.readContract({
+                address: ADDRESSES.launchpad,
+                abi: LAUNCHPAD_ABI,
+                functionName: "getTokensCount",
+            })) as bigint,
+        );
+    } catch {
+        return [];
+    }
     if (count === 0) return [];
     const start = Math.max(0, count - Math.min(limit * 2, count));
     const idxs = Array.from({ length: count - start }, (_, i) => start + i);
@@ -570,12 +769,18 @@ export async function listTrending(limit = 15): Promise<TrendingToken[]> {
                 arc.readContract({ address: token, abi: erc20Abi, functionName: "symbol" }).catch(() => "?"),
             ]);
             const sold = st?.tokensSold ?? 0n;
+            const mcBig = mc as bigint;
+            const migrated = st?.migrated ?? false;
             return {
                 token,
                 symbol: String(sym),
-                marketCapUsdc: (mc as bigint).toString(),
-                migrated: st?.migrated ?? false,
-                curveProgressBps: st?.migrated ? 10_000 : Number((sold * 10_000n) / CURVE),
+                decimals: 18,
+                marketCapUsdc: mcBig.toString(),
+                marketCapUsdcFmt: fmtAmount(mcBig, 6),
+                priceUsdc: (Number(mcBig) / 1e15).toPrecision(6),
+                migrated,
+                curveProgressBps: migrated ? 10_000 : Number((sold * 10_000n) / CURVE),
+                tradeVia: migrated ? "swap" : "launchpad",
             } as TrendingToken;
         }),
     );
@@ -590,8 +795,18 @@ export async function getPortfolio(wallet: Address) {
             const bal = (await arc
                 .readContract({ address: t.address, abi: erc20Abi, functionName: "balanceOf", args: [wallet] })
                 .catch(() => 0n)) as bigint;
-            return { symbol: t.symbol, address: t.address, decimals: t.decimals, balanceRaw: bal.toString() };
+            return {
+                symbol: t.symbol,
+                address: t.address,
+                decimals: t.decimals,
+                balanceRaw: bal.toString(),
+                balanceFmt: fmtAmount(bal, t.decimals),
+            };
         }),
     );
-    return { wallet, balances };
+    return {
+        wallet,
+        balances,
+        note: "Reference tokens only. Launchpad-token holdings are not listed here.",
+    };
 }

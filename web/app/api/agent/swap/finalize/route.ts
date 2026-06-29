@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { finalizePermit2Swap } from "@/lib/agent/arcade";
+import { finalizePermit2Swap, resolveToken } from "@/lib/agent/arcade";
 import { ok, bad, preflight, addr, big } from "@/lib/agent/http";
 
 export const runtime = "nodejs";
@@ -22,8 +22,8 @@ export async function POST(req: NextRequest) {
     } catch {
         return bad("invalid json");
     }
-    const tokenIn = addr(body.tokenIn);
-    const tokenOut = addr(body.tokenOut);
+    const tokenIn = resolveToken(body.tokenIn);
+    const tokenOut = resolveToken(body.tokenOut);
     const recipient = addr(body.recipient);
     const amountIn = big(body.amountIn);
     const signature = body.signature;

@@ -1,0 +1,12 @@
+{
+  "schema_version": "v1",
+  "name_for_human": "Arcade",
+  "name_for_model": "arcade",
+  "description_for_human": "USDC-native DEX + bonding-curve launchpad on Circle's Arc L1.",
+  "description_for_model": "Trade tokens and launch/trade bonding-curve tokens on Arc (Circle EVM L1, chainId 5042002, USDC is the native gas token, 6 decimals). Read endpoints return market data; build endpoints return ordered contract-call descriptors {contractAddress, abiFunctionSignature, abiParameters} that map 1:1 onto Circle createContractExecutionTransaction. The agent signs with its OWN Circle Wallet; Arcade never custodies keys. Amounts are RAW token units (integer strings). For Permit2 venues, swap returns a typedData to sign then call swap/finalize.",
+  "auth": { "type": "none" },
+  "api": { "type": "openapi", "url": "https://www.arcade.trading/api/agent/openapi" },
+  "logo_url": "https://www.arcade.trading/icon.png",
+  "contact_email": "agents@arcade.trading",
+  "legal_info_url": "https://www.arcade.trading"
+}

@@ -18,15 +18,26 @@ import { z } from "zod";
 const BASE = process.env.ARCADE_API_BASE || "https://www.arcade.trading";
 
 async function api(path, init) {
-    const res = await fetch(`${BASE}/api/agent${path}`, init);
-    return res.text();
+    let res;
+    try {
+        res = await fetch(`${BASE}/api/agent${path}`, init);
+    } catch (e) {
+        return {
+            ok: false,
+            text: JSON.stringify({ error: `network error reaching ${BASE}: ${e.message}`, retryable: true }),
+        };
+    }
+    const text = await res.text();
+    return { ok: res.ok, text };
 }
 const post = (body) => ({
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
 });
-const out = (s) => ({ content: [{ type: "text", text: typeof s === "string" ? s : JSON.stringify(s) }] });
+// Surface HTTP/network failures as MCP errors so the agent never mistakes an
+// error body for a result.
+const out = (r) => ({ content: [{ type: "text", text: r.text }], isError: !r.ok });
 
 const server = new McpServer({ name: "arcade-agent", version: "1.0.0" });
 
@@ -65,7 +76,7 @@ server.tool(
 
 server.tool(
     "arcade_swap",
-    "Build approve + swap contract-call descriptors (contractAddress, abiFunctionSignature, abiParameters) for the agent to sign with its own wallet. recipient is the agent wallet; output is sent there.",
+    "Build approve + swap contract-call descriptors (contractAddress, abiFunctionSignature, abiParameters) for the agent to sign with its own wallet on ARC-TESTNET (chainId 5042002). recipient is the agent wallet; output is sent there. amountIn is RAW token units (integer string; USDC has 6 decimals). Run the returned calls[] in order (approve, then swap). tokenIn/tokenOut accept a known symbol (USDC, USDT, EURC, WUSDC, cirBTC, WETH) or a 0x address.",
     {
         tokenIn: z.string(),
         tokenOut: z.string(),
@@ -93,7 +104,7 @@ server.tool(
 
 server.tool(
     "arcade_launchpad",
-    "Build bonding-curve buy/sell or create-token descriptors. action='buy' {token, amountUsdcIn}; action='sell' {token, tokensIn}; action='create' {name, symbol, metadataURI?, mode?}.",
+    "Build bonding-curve buy/sell or create-token descriptors on Arc. action='buy' {token, amountUsdcIn}; action='sell' {token, tokensIn}; action='create' {name, symbol, metadataURI?, mode?}. amountUsdcIn/tokensIn are RAW units (USDC 6 decimals, launch tokens 18). Run the returned calls[] in order (approve, then action). token must be a 0x address (launchpad tokens are not symbol-addressable).",
     {
         action: z.enum(["buy", "sell", "create"]),
         token: z.string().optional(),
@@ -110,7 +121,7 @@ server.tool(
 
 server.tool(
     "arcade_multiswap",
-    "Build a basket-converge swap (Arcade aggregator): many input tokens into one output token in a single settlement.",
+    "Build a basket-converge swap (Arcade aggregator): many input tokens into one output token in a single settlement on Arc. inputs amounts are RAW token units. tokenOut accepts a symbol or 0x address. Run the returned calls[] in order (one approve per input, then swapToSingle).",
     {
         inputs: z.array(z.object({ token: z.string(), amount: z.string() })),
         tokenOut: z.string(),

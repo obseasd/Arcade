@@ -10,8 +10,19 @@ export const CORS: Record<string, string> = {
 };
 
 export const ok = (data: unknown) => NextResponse.json(data, { headers: CORS });
-export const bad = (error: string, status = 400) =>
-    NextResponse.json({ error }, { status, headers: CORS });
+
+/** Structured error so agents can branch: { ok:false, error, code, retryable }.
+ *  Second arg accepts a status number (back-compat) or an options object. */
+export const bad = (
+    error: string,
+    statusOrOpts: number | { status?: number; code?: string; retryable?: boolean } = 400,
+) => {
+    const o = typeof statusOrOpts === "number" ? { status: statusOrOpts } : statusOrOpts;
+    return NextResponse.json(
+        { ok: false, error, code: o.code ?? "BAD_REQUEST", retryable: o.retryable ?? false },
+        { status: o.status ?? 400, headers: CORS },
+    );
+};
 export const preflight = () => new NextResponse(null, { headers: CORS });
 
 const ADDR = /^0x[0-9a-fA-F]{40}$/;

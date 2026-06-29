@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { getSwapPlan } from "@/lib/agent/arcade";
+import { getSwapPlan, resolveToken } from "@/lib/agent/arcade";
 import { ok, bad, preflight, addr, big } from "@/lib/agent/http";
 
 export const runtime = "nodejs";
@@ -19,11 +19,11 @@ export async function POST(req: NextRequest) {
     } catch {
         return bad("invalid json");
     }
-    const tokenIn = addr(body.tokenIn);
-    const tokenOut = addr(body.tokenOut);
+    const tokenIn = resolveToken(body.tokenIn);
+    const tokenOut = resolveToken(body.tokenOut);
     const recipient = addr(body.recipient);
     const amountIn = big(body.amountIn);
-    if (!tokenIn || !tokenOut) return bad("tokenIn and tokenOut must be addresses");
+    if (!tokenIn || !tokenOut) return bad("tokenIn and tokenOut must be a known symbol or a 0x address");
     if (!recipient) return bad("recipient (the agent wallet) must be an address");
     if (!amountIn || amountIn === 0n) return bad("amountIn must be a positive integer (raw units)");
 

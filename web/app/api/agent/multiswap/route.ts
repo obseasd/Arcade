@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
-import { getMultiswapPlan } from "@/lib/agent/arcade";
-import { ok, bad, preflight, addr, big } from "@/lib/agent/http";
+import { getMultiswapPlan, resolveToken } from "@/lib/agent/arcade";
+import { ok, bad, preflight, big } from "@/lib/agent/http";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -18,18 +18,27 @@ export async function POST(req: NextRequest) {
     } catch {
         return bad("invalid json");
     }
-    const tokenOut = addr(body.tokenOut);
-    if (!tokenOut) return bad("tokenOut must be an address");
+    const tokenOut = resolveToken(body.tokenOut);
+    if (!tokenOut) return bad("tokenOut must be a known symbol or a 0x address");
     if (!Array.isArray(body.inputs) || body.inputs.length === 0) return bad("inputs must be a non-empty array");
 
     const inputs: { token: `0x${string}`; amount: bigint }[] = [];
     for (const raw of body.inputs as unknown[]) {
         const o = raw as Record<string, unknown>;
-        const token = addr(o.token);
+        const token = resolveToken(o.token);
         const amount = big(o.amount);
-        if (!token || !amount || amount === 0n) return bad("each input needs { token: address, amount: positive int }");
+        if (!token || !amount || amount === 0n) return bad("each input needs { token: symbol|address, amount: positive int }");
         inputs.push({ token, amount });
     }
-    const minTotalOut = big(body.minTotalOut) ?? 0n;
-    return ok(getMultiswapPlan({ inputs, tokenOut, minTotalOut }));
+    // Leave minTotalOut undefined so the lib computes a real slippage floor;
+    // only honor an explicit caller value.
+    const minTotalOut = body.minTotalOut !== undefined ? (big(body.minTotalOut) ?? undefined) : undefined;
+    return ok(
+        await getMultiswapPlan({
+            inputs,
+            tokenOut,
+            minTotalOut,
+            slippageBps: Number(body.slippageBps ?? 100),
+        }),
+    );
 }

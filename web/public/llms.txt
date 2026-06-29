@@ -1,0 +1,15 @@
+# Arcade
+
+> USDC-native DEX + bonding-curve launchpad on Circle's Arc L1 (chainId 5042002, USDC is the native gas token). Agent-usable: read live market data and get ready-to-sign Circle contract-call descriptors. Non-custodial: the agent signs with its own Circle Wallet.
+
+## Agent API
+
+- [OpenAPI 3.1 spec](https://www.arcade.trading/api/agent/openapi): all agent endpoints (markets, trending, portfolio, quote, swap, swap/finalize, launchpad, multiswap).
+- Base URL: https://www.arcade.trading/api/agent
+- MCP server: npm `arcade-agent-mcp` (run `npx -y arcade-agent-mcp`, set `ARCADE_API_BASE=https://www.arcade.trading`). Tools: arcade_markets, arcade_trending, arcade_portfolio, arcade_quote, arcade_swap, arcade_swap_finalize, arcade_launchpad, arcade_multiswap.
+
+## How it works
+
+- Amounts are RAW integer token units (e.g. 1 USDC = "1000000", USDC has 6 decimals).
+- Build endpoints return `calls[]`: run them in order (an `approve` then the action) via Circle `createContractExecutionTransaction` on blockchain `ARC-TESTNET`.
+- Permit2 venues (Synthra, UnitFlow): `swap` returns `requiresPermit2Signature` + a `typedData` to sign with Circle `sign/typedData`, then POST `swap/finalize` with the signature to get the execute call.
