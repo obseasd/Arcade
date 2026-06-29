@@ -37,6 +37,16 @@ contract ArcadeV3SwapRouter is IUniswapV3SwapCallback {
     uint160 internal constant MIN_SQRT_RATIO = 4295128739;
     uint160 internal constant MAX_SQRT_RATIO = 1461446703485210103287273052203988822378723970342;
 
+    /// @dev Audit 2026-06-29 CRITICAL: the pool this router is actively swapping
+    /// against. Set in _swap immediately before pool.swap and cleared right
+    /// after, so uniswapV3SwapCallback can require msg.sender == _authorisedPool.
+    /// Without it the callback authenticated only "msg.sender is a canonical
+    /// pool" and trusted an attacker-supplied `payer`, letting anyone call
+    /// pool.swap directly with payer = a victim and drain that victim's standing
+    /// (max) approval to this router. Plain storage, reset within the same tx
+    /// (Arc may not support EIP-1153 transient storage).
+    address private _authorisedPool;
+
     struct SwapCallbackData {
         address tokenIn;
         address tokenOut;
@@ -164,6 +174,7 @@ contract ArcadeV3SwapRouter is IUniswapV3SwapCallback {
         address pool = IUniswapV3Factory(factory).getPool(d.tokenIn, d.tokenOut, d.fee);
         require(pool != address(0), "NO_POOL");
         bool zeroForOne = d.tokenIn < d.tokenOut;
+        _authorisedPool = pool;
         (int256 amount0, int256 amount1) = IUniswapV3Pool(pool).swap(
             recipient,
             zeroForOne,
@@ -171,15 +182,20 @@ contract ArcadeV3SwapRouter is IUniswapV3SwapCallback {
             zeroForOne ? MIN_SQRT_RATIO + 1 : MAX_SQRT_RATIO - 1,
             abi.encode(d)
         );
+        _authorisedPool = address(0);
         amountOut = uint256(-(zeroForOne ? amount1 : amount0));
     }
 
     /// @inheritdoc IUniswapV3SwapCallback
     function uniswapV3SwapCallback(int256 amount0Delta, int256 amount1Delta, bytes calldata data) external override {
+        // Audit 2026-06-29 CRITICAL: bind the callback to a swap THIS router
+        // just initiated. _authorisedPool is the exact pool _swap is calling and
+        // is address(0) otherwise, so a third party calling pool.swap directly
+        // (with an attacker-chosen `payer` to drain a standing approval) reverts
+        // here. This supersedes the old "msg.sender is a canonical pool" check,
+        // which proved the caller was a real pool but NOT that we initiated it.
+        require(msg.sender == _authorisedPool, "BAD_CALLBACK");
         SwapCallbackData memory d = abi.decode(data, (SwapCallbackData));
-        // Authenticate: msg.sender must be the canonical pool for these tokens+fee.
-        address pool = IUniswapV3Factory(factory).getPool(d.tokenIn, d.tokenOut, d.fee);
-        require(msg.sender == pool, "BAD_CALLBACK");
 
         // We owe the positive delta, always in the input token.
         uint256 amountToPay = amount0Delta > 0 ? uint256(amount0Delta) : uint256(amount1Delta);

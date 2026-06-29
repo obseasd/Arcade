@@ -925,25 +925,29 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         // For the normal (empty) pair it adds the full seed and refunds nothing.
         USDC.forceApprove(v2Router, usdcForLP);
         IERC20(tokenAddr).forceApprove(v2Router, tokensForLP);
-        (uint256 usedUsdc, uint256 usedToken,) = IArcadeV2Router(v2Router).addLiquidity(
+        // Audit 2026-06-29: addLiquidity(min=0) does NOT "never revert" — a
+        // skewed pre-minted pair can make the quoted optimal amount round one
+        // side to 0, so pair.mint reverts (InsufficientLiquidityMinted) and the
+        // inline migration bricks the curve forever (H-1 regression). Wrap it in
+        // try/catch: on failure the token STILL graduates (no brick) and the
+        // seed USDC is routed to the treasury instead of the corrupted pair.
+        // The residual allowance to our own trusted immutable router is benign.
+        try IArcadeV2Router(v2Router).addLiquidity(
             address(USDC), tokenAddr, usdcForLP, tokensForLP, 0, 0, DEAD, block.timestamp
-        );
-        // Allowance is not reset to 0: addLiquidity consumes the approval down
-        // to the leftover, and v2Router is our own immutable, trusted contract
-        // (it only ever transferFrom's its own caller), so a residual allowance
-        // on the un-seeded remainder is not third-party exploitable. Saves the
-        // bytecode of two resets to stay under EIP-170.
-        // Refund the precise un-seeded remainder (nonzero only when a skewed
-        // pair was pre-minted). USDC to the treasury, leftover tokens burned to
-        // DEAD. Using the router's return values keeps this exact and never
-        // touches other curves' pooled USDC.
-        uint256 leftoverUsdc = usdcForLP - usedUsdc;
-        if (leftoverUsdc > 0) _safePayUsdc(treasury, leftoverUsdc);
-        uint256 leftoverToken = tokensForLP - usedToken;
-        if (leftoverToken > 0) IERC20(tokenAddr).safeTransfer(DEAD, leftoverToken);
+        ) returns (uint256 usedUsdc, uint256 usedToken, uint256) {
+            // Refund the precise un-seeded remainder (nonzero only when a skewed
+            // pair was pre-minted). USDC to treasury, leftover tokens to DEAD.
+            uint256 leftoverUsdc = usdcForLP - usedUsdc;
+            if (leftoverUsdc > 0) _safePayUsdc(treasury, leftoverUsdc);
+            uint256 leftoverToken = tokensForLP - usedToken;
+            if (leftoverToken > 0) IERC20(tokenAddr).safeTransfer(DEAD, leftoverToken);
+        } catch {
+            // Seeding the poisoned pair reverted: graduate anyway, seed to treasury.
+            _safePayUsdc(treasury, usdcForLP);
+        }
         address pair = v2Factory.getPair(address(USDC), tokenAddr);
         s.v2Pair = pair;
-        emit Migrated(tokenAddr, pair, usedUsdc, usedToken);
+        emit Migrated(tokenAddr, pair, usdcForLP, tokensForLP);
     }
 
     /// @dev Clanker-style immediate launch (no bonding curve): deploy a Uniswap
