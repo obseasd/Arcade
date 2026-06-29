@@ -842,23 +842,55 @@ export async function listTrending(limit = 15): Promise<TrendingToken[]> {
 }
 
 export async function getPortfolio(wallet: Address) {
+    const usdc = ADDRESSES.usdc.toLowerCase();
     const balances = await Promise.all(
         KNOWN_TOKENS.map(async (t) => {
             const bal = (await arc
                 .readContract({ address: t.address, abi: erc20Abi, functionName: "balanceOf", args: [wallet] })
                 .catch(() => 0n)) as bigint;
+            // Best-effort USDC valuation: USDC is 1:1; others are quoted to USDC.
+            let valueUsdc: string | null = "0";
+            if (bal > 0n) {
+                if (t.address.toLowerCase() === usdc) {
+                    valueUsdc = bal.toString();
+                } else {
+                    try {
+                        const r = await quoteBestLeg(
+                            {
+                                tokenIn: t.address,
+                                tokenOut: ADDRESSES.usdc,
+                                decimalsIn: t.decimals,
+                                decimalsOut: 6,
+                                amountIn: bal,
+                                recipient: wallet,
+                                slippageBps: 100,
+                                deadline: deadlineFromNow(),
+                            },
+                            arc,
+                        );
+                        valueUsdc = r ? r.amountOut.toString() : null;
+                    } catch {
+                        valueUsdc = null;
+                    }
+                }
+            }
             return {
                 symbol: t.symbol,
                 address: t.address,
                 decimals: t.decimals,
                 balanceRaw: bal.toString(),
                 balanceFmt: fmtAmount(bal, t.decimals),
+                valueUsdc,
+                valueUsdcFmt: valueUsdc !== null ? fmtAmount(BigInt(valueUsdc), 6) : null,
             };
         }),
     );
+    const totalValueUsdc = balances.reduce((a, b) => a + (b.valueUsdc ? BigInt(b.valueUsdc) : 0n), 0n);
     return {
         wallet,
+        totalValueUsdc: totalValueUsdc.toString(),
+        totalValueUsdcFmt: fmtAmount(totalValueUsdc, 6),
         balances,
-        note: "Reference tokens only. Launchpad-token holdings are not listed here.",
+        note: "Reference tokens only (valued by quoting to USDC). Launchpad-token holdings are not listed here.",
     };
 }
