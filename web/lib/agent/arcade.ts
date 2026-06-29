@@ -84,6 +84,14 @@ const tokenMeta = (addr: Address, decimals: number) => {
     return { address: addr, symbol: k?.symbol ?? null, decimals };
 };
 
+/** Same-currency USD stablecoins (EURC excluded — it's EUR). Used to flag a
+ *  bad fill when a USD-stable pair prices far from 1:1. */
+const USD_STABLES = new Set(["USDC", "USDT", "WUSDC"]);
+const isUsdStable = (addr: Address): boolean => {
+    const k = KNOWN_TOKENS.find((t) => t.address.toLowerCase() === addr.toLowerCase());
+    return k ? USD_STABLES.has(k.symbol) : false;
+};
+
 // ===== Descriptor model =====
 
 export type ContractCall = {
@@ -182,6 +190,11 @@ export type SwapPlan = {
     /** Slippage floor on amountOut (raw units) the agent is protected to. */
     minAmountOut?: string;
     slippageBps?: number;
+    /** amountOut per 1 unit of tokenIn (decimal-adjusted). */
+    effectivePrice?: string | null;
+    /** Set when a USD-stable pair prices far from 1:1 (thin testnet liquidity);
+     *  an agent should treat this as a likely bad fill. */
+    priceWarning?: string;
     tokenIn?: { address: Address; symbol: string | null; decimals: number };
     tokenOut?: { address: Address; symbol: string | null; decimals: number };
     /** What the agent should do next (machine-oriented hint). */
@@ -238,6 +251,12 @@ export async function getSwapPlan(params: {
         };
     }
     const minAmountOut = (route.amountOut * BigInt(10_000 - slippageBps)) / 10_000n;
+    const effPrice =
+        (Number(route.amountOut) / 10 ** decimalsOut) / (Number(params.amountIn) / 10 ** decimalsIn);
+    const priceWarning =
+        isUsdStable(params.tokenIn) && isUsdStable(params.tokenOut) && (effPrice < 0.95 || effPrice > 1.05)
+            ? `Effective rate ${effPrice.toPrecision(4)} out per in deviates sharply from 1:1 for a USD-stable pair — likely thin/mispriced testnet liquidity. Consider NOT executing this fill.`
+            : undefined;
     const baseOut = {
         ok: true as const,
         provider: route.provider,
@@ -247,6 +266,8 @@ export async function getSwapPlan(params: {
         amountOutFmt: fmtAmount(route.amountOut, decimalsOut),
         minAmountOut: minAmountOut.toString(),
         slippageBps,
+        effectivePrice: Number.isFinite(effPrice) ? effPrice.toPrecision(6) : null,
+        ...(priceWarning ? { priceWarning } : {}),
         tokenIn: tokenMeta(params.tokenIn, decimalsIn),
         tokenOut: tokenMeta(params.tokenOut, decimalsOut),
     };

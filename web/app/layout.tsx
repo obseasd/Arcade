@@ -25,6 +25,13 @@ export const metadata: Metadata = {
     icon: "/arcdlogo22.png",
     apple: "/arcdlogo22.png",
   },
+  // Machine-discoverable pointers to the agent layer (for crawlers / agent
+  // frameworks that read page metadata). Human + worked docs live at /agents.
+  other: {
+    "ai-plugin": "https://www.arcade.trading/.well-known/ai-plugin.json",
+    "agent-api": "https://www.arcade.trading/api/agent/openapi",
+    "agent-docs": "https://www.arcade.trading/agents",
+  },
   openGraph: {
     title: "Arcade",
     description: "USDC-native AMM and fair-launch tokenization on Arc.",
