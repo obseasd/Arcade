@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { getMultiswapPlan, resolveToken } from "@/lib/agent/arcade";
-import { ok, bad, preflight, big } from "@/lib/agent/http";
+import { ok, bad, preflight, addr, big } from "@/lib/agent/http";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -39,6 +39,7 @@ export async function POST(req: NextRequest) {
             tokenOut,
             minTotalOut,
             slippageBps: Number(body.slippageBps ?? 100),
+            owner: addr(body.owner) ?? undefined,
         }),
     );
 }

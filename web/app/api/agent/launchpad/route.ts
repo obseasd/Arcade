@@ -32,7 +32,12 @@ export async function POST(req: NextRequest) {
         if (!token) return bad("token must be an address");
         if (!amountUsdcIn || amountUsdcIn === 0n) return bad("amountUsdcIn must be a positive integer");
         return ok(
-            await getLaunchpadBuyPlan({ token, amountUsdcIn, slippageBps: Number(body.slippageBps ?? 100) }),
+            await getLaunchpadBuyPlan({
+                token,
+                amountUsdcIn,
+                slippageBps: Number(body.slippageBps ?? 100),
+                owner: addr(body.owner) ?? undefined,
+            }),
         );
     }
     if (action === "sell") {
@@ -41,23 +46,34 @@ export async function POST(req: NextRequest) {
         if (!token) return bad("token must be an address");
         if (!tokensIn || tokensIn === 0n) return bad("tokensIn must be a positive integer");
         return ok(
-            await getLaunchpadSellPlan({ token, tokensIn, slippageBps: Number(body.slippageBps ?? 100) }),
+            await getLaunchpadSellPlan({
+                token,
+                tokensIn,
+                slippageBps: Number(body.slippageBps ?? 100),
+                owner: addr(body.owner) ?? undefined,
+            }),
         );
     }
     if (action === "create") {
         const name = String(body.name ?? "");
         const symbol = String(body.symbol ?? "");
         if (!name || !symbol) return bad("name and symbol are required");
+        const mode = body.mode !== undefined ? Number(body.mode) : 0;
+        if (![0, 1, 2].includes(mode)) return bad("mode must be 0 (PUMP), 1 (CLANKER), or 2 (CLANKER_V3)");
         const creator2 = addr(body.creator2) ?? undefined;
+        const creator2ShareBps =
+            body.creator2ShareBps !== undefined ? Number(body.creator2ShareBps) : undefined;
+        if (creator2ShareBps !== undefined && (creator2ShareBps < 0 || creator2ShareBps > 10_000))
+            return bad("creator2ShareBps must be between 0 and 10000");
+        if (creator2ShareBps && !creator2) return bad("creator2 address is required when creator2ShareBps is set");
         return ok(
             getCreateTokenPlan({
                 name,
                 symbol,
                 metadataURI: body.metadataURI ? String(body.metadataURI) : undefined,
-                mode: body.mode !== undefined ? Number(body.mode) : undefined,
+                mode,
                 creator2,
-                creator2ShareBps:
-                    body.creator2ShareBps !== undefined ? Number(body.creator2ShareBps) : undefined,
+                creator2ShareBps,
             }),
         );
     }

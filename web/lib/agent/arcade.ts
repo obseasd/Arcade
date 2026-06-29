@@ -116,6 +116,44 @@ export function approvalCall(
     };
 }
 
+/** Emit an approve descriptor ONLY when the owner's current allowance is below
+ *  `amount` (saves the agent a redundant approve tx). If `owner` is unknown, we
+ *  cannot check, so we emit the approve to be safe. */
+async function approvalCallIfNeeded(
+    owner: Address | undefined,
+    token: Address,
+    spender: Address,
+    amount: bigint,
+    label: string,
+): Promise<ContractCall | null> {
+    if (owner) {
+        try {
+            const cur = (await arc.readContract({
+                address: token,
+                abi: erc20Abi,
+                functionName: "allowance",
+                args: [owner, spender],
+            })) as bigint;
+            if (cur >= amount) return null;
+        } catch {
+            /* read failed -> fall through and emit the approve */
+        }
+    }
+    return approvalCall(token, spender, amount, label);
+}
+
+/** Spreadable variant: returns [approve] or [] depending on allowance. */
+const oneApprove = async (
+    owner: Address | undefined,
+    token: Address,
+    spender: Address,
+    amount: bigint,
+    label: string,
+): Promise<ContractCall[]> => {
+    const c = await approvalCallIfNeeded(owner, token, spender, amount, label);
+    return c ? [c] : [];
+};
+
 const deadlineFromNow = (secs = 600) => BigInt(Math.floor(Date.now() / 1000) + secs);
 
 async function getDecimals(token: Address): Promise<number> {
@@ -250,13 +288,20 @@ export async function getSwapPlan(params: {
             calls: [],
         };
     }
+    const swapApprove = await approvalCallIfNeeded(
+        params.recipient,
+        route.approval.token,
+        route.approval.spender,
+        route.approval.amount,
+        "Arcade router",
+    );
     return {
         ...baseOut,
         executable: true,
         nextStep:
-            "Submit calls[] in order (approve, then swap) via Circle createContractExecutionTransaction on blockchain ARC-TESTNET.",
+            "Submit calls[] in order via Circle createContractExecutionTransaction on blockchain ARC-TESTNET.",
         calls: [
-            approvalCall(route.approval.token, route.approval.spender, route.approval.amount, "Arcade router"),
+            ...(swapApprove ? [swapApprove] : []),
             {
                 chain: ARC_CHAIN,
                 contractAddress: route.executor.router,
@@ -430,6 +475,7 @@ export async function getLaunchpadBuyPlan(params: {
     token: Address;
     amountUsdcIn: bigint;
     slippageBps?: number;
+    owner?: Address;
 }): Promise<SwapPlan> {
     const slippageBps = params.slippageBps ?? 100;
     const state = await readTokenState(params.token);
@@ -497,7 +543,7 @@ export async function getLaunchpadBuyPlan(params: {
             "Submit calls[] in order (approve USDC, then buy) via Circle createContractExecutionTransaction on ARC-TESTNET.",
         note: refund > 0n ? `Curve will refund ${refund} USDC (it graduates mid-buy).` : undefined,
         calls: [
-            approvalCall(ADDRESSES.usdc, ADDRESSES.launchpad, params.amountUsdcIn, "Arcade launchpad"),
+            ...(await oneApprove(params.owner, ADDRESSES.usdc, ADDRESSES.launchpad, params.amountUsdcIn, "Arcade launchpad")),
             {
                 chain: ARC_CHAIN,
                 contractAddress: ADDRESSES.launchpad,
@@ -514,6 +560,7 @@ export async function getLaunchpadSellPlan(params: {
     token: Address;
     tokensIn: bigint;
     slippageBps?: number;
+    owner?: Address;
 }): Promise<SwapPlan> {
     const slippageBps = params.slippageBps ?? 100;
     const state = await readTokenState(params.token);
@@ -579,7 +626,7 @@ export async function getLaunchpadSellPlan(params: {
         nextStep:
             "Submit calls[] in order (approve token, then sell) via Circle createContractExecutionTransaction on ARC-TESTNET.",
         calls: [
-            approvalCall(params.token, ADDRESSES.launchpad, params.tokensIn, "Arcade launchpad"),
+            ...(await oneApprove(params.owner, params.token, ADDRESSES.launchpad, params.tokensIn, "Arcade launchpad")),
             {
                 chain: ARC_CHAIN,
                 contractAddress: ADDRESSES.launchpad,
@@ -634,6 +681,7 @@ export async function getMultiswapPlan(params: {
     tokenOut: Address;
     minTotalOut?: bigint;
     slippageBps?: number;
+    owner?: Address;
 }): Promise<SwapPlan> {
     const slippageBps = params.slippageBps ?? 100;
     const total = params.inputs.reduce((a, i) => a + i.amount, 0n);
@@ -686,9 +734,13 @@ export async function getMultiswapPlan(params: {
         nextStep:
             "Submit calls[] in order (one approve per input, then swapToSingle) via Circle createContractExecutionTransaction on ARC-TESTNET.",
         calls: [
-            ...params.inputs.map((i) =>
-                approvalCall(i.token, ADDRESSES.multiSwap, i.amount, "Arcade MultiSwap"),
-            ),
+            ...(
+                await Promise.all(
+                    params.inputs.map((i) =>
+                        oneApprove(params.owner, i.token, ADDRESSES.multiSwap, i.amount, "Arcade MultiSwap"),
+                    ),
+                )
+            ).flat(),
             {
                 chain: ARC_CHAIN,
                 contractAddress: ADDRESSES.multiSwap,

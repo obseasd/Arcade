@@ -4,6 +4,15 @@ Deploy and trade tokens on **Arcade** — a USDC-native DEX + launchpad on **Arc
 (Circle's EVM L1). This skill lets an agent launch a token, trade it, and claim
 creator fees programmatically with a funded wallet.
 
+> 🔀 **Two ways to use Arcade as an agent — pick one:**
+> - **Non-custodial (recommended):** the **Arcade Agent API / MCP**. Arcade
+>   returns ready-to-sign descriptors and you sign with your **own Circle
+>   Wallet** (Arcade never sees your key). See
+>   `https://www.arcade.trading/api/agent/openapi`, `https://www.arcade.trading/llms.txt`,
+>   or run `npx -y arcade-agent-mcp`.
+> - **This skill (raw key):** signs directly with a private key you supply. Only
+>   for throwaway testnet keys. Continue below.
+
 > ⚠️ **Security (Audit C-9):** Arc **Testnet only**. This skill signs
 > transactions with the private key you supply — use a **throwaway,
 > testnet-only key**, never one that holds mainnet funds or is reused on a
@@ -13,7 +22,7 @@ creator fees programmatically with a funded wallet.
 > · explorer `https://testnet.arcscan.app` · gas + default quote token is **USDC**.
 > A (non-official) **WETH** at `A.WETH` is also available as a Clanker pool pairing.
 >
-> **Addresses (source of truth):** fetch `https://arcade.trading/deployments.json`.
+> **Addresses (source of truth):** fetch `https://www.arcade.trading/deployments.json`.
 > Always read addresses from there — they change on redeploy. Below, `A.*` refers
 > to `addresses.*` in that file (e.g. `A.launchpad`).
 
@@ -115,7 +124,7 @@ Quote first with `quoteSwapToSingle(inputs, tokenOut)`.
 import { createWalletClient, http, parseUnits, getContract } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 
-const cfg = await (await fetch("https://arcade.trading/deployments.json")).json();
+const cfg = await (await fetch("https://www.arcade.trading/deployments.json")).json();
 const A = cfg.addresses;
 const chain = { id: cfg.chain.chainId, name: cfg.chain.name,
   nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 6 },

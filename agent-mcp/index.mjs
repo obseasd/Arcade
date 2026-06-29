@@ -130,5 +130,48 @@ server.tool(
     async (a) => out(await api("/multiswap", post(a))),
 );
 
+// Resources: let an agent read the full API spec and a how-to-execute guide.
+server.resource(
+    "arcade-openapi",
+    "arcade://openapi",
+    { mimeType: "application/json", description: "Arcade Agent API OpenAPI 3.1 spec" },
+    async (uri) => {
+        const r = await api("/openapi");
+        return { contents: [{ uri: uri.href, mimeType: "application/json", text: r.text }] };
+    },
+);
+
+const GUIDE = `# Using Arcade as an agent
+
+Arcade is a USDC-native DEX + bonding-curve launchpad on Circle's Arc L1
+(chainId 5042002, USDC is the native gas token, 6 decimals). It is
+non-custodial: Arcade returns ready-to-sign contract-call descriptors; you sign
+with your OWN Circle Wallet.
+
+1. Discover: arcade_markets (reference tokens), arcade_trending (launchpad
+   tokens; each has tradeVia = "launchpad" or "swap").
+2. Price: arcade_quote (read-only). All amounts are RAW integer token units
+   (1 USDC = "1000000").
+3. Build: arcade_swap / arcade_launchpad / arcade_multiswap return { calls: [...] }
+   plus minAmountOut, slippageBps, amountOutFmt, and nextStep. Pass your wallet as
+   recipient/owner so a redundant approve is skipped.
+4. Execute: for each call in calls[] (in order), call Circle
+   createContractExecutionTransaction with blockchain "ARC-TESTNET",
+   contractAddress, abiFunctionSignature, abiParameters (and value if non-zero).
+5. Permit2 venues (Synthra, UnitFlow): arcade_swap returns
+   requiresPermit2Signature + permit2.{approve,typedData,permit}. Run the approve
+   once, sign permit2.typedData via Circle sign/typedData, then call
+   arcade_swap_finalize with the same params + permit + signature to get the
+   execute call.
+
+Errors return { ok:false, error, code, retryable }. Retry only when retryable.`;
+
+server.resource(
+    "arcade-guide",
+    "arcade://guide",
+    { mimeType: "text/markdown", description: "How an agent executes Arcade descriptors with Circle Wallets" },
+    async (uri) => ({ contents: [{ uri: uri.href, mimeType: "text/markdown", text: GUIDE }] }),
+);
+
 const transport = new StdioServerTransport();
 await server.connect(transport);
