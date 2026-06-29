@@ -27,8 +27,9 @@ Add to your MCP config (no install needed, `npx` fetches it):
 `ARCADE_API_BASE` defaults to `https://www.arcade.trading`; point it at
 `http://localhost:3000` for local dev.
 
-**From source** (development): `cd agent-mcp && npm install`, then use
-`"command": "node", "args": ["/absolute/path/to/agent-mcp/index.mjs"]`.
+**From source** (development):
+`git clone https://github.com/obseasd/arcade-agent-mcp && cd arcade-agent-mcp && npm install`,
+then use `"command": "node", "args": ["/absolute/path/to/index.mjs"]`.
 
 ## Tools
 

@@ -3,9 +3,8 @@
   "name": "io.github.obseasd/arcade-agent-mcp",
   "description": "Let any AI agent trade and launch tokens on Arcade (USDC-native DEX + bonding-curve launchpad on Circle's Arc L1). Non-custodial: returns ready-to-sign Circle contract-call descriptors.",
   "repository": {
-    "url": "https://github.com/obseasd/Arcade",
-    "source": "github",
-    "subfolder": "agent-mcp"
+    "url": "https://github.com/obseasd/arcade-agent-mcp",
+    "source": "github"
   },
   "version": "1.0.0",
   "websiteUrl": "https://www.arcade.trading",

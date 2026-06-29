@@ -14,11 +14,10 @@
     "arcade",
     "launchpad"
   ],
-  "homepage": "https://www.arcade.trading",
+  "homepage": "https://www.arcade.trading/agents",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/obseasd/Arcade.git",
-    "directory": "agent-mcp"
+    "url": "git+https://github.com/obseasd/arcade-agent-mcp.git"
   },
   "license": "MIT",
   "type": "module",
@@ -27,7 +26,8 @@
   },
   "files": [
     "index.mjs",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "engines": {
     "node": ">=18"
