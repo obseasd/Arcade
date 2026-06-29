@@ -54,6 +54,36 @@ export const metadata: Metadata = {
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
+  const jsonLd = {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "Organization",
+        "@id": "https://www.arcade.trading/#org",
+        name: "Arcade",
+        url: "https://www.arcade.trading",
+        logo: "https://www.arcade.trading/arcdlogo22.png",
+        description: "USDC-native DEX and bonding-curve launchpad on Circle's Arc L1.",
+      },
+      {
+        "@type": "WebSite",
+        "@id": "https://www.arcade.trading/#website",
+        url: "https://www.arcade.trading",
+        name: "Arcade",
+        publisher: { "@id": "https://www.arcade.trading/#org" },
+      },
+      {
+        "@type": "SoftwareApplication",
+        name: "Arcade Agent API",
+        applicationCategory: "FinanceApplication",
+        operatingSystem: "Web",
+        url: "https://www.arcade.trading/agents",
+        offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
+        description:
+          "Agent-accessible API + MCP server to trade and launch tokens on Arc with a Circle Wallet.",
+      },
+    ],
+  };
   return (
     <html lang="en" className={`${inter.variable} ${spaceGrotesk.variable}`} suppressHydrationWarning>
       <head>
@@ -64,6 +94,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             browsers that ignore preconnect on third-party origins. */}
         <link rel="preconnect" href="https://gateway.pinata.cloud" crossOrigin="" />
         <link rel="dns-prefetch" href="https://gateway.pinata.cloud" />
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
+        />
       </head>
       <body className="font-sans antialiased" suppressHydrationWarning>
         <Providers>
