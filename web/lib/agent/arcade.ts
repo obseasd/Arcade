@@ -164,6 +164,11 @@ const oneApprove = async (
 
 const deadlineFromNow = (secs = 600) => BigInt(Math.floor(Date.now() / 1000) + secs);
 
+// Clamp caller-supplied slippage to [0, 5000] bps so a malicious/garbage value
+// (e.g. 100000) can't drive minOut to 0 and strip all sandwich protection.
+const clampBps = (v: number | undefined, d: number) =>
+    Math.min(Math.max(Number.isFinite(v) ? (v as number) : d, 0), 5000);
+
 async function getDecimals(token: Address): Promise<number> {
     const known = KNOWN_TOKENS.find((t) => t.address.toLowerCase() === token.toLowerCase());
     if (known) return known.decimals;
@@ -222,7 +227,7 @@ export async function getSwapPlan(params: {
     recipient: Address;
     slippageBps?: number;
 }): Promise<SwapPlan> {
-    const slippageBps = params.slippageBps ?? 50;
+    const slippageBps = clampBps(params.slippageBps, 50);
     const [decimalsIn, decimalsOut] = await Promise.all([
         getDecimals(params.tokenIn),
         getDecimals(params.tokenOut),
@@ -421,7 +426,7 @@ export async function finalizePermit2Swap(params: {
     permit: PermitJson;
     signature: Hex;
 }): Promise<SwapPlan> {
-    const slippageBps = params.slippageBps ?? 50;
+    const slippageBps = clampBps(params.slippageBps, 50);
     const [decimalsIn, decimalsOut] = await Promise.all([
         getDecimals(params.tokenIn),
         getDecimals(params.tokenOut),
@@ -498,7 +503,7 @@ export async function getLaunchpadBuyPlan(params: {
     slippageBps?: number;
     owner?: Address;
 }): Promise<SwapPlan> {
-    const slippageBps = params.slippageBps ?? 100;
+    const slippageBps = clampBps(params.slippageBps, 100);
     const state = await readTokenState(params.token);
     if (state === null) {
         return {
@@ -583,7 +588,7 @@ export async function getLaunchpadSellPlan(params: {
     slippageBps?: number;
     owner?: Address;
 }): Promise<SwapPlan> {
-    const slippageBps = params.slippageBps ?? 100;
+    const slippageBps = clampBps(params.slippageBps, 100);
     const state = await readTokenState(params.token);
     if (state === null) {
         return {
@@ -704,7 +709,7 @@ export async function getMultiswapPlan(params: {
     slippageBps?: number;
     owner?: Address;
 }): Promise<SwapPlan> {
-    const slippageBps = params.slippageBps ?? 100;
+    const slippageBps = clampBps(params.slippageBps, 100);
     const total = params.inputs.reduce((a, i) => a + i.amount, 0n);
     const decimalsOut = await getDecimals(params.tokenOut);
 

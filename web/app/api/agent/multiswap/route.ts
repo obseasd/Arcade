@@ -21,6 +21,9 @@ export async function POST(req: NextRequest) {
     const tokenOut = resolveToken(body.tokenOut);
     if (!tokenOut) return bad("tokenOut must be a known symbol or a 0x address");
     if (!Array.isArray(body.inputs) || body.inputs.length === 0) return bad("inputs must be a non-empty array");
+    // Cap basket size: each input triggers a multi-venue quote fan-out, so an
+    // unbounded array is an unauthenticated RPC-amplification / DoS vector.
+    if (body.inputs.length > 8) return bad("too many inputs (max 8 per basket)");
 
     const inputs: { token: `0x${string}`; amount: bigint }[] = [];
     for (const raw of body.inputs as unknown[]) {
