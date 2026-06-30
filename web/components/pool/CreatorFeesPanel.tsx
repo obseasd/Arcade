@@ -2,10 +2,10 @@
 
 import { useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Address, encodeFunctionData, erc20Abi, zeroAddress } from "viem";
+import { Address, erc20Abi, zeroAddress } from "viem";
 import { useAccount, usePublicClient, useReadContract, useReadContracts, useWriteContract } from "wagmi";
 import { V3_LOCKER_ABI } from "@/lib/abis/v3";
-import { buildAggregate3 } from "@/lib/routing/batchSwap";
+import { runSequential } from "@/lib/routing/runSequential";
 import { ADDRESSES, USDC_DECIMALS } from "@/lib/constants";
 import { useV3Tokens } from "@/lib/hooks/useV3Tokens";
 import { useTokenImage } from "@/lib/hooks/useTokenImage";
@@ -121,13 +121,12 @@ export function CreatorFeesPanel() {
 /* ----------------------------- Claim-all (batched) ----------------------- */
 
 /**
- * Collects fees from EVERY creator position in ONE signature via
- * Multicall3From (aggregate3 of N collectFees, sender-preserving so the
- * locker's per-recipient accounting credits the right wallet). allowFailure
- * is true so a position with zero accrued fees can't sink the batch.
- * Validated on-chain 2026-06-21: a 2-position collectFees batch simulates
- * clean through the precompile (the nested-callFrom that killed the Memo
- * wrap does NOT recur here).
+ * Collects fees from EVERY creator position. Arc's callFrom precompile is
+ * dead so the old one-signature Multicall3From batch reverts on-chain; we
+ * now run one collectFees tx per position straight from the user's wallet
+ * (msg.sender is the user, so the locker's per-recipient accounting
+ * credits the right wallet). A position with zero accrued fees that
+ * reverts is skipped (allowFailure) so it can't sink the rest.
  */
 function ClaimAllFeesButton({ positions }: { positions: CreatorPosition[] }) {
   const publicClient = usePublicClient();
@@ -140,30 +139,21 @@ function ClaimAllFeesButton({ positions }: { positions: CreatorPosition[] }) {
     if (claimable.length === 0) return;
     setClaiming(true);
     try {
-      const batched = buildAggregate3(
+      // Arc's callFrom precompile is dead, so the old "collect every
+      // position in one signature" Multicall3From batch reverts on-chain.
+      // Run one collectFees tx per position from the user's wallet;
+      // allowFailure mirrors the old aggregate3 allowFailure:true so a
+      // position with zero accrued fees can't sink the rest.
+      await runSequential(
         claimable.map((p) => ({
-          target: ADDRESSES.v3Locker,
+          address: ADDRESSES.v3Locker,
+          abi: V3_LOCKER_ABI,
+          functionName: "collectFees",
+          args: [p.positionId],
           allowFailure: true,
-          callData: encodeFunctionData({
-            abi: V3_LOCKER_ABI,
-            functionName: "collectFees",
-            args: [p.positionId],
-          }),
         })),
+        { writeContractAsync, publicClient },
       );
-      const hash = await writeContractAsync({
-        address: batched.address,
-        abi: batched.abi,
-        functionName: batched.functionName,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        args: batched.args as any,
-      });
-      if (publicClient) {
-        const receipt = await publicClient.waitForTransactionReceipt({ hash });
-        if (receipt.status !== "success") {
-          throw new Error(`Claim-all reverted (tx ${hash.slice(0, 10)}…).`);
-        }
-      }
       pushToast({
         kind: "info",
         title: `Claimed fees from ${claimable.length} positions`,
@@ -190,7 +180,7 @@ function ClaimAllFeesButton({ positions }: { positions: CreatorPosition[] }) {
     >
       {claiming
         ? "Claiming…"
-        : `Claim all fees (${claimable.length} positions, 1 signature)`}
+        : `Claim all fees (${claimable.length} positions, ${claimable.length} transaction${claimable.length === 1 ? "" : "s"})`}
     </button>
   );
 }

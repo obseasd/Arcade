@@ -3,20 +3,16 @@
 import { CheckCircle2, Info } from "lucide-react";
 import { CrossIcon } from "@/components/ui/MaskIcon";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Address, encodeFunctionData, erc20Abi, formatUnits, zeroAddress } from "viem";
+import { Address, erc20Abi, formatUnits, zeroAddress } from "viem";
 import {
     useAccount,
     usePublicClient,
     useReadContract,
     useReadContracts,
-    useWalletClient,
     useWriteContract,
 } from "wagmi";
 
-import {
-    MULTICALL3_FROM_ABI,
-    MULTICALL3_FROM_ADDRESS,
-} from "@/lib/abis/multicall3From";
+import { runSequential } from "@/lib/routing/runSequential";
 import { V3_FACTORY_ABI, V3_NPM_ABI, V3_POOL_ABI } from "@/lib/abis/v3-npm";
 import { ADDRESSES, USDC_DECIMALS } from "@/lib/constants";
 import { arcTestnet } from "@/lib/chains";
@@ -51,11 +47,6 @@ export function ClaimAllFeesModal({ open, onClose, onSuccess }: Props) {
     const { address: account } = useAccount();
     const publicClient = usePublicClient();
     const { writeContractAsync } = useWriteContract();
-    // walletClient is used for the multi-position case: we encode the
-    // batched multicall calldata ourselves and send it as a raw tx,
-    // bypassing wagmi v2's writeContract type-narrowing which doesn't
-    // surface NPM's inherited Multicall function in its writable union.
-    const { data: walletClient } = useWalletClient();
     const npmEnabled = ADDRESSES.v3PositionManager !== zeroAddress;
 
     const balanceQ = useReadContract({
@@ -299,62 +290,27 @@ export function ClaimAllFeesModal({ open, onClose, onSuccess }: Props) {
             const ids = positions
                 .filter((p) => selected.has(p.tokenId.toString()))
                 .map((p) => p.tokenId);
-            // Bundle every collect() into a single tx. The user signs
-            // once instead of once-per-position, gas is paid once, and
-            // either the whole batch lands or none of it does.
-            //
-            // Path split:
-            //   - 1 position: direct writeContract on NPM.collect. Skips
-            //     the multicall-overhead shim entirely.
-            //   - N positions: Multicall3From.aggregate3. Switched off
-            //     the hand-rolled NPM.multicall(bytes[]) path in 2026-06-17
-            //     once Arc's sender-preserving Multicall3From shipped.
-            //     The callFrom precompile preserves the user's msg.sender
-            //     across every subcall (same semantics as the inline
-            //     Multicall.sol path, no behavior change visible to the
-            //     user), and we're now positioned to extend the batch
-            //     with launchpad creator-fee claims or other targets
-            //     beyond the NPM in a single signature.
-            if (ids.length === 1) {
-                const hash = await writeContractAsync({
+            // Arc's callFrom precompile is dead, so the old "collect every
+            // selected position in one Multicall3From signature" batch
+            // reverts on-chain. Run one NPM.collect tx per selected
+            // position from the user's wallet (msg.sender is the user, who
+            // owns each NFT). A single position is just the N=1 case.
+            await runSequential(
+                ids.map((id) => ({
                     address: ADDRESSES.v3PositionManager,
                     abi: V3_NPM_ABI,
                     functionName: "collect",
                     args: [
                         {
-                            tokenId: ids[0],
+                            tokenId: id,
                             recipient: account,
                             amount0Max: MAX_UINT128,
                             amount1Max: MAX_UINT128,
                         },
                     ],
-                });
-                await publicClient.waitForTransactionReceipt({ hash });
-            } else {
-                const calls = ids.map((id) => ({
-                    target: ADDRESSES.v3PositionManager,
-                    allowFailure: false,
-                    callData: encodeFunctionData({
-                        abi: V3_NPM_ABI,
-                        functionName: "collect",
-                        args: [
-                            {
-                                tokenId: id,
-                                recipient: account,
-                                amount0Max: MAX_UINT128,
-                                amount1Max: MAX_UINT128,
-                            },
-                        ],
-                    }),
-                }));
-                const hash = await writeContractAsync({
-                    address: MULTICALL3_FROM_ADDRESS,
-                    abi: MULTICALL3_FROM_ABI,
-                    functionName: "aggregate3",
-                    args: [calls],
-                });
-                await publicClient.waitForTransactionReceipt({ hash });
-            }
+                })),
+                { writeContractAsync, publicClient },
+            );
             // Per-position breakdown: one toast + one activity entry per
             // position so the user sees exactly what they pocketed. The
             // tokensOwed* readings are pre-claim snapshots; on-chain

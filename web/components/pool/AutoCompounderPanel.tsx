@@ -2,9 +2,9 @@
 
 import { Sparkles, Plus, Power, RefreshCw, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useAccount, useReadContract, useReadContracts, useWriteContract } from "wagmi";
-import { Address, encodeFunctionData, isAddress } from "viem";
-import { buildAggregate3 } from "@/lib/routing/batchSwap";
+import { useAccount, usePublicClient, useReadContract, useReadContracts, useWriteContract } from "wagmi";
+import { Address, isAddress } from "viem";
+import { runSequential } from "@/lib/routing/runSequential";
 
 import { ADDRESSES } from "@/lib/constants";
 import { V3_NPM_ABI } from "@/lib/abis/v3-npm";
@@ -370,6 +370,7 @@ function DepositModal({
 }) {
     const { address: account } = useAccount();
     const { writeContractAsync } = useWriteContract();
+    const publicClient = usePublicClient();
 
     const [tokenIdInput, setTokenIdInput] = useState("");
     const [mode, setMode] = useState<CompounderModeId>(1); // default RECEIVE
@@ -440,34 +441,34 @@ function DepositModal({
         }
         setBusy(true);
         try {
-            // Fold the ERC-721 approve(tokenId) + depositPosition into a
-            // single sender-preserving signature (Arc Multicall3From). The
-            // compounder's safeTransferFrom(msg.sender) inside
-            // depositPosition still pulls from the user because callFrom
-            // preserves the sender across both subcalls.
-            setStep("approving");
-            const approveData = encodeFunctionData({
-                abi: ERC721_APPROVE_ABI,
-                functionName: "approve",
-                args: [ADDRESSES.autoCompounder as Address, BigInt(tokenIdToUse)],
-            });
-            const depositData = encodeFunctionData({
-                abi: AUTO_COMPOUNDER_ABI,
-                functionName: "depositPosition",
-                args: [BigInt(tokenIdToUse), mode, thresholdMicros, slippageBps],
-            });
-            setStep("depositing");
-            const batched = buildAggregate3([
-                { target: ADDRESSES.v3PositionManager, callData: approveData },
-                { target: ADDRESSES.autoCompounder as Address, callData: depositData },
-            ]);
-            await writeContractAsync({
-                address: batched.address,
-                abi: batched.abi,
-                functionName: batched.functionName,
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                args: batched.args as any,
-            });
+            // Arc's callFrom precompile is dead, so the old "approve +
+            // deposit in one signature" Multicall3From batch reverts
+            // on-chain. Run the two legs as direct txs from the user's
+            // wallet, in order: ERC-721 approve(tokenId) to the compounder,
+            // then depositPosition. The compounder's
+            // safeTransferFrom(msg.sender) inside depositPosition still
+            // pulls from the user because each tx is signed by the user.
+            await runSequential(
+                [
+                    {
+                        address: ADDRESSES.v3PositionManager,
+                        abi: ERC721_APPROVE_ABI,
+                        functionName: "approve",
+                        args: [ADDRESSES.autoCompounder as Address, BigInt(tokenIdToUse)],
+                    },
+                    {
+                        address: ADDRESSES.autoCompounder as Address,
+                        abi: AUTO_COMPOUNDER_ABI,
+                        functionName: "depositPosition",
+                        args: [BigInt(tokenIdToUse), mode, thresholdMicros, slippageBps],
+                    },
+                ],
+                {
+                    writeContractAsync,
+                    publicClient,
+                    onStep: (i) => setStep(i === 0 ? "approving" : "depositing"),
+                },
+            );
 
             // Step 3: mirror to DB so the cron picks it up immediately
             // (the scanner queries the DB, not the chain).
@@ -508,6 +509,7 @@ function DepositModal({
         thresholdMicros,
         tokenIdToUse,
         writeContractAsync,
+        publicClient,
     ]);
 
     return (

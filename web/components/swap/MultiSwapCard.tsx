@@ -5,7 +5,6 @@ import { CrossIcon } from "@/components/ui/MaskIcon";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Address,
-  encodeFunctionData,
   erc20Abi,
   formatUnits,
   maxUint256,
@@ -17,7 +16,7 @@ import {
   useReadContracts,
   useWriteContract,
 } from "wagmi";
-import { buildAggregate3 } from "@/lib/routing/batchSwap";
+import { runSequential, type SequentialCall } from "@/lib/routing/runSequential";
 import { quoteBestLeg, quoteBestLegs } from "@/lib/routing/multiLegQuote";
 import type { RouteQuote } from "@/lib/routing/types";
 import { useSignPermit2, PERMIT2_ADDRESS } from "@/lib/permit2";
@@ -406,26 +405,28 @@ export function MultiSwapCard({ tab, onTabChange }: MultiSwapCardProps) {
     const permit2Legs = legs.filter((l) => !!l.route.permit2);
     let lastHash: `0x${string}` | undefined;
 
-    const calls: { target: Address; callData: `0x${string}` }[] = [];
+    // Arc's callFrom precompile is dead, so the old "approve + swap every
+    // leg in one signature" Multicall3From batch reverts on-chain. Build
+    // the SAME ordered list of calls (per classic leg: approve then swap;
+    // per permit2 leg needing it: a Permit2 approve) and run them as
+    // sequential direct txs from the user's wallet. msg.sender is the user
+    // on each tx for free.
+    const calls: SequentialCall[] = [];
     for (const l of classicLegs) {
       if ((l.route.executor.value ?? 0n) > 0n) {
         throw new Error("A value-bearing route can't be batched.");
       }
       calls.push({
-        target: l.route.approval.token,
-        callData: encodeFunctionData({
-          abi: erc20Abi,
-          functionName: "approve",
-          args: [l.route.approval.spender, maxUint256],
-        }),
+        address: l.route.approval.token,
+        abi: erc20Abi,
+        functionName: "approve",
+        args: [l.route.approval.spender, maxUint256],
       });
       calls.push({
-        target: l.route.executor.router,
-        callData: encodeFunctionData({
-          abi: l.route.executor.abi,
-          functionName: l.route.executor.functionName,
-          args: l.route.executor.args,
-        }),
+        address: l.route.executor.router,
+        abi: l.route.executor.abi,
+        functionName: l.route.executor.functionName,
+        args: l.route.executor.args,
       });
     }
     for (const l of permit2Legs) {
@@ -437,30 +438,20 @@ export function MultiSwapCard({ tab, onTabChange }: MultiSwapCardProps) {
       })) as bigint;
       if (allowance < l.amount) {
         calls.push({
-          target: l.token,
-          callData: encodeFunctionData({
-            abi: erc20Abi,
-            functionName: "approve",
-            args: [PERMIT2_ADDRESS, maxUint256],
-          }),
+          address: l.token,
+          abi: erc20Abi,
+          functionName: "approve",
+          args: [PERMIT2_ADDRESS, maxUint256],
         });
       }
     }
     if (calls.length > 0) {
       setTx({ status: "pending", message: `${label}: approve + swap` });
-      const batched = buildAggregate3(calls);
-      const h = await writeContractAsync({
-        address: batched.address,
-        abi: batched.abi,
-        functionName: batched.functionName,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        args: batched.args as any,
+      const h = await runSequential(calls, {
+        writeContractAsync,
+        publicClient,
       });
-      const r = await publicClient!.waitForTransactionReceipt({ hash: h });
-      if (r.status !== "success") {
-        throw new Error(`${label} batch reverted on-chain. Tx: ${h}`);
-      }
-      lastHash = h;
+      if (h) lastHash = h;
     }
     for (const l of permit2Legs) {
       const p2 = l.route.permit2!;

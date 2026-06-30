@@ -13,7 +13,6 @@ import { QuickButton } from "@/components/swap/QuickButton";
 import { useV2Tokens } from "@/lib/hooks/useV2Tokens";
 import { useV3Tokens } from "@/lib/hooks/useV3Tokens";
 import { useApproveIfNeeded } from "@/lib/hooks/useApproveIfNeeded";
-import { buildApproveAndCall } from "@/lib/routing/batchSwap";
 import { TokenSelectModal, TokenOption } from "@/components/ui/TokenSelectModal";
 import { AutoTokenIcon } from "@/components/ui/AutoTokenIcon";
 import { ORBS_TWAP_ABI } from "@/lib/abis/orbsTwap";
@@ -393,7 +392,7 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
         }
     };
 
-    const { allowance } = useApproveIfNeeded(
+    const { allowance, ensureAllowance } = useApproveIfNeeded(
         tokenIn.address,
         ADDRESSES.orbsTwap,
     );
@@ -459,30 +458,21 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
                 data: "0x" as const,
             };
 
+            // Arc's callFrom precompile is dead, so the old "approve + ask
+            // in one signature" Multicall3From batch reverts on-chain. Run
+            // the one-time TWAP approval (when needed) and the order as two
+            // direct txs from the user's wallet; msg.sender is the user on
+            // each for free.
             let hash: `0x${string}`;
             if (needsApproval) {
-                // Fold the one-time TWAP approval + the order into a single
-                // sender-preserving signature (Arc Multicall3From).
-                const batched = buildApproveAndCall({
-                    token: tokenIn.address,
-                    spender: ADDRESSES.orbsTwap,
-                    call: { address: ADDRESSES.orbsTwap, abi: ORBS_TWAP_ABI, functionName: "ask", args: [ask] },
-                });
-                hash = await writeContractAsync({
-                    address: batched.address,
-                    abi: batched.abi,
-                    functionName: batched.functionName,
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                    args: batched.args as any,
-                });
-            } else {
-                hash = await writeContractAsync({
-                    address: ADDRESSES.orbsTwap,
-                    abi: ORBS_TWAP_ABI,
-                    functionName: "ask",
-                    args: [ask],
-                });
+                await ensureAllowance(srcAmountBn);
             }
+            hash = await writeContractAsync({
+                address: ADDRESSES.orbsTwap,
+                abi: ORBS_TWAP_ABI,
+                functionName: "ask",
+                args: [ask],
+            });
 
             // 2026-06-15 audit HIGH#4 fix: writeContractAsync resolves the
             // moment the wallet returns a hash (post-signature, pre-mining),

@@ -40,7 +40,7 @@ import {
     useSignPermit2,
 } from "@/lib/permit2";
 import { encodePermit2PermitInput } from "@/lib/routing/universalRouter";
-import { buildBatchedApproveAndSwap, type BatchSwapCall } from "@/lib/routing/batchSwap";
+import { type BatchSwapCall } from "@/lib/routing/batchSwap";
 import { cn, formatToken, formatUSDC } from "@/lib/utils";
 
 const USDC_TOKEN: TokenOption = {
@@ -1072,23 +1072,20 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
       // HIGH#6: under partial-fill we only approve the amount the
       // executor will actually pull, not the user-typed amount.
       const approvalAmount = exactIn ? effectiveFinalAmountIn : maxIn;
-      // Arc batch (#3): for the classic-approval Arcade routes (V2 / V3 /
-      // launchpad) we fold the ERC20 approve and the swap into ONE
-      // signature via Multicall3From when an approval is actually needed.
-      // Validated on-chain 2026-06-19 (sender-preserving callFrom). The
-      // external UR/Permit2 routes never batch (they settle in a single
-      // execute() with an off-chain permit), and value-bearing variants
-      // are excluded because the precompile can't forward value.
-      const willBatch = !isExternalRoute && currentAllowance < approvalAmount;
+      // Arc's callFrom precompile is dead, so the old "approve + swap in
+      // one signature" Multicall3From batch reverts on-chain. For the
+      // classic-approval Arcade routes (V2 / V3 / launchpad) we now run the
+      // approve (when the allowance is short) and the swap as two direct
+      // txs from the user's wallet; msg.sender is the user on each for free.
+      const needsApprove = !isExternalRoute && currentAllowance < approvalAmount;
 
       // Permit2-backed external routes (Synthra UR, UnitFlow UR) need a
       // one-time max approve to Permit2 instead of per-router approves.
       // After that, the per-swap "approval" is an off-chain EIP-712 sig
       // the user signs once per swap and we bake into the executor args.
       // Non-Permit2 routes (Arcade V2/V3, XyloNet, UnitFlow WRAP_ETH
-      // variant where USDC is paid via msg.value) still use the legacy
-      // ensureAllowance path — except the batchable Arcade routes, whose
-      // approve is folded into the aggregate3 below.
+      // variant where USDC is paid via msg.value) use the ensureAllowance
+      // path: a direct approve tx before the direct swap tx.
       if (usesPermit2 && activeRoute) {
         if (permit2Approval.needsApproval) {
           setTx({ status: "pending", message: "Approving Permit2 (one-time)…" });
@@ -1100,7 +1097,7 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
       ) {
         // WRAP_ETH variant — no ERC20 allowance needed, value is sent
         // with the tx. Skip ensureAllowance entirely.
-      } else if (!willBatch) {
+      } else if (needsApprove) {
         // Over-approval to the router is harmless (trusted contract) but
         // the smaller amount keeps the allowance footprint honest.
         await ensureAllowance(approvalAmount);
@@ -1277,32 +1274,16 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
           };
         }
 
-        if (willBatch) {
-          // Fold approve + swap into a single sender-preserving signature.
-          setTx({ status: "pending", message: "Approve + swap (1 signature)…" });
-          const batched = buildBatchedApproveAndSwap({
-            token: tokenIn.address,
-            spender: swapSpender,
-            swap: swapCall,
-          });
-          hash = await writeContractAsync({
-            address: batched.address,
-            abi: batched.abi,
-            functionName: batched.functionName,
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            args: batched.args as any,
-            chainId: arcTestnet.id,
-          });
-        } else {
-          hash = await writeContractAsync({
-            address: swapCall.address,
-            abi: swapCall.abi,
-            functionName: swapCall.functionName,
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            args: swapCall.args as any,
-            chainId: arcTestnet.id,
-          });
-        }
+        // The approve (if any) already ran above as its own direct tx, so
+        // here we just send the swap directly.
+        hash = await writeContractAsync({
+          address: swapCall.address,
+          abi: swapCall.abi,
+          functionName: swapCall.functionName,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          args: swapCall.args as any,
+          chainId: arcTestnet.id,
+        });
       }
       // Audit high [26]: viem's waitForTransactionReceipt returns a
       // receipt for BOTH success and revert. Without an explicit status

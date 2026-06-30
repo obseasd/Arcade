@@ -7,9 +7,7 @@ import {
     ERC_8004_IDENTITY_ABI,
     ERC_8004_IDENTITY_ADDRESS,
 } from "@/lib/abis/erc8004Identity";
-import { encodeFunctionData } from "viem";
-import { buildAggregate3 } from "@/lib/routing/batchSwap";
-import { ADDRESSES } from "@/lib/constants";
+import { runSequential } from "@/lib/routing/runSequential";
 import { useCreatorTier, type CreatorTier } from "@/lib/hooks/useCreatorTier";
 import { pushToast } from "@/lib/toast";
 
@@ -178,44 +176,35 @@ export function DiamondIdentityMint() {
                 functionName: "tokenOfOwnerByIndex",
                 args: [account, balance - 1n],
             })) as bigint;
-            const burnData = encodeFunctionData({
-                abi: ERC_8004_IDENTITY_ABI,
-                functionName: "burn",
-                args: [tokenId],
-            });
-            // register(uri) self-registers for msg.sender — which
-            // Multicall3From preserves as the user across both subcalls,
-            // so the fresh NFT lands in the creator's wallet (the Issuer
-            // can't do this: register would register the Issuer itself).
-            const mintData = encodeFunctionData({
-                abi: ERC_8004_IDENTITY_ABI,
-                functionName: "register",
-                args: [metadataUri],
-            });
-            // Burn + re-register in ONE atomic, sender-preserving
-            // signature (Arc Multicall3From). allowFailure=false → if the
-            // re-register reverts the burn rolls back too, closing the
-            // old 2-tx gap where a failed re-mint left the user with no
-            // NFT.
-            const batched = buildAggregate3([
-                { target: ERC_8004_IDENTITY_ADDRESS, callData: burnData },
-                { target: ERC_8004_IDENTITY_ADDRESS, callData: mintData },
-            ]);
-            const hash = await writeContractAsync({
-                address: batched.address,
-                abi: batched.abi,
-                functionName: batched.functionName,
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                args: batched.args as any,
-            });
-            const receipt = await publicClient.waitForTransactionReceipt({ hash });
-            if (receipt.status !== "success") {
-                throw new Error("Identity refresh reverted on-chain.");
-            }
+            // Arc's callFrom precompile is dead, so the old atomic
+            // burn + re-register Multicall3From batch reverts on-chain.
+            // Run the two legs as direct txs from the user's wallet, in
+            // order: burn the stale NFT, then register(uri) which
+            // self-registers for msg.sender (the user) so the fresh NFT
+            // lands in the creator's wallet. Without batch atomicity the
+            // legs run as two confirmations; runSequential awaits the burn
+            // receipt before the register so the order is preserved.
+            await runSequential(
+                [
+                    {
+                        address: ERC_8004_IDENTITY_ADDRESS,
+                        abi: ERC_8004_IDENTITY_ABI,
+                        functionName: "burn",
+                        args: [tokenId],
+                    },
+                    {
+                        address: ERC_8004_IDENTITY_ADDRESS,
+                        abi: ERC_8004_IDENTITY_ABI,
+                        functionName: "register",
+                        args: [metadataUri],
+                    },
+                ],
+                { writeContractAsync, publicClient },
+            );
             pushToast({
                 kind: "info",
                 title: `${tierLabel} Identity refreshed`,
-                message: "Old tier burned + new tier minted — one signature.",
+                message: "Old tier burned, new tier minted (2 transactions).",
             });
             void balanceOfQ.refetch();
         } catch (e: unknown) {

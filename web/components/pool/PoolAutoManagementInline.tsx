@@ -1,20 +1,20 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Address, encodeFunctionData } from "viem";
+import { Address } from "viem";
 import type { PublicClient } from "viem";
 import { useAccount, usePublicClient, useWriteContract } from "wagmi";
 
 import { AUTO_COMPOUNDER_ABI, modeLabelFromId } from "@/lib/abis/autoCompounder";
 import { V3_NPM_ABI } from "@/lib/abis/v3-npm";
-import { buildAggregate3 } from "@/lib/routing/batchSwap";
+import { runSequential } from "@/lib/routing/runSequential";
 import { ADDRESSES } from "@/lib/constants";
 import { pushToast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 
 // Minimal ERC-721 approve fragment (V3_NPM_ABI's approve overload isn't
-// exposed here). Used to fold approve(tokenId) + depositPosition into one
-// Multicall3From signature.
+// exposed here). Used for the approve(tokenId) tx that precedes
+// depositPosition (run as sequential direct txs from the user's wallet).
 const ERC721_APPROVE_ABI = [
   {
     type: "function",
@@ -411,31 +411,31 @@ function ManagedRowCard({
         try {
             let hash: `0x${string}`;
             if (unmanaged) {
-                // Depositing an un-managed position: fold the ERC-721
-                // approve(tokenId) + depositPosition into ONE Multicall3From
-                // signature. thresholdMicros is already clamped to the
+                // Depositing an un-managed position. Arc's callFrom
+                // precompile is dead, so the old "approve + deposit in one
+                // signature" Multicall3From batch reverts on-chain. Run the
+                // ERC-721 approve(tokenId) then depositPosition as two
+                // direct txs from the user's wallet (msg.sender is the user
+                // on each). thresholdMicros is already clamped to the
                 // 1-USDC floor above, so this can't hit MIN_FEE_TOO_LOW.
-                const approveData = encodeFunctionData({
-                    abi: ERC721_APPROVE_ABI,
-                    functionName: "approve",
-                    args: [ADDRESSES.autoCompounder as Address, row.tokenId],
-                });
-                const depositData = encodeFunctionData({
-                    abi: AUTO_COMPOUNDER_ABI,
-                    functionName: "depositPosition",
-                    args: [row.tokenId, modeId, thresholdMicros, slippageBps],
-                });
-                const batched = buildAggregate3([
-                    { target: ADDRESSES.v3PositionManager, callData: approveData },
-                    { target: ADDRESSES.autoCompounder as Address, callData: depositData },
-                ]);
-                hash = await writeContractAsync({
-                    address: batched.address,
-                    abi: batched.abi,
-                    functionName: batched.functionName,
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                    args: batched.args as any,
-                });
+                const last = await runSequential(
+                    [
+                        {
+                            address: ADDRESSES.v3PositionManager,
+                            abi: ERC721_APPROVE_ABI,
+                            functionName: "approve",
+                            args: [ADDRESSES.autoCompounder as Address, row.tokenId],
+                        },
+                        {
+                            address: ADDRESSES.autoCompounder as Address,
+                            abi: AUTO_COMPOUNDER_ABI,
+                            functionName: "depositPosition",
+                            args: [row.tokenId, modeId, thresholdMicros, slippageBps],
+                        },
+                    ],
+                    { writeContractAsync, publicClient },
+                );
+                hash = last as `0x${string}`;
             } else {
                 hash = await writeContractAsync({
                     address: ADDRESSES.autoCompounder,

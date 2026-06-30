@@ -4,10 +4,10 @@ import { X } from "lucide-react";
 import { RefreshIcon } from "@/components/ui/MaskIcon";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { encodeFunctionData, type Address } from "viem";
+import { type Address } from "viem";
 import { usePublicClient, useReadContract, useReadContracts, useWriteContract } from "wagmi";
 import { ORBS_TWAP_ABI, decodeOrderStatus } from "@/lib/abis/orbsTwap";
-import { buildAggregate3 } from "@/lib/routing/batchSwap";
+import { runSequential } from "@/lib/routing/runSequential";
 import { ADDRESSES, USDC_DECIMALS } from "@/lib/constants";
 import { useV2Tokens } from "@/lib/hooks/useV2Tokens";
 import { useV3Tokens } from "@/lib/hooks/useV3Tokens";
@@ -230,35 +230,24 @@ export function LimitOrdersPanel({ account, variant = "card", className }: Props
             title: `Cancelling ${openOrders.length} order${openOrders.length === 1 ? "" : "s"}`,
             message: "Confirm in your wallet.",
         });
-        // Cancel every open order in ONE signature via Multicall3From.
-        // RACE-011 superseded: the old per-cancel loop waited for each
-        // receipt so a keeper fill mid-loop surfaced per-order; now
-        // allowFailure:true makes one just-filled order's cancel revert
-        // only its own subcall while the rest still cancel atomically.
-        // cancel() gates on maker == msg.sender, which the precompile
-        // preserves.
+        // Arc's callFrom precompile is dead, so the old "cancel every order
+        // in one signature" Multicall3From batch reverts on-chain. Run one
+        // cancel tx per order from the user's wallet; cancel() gates on
+        // maker == msg.sender, which holds for free when the user signs.
+        // allowFailure mirrors the old aggregate3 allowFailure:true so a
+        // just-filled order's cancel revert is skipped and the rest still
+        // cancel.
         try {
-            const batched = buildAggregate3(
+            await runSequential(
                 openOrders.map((o) => ({
-                    target: ADDRESSES.orbsTwap,
+                    address: ADDRESSES.orbsTwap,
+                    abi: ORBS_TWAP_ABI,
+                    functionName: "cancel",
+                    args: [o.id],
                     allowFailure: true,
-                    callData: encodeFunctionData({
-                        abi: ORBS_TWAP_ABI,
-                        functionName: "cancel",
-                        args: [o.id],
-                    }),
                 })),
+                { writeContractAsync, publicClient },
             );
-            const hash = await writeContractAsync({
-                address: batched.address,
-                abi: batched.abi,
-                functionName: batched.functionName,
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                args: batched.args as any,
-            });
-            if (publicClient) {
-                await publicClient.waitForTransactionReceipt({ hash });
-            }
             pushToast({
                 kind: "info",
                 title: `Cancelled ${openOrders.length} order${openOrders.length === 1 ? "" : "s"}`,

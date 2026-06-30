@@ -20,7 +20,6 @@ import { V4_QUOTER_ABI } from "@/lib/abis/v4Quoter";
 import { V4_ROUTER_ABI } from "@/lib/abis/v4Router";
 import { ADDRESSES, USDC_DECIMALS } from "@/lib/constants";
 import { useApproveIfNeeded } from "@/lib/hooks/useApproveIfNeeded";
-import { buildBatchedApproveAndSwap } from "@/lib/routing/batchSwap";
 import { useTokenImage } from "@/lib/hooks/useTokenImage";
 import { pushToast } from "@/lib/toast";
 import { AmountInput } from "@/components/ui/AmountInput";
@@ -112,7 +111,7 @@ export function V4SwapPanel({ token, symbol }: Props) {
     const balance = (balanceQ.data as bigint | undefined) ?? 0n;
 
     // --- Allowance for the router (USDC or token, whichever is input) ----
-    const { allowance } = useApproveIfNeeded(inputAddr, router);
+    const { allowance, ensureAllowance } = useApproveIfNeeded(inputAddr, router);
 
     // --- Quote via V4Quoter ---------------------------------------------
     const [quote, setQuote] = useState<bigint | undefined>();
@@ -220,42 +219,23 @@ export function V4SwapPanel({ token, symbol }: Props) {
                 user,
                 0n, // sqrtPriceLimitX96 = unlimited within tick range
             ] as const;
-            // First swap of this token through the V4 router? Fold the
-            // ERC20 approve + exactInputSingle into ONE Multicall3From
-            // signature (same path as the main SwapCard; the router's
-            // transferFrom still pulls from the user because callFrom
-            // preserves the sender). Later swaps skip the approve
-            // (allowance already max) and go direct.
-            const willBatch = allowance < amountInBigInt;
+            // Arc's callFrom precompile is dead, so the old "approve + swap
+            // in one signature" Multicall3From batch reverts on-chain. Run
+            // the legs as direct txs from the user's wallet: approve first
+            // (only on the first swap of this token), then exactInputSingle.
+            // msg.sender is the user on each tx for free.
             let hash: `0x${string}`;
-            if (willBatch) {
-                setSwapState({ status: "pending", message: "Approve + swap..." });
-                const batched = buildBatchedApproveAndSwap({
-                    token: inputAddr,
-                    spender: router,
-                    swap: {
-                        address: router,
-                        abi: V4_ROUTER_ABI,
-                        functionName: "exactInputSingle",
-                        args: swapArgs,
-                    },
-                });
-                hash = await writeContractAsync({
-                    address: batched.address,
-                    abi: batched.abi,
-                    functionName: batched.functionName,
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                    args: batched.args as any,
-                });
-            } else {
-                setSwapState({ status: "pending", message: "Submitting swap..." });
-                hash = await writeContractAsync({
-                    address: router,
-                    abi: V4_ROUTER_ABI,
-                    functionName: "exactInputSingle",
-                    args: swapArgs,
-                });
+            if (allowance < amountInBigInt) {
+                setSwapState({ status: "pending", message: "Approving..." });
+                await ensureAllowance(amountInBigInt);
             }
+            setSwapState({ status: "pending", message: "Submitting swap..." });
+            hash = await writeContractAsync({
+                address: router,
+                abi: V4_ROUTER_ABI,
+                functionName: "exactInputSingle",
+                args: swapArgs,
+            });
             setSwapState({ status: "pending", message: "Waiting for confirmation..." });
             await publicClient?.waitForTransactionReceipt({ hash });
             setSwapState({ status: "success", hash, message: "Swap confirmed" });
