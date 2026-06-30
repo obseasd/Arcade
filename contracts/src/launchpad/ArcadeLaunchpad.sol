@@ -1026,22 +1026,22 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
             /* pool already initialised */
         }
 
-        // Audit L-2: drop the strict-equal check that let attackers brick
-        // CLANKER_V3 launches by pre-initializing the predicted pool at
-        // any other price (gas-only grief). Accept whatever sqrt is on
-        // the pool, fall back to revert ONLY when the pool is somehow
-        // still un-initialized (sp == 0). The subsequent single-sided
-        // position math reads `sqrtPriceX96` for tick sizing; if the
-        // pre-init price is extreme enough that the locker can't mint
-        // a valid range, the locker call below reverts with its own
-        // error so the launch still aborts cleanly — just one step
-        // later instead of here, and only when the attack is at the
-        // edge of feasibility. The economic deterrent: an attacker who
-        // wants to mis-price a launch must actually pre-fund the pool
-        // and choose a believable-enough sqrt that the locker accepts.
+        // Audit 2026-06-29 (HIGH): do NOT anchor the locked single-sided
+        // liquidity to the pool's slot0. The token address is CREATE-nonce
+        // predictable, so an attacker can pre-initialise the predicted pool at
+        // a cheap price. The previous code overwrote sqrtPriceX96 with that
+        // slot0 value, and the locker (_computeRanges anchors its bands to the
+        // passed sqrtPriceX96 tick) then placed the ENTIRE launch supply at the
+        // attacker's price, letting them buy it cheap (steal-the-supply).
+        // Keep sqrtPriceX96 at the INTENDED launch price so the locked bands
+        // are always anchored to intent regardless of any pre-init. We still
+        // require the pool to be initialised (sp != 0) so the locker's mint can
+        // proceed; a momentarily mispriced spot is arbed back, and the
+        // creator-buy path below already enforces an FDV-based minOut. This
+        // also avoids the L-2 brick: a pre-init at a wrong price no longer
+        // reverts here, it is simply ignored.
         (uint160 sp,,,,,,) = IArcadeV3Pool(pool).slot0();
         if (sp == 0) revert InvalidRoute();
-        sqrtPriceX96 = sp;
 
         // L-02: flip migrated state BEFORE the external locker call so that
         // any view of `isMigrated(token)` invoked during the locker's
