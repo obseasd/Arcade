@@ -232,14 +232,21 @@ contract ArcadeV3Zap is IUniswapV3SwapCallback {
         require(p.amountIn > 0, "ZERO_AMOUNT");
         require(p.tokenIn != p.otherToken, "SAME_TOKEN");
 
-        IERC20Min(p.tokenIn).safeTransferFrom(msg.sender, address(this), p.amountIn);
-
         (address t0, address t1) = p.tokenIn < p.otherToken
             ? (p.tokenIn, p.otherToken)
             : (p.otherToken, p.tokenIn);
+
+        // Audit 2026-06-29: snapshot pre-pull balances so the post-zap sweep
+        // forwards only this call's residual, not any pre-parked balance
+        // (donation / prior leftover). Ports the ArcadeV2Zap delta-sweep.
+        uint256 b0 = IERC20Min(t0).balanceOf(address(this));
+        uint256 b1 = IERC20Min(t1).balanceOf(address(this));
+
+        IERC20Min(p.tokenIn).safeTransferFrom(msg.sender, address(this), p.amountIn);
+
         (tokenId, liquidity) = _zapInRoute(p, t0, t1, tickLower, tickUpper);
-        _sweep(t0, p.recipient);
-        _sweep(t1, p.recipient);
+        _sweep(t0, p.recipient, b0);
+        _sweep(t1, p.recipient, b1);
         emit ZapIn(p.recipient, tokenId, p.tokenIn, p.amountIn, liquidity);
     }
 
@@ -504,6 +511,13 @@ contract ArcadeV3Zap is IUniswapV3SwapCallback {
         (address t0, address t1, uint24 fee) = _readPositionPair(p.tokenId);
         require(p.tokenOut == t0 || p.tokenOut == t1, "BAD_TOKEN_OUT");
 
+        // Audit 2026-06-29: snapshot the non-tokenOut leg BEFORE the collect so
+        // its post-settle sweep forwards only this call's residual, never a
+        // balance parked in the zap. (tokenOut itself is paid via a computed
+        // amountOut, not a balance sweep, so it needs no snapshot.)
+        uint256 balBeforeOther =
+            IERC20Min(p.tokenOut == t0 ? t1 : t0).balanceOf(address(this));
+
         // Pull the NFT, decrease + collect, return the NFT, then swap the
         // non-tokenOut leg. Splitting into helpers avoids 0.7.6's
         // stack-too-deep limit.
@@ -517,6 +531,9 @@ contract ArcadeV3Zap is IUniswapV3SwapCallback {
         INonfungiblePositionManager(npm).transferFrom(address(this), p.recipient, p.tokenId);
 
         amountOut = _zapOutSettle(p, t0, t1, fee, collected0, collected1);
+        // Delta-sweep the non-tokenOut leg using the pre-collect snapshot so a
+        // parked balance can't be skimmed by this caller (audit 2026-06-29).
+        _sweep(p.tokenOut == t0 ? t1 : t0, p.recipient, balBeforeOther);
     }
 
     function _decreaseAndCollect(ZapOutParams calldata p)
@@ -583,7 +600,8 @@ contract ArcadeV3Zap is IUniswapV3SwapCallback {
         require(amountOut >= p.amountOutMin, "ZAPOUT_SLIPPAGE");
 
         IERC20Min(p.tokenOut).safeTransfer(p.recipient, amountOut);
-        _sweep(outIsT0 ? t1 : t0, p.recipient);
+        // Non-tokenOut leg is swept by the caller (zapOut) with its pre-collect
+        // snapshot — moved out of this helper to stay under 0.7.6 stack limits.
         emit ZapOut(p.recipient, p.tokenId, p.tokenOut, amountOut);
     }
 
@@ -715,11 +733,17 @@ contract ArcadeV3Zap is IUniswapV3SwapCallback {
         IERC20Min(tokenIn).safeTransfer(msg.sender, amountToPay);
     }
 
-    function _sweep(address token, address to) internal {
+    function _sweep(address token, address to, uint256 balBefore) internal {
         uint256 bal = IERC20Min(token).balanceOf(address(this));
-        // Audit V3 Zap L-3: require the transfer return so a silently-
-        // failing non-standard ERC20 doesn't leave the dust in the
-        // contract while the caller thinks the sweep succeeded.
-        if (bal > 0) IERC20Min(token).safeTransfer(to, bal);
+        // Audit 2026-06-29: forward only THIS call's residual (current minus the
+        // pre-pull / pre-collect snapshot), never a balance parked in the zap by
+        // a donation or a prior tx's leftover dust. Ports the ArcadeV2Zap MEDIUM
+        // delta-sweep fix that was never carried over to V3 — without it the next
+        // zap caller sweeps any parked balance to themselves.
+        uint256 dust = bal > balBefore ? bal - balBefore : 0;
+        // Audit V3 Zap L-3: require the transfer return so a silently-failing
+        // non-standard ERC20 doesn't leave the dust in the contract while the
+        // caller thinks the sweep succeeded.
+        if (dust > 0) IERC20Min(token).safeTransfer(to, dust);
     }
 }
