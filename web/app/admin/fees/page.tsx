@@ -31,6 +31,7 @@ interface FeeItem {
     amountUsdc: string;
     from: string;
     reason: string;
+    isFee: boolean;
 }
 
 interface FeesResponse {
@@ -39,7 +40,9 @@ interface FeesResponse {
     fromBlock: number;
     toBlock: number;
     totalUsdc: string;
+    grossUsdc: string;
     count: number;
+    grossCount: number;
     truncated: boolean;
     note: string;
     items: FeeItem[];
@@ -156,20 +159,26 @@ function FeesBody() {
                 ) : data ? (
                     <>
                         <div className="text-xs uppercase tracking-wider text-arc-text-muted">
-                            Total fees received (scanned window)
+                            Recognized protocol fees (scanned window)
                         </div>
                         <div className="mt-2 text-4xl font-semibold tabular-nums sm:text-5xl">
                             ${formatTwo(data.totalUsdc)}
                         </div>
                         <div className="mt-3 text-xs text-arc-text-faint">
-                            {data.count.toLocaleString("en-US")} transfer
+                            {data.count.toLocaleString("en-US")} fee transfer
                             {data.count === 1 ? "" : "s"} · blocks{" "}
                             {data.fromBlock.toLocaleString("en-US")} to{" "}
                             {data.toBlock.toLocaleString("en-US")}
                         </div>
-                        <div className="mt-1 text-xs text-arc-text-faint">
-                            Recent window. Full all-time history ships with the indexer.
+                        <div className="mt-2 text-xs text-arc-text-faint">
+                            Total inbound USDC (incl. trades / direct):{" "}
+                            <span className="tabular-nums text-arc-text-muted">
+                                ${formatTwo(data.grossUsdc)}
+                            </span>{" "}
+                            across {data.grossCount.toLocaleString("en-US")} transfer
+                            {data.grossCount === 1 ? "" : "s"}.
                         </div>
+                        <div className="mt-2 text-xs text-arc-text-faint">{data.note}</div>
                         {data.truncated && (
                             <div className="mt-3 inline-flex items-center gap-2 rounded-lg bg-arc-warn/10 px-3 py-1.5 text-xs text-arc-warn">
                                 <AlertTriangle className="h-3.5 w-3.5" />
@@ -237,11 +246,21 @@ function FeeRow({ item }: { item: FeeItem }) {
                 </span>
                 {formatWhen(item.timestamp)}
             </div>
-            <div className="tabular-nums font-semibold text-arc-success sm:text-right">
+            <div
+                className={cn(
+                    "tabular-nums font-semibold sm:text-right",
+                    item.isFee ? "text-arc-success" : "text-arc-text-faint",
+                )}
+            >
                 <span className="sm:hidden text-[10px] uppercase tracking-wider text-arc-text-muted">
                     Amount:{" "}
                 </span>
                 +${formatTwo(item.amountUsdc)}
+                {!item.isFee && (
+                    <span className="ml-1 text-[10px] uppercase tracking-wider text-arc-text-faint">
+                        (not a fee)
+                    </span>
+                )}
             </div>
             <div className="text-xs text-arc-text-muted">
                 <span className="sm:hidden text-[10px] uppercase tracking-wider">

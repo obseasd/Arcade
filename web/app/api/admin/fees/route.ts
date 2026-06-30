@@ -59,15 +59,19 @@ export async function GET() {
         });
     }
 
-    // Categorize an inbound transfer by its `from` address.
-    const reasonFor = (from: string): string => {
+    // Categorize an inbound transfer by its `from` address. Only transfers FROM
+    // a recognized Arcade fee-emitting contract count as protocol fees. On
+    // testnet the treasury is the deployer EOA, which is also used for trading,
+    // so its inbound USDC also includes trade proceeds (sells, swap outputs)
+    // and direct transfers — those are listed but NOT summed into the fee total.
+    const classify = (from: string): { reason: string; isFee: boolean } => {
         const f = lc(from);
         if (f === lc(addrs.launchpad)) {
-            return "Launchpad fee (creation / migration / snipe skim)";
+            return { reason: "Launchpad fee (creation / migration / snipe skim)", isFee: true };
         }
-        if (f === lc(addrs.v3Locker)) return "Locked-LP protocol fee";
-        if (f === lc(addrs.autoCompounder)) return "Auto-compounder protocol fee";
-        return "Other / direct transfer";
+        if (f === lc(addrs.v3Locker)) return { reason: "Locked-LP protocol fee", isFee: true };
+        if (f === lc(addrs.autoCompounder)) return { reason: "Auto-compounder protocol fee", isFee: true };
+        return { reason: "Direct transfer / trade proceeds (not a protocol fee)", isFee: false };
     };
 
     const client = createPublicClient({
@@ -134,33 +138,43 @@ export async function GET() {
         }),
     );
 
-    let totalRaw = 0n;
+    let feeRaw = 0n; // only recognized protocol fees
+    let grossRaw = 0n; // every inbound transfer (incl. trades / direct)
     const items = logs
         .map((l) => {
             const amount = l.args.value ?? 0n;
             const fromAddr = (l.args.from ?? "0x0000000000000000000000000000000000000000") as string;
             const block = l.blockNumber ?? 0n;
-            totalRaw += amount;
+            const { reason, isFee } = classify(fromAddr);
+            grossRaw += amount;
+            if (isFee) feeRaw += amount;
             return {
                 txHash: l.transactionHash ?? "",
                 block: Number(block),
                 timestamp: tsByBlock.get(block) ?? 0,
                 amountUsdc: fmtUsdc(amount),
                 from: fromAddr,
-                reason: reasonFor(fromAddr),
+                reason,
+                isFee,
             };
         })
         .sort((a, b) => b.block - a.block);
+
+    const feeCount = items.filter((i) => i.isFee).length;
 
     return ok({
         ok: true,
         treasury,
         fromBlock: Number(fromBlock),
         toBlock: Number(head),
-        totalUsdc: fmtUsdc(totalRaw),
-        count: items.length,
+        // Headline = recognized protocol fees only. grossUsdc is every inbound
+        // transfer (which on testnet includes the treasury EOA's own trades).
+        totalUsdc: fmtUsdc(feeRaw),
+        grossUsdc: fmtUsdc(grossRaw),
+        count: feeCount,
+        grossCount: items.length,
         truncated,
-        note: "Recent window only. Full all-time fee history ships with the indexer (roadmap item).",
+        note: "Headline = recognized protocol fees (transfers from the launchpad / locker / compounder). Other inbound USDC is listed but excluded: on testnet the treasury is the deployer EOA, so it also receives trade proceeds and direct transfers. Recent window only; full all-time history ships with the indexer.",
         items,
     });
 }
