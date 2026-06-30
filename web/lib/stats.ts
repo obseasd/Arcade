@@ -63,6 +63,17 @@ const ARC_RPC =
  * call; we're well under that with 8 generations * 5 contracts each.
  */
 const PREDECESSOR_CONTRACTS: Address[] = [
+    // gen 9 (2026-06-21, pre-Path-B live stack — superseded by the 2026-06-30
+    // Path B redeploy; keep counting so the page does not drop this gen's
+    // tokens / volume / wallets after the cutover).
+    "0x7337789D6F0f731BCBE6CE6a44334F548Bba56b9", // launchpad
+    "0xfD1c54B13C30AE50a7e5642D7d7040AF6CB23bd8", // twitter escrow
+    "0x1acc719F43AaB36b29Df6F9B8ecd02D8704c4D29", // v3 factory
+    "0x8434cAeC1e6074aE6d98d5744b485C7F5f19F6A7", // v3 locker
+    "0xB6a722667D1a61170B15A3d82ece155D3516db19", // v3 router
+    "0xD428D8975804ffE2AFD82E8Ff02273d6a3E89f6B", // v3 quoter
+    "0xB3FDAEE3c1Bc3e08D4b4B9e5bBC3708c1b99AabD", // v3 NPM
+    "0x629da8bAD9DE632990c70Ad907cbfa65bc214187", // v3 zap
     // gen 8 (2026-06-11, audit v2 + cooldown-fix prep deploy)
     "0xD863e3475E00550FBe0Abf4F1127B673E65C86a4", // launchpad
     "0xc7321283D18C4cABcD5Eda4489845336A9F5c3ed", // twitter escrow
