@@ -6,14 +6,16 @@ import { useCallback, useDeferredValue, useEffect, useMemo, useState } from "rea
 import {
     Address,
     encodeAbiParameters,
+    encodeFunctionData,
     erc20Abi,
     formatUnits,
     keccak256,
+    parseAbi,
     parseUnits,
     toBytes,
     zeroAddress,
 } from "viem";
-import { useAccount, usePublicClient, useReadContract, useWriteContract } from "wagmi";
+import { useAccount, useChainId, usePublicClient, useReadContract, useWriteContract } from "wagmi";
 
 import {
     V3_FACTORY_ABI,
@@ -47,6 +49,25 @@ const ERC721_SAFE_TRANSFER_FROM_DATA_ABI = [
         outputs: [],
     },
 ] as const;
+
+// The NPM inherits Uniswap's Multicall.sol (delegatecalls its OWN functions,
+// so msg.sender stays the user, no Arc precompile, unlike the dead
+// Multicall3From). The canonical V3_NPM_ABI deliberately omits this entry
+// (wagmi v2's typed writeContract drops bytes[]-returning Multicall-style
+// calls from its writable union), so we keep a standalone parseAbi fragment
+// here, the same approach RemoveLiquidityModalV3 uses to batch
+// decrease/collect/burn. Used by the Arc fresh-pool fast path to fold
+// createAndInitializePoolIfNecessary + mint into one atomic transaction.
+const NPM_MULTICALL_ABI = parseAbi([
+    "function multicall(bytes[] data) payable returns (bytes[])",
+]);
+
+// Circle's Arc testnet. Used to gate the single-transaction fresh-pool path:
+// Arc has NO public mempool and uses deterministic single-sequencer ordering
+// (AMP), so front-running the pool init price is impossible. That makes it
+// safe to batch init + mint atomically instead of the two-tx + slot0-verify
+// flow other chains need. Re-evaluate if Arc ever ships a public mempool.
+const ARC_TESTNET_CHAIN_ID = 5042002;
 
 // Pre-hashed Transfer signature so receipt-log parsing avoids a
 // keccak round trip per mint. ERC-721 emits Transfer(from, to,
@@ -110,6 +131,7 @@ export function V3AddLiquidity({
     const router = useRouter();
     const { address: account } = useAccount();
     const publicClient = usePublicClient();
+    const chainId = useChainId();
     const { writeContractAsync } = useWriteContract();
 
     const npmEnabled = ADDRESSES.v3PositionManager !== zeroAddress;
@@ -692,7 +714,7 @@ export function V3AddLiquidity({
             // we're seeding it AND (b) the pool exists from a previous
             // failed mint but liquidity is still 0. In both cases we're
             // setting the effective seed of the pool's first position, so
-            // there's no front-runnable price to slip against — the
+            // there's no front-runnable price to slip against, the
             // slot0 verification below detects pre-init grief, and the
             // tick-quantisation rounding is the only realistic source of
             // amount drift. Force a 5% floor so 0.5% defaults don't false-
@@ -704,8 +726,24 @@ export function V3AddLiquidity({
             let actualTickLower = tickLower;
             let actualTickUpper = tickUpper;
 
-            // Fresh-pool branch. Two on-chain calls (init + mint) bracketed
-            // by a slot0 verification — see the security commentary below.
+            // When the fresh pool is initialised atomically with the mint
+            // (Arc fast path) we carry the seed sqrtPriceX96 here so the
+            // mint-broadcast step can prepend the init call to the same
+            // multicall. Stays null on every other chain (two-tx flow).
+            let atomicInitSqrtX96: bigint | null = null;
+
+            // Fresh-pool branch.
+            //   - Arc testnet: ONE atomic NPM.multicall([init, mint]). Arc has
+            //     no public mempool and uses deterministic single-sequencer
+            //     ordering (AMP), so front-running the init price is
+            //     impossible. The pool is initialised to the exact seed price
+            //     inside the same tx, so the ticks anchored to that price are
+            //     correct, no post-init slot0 re-anchor needed. The mint's
+            //     amount0Min/amount1Min stay as the slippage backstop.
+            //   - Every other chain: the canonical two-tx flow (init, then a
+            //     slot0 verification against front-run pre-init, then mint).
+            //     This is the mainnet-safe path; leave it untouched.
+            //   Re-evaluate the fast path if Arc ever ships a public mempool.
             if (!hasPool) {
                 if (a0Raw === 0n || a1Raw === 0n) {
                     throw new Error(
@@ -739,60 +777,68 @@ export function V3AddLiquidity({
                     tickSpacing,
                 );
 
-                // Init the pool and wait for the receipt before approving
-                // / minting. If init reverted we must abort or the next
-                // tx would mint against an uninitialised pool.
-                const initHash = await writeContractAsync({
-                    address: ADDRESSES.v3PositionManager,
-                    abi: V3_NPM_ABI,
-                    functionName: "createAndInitializePoolIfNecessary",
-                    args: [t0.address, t1.address, feePip, sqrtX96],
-                });
-                const initReceipt = await publicClient.waitForTransactionReceipt({ hash: initHash });
-                if (initReceipt.status !== "success") {
-                    throw new Error(
-                        `Pool init reverted (tx ${initHash.slice(0, 10)}…). Retry with a different ratio or fee tier.`,
-                    );
-                }
+                if (chainId === ARC_TESTNET_CHAIN_ID) {
+                    // Arc fast path: defer the init into the mint multicall.
+                    // The ticks above are anchored to the EXACT seed price the
+                    // pool will be initialised to in the same atomic tx, so no
+                    // separate init tx and no post-init slot0 re-anchor.
+                    atomicInitSqrtX96 = sqrtX96;
+                } else {
+                    // Init the pool and wait for the receipt before approving
+                    // / minting. If init reverted we must abort or the next
+                    // tx would mint against an uninitialised pool.
+                    const initHash = await writeContractAsync({
+                        address: ADDRESSES.v3PositionManager,
+                        abi: V3_NPM_ABI,
+                        functionName: "createAndInitializePoolIfNecessary",
+                        args: [t0.address, t1.address, feePip, sqrtX96],
+                    });
+                    const initReceipt = await publicClient.waitForTransactionReceipt({ hash: initHash });
+                    if (initReceipt.status !== "success") {
+                        throw new Error(
+                            `Pool init reverted (tx ${initHash.slice(0, 10)}…). Retry with a different ratio or fee tier.`,
+                        );
+                    }
 
-                // AUDIT CRITICAL [2]/[22]: PoolInitializer's createAndInit-
-                // ializePoolIfNecessary is a SILENT no-op when the pool was
-                // already initialised by someone else. A front-runner could
-                // have pre-initialised at a malicious price between our
-                // submit and our receipt landing; without this check we'd
-                // mint into the attacker's price. Verify the live slot0
-                // matches what we asked for (1% tolerance for rounding).
-                await poolAddrQ.refetch();
-                const livePool = (await publicClient.readContract({
-                    address: ADDRESSES.v3Factory,
-                    abi: V3_FACTORY_ABI,
-                    functionName: "getPool",
-                    args: [t0.address, t1.address, feePip],
-                })) as Address;
-                if (!livePool || livePool === zeroAddress) {
-                    throw new Error("V3 factory did not return a pool address after init.");
-                }
-                const liveSlot0 = (await publicClient.readContract({
-                    address: livePool,
-                    abi: V3_POOL_ABI,
-                    functionName: "slot0",
-                })) as readonly [bigint, number, ...unknown[]];
-                const liveSqrtX96 = liveSlot0[0] as bigint;
-                const dev =
-                    liveSqrtX96 > sqrtX96
-                        ? ((liveSqrtX96 - sqrtX96) * 10_000n) / sqrtX96
-                        : ((sqrtX96 - liveSqrtX96) * 10_000n) / sqrtX96;
-                if (dev > 100n) {
-                    throw new Error(
-                        "Pool init landed at a price ~1%+ off the seed (likely a front-run). Refresh and retry — UI will re-read the live tick.",
-                    );
-                }
+                    // AUDIT CRITICAL [2]/[22]: PoolInitializer's createAndInit-
+                    // ializePoolIfNecessary is a SILENT no-op when the pool was
+                    // already initialised by someone else. A front-runner could
+                    // have pre-initialised at a malicious price between our
+                    // submit and our receipt landing; without this check we'd
+                    // mint into the attacker's price. Verify the live slot0
+                    // matches what we asked for (1% tolerance for rounding).
+                    await poolAddrQ.refetch();
+                    const livePool = (await publicClient.readContract({
+                        address: ADDRESSES.v3Factory,
+                        abi: V3_FACTORY_ABI,
+                        functionName: "getPool",
+                        args: [t0.address, t1.address, feePip],
+                    })) as Address;
+                    if (!livePool || livePool === zeroAddress) {
+                        throw new Error("V3 factory did not return a pool address after init.");
+                    }
+                    const liveSlot0 = (await publicClient.readContract({
+                        address: livePool,
+                        abi: V3_POOL_ABI,
+                        functionName: "slot0",
+                    })) as readonly [bigint, number, ...unknown[]];
+                    const liveSqrtX96 = liveSlot0[0] as bigint;
+                    const dev =
+                        liveSqrtX96 > sqrtX96
+                            ? ((liveSqrtX96 - sqrtX96) * 10_000n) / sqrtX96
+                            : ((sqrtX96 - liveSqrtX96) * 10_000n) / sqrtX96;
+                    if (dev > 100n) {
+                        throw new Error(
+                            "Pool init landed at a price ~1%+ off the seed (likely a front-run). Refresh and retry — UI will re-read the live tick.",
+                        );
+                    }
 
-                // Re-anchor the range around the live tick so the slip-min
-                // computation below targets the correct deposit ratios.
-                const liveTick = Number(liveSlot0[1]);
-                actualTickLower = nearestUsableTick(liveTick - halfWidth, tickSpacing);
-                actualTickUpper = nearestUsableTick(liveTick + halfWidth, tickSpacing);
+                    // Re-anchor the range around the live tick so the slip-min
+                    // computation below targets the correct deposit ratios.
+                    const liveTick = Number(liveSlot0[1]);
+                    actualTickLower = nearestUsableTick(liveTick - halfWidth, tickSpacing);
+                    actualTickUpper = nearestUsableTick(liveTick + halfWidth, tickSpacing);
+                }
             }
 
             await Promise.all([
@@ -816,7 +862,13 @@ export function V3AddLiquidity({
                       functionName: "getPool",
                       args: [t0.address, t1.address, feePip],
                   })) as Address);
-            if (!resolvedPool || resolvedPool === zeroAddress) {
+            // On the Arc atomic path the pool is created inside the mint
+            // multicall, so getPool legitimately returns zeroAddress here.
+            // The exact-amount precompute below already no-ops gracefully
+            // for an unresolved pool (its slot0 read throws and falls back to
+            // the user's raw amounts, and isFirstLP forces the mins to 0n).
+            // Only treat an unresolved pool as an error on the two-tx path.
+            if (atomicInitSqrtX96 === null && (!resolvedPool || resolvedPool === zeroAddress)) {
                 throw new Error("V3 pool address unresolved — refresh and retry.");
             }
 
@@ -896,22 +948,58 @@ export function V3AddLiquidity({
                 },
             ] as const;
 
-            // Simulate the mint before broadcasting. NOT fatal: if simulate
-            // reverts we still try the real tx, because Arc's USDC blocklist
-            // precompile and other chain-specific quirks can produce false
-            // positives in eth_call that don't reproduce on-chain. The
-            // simulate output goes to the browser console so DevTools shows
-            // the full revert chain — short / cause / data — for diagnosis,
-            // and a warning toast tells the user we proceeded despite a sim
-            // warning so a real on-chain revert isn't a surprise.
+            // Arc fast path: fold init + mint into ONE atomic NPM.multicall.
+            // The NPM's Multicall.sol delegatecalls its own functions, so
+            // msg.sender stays the user for the ERC20 transferFrom inside
+            // mint (no Arc precompile, unlike Multicall3From). Order matters:
+            // createAndInitializePoolIfNecessary must come first so the pool
+            // exists + is seeded before mint runs. Both encoded against the
+            // canonical V3_NPM_ABI; the outer multicall uses the standalone
+            // NPM_MULTICALL_ABI fragment.
+            const atomicMulticallData: `0x${string}`[] | null =
+                atomicInitSqrtX96 !== null
+                    ? [
+                          encodeFunctionData({
+                              abi: V3_NPM_ABI,
+                              functionName: "createAndInitializePoolIfNecessary",
+                              args: [t0.address, t1.address, feePip, atomicInitSqrtX96],
+                          }),
+                          encodeFunctionData({
+                              abi: V3_NPM_ABI,
+                              functionName: "mint",
+                              args: mintArgs,
+                          }),
+                      ]
+                    : null;
+
+            // Simulate before broadcasting. NOT fatal: if simulate reverts we
+            // still try the real tx, because Arc's USDC blocklist precompile
+            // and other chain-specific quirks can produce false positives in
+            // eth_call that don't reproduce on-chain. The simulate output goes
+            // to the browser console so DevTools shows the full revert chain —
+            // short / cause / data — for diagnosis, and a warning toast tells
+            // the user we proceeded despite a sim warning so a real on-chain
+            // revert isn't a surprise. On the Arc atomic path we simulate the
+            // whole multicall (a bare mint sim would always revert since the
+            // pool isn't initialised until the same tx runs init first).
             try {
-                await publicClient.simulateContract({
-                    address: ADDRESSES.v3PositionManager,
-                    abi: V3_NPM_ABI,
-                    functionName: "mint",
-                    args: mintArgs,
-                    account,
-                });
+                if (atomicMulticallData !== null) {
+                    await publicClient.simulateContract({
+                        address: ADDRESSES.v3PositionManager,
+                        abi: NPM_MULTICALL_ABI,
+                        functionName: "multicall",
+                        args: [atomicMulticallData],
+                        account,
+                    });
+                } else {
+                    await publicClient.simulateContract({
+                        address: ADDRESSES.v3PositionManager,
+                        abi: V3_NPM_ABI,
+                        functionName: "mint",
+                        args: mintArgs,
+                        account,
+                    });
+                }
             } catch (simErr: unknown) {
                 // Walk every level of the viem error chain so a bare
                 // "execution reverted" still surfaces the underlying revert
@@ -949,13 +1037,22 @@ export function V3AddLiquidity({
             // Use the EXACT consumed amounts as Desired so V3's mint binds
             // both legs exactly. If we passed the raw user amounts, V3
             // would consume less than amount{0,1}Min on the non-binding
-            // leg and revert.
-            const hash = await writeContractAsync({
-                address: ADDRESSES.v3PositionManager,
-                abi: V3_NPM_ABI,
-                functionName: "mint",
-                args: mintArgs,
-            });
+            // leg and revert. On the Arc fast path we broadcast the single
+            // init+mint multicall instead of the bare mint.
+            const hash =
+                atomicMulticallData !== null
+                    ? await writeContractAsync({
+                          address: ADDRESSES.v3PositionManager,
+                          abi: NPM_MULTICALL_ABI,
+                          functionName: "multicall",
+                          args: [atomicMulticallData],
+                      })
+                    : await writeContractAsync({
+                          address: ADDRESSES.v3PositionManager,
+                          abi: V3_NPM_ABI,
+                          functionName: "mint",
+                          args: mintArgs,
+                      });
 
             // Confirm the mint on-chain. If the receipt comes back reverted
             // (eg slippage trip on amount0Min / amount1Min, or a tick spacing
@@ -1269,7 +1366,10 @@ export function V3AddLiquidity({
                 <div className="rounded-xl border border-arc-warn/30 bg-arc-warn/10 p-3 text-xs text-arc-warn">
                     Pool doesn&apos;t exist yet. Submitting will create it via
                     createAndInitializePoolIfNecessary with the midpoint of
-                    your range as the seed price.
+                    your range as the seed price
+                    {chainId === ARC_TESTNET_CHAIN_ID
+                        ? ", then add your liquidity in the same single transaction."
+                        : ", then add your liquidity."}
                 </div>
             )}
             {feeTierEnabled && hasPool && isFirstLP && (
@@ -1515,9 +1615,13 @@ export function V3AddLiquidity({
                             ? autoMode !== 0
                                 ? "Minting + enabling auto-management…"
                                 : "Minting position…"
-                            : autoMode !== 0
-                                ? "Initialising pool + minting + auto-management…"
-                                : "Initialising pool + minting…"
+                            : chainId === ARC_TESTNET_CHAIN_ID
+                                ? autoMode !== 0
+                                    ? "Creating pool + adding liquidity (1 transaction) + auto-management…"
+                                    : "Creating pool + adding liquidity (1 transaction)…"
+                                : autoMode !== 0
+                                    ? "Initialising pool + minting + auto-management…"
+                                    : "Initialising pool + minting…"
                       : mode === "single"
                         ? !singleSideTyped
                             ? "Enter an amount"
