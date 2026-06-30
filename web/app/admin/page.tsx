@@ -3,12 +3,12 @@
 import Link from "next/link";
 import {
     Activity,
+    BarChart3,
     ChevronRight,
-    LineChart,
     LogOut,
     Lock,
+    Receipt,
     ShieldAlert,
-    UserCog,
 } from "lucide-react";
 import { useAccount, useReadContract } from "wagmi";
 import { TWITTER_ESCROW_V3_ABI } from "@/lib/abis/twitterEscrowV3";
@@ -57,27 +57,27 @@ export default function AdminIndex() {
     const cards: AdminCard[] = [
         {
             href: "/admin/escrow",
-            title: "Twitter Escrow V3",
+            title: "Escrow",
             description:
-                "Pause / unpause, request + finalize signer rotation (24h timelock), rescue unattributed balances, debug slots.",
+                "Manage Twitter escrow claims, trusted signer (24h timelock), pause / unpause and veto.",
             Icon: Lock,
             status: { label: "Live", tone: "ok" },
         },
         {
-            href: "/admin/observability",
-            title: "Observability",
+            href: "/stats",
+            title: "Stats",
             description:
-                "Sentry dashboard for swap / bridge / claim error rates, performance traces, release health. Free tier, hosted at sentry.io.",
-            Icon: LineChart,
-            status: { label: "Audit A-6", tone: "warn" },
+                "Live Arcade activity on Arc: USDC gas paid, transactions routed, unique wallets, tokens launched.",
+            Icon: BarChart3,
+            status: { label: "Public", tone: "ok" },
         },
         {
-            href: "/admin/governance",
-            title: "Treasury & governance",
+            href: "/admin/fees",
+            title: "Fees",
             description:
-                "Rotate treasury address, manage V3 infra wiring, set V4 hook addresses when ready. Disabled until the rotation function lands on chain.",
-            Icon: UserCog,
-            status: { label: "Pending L-7", tone: "warn" },
+                "Detailed history of protocol fees received by the treasury: when, how much, and the source.",
+            Icon: Receipt,
+            status: { label: "Live", tone: "ok" },
         },
     ];
 

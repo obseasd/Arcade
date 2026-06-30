@@ -237,7 +237,7 @@ export function HeaderWalletWidget() {
                                     <div className="flex shrink-0 items-center gap-1">
                                         {isEscrowOwner && (
                                             <Link
-                                                href="/admin/escrow"
+                                                href="/admin"
                                                 onClick={() => setMenuOpen(false)}
                                                 title="Admin"
                                                 className="rounded-lg p-2 text-arc-text-muted transition-colors hover:bg-white/5 hover:text-arc-text"
