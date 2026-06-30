@@ -9,7 +9,6 @@ import { useAccount, usePublicClient, useReadContract, useWriteContract } from "
 import { erc20Abi } from "viem";
 import { TWITTER_ESCROW_V3_ABI } from "@/lib/abis/twitterEscrowV3";
 import { V3_LOCKER_ABI } from "@/lib/abis/v3";
-import { buildAggregate3 } from "@/lib/routing/batchSwap";
 import { removePendingClaim, savePendingClaim } from "@/lib/pendingClaims";
 import { ADDRESSES, LAUNCHPAD_TOKEN_DECIMALS, USDC_DECIMALS } from "@/lib/constants";
 import { pushToast } from "@/lib/toast";
@@ -243,84 +242,17 @@ function ClaimPageInner() {
     }
     setSubmitting(true);
     try {
-      // Fast path (timelock 0, e.g. testnet): fold the optional fee sync,
-      // the authorize, and the claim into ONE Multicall3From signature.
-      // collectFees is permissionless; authorize gates on
-      // recipient == msg.sender and claimByTwitter on executeAfter <= now
-      // — both hold because callFrom preserves the sender and a 0 timelock
-      // sets executeAfter = block.timestamp, so the claim in the same tx
-      // passes the >= check. allowFailure stays false so a partial claim
-      // can't happen. With timelock > 0 (mainnet) authorize + claim can't
-      // share a tx, so we fall through to the staged flow below.
-      if (timelockSec === 0) {
-        const calls: Parameters<typeof buildAggregate3>[0] = [];
-        if (needsSync) {
-          calls.push({
-            target: ADDRESSES.v3Locker,
-            callData: encodeFunctionData({
-              abi: V3_LOCKER_ABI,
-              functionName: "collectFees",
-              args: [positionId],
-            }),
-          });
-        }
-        calls.push({
-          target: escrow,
-          callData: encodeFunctionData({
-            abi: TWITTER_ESCROW_V3_ABI,
-            functionName: "authorize",
-            args: [
-              positionId,
-              slotIndex,
-              recipient!,
-              pairedToken!,
-              pairedAmount,
-              clankerToken!,
-              clankerAmount,
-              deadline,
-              nonce!,
-              sig!,
-            ],
-          }),
-        });
-        calls.push({
-          target: escrow,
-          callData: encodeFunctionData({
-            abi: TWITTER_ESCROW_V3_ABI,
-            functionName: "claimByTwitter",
-            args: [nonce!],
-          }),
-        });
-        const batched = buildAggregate3(calls);
-        pushToast({
-          kind: "info",
-          title: needsSync
-            ? "Claiming — sync + authorize + claim…"
-            : "Claiming — authorize + claim…",
-          message: "One signature.",
-        });
-        const hash = await writeContractAsync({
-          address: batched.address,
-          abi: batched.abi,
-          functionName: batched.functionName,
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          args: batched.args as any,
-        });
-        if (publicClient) {
-          const receipt = await publicClient.waitForTransactionReceipt({ hash });
-          if (receipt.status !== "success") {
-            throw new Error(`Claim reverted on-chain (tx ${hash.slice(0, 10)}…).`);
-          }
-        }
-        removePendingClaim(account as Address, token!, slotIndex.toString());
-        pushToast({
-          kind: "info",
-          title: "Claim confirmed",
-          message: "Future fees route directly to your wallet.",
-        });
-        router.replace(`/launchpad/${token}`);
-        return;
-      }
+      // NOTE (2026-06-30): the Multicall3From "one signature" fast path is
+      // DISABLED. Arc's `callFrom` precompile (0x18..03) that Multicall3From
+      // routes through is broken on the current Arc version (codesize 1, every
+      // aggregate3 reverts with StackUnderflow), so folding sync + authorize +
+      // claim into one signature reverts on-chain. We always use the staged
+      // direct-tx flow below: each call runs straight from the user's wallet so
+      // msg.sender == recipient naturally and no precompile is involved. With a
+      // 0 timelock the claim still settles immediately (authorize sets
+      // executeAfter to its block timestamp; the later claim tx satisfies
+      // block.timestamp >= executeAfter). Re-enable the batch only once a
+      // working sender-preserving multicall exists on Arc.
 
       // --- Optional pre-step: sync fees from V3 pool to escrow ---
       // Triggered when nobody has called locker.collectFees yet, so the
