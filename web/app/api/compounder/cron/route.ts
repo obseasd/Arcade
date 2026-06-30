@@ -312,6 +312,7 @@ export async function POST(req: NextRequest) {
                     batchHash as Hex,
                     summary,
                     publicClient,
+                    compounderAddress,
                 );
             }
         }
@@ -616,6 +617,7 @@ async function recordOutcome(
     batchHash: Hex,
     summary: RunSummary,
     publicClient: ReturnType<typeof createPublicClient>,
+    compounderAddress: Address,
 ): Promise<void> {
     // Settle THIS position's outcome from the SHARED batch receipt. With
     // allowFailure:true a reverted subcall emits no event for its tokenId,
@@ -628,6 +630,14 @@ async function recordOutcome(
     let resolvedFee0 = p.fee0;
     let resolvedFee1 = p.fee1;
     for (const lg of receipt.logs) {
+        // Audit 2026-06-29 (HIGH): only trust logs EMITTED BY the compounder.
+        // Without this, a malicious token (compoundable since V3 createPool is
+        // permissionless) can emit a forged Compounded log from its OWN address
+        // into the shared Multicall3 receipt, overwriting another in-batch
+        // position's fee accounting or marking a reverted compound as
+        // succeeded. viem's decodeEventLog matches purely on topic0, so a
+        // foreign log decodes cleanly without this emitter gate.
+        if (!lg.address || lg.address.toLowerCase() !== compounderAddress.toLowerCase()) continue;
         try {
             const decoded = decodeEventLog({
                 abi: AUTO_COMPOUNDER_ABI,
