@@ -452,7 +452,7 @@ export default function TokenDetailPage() {
             mode={state ? Number(state.mode) : undefined}
             pool={isClanker ? (state?.v2Pair as Address | undefined) : undefined}
             totalSupplyRaw={LAUNCHPAD_TOTAL_SUPPLY * 10n ** 18n}
-            launchpadAddress={ADDRESSES.launchpad}
+            launchpadAddress={tokenStateLaunchpad}
           />
 
           {/* Comments */}
@@ -480,6 +480,7 @@ export default function TokenDetailPage() {
               symbol={symbol}
               migrated={migrated}
               image={image}
+              launchpad={tokenStateLaunchpad}
               onTradeSuccess={bumpRefresh}
             />
           )}

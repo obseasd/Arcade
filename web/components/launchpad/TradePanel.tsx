@@ -23,9 +23,22 @@ interface Props {
   image?: string;
   /** Fired after a successful buy/sell so the parent can refetch derived state (volume, etc.). */
   onTradeSuccess?: () => void;
+  /** Launchpad contract this token was minted on. Defaults to the current
+   *  generation; the token page passes the resolved per-generation launchpad
+   *  so buying/selling a token from a PRIOR launchpad routes to the contract
+   *  that actually holds its curve (the current launchpad reverts with an
+   *  unknown-token error otherwise). */
+  launchpad?: Address;
 }
 
-export function TradePanel({ token, symbol, migrated, image, onTradeSuccess }: Props) {
+export function TradePanel({
+  token,
+  symbol,
+  migrated,
+  image,
+  onTradeSuccess,
+  launchpad = ADDRESSES.launchpad,
+}: Props) {
   const { address: account } = useAccount();
   const publicClient = usePublicClient();
   const [side, setSide] = useState<"buy" | "sell">("buy");
@@ -36,7 +49,7 @@ export function TradePanel({ token, symbol, migrated, image, onTradeSuccess }: P
   // Both pre- and post-migration swaps go through the Launchpad contract now
   // (post-migration uses `buyMigrated`/`sellMigrated` which take a royalty for
   // the creator + platform on top of the V2 LP fee).
-  const spender = ADDRESSES.launchpad;
+  const spender = launchpad;
 
   const usdcBalance = useReadContract({
     address: ADDRESSES.usdc,
@@ -66,14 +79,14 @@ export function TradePanel({ token, symbol, migrated, image, onTradeSuccess }: P
 
   // Curve quote
   const curveBuyQuote = useReadContract({
-    address: ADDRESSES.launchpad,
+    address: launchpad,
     abi: LAUNCHPAD_ABI,
     functionName: "quoteBuy",
     args: amountRaw > 0n ? [token, amountRaw] : undefined,
     query: { enabled: !migrated && side === "buy" && amountRaw > 0n },
   });
   const curveSellQuote = useReadContract({
-    address: ADDRESSES.launchpad,
+    address: launchpad,
     abi: LAUNCHPAD_ABI,
     functionName: "quoteSell",
     args: amountRaw > 0n ? [token, amountRaw] : undefined,
@@ -144,7 +157,7 @@ export function TradePanel({ token, symbol, migrated, image, onTradeSuccess }: P
       }
       setTx({ status: "pending", message: "Submitting trade…" });
       hash = await writeContractAsync({
-        address: ADDRESSES.launchpad,
+        address: launchpad,
         abi: LAUNCHPAD_ABI,
         functionName: fn,
         args: args as unknown as readonly [`0x${string}`, bigint, bigint],
