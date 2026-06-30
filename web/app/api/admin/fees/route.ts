@@ -59,18 +59,31 @@ export async function GET() {
         });
     }
 
-    // Categorize an inbound transfer by its `from` address. Only transfers FROM
-    // a recognized Arcade fee-emitting contract count as protocol fees. On
-    // testnet the treasury is the deployer EOA, which is also used for trading,
-    // so its inbound USDC also includes trade proceeds (sells, swap outputs)
-    // and direct transfers — those are listed but NOT summed into the fee total.
-    const classify = (from: string): { reason: string; isFee: boolean } => {
+    // The fixed launchpad creation fee is paid creator -> treasury inside
+    // createToken, so its `from` is the creator EOA (not the launchpad). We
+    // recognize it by its exact amount.
+    let creationFeeRaw = 0n;
+    try {
+        creationFeeRaw = BigInt(deployments.constants?.creationFeeUsdc ?? "0");
+    } catch {
+        creationFeeRaw = 0n;
+    }
+
+    // Categorize an inbound transfer by its `from` address + amount. Transfers
+    // FROM a recognized Arcade fee contract, OR of exactly the creation fee,
+    // count as protocol fees. On testnet the treasury is the deployer EOA, also
+    // used for trading, so other inbound USDC (trade proceeds, direct sends) is
+    // listed but NOT summed into the fee total.
+    const classify = (from: string, amount: bigint): { reason: string; isFee: boolean } => {
         const f = lc(from);
         if (f === lc(addrs.launchpad)) {
-            return { reason: "Launchpad fee (creation / migration / snipe skim)", isFee: true };
+            return { reason: "Launchpad fee (migration / snipe skim)", isFee: true };
         }
         if (f === lc(addrs.v3Locker)) return { reason: "Locked-LP protocol fee", isFee: true };
         if (f === lc(addrs.autoCompounder)) return { reason: "Auto-compounder protocol fee", isFee: true };
+        if (creationFeeRaw > 0n && amount === creationFeeRaw) {
+            return { reason: "Launchpad token creation fee", isFee: true };
+        }
         return { reason: "Direct transfer / trade proceeds (not a protocol fee)", isFee: false };
     };
 
@@ -145,7 +158,7 @@ export async function GET() {
             const amount = l.args.value ?? 0n;
             const fromAddr = (l.args.from ?? "0x0000000000000000000000000000000000000000") as string;
             const block = l.blockNumber ?? 0n;
-            const { reason, isFee } = classify(fromAddr);
+            const { reason, isFee } = classify(fromAddr, amount);
             grossRaw += amount;
             if (isFee) feeRaw += amount;
             return {
