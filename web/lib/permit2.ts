@@ -186,16 +186,12 @@ export function useSignPermit2() {
             const ttl = args.ttlSeconds ?? PERMIT2_DEFAULT_EXPIRATION_SECONDS;
             const expiration = now + ttl;
             const sigDeadline = BigInt(now + ttl);
-            // Audit 2026-07-01: sign the EXACT amount plus a 2% buffer instead
-            // of maxUint160. The buffer absorbs the 1-wei React state drift
-            // between sign and exec that the old max-signing avoided (the
-            // reason it used the ceiling), while capping the Permit2 allowance
-            // to ~102% of THIS trade instead of unlimited. The V3_SWAP's
-            // amountOutMinimum still bounds slippage and the short expiration
-            // caps any leftover-allowance window. Clamp to the uint160 ceiling
-            // defensively (unreachable for realistic amounts).
-            const buffered = args.amount + (args.amount * 200n) / 10_000n;
-            const cappedAmount = buffered > maxUint160 ? maxUint160 : buffered;
+            // Sign with maxUint160 (Permit2's allowance ceiling) so a 1-wei
+            // React drift between sign and exec can't false-revert the swap;
+            // the V3_SWAP's amountOutMinimum bounds slippage and the short
+            // expiration caps the leftover-allowance window. Mainnet TODO:
+            // exact amount + buffer for a tighter per-trade cap.
+            const cappedAmount = maxUint160;
             const permit: Permit2PermitSingle = {
                 details: {
                     token: args.token,
