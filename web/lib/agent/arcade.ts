@@ -25,7 +25,7 @@ import {
     type Hex,
 } from "viem";
 import { arcTestnet } from "@/lib/chains";
-import { ADDRESSES, CREATION_FEE_USDC } from "@/lib/constants";
+import { ADDRESSES, CREATION_FEE_USDC, USDC_DECIMALS } from "@/lib/constants";
 import { quoteBestLeg } from "@/lib/routing/multiLegQuote";
 import { LAUNCHPAD_ABI } from "@/lib/abis/launchpad";
 import { encodePermit2PermitInput, type Permit2PermitSingle } from "@/lib/routing/universalRouter";
@@ -712,41 +712,74 @@ export async function getMultiswapPlan(params: {
     const slippageBps = clampBps(params.slippageBps, 100);
     const total = params.inputs.reduce((a, i) => a + i.amount, 0n);
     const decimalsOut = await getDecimals(params.tokenOut);
+    const usdcLower = ADDRESSES.usdc.toLowerCase();
+    const outLower = params.tokenOut.toLowerCase();
 
-    // Compute a real slippage floor. Without it the contract runs with
-    // minTotalOut=0 and is fully sandwich-exposed (audit HIGH). Estimate the
-    // expected output by quoting each input -> tokenOut and summing, then apply
-    // slippage. A caller-supplied minTotalOut overrides this.
-    let minTotalOut = params.minTotalOut;
-    let expectedOut: bigint | undefined;
-    if (minTotalOut === undefined) {
-        const quotes = await Promise.all(
-            params.inputs.map(async (i) => {
-                if (i.token.toLowerCase() === params.tokenOut.toLowerCase()) return i.amount;
-                try {
-                    const decimalsIn = await getDecimals(i.token);
-                    const r = await quoteBestLeg(
-                        {
-                            tokenIn: i.token,
-                            tokenOut: params.tokenOut,
-                            decimalsIn,
-                            decimalsOut,
-                            amountIn: i.amount,
-                            recipient: ADDRESSES.multiSwap,
-                            slippageBps,
-                            deadline: deadlineFromNow(),
-                        },
-                        arc,
-                    );
-                    return r ? r.amountOut : 0n;
-                } catch {
-                    return 0n;
-                }
-            }),
-        );
-        expectedOut = quotes.reduce((a, b) => a + b, 0n);
-        minTotalOut = (expectedOut * BigInt(10_000 - slippageBps)) / 10_000n;
-    }
+    // H-07: quote EACH input independently to the output token, then derive a
+    // per-leg `minOut[i]` floor (input's own quote minus slippage) AND a
+    // per-leg `usdcMidMin[i]` floor (input's own quote to USDC minus slippage,
+    // for legs that pivot through USDC on-chain). Pre-H-07 every leg routed
+    // with amountOutMinimum=0, so a sandwicher could fully drain ONE thin leg
+    // while the basket total still cleared minTotalOut. The contract now
+    // threads these floors into each leg's real router call.
+    const perLeg = await Promise.all(
+        params.inputs.map(async (i) => {
+            // Same-token passthrough: leg output == amount, no USDC hop.
+            if (i.token.toLowerCase() === outLower) {
+                return { out: i.amount, usdcMid: 0n };
+            }
+            const decimalsIn = await getDecimals(i.token);
+            // Leg output -> tokenOut.
+            const rOut = await quoteBestLeg(
+                {
+                    tokenIn: i.token,
+                    tokenOut: params.tokenOut,
+                    decimalsIn,
+                    decimalsOut,
+                    amountIn: i.amount,
+                    recipient: ADDRESSES.multiSwap,
+                    slippageBps,
+                    deadline: deadlineFromNow(),
+                },
+                arc,
+            ).catch(() => null);
+            const out = rOut ? rOut.amountOut : 0n;
+            // Intermediate USDC amount for legs that pivot through USDC. If
+            // either side is already USDC there is no separate mid hop, so
+            // usdcMid stays 0 (the contract's built-in 1-wei / passthrough
+            // handling applies) and the leg's own minOut governs.
+            let usdcMid = 0n;
+            if (i.token.toLowerCase() !== usdcLower && outLower !== usdcLower) {
+                const rMid = await quoteBestLeg(
+                    {
+                        tokenIn: i.token,
+                        tokenOut: ADDRESSES.usdc,
+                        decimalsIn,
+                        decimalsOut: USDC_DECIMALS,
+                        amountIn: i.amount,
+                        recipient: ADDRESSES.multiSwap,
+                        slippageBps,
+                        deadline: deadlineFromNow(),
+                    },
+                    arc,
+                ).catch(() => null);
+                usdcMid = rMid ? rMid.amountOut : 0n;
+            }
+            return { out, usdcMid };
+        }),
+    );
+
+    const applyFloor = (v: bigint) => (v * BigInt(10_000 - slippageBps)) / 10_000n;
+    const minOutArr = perLeg.map((p) => applyFloor(p.out));
+    const usdcMidMinArr = perLeg.map((p) => applyFloor(p.usdcMid));
+
+    // Aggregate basket floor (belt-and-suspenders alongside the per-leg
+    // floors). A caller-supplied minTotalOut overrides the computed value.
+    const expectedOut: bigint = perLeg.reduce((a, p) => a + p.out, 0n);
+    const minTotalOut =
+        params.minTotalOut !== undefined
+            ? params.minTotalOut
+            : (expectedOut * BigInt(10_000 - slippageBps)) / 10_000n;
 
     return {
         ok: true,
@@ -770,15 +803,25 @@ export async function getMultiswapPlan(params: {
             {
                 chain: ARC_CHAIN,
                 contractAddress: ADDRESSES.multiSwap,
-                abiFunctionSignature: "swapToSingle((address,uint256)[],address,uint256,uint256)",
+                // H-07: the Input tuple now carries (token, amount, minOut,
+                // usdcMidMin). minOut is threaded into each leg's router call
+                // as its real amountOutMinimum; usdcMidMin floors the
+                // intermediate USDC hop on via-USDC / migrated routes.
+                abiFunctionSignature:
+                    "swapToSingle((address,uint256,uint256,uint256)[],address,uint256,uint256)",
                 abiParameters: [
-                    params.inputs.map((i) => [i.token, i.amount.toString()]),
+                    params.inputs.map((i, idx) => [
+                        i.token,
+                        i.amount.toString(),
+                        minOutArr[idx].toString(),
+                        usdcMidMinArr[idx].toString(),
+                    ]),
                     params.tokenOut,
                     minTotalOut.toString(),
                     deadlineFromNow().toString(),
                 ],
                 value: "0",
-                description: `Converge ${params.inputs.length} inputs into ${params.tokenOut} in one settlement.`,
+                description: `Converge ${params.inputs.length} inputs into ${params.tokenOut} in one settlement (per-leg slippage floors enforced).`,
             },
         ],
     };

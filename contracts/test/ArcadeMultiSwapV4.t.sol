@@ -179,7 +179,7 @@ contract ArcadeMultiSwapV4Test is Test {
     }
 
     function _push(address token, uint256 amount) internal {
-        inputsBuf.push(ArcadeMultiSwap.Input({token: token, amount: amount}));
+        inputsBuf.push(ArcadeMultiSwap.Input({token: token, amount: amount, minOut: 0, usdcMidMin: 0}));
     }
 
     function _reset() internal { delete inputsBuf; }

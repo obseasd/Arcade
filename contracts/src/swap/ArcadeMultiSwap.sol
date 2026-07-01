@@ -112,6 +112,23 @@ contract ArcadeMultiSwap is ReentrancyGuard {
     struct Input {
         address token;
         uint256 amount;
+        /// @notice H-07: caller-supplied floor on the amount of `tokenOut`
+        ///         THIS leg must produce, enforced as the router's real
+        ///         `amountOutMinimum`. Prior to H-07 every leg routed with a
+        ///         0 / 1-wei floor, so a sandwicher could fully drain one thin
+        ///         leg as long as the basket-wide `minTotalOut` still held.
+        ///         Pass 0 to opt this leg out (legacy behaviour); the basket
+        ///         `minTotalOut` still applies. The frontend / agent lib
+        ///         always derives a real value from the per-leg quote.
+        uint256 minOut;
+        /// @notice H-07: caller-supplied floor on the USDC produced by the
+        ///         intermediate hop when THIS leg routes tokenIn -> USDC ->
+        ///         tokenOut (V2-via-USDC multi-hop and the migrated route).
+        ///         Replaces the execution-time inline quote, which a
+        ///         sandwicher controls via the tokenIn/USDC reserves. Pass 0
+        ///         to keep the old 1-wei behaviour; legs that never pivot
+        ///         through USDC ignore it.
+        uint256 usdcMidMin;
     }
 
     error EmptyInputs();
@@ -196,7 +213,14 @@ contract ArcadeMultiSwap is ReentrancyGuard {
             }
 
             IERC20(inp.token).safeTransferFrom(msg.sender, address(this), inp.amount);
-            totalOut += _routeOne(inp.token, tokenOut, inp.amount, deadline);
+            uint256 got = _routeOne(inp.token, tokenOut, inp.amount, inp.minOut, inp.usdcMidMin, deadline);
+            // H-07: enforce this leg's own floor. This is the crux of the
+            // fix: previously a single thin leg could be fully sandwiched
+            // (its amountOutMinimum was 0) as long as the OTHER legs kept
+            // the basket total above minTotalOut. Now each leg must clear
+            // its own quoted floor.
+            if (got < inp.minOut) revert InsufficientOutput();
+            totalOut += got;
         }
 
         if (totalOut < minTotalOut) revert InsufficientOutput();
@@ -234,26 +258,40 @@ contract ArcadeMultiSwap is ReentrancyGuard {
     /// @dev Picks the best route for a single (tokenIn -> tokenOut) leg and
     /// executes it. Output is sent to `address(this)` so the caller can
     /// accumulate before forwarding.
-    function _routeOne(address tokenIn, address tokenOut, uint256 amountIn, uint256 deadline) internal returns (uint256) {
+    /// @param minOut      H-07: the router-level `amountOutMinimum` for this
+    ///                    leg's FINAL hop. Threaded into every leaf router call
+    ///                    (V2, V3, V4, migrated) so a sandwiched leg reverts at
+    ///                    the router instead of scraping past on a 0 floor.
+    /// @param usdcMidMin  H-07: caller floor for the intermediate USDC hop
+    ///                    (V2-via-USDC and migrated routes). Replaces the old
+    ///                    inline execution-time quote (sandwicher-controlled).
+    function _routeOne(
+        address tokenIn,
+        address tokenOut,
+        uint256 amountIn,
+        uint256 minOut,
+        uint256 usdcMidMin,
+        uint256 deadline
+    ) internal returns (uint256) {
         // 0) V4 takes priority: any leg touching a V4 launch routes through
         // the V4 swap router (potentially via USDC for cross-version legs).
         bool inIsV4 = _isV4LaunchToken(tokenIn);
         bool outIsV4 = _isV4LaunchToken(tokenOut);
         if (inIsV4 || outIsV4) {
-            return _swapV4Path(tokenIn, tokenOut, amountIn, inIsV4, outIsV4, deadline);
+            return _swapV4Path(tokenIn, tokenOut, amountIn, inIsV4, outIsV4, minOut, usdcMidMin, deadline);
         }
 
         // 1) Clanker V3 launches have no V2 pair — route via the V3 router.
         bool inIsV3 = _isV3LaunchToken(tokenIn);
         bool outIsV3 = _isV3LaunchToken(tokenOut);
         if (inIsV3 || outIsV3) {
-            return _swapV3(tokenIn, tokenOut, amountIn, deadline);
+            return _swapV3(tokenIn, tokenOut, amountIn, minOut, usdcMidMin, deadline);
         }
 
         // 2) Direct V2 path: USDC pivot or an explicit A<->B pool exists.
         bool oneSideUsdc = tokenIn == address(USDC) || tokenOut == address(USDC);
         if (oneSideUsdc || v2Factory.getPair(tokenIn, tokenOut) != address(0)) {
-            return _swapV2(tokenIn, tokenOut, amountIn, /*viaUsdc=*/ false, deadline);
+            return _swapV2(tokenIn, tokenOut, amountIn, /*viaUsdc=*/ false, minOut, usdcMidMin, deadline);
         }
 
         // 3) Multi-hop via USDC. If at least one side is a curve-migrated
@@ -263,28 +301,6 @@ contract ArcadeMultiSwap is ReentrancyGuard {
         bool outMigrated = launchpad.isMigrated(tokenOut);
         if (inMigrated || outMigrated) {
             IERC20(tokenIn).forceApprove(address(launchpad), amountIn);
-            // Audit 2026-06-11 v2 G9-1: thread a real `usdcMidMin` floor
-            // into the migrated route. Prior `0n` neutered the launchpad's
-            // new MidSlippage defence for every MultiSwap caller. We
-            // quote inline to discover the expected mid, then floor at
-            // 95% (basket flows tolerate slightly wider mid drift than a
-            // direct user swap because the outer minTotalOut still gates
-            // the basket as a whole).
-            //
-            // Formula matches ArcadeLaunchpad's CSEC-018 invariant
-            // (MIGRATED_ROYALTY_BPS = 30, applied to original usdcMid
-            // before any deduction). For N migrated legs:
-            //   totalRoyalty = usdcMid * 30 * N / 10_000
-            //   usdcMid      = totalRoyalty * 10_000 / (30 * N)
-            (, uint256 totalRoyaltyUsdc) = launchpad.quoteSwapMigratedRoute(
-                tokenIn, tokenOut, amountIn
-            );
-            uint256 migratedLegs = (inMigrated ? 1 : 0) + (outMigrated ? 1 : 0);
-            uint256 usdcMidMin = 0;
-            if (migratedLegs > 0 && totalRoyaltyUsdc > 0) {
-                uint256 usdcMidEstimate = (totalRoyaltyUsdc * 10_000) / (30 * migratedLegs);
-                usdcMidMin = (usdcMidEstimate * 9_500) / 10_000;
-            }
             // Audit 2026-06-11 v2 G9-2: switch the balance-delta sanity
             // check from `==` to `>=`. The strict equality was DoS-grief-
             // able by a 1-wei USDC donation to this contract (anyone
@@ -293,8 +309,15 @@ contract ArcadeMultiSwap is ReentrancyGuard {
             // is still caught because `balAfter >= balBefore` only
             // tolerates incoming transfers. Combined with `nonReentrant`
             // this is sufficient.
+            //
+            // H-07: `usdcMidMin` is now the CALLER-supplied floor for the
+            // migrated route's intermediate USDC hop (was quoted inline at
+            // execution-time reserves, which a sandwicher controls). `minOut`
+            // is threaded as the launchpad's `minTokensOut` so a sandwiched
+            // migrated leg reverts in the launchpad rather than scraping past
+            // on the old 0 floor.
             uint256 balBefore = IERC20(USDC).balanceOf(address(this));
-            uint256 out = launchpad.swapMigratedRoute(tokenIn, tokenOut, amountIn, 0, usdcMidMin, deadline);
+            uint256 out = launchpad.swapMigratedRoute(tokenIn, tokenOut, amountIn, minOut, usdcMidMin, deadline);
             uint256 balAfter = IERC20(USDC).balanceOf(address(this));
             require(balAfter >= balBefore, "BAL_DRIFT");
             // M-08 / L-05: reset launchpad allowance after the call.
@@ -302,7 +325,7 @@ contract ArcadeMultiSwap is ReentrancyGuard {
             return out;
         }
 
-        return _swapV2(tokenIn, tokenOut, amountIn, /*viaUsdc=*/ true, deadline);
+        return _swapV2(tokenIn, tokenOut, amountIn, /*viaUsdc=*/ true, minOut, usdcMidMin, deadline);
     }
 
     /// @dev Dispatch for legs touching a V4 launch. Cases:
@@ -311,42 +334,55 @@ contract ArcadeMultiSwap is ReentrancyGuard {
     ///        (V4, V4)    -> V4 swap to USDC, then USDC -> V4
     ///        (V4, other) -> V4 swap to USDC, then USDC -> other via V2/V3
     ///        (other, V4) -> other -> USDC via V2/V3, then USDC -> V4
+    /// @param minOut      H-07: final-hop floor for the leg (the V4 hop that
+    ///                    lands on `tokenOut`, or the recursed V2/V3 leg).
+    /// @param usdcMidMin  H-07: floor for the USDC produced by the FIRST hop
+    ///                    when this leg pivots through USDC (V4->USDC->x or
+    ///                    x->USDC->V4). It applies to the intermediate USDC,
+    ///                    NOT the final tokenOut.
     function _swapV4Path(
         address tokenIn,
         address tokenOut,
         uint256 amountIn,
         bool inIsV4,
         bool outIsV4,
+        uint256 minOut,
+        uint256 usdcMidMin,
         uint256 deadline
     ) internal returns (uint256) {
-        // V4 <-> USDC: one V4 hop.
+        // V4 <-> USDC: one V4 hop. minOut floors the final output directly.
         if (tokenIn == address(USDC) || tokenOut == address(USDC)) {
-            return _swapV4Single(tokenIn, tokenOut, amountIn);
+            return _swapV4Single(tokenIn, tokenOut, amountIn, minOut);
         }
 
-        // V4 <-> V4: pivot through USDC, both legs on V4.
+        // V4 <-> V4: pivot through USDC, both legs on V4. usdcMidMin floors
+        // the mid USDC, minOut floors the final V4 output.
         if (inIsV4 && outIsV4) {
-            uint256 usdcOut = _swapV4Single(tokenIn, address(USDC), amountIn);
-            return _swapV4Single(address(USDC), tokenOut, usdcOut);
+            uint256 usdcOut = _swapV4Single(tokenIn, address(USDC), amountIn, usdcMidMin);
+            return _swapV4Single(address(USDC), tokenOut, usdcOut, minOut);
         }
 
         // Mixed: V4 leg + V2/V3 leg, pivoting through USDC. We recurse into
         // `_routeOne` for the non-V4 leg so it gets the existing V2/V3 path
-        // selection (direct, migrated, multi-hop, etc).
+        // selection (direct, migrated, multi-hop, etc). The recursed leg
+        // carries `minOut` for its final hop; its own internal usdcMid (if it
+        // multi-hops again) is left unfloored (0) since the caller only
+        // supplied one usdcMidMin, which we spend on the V4 mid hop here.
         if (inIsV4) {
-            uint256 usdcOut = _swapV4Single(tokenIn, address(USDC), amountIn);
-            return _routeOne(address(USDC), tokenOut, usdcOut, deadline);
+            uint256 usdcOut = _swapV4Single(tokenIn, address(USDC), amountIn, usdcMidMin);
+            return _routeOne(address(USDC), tokenOut, usdcOut, minOut, 0, deadline);
         }
-        // outIsV4
-        uint256 usdcMid = _routeOne(tokenIn, address(USDC), amountIn, deadline);
-        return _swapV4Single(address(USDC), tokenOut, usdcMid);
+        // outIsV4: first the V2/V3 leg tokenIn->USDC (floored by usdcMidMin),
+        // then the final V4 hop USDC->tokenOut (floored by minOut).
+        uint256 usdcMid = _routeOne(tokenIn, address(USDC), amountIn, usdcMidMin, 0, deadline);
+        return _swapV4Single(address(USDC), tokenOut, usdcMid, minOut);
     }
 
     /// @dev Execute a single V4 swap between `tokenIn` and `tokenOut`, one
     ///      of which is USDC and the other a registered V4 launch. Looks up
     ///      the PoolKey from the launchpad and derives `zeroForOne` from the
     ///      key's currency sort.
-    function _swapV4Single(address tokenIn, address tokenOut, uint256 amountIn)
+    function _swapV4Single(address tokenIn, address tokenOut, uint256 amountIn, uint256 minAmountOut)
         internal
         returns (uint256 amountOut)
     {
@@ -369,7 +405,7 @@ contract ArcadeMultiSwap is ReentrancyGuard {
             l.poolKey,
             zeroForOne,
             amountIn,
-            0, // aggregator-internal slippage = 0; final slippage at swapToSingle
+            minAmountOut, // H-07: caller's per-leg floor (was 0)
             address(this),
             0  // sqrtPriceLimitX96 = unlimited within tick range
         );
@@ -381,7 +417,19 @@ contract ArcadeMultiSwap is ReentrancyGuard {
     }
 
     /// @dev Helper for the two V2 paths (direct or via USDC).
-    function _swapV2(address tokenIn, address tokenOut, uint256 amountIn, bool viaUsdc, uint256 deadline)
+    /// @param minOut      H-07: `amountOutMinimum` for the FINAL hop (was 0).
+    /// @param usdcMidMin  H-07: caller floor for the intermediate USDC hop on
+    ///                    the via-USDC path (was a decorative 1-wei). Ignored
+    ///                    on the direct (non-viaUsdc) path.
+    function _swapV2(
+        address tokenIn,
+        address tokenOut,
+        uint256 amountIn,
+        bool viaUsdc,
+        uint256 minOut,
+        uint256 usdcMidMin,
+        uint256 deadline
+    )
         internal
         returns (uint256 amountOut)
     {
@@ -391,26 +439,30 @@ contract ArcadeMultiSwap is ReentrancyGuard {
             path[0] = tokenIn;
             path[1] = tokenOut;
             uint256[] memory amounts = v2Router.swapExactTokensForTokens(
-                amountIn, 0, path, address(this), deadline
+                amountIn, minOut, path, address(this), deadline
             );
             amountOut = amounts[1];
             IERC20(tokenIn).forceApprove(address(v2Router), 0);
             return amountOut;
         }
 
-        // MEV-007: a single 3-hop swapExactTokensForTokens(amountIn, 0, [in,
-        // USDC, out], ...) only enforces a slippage bound on the FINAL leg.
-        // A sandwicher who controls only the tokenIn/USDC pair can drive
-        // usdcMid arbitrarily low, then the USDC/out leg's smoothing can
-        // still scrape past the outer minOut. Split into two single hops
-        // with an independent usdcMid sanity floor (1 wei) so a complete
-        // mid-leg collapse reverts here instead of selling through it.
-        // The outer Input.minOut still bounds the final tokenOut amount.
+        // MEV-007 / H-07: a single 3-hop swapExactTokensForTokens(amountIn, 0,
+        // [in, USDC, out], ...) only enforces a slippage bound on the FINAL
+        // leg. A sandwicher who controls only the tokenIn/USDC pair can drive
+        // usdcMid arbitrarily low, then the USDC/out leg's smoothing can still
+        // scrape past the outer minTotalOut. Split into two single hops with
+        // the CALLER's `usdcMidMin` on the first leg (was a decorative 1-wei
+        // that a sandwicher could always clear) and the CALLER's `minOut` on
+        // the final leg.
         address[] memory path1 = new address[](2);
         path1[0] = tokenIn;
         path1[1] = address(USDC);
+        // Enforce at least 1 wei out even when the caller passes usdcMidMin==0,
+        // so a total mid-leg collapse still reverts (preserves the old floor's
+        // grief-resistance for callers that opt out of a real mid floor).
+        uint256 midFloor = usdcMidMin == 0 ? 1 : usdcMidMin;
         uint256[] memory leg1 = v2Router.swapExactTokensForTokens(
-            amountIn, 1, path1, address(this), deadline
+            amountIn, midFloor, path1, address(this), deadline
         );
         uint256 usdcMid = leg1[1];
         IERC20(tokenIn).forceApprove(address(v2Router), 0);
@@ -420,7 +472,7 @@ contract ArcadeMultiSwap is ReentrancyGuard {
         path2[0] = address(USDC);
         path2[1] = tokenOut;
         uint256[] memory leg2 = v2Router.swapExactTokensForTokens(
-            usdcMid, 0, path2, address(this), deadline
+            usdcMid, minOut, path2, address(this), deadline
         );
         amountOut = leg2[1];
         USDC.forceApprove(address(v2Router), 0);
@@ -429,22 +481,32 @@ contract ArcadeMultiSwap is ReentrancyGuard {
     /// @dev Route a leg through the V3 router. Single hop if the other side is
     /// USDC (USDC-paired Clanker V3 pool), two-hop pivoting through USDC
     /// otherwise (eg ClankerA -> USDC -> ClankerB).
-    function _swapV3(address tokenIn, address tokenOut, uint256 amountIn, uint256 deadline)
+    /// @param minOut      H-07: `amountOutMinimum` for the final hop (was 0).
+    /// @param usdcMidMin  H-07: caller floor for the intermediate USDC hop on
+    ///                    the two-hop (non-USDC pair) path (was 0). Ignored on
+    ///                    the single-hop (USDC-paired) path.
+    function _swapV3(
+        address tokenIn,
+        address tokenOut,
+        uint256 amountIn,
+        uint256 minOut,
+        uint256 usdcMidMin,
+        uint256 deadline
+    )
         internal
         returns (uint256 amountOut)
     {
         if (address(v3Router) == address(0)) revert ZeroAddress();
         IERC20(tokenIn).forceApprove(address(v3Router), amountIn);
         if (tokenIn == address(USDC) || tokenOut == address(USDC)) {
-            amountOut = v3Router.exactInputSingle(tokenIn, tokenOut, V3_FEE, address(this), amountIn, 0, deadline);
+            amountOut = v3Router.exactInputSingle(tokenIn, tokenOut, V3_FEE, address(this), amountIn, minOut, deadline);
         } else {
-            // MEV-001 fix: pass usdcMidMin = 0 here (mirrors the existing
-            // amountOutMinimum = 0 on this call site; MultiSwap relies on
-            // its OWN minOut at the outer Input level for slippage protection).
-            // The interface previously only had 7 args; calling the deployed
+            // MEV-001 / H-07: thread the caller's `usdcMidMin` into the mid
+            // USDC hop and `minOut` into the final hop (both were 0). The
+            // interface previously only had 7 args; calling the deployed
             // 8-arg router via a 7-arg interface selector ALWAYS reverted, so
             // V3 two-hop swaps via MultiSwap were silently broken in prod.
-            amountOut = v3Router.exactInputThroughUsdc(tokenIn, tokenOut, V3_FEE, address(this), amountIn, 0, 0, deadline);
+            amountOut = v3Router.exactInputThroughUsdc(tokenIn, tokenOut, V3_FEE, address(this), amountIn, minOut, usdcMidMin, deadline);
         }
         IERC20(tokenIn).forceApprove(address(v3Router), 0);
     }

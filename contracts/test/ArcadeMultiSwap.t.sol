@@ -63,7 +63,13 @@ contract ArcadeMultiSwapTest is Test {
     }
 
     function _pushInput(address t, uint256 a) internal {
-        inputsBuf.push(ArcadeMultiSwap.Input({token: t, amount: a}));
+        // Default: no per-leg floor (minOut/usdcMidMin = 0). The basket-wide
+        // minTotalOut passed to swapToSingle still gates the whole call.
+        inputsBuf.push(ArcadeMultiSwap.Input({token: t, amount: a, minOut: 0, usdcMidMin: 0}));
+    }
+
+    function _pushInputWithMin(address t, uint256 a, uint256 minOut, uint256 usdcMidMin) internal {
+        inputsBuf.push(ArcadeMultiSwap.Input({token: t, amount: a, minOut: minOut, usdcMidMin: usdcMidMin}));
     }
 
     function _createTokenAs(address as_, string memory n, string memory s) internal returns (address) {
@@ -187,6 +193,59 @@ contract ArcadeMultiSwapTest is Test {
         _resetInputs();
         vm.expectRevert(ArcadeMultiSwap.EmptyInputs.selector);
         multiSwap.swapToSingle(inputsBuf, tokenA, 0, block.timestamp + 60);
+    }
+
+    /// H-07: a single thin leg whose per-leg `minOut` is violated must revert
+    /// the WHOLE basket, even when the OTHER leg's output would keep the
+    /// basket total above the aggregate `minTotalOut`. This is the exact
+    /// sandwich hole H-07 closes: pre-fix, leg slippage was unprotected (the
+    /// router got amountOutMinimum=0) so an attacker could fully drain the
+    /// thin leg as long as the fat leg carried the basket.
+    function test_swapToSingle_thinLeg_perLegMinOutEnforced() public {
+        // Two USDC inputs converging to tokenA. Both legs route USDC->tokenA
+        // (direct V2). Leg 0 is small ("thin"), leg 1 is large ("fat").
+        _resetInputs();
+        // Leg 0: 1 USDC in, but demand an impossibly high per-leg minOut so
+        // the leg's own floor is violated regardless of the basket total.
+        _pushInputWithMin(address(usdc), 1e6, type(uint256).max, 0);
+        // Leg 1: 1000 USDC in, no per-leg floor. On its own this leg's output
+        // would dwarf any reasonable basket minTotalOut.
+        _pushInput(address(usdc), 1_000e6);
+
+        vm.startPrank(bob);
+        usdc.approve(address(multiSwap), type(uint256).max);
+        // Basket minTotalOut = 0 so the ONLY thing that can revert is the
+        // per-leg floor on leg 0. Pre-H-07 this call succeeded (leg slippage
+        // was unprotected); post-fix it must revert. The floor is threaded
+        // straight into the V2 router's `amountOutMinimum`, so the router's
+        // own `InsufficientOutputAmount` guard fires first (before the
+        // aggregator's belt-and-suspenders `InsufficientOutput` check). We
+        // accept ANY revert here since either guard proves the leg is now
+        // protected.
+        vm.expectRevert();
+        multiSwap.swapToSingle(inputsBuf, tokenA, 0, block.timestamp + 60);
+        vm.stopPrank();
+    }
+
+    /// Companion happy-path: the SAME basket with a realistic per-leg floor
+    /// (derived from the quote) succeeds, proving the floor only bites on a
+    /// genuine shortfall.
+    function test_swapToSingle_perLegMinOut_passesWhenQuoteMet() public {
+        _resetInputs();
+        _pushInput(address(usdc), 1e6);
+        _pushInput(address(usdc), 1_000e6);
+        (, uint256[] memory per) = multiSwap.quoteSwapToSingle(inputsBuf, tokenA);
+
+        _resetInputs();
+        // Floor each leg at 99% of its own quote.
+        _pushInputWithMin(address(usdc), 1e6, (per[0] * 99) / 100, 0);
+        _pushInputWithMin(address(usdc), 1_000e6, (per[1] * 99) / 100, 0);
+
+        vm.startPrank(bob);
+        usdc.approve(address(multiSwap), type(uint256).max);
+        uint256 totalOut = multiSwap.swapToSingle(inputsBuf, tokenA, 0, block.timestamp + 60);
+        vm.stopPrank();
+        assertGt(totalOut, 0, "swap succeeded with per-leg floors met");
     }
 
     function test_quoteSwapToSingle_handlesMixedInputs() public {

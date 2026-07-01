@@ -10,6 +10,12 @@ export const MULTISWAP_ABI = [
         components: [
           { name: "token", type: "address" },
           { name: "amount", type: "uint256" },
+          // H-07: per-leg floor threaded into each leg's router call as the
+          // real amountOutMinimum (closes the single-thin-leg sandwich hole).
+          { name: "minOut", type: "uint256" },
+          // H-07: per-leg floor for the intermediate USDC hop on via-USDC /
+          // migrated routes (replaces the sandwicher-controlled inline quote).
+          { name: "usdcMidMin", type: "uint256" },
         ],
       },
       { name: "tokenOut", type: "address" },
