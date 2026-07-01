@@ -23,7 +23,8 @@ import { ADDRESSES } from "./constants";
  * the generation numbers below are derived, not hand-maintained.
  */
 const KNOWN_LAUNCHPADS: Address[] = [
-    "0x4339522dAaaBBCc2888681d53a19901e7a31cb39", // gen 10 (2026-06-30, escrow rewire) — current live
+    "0x70E9d457423eF35711886f7dc7535A8caeBA7cfE", // gen 11 (2026-07-01, seed-clearing + H-07 + escrow) — current live
+    "0x4339522dAaaBBCc2888681d53a19901e7a31cb39", // gen 10 (2026-06-30, escrow rewire)
     "0x7337789D6F0f731BCBE6CE6a44334F548Bba56b9", // gen 9 (2026-06-21, pre-Path-B live stack)
     "0xD863e3475E00550FBe0Abf4F1127B673E65C86a4", // gen 8 (2026-06-11, audit v2 prep)
     "0x62aC6A355D092267a93a1Ffb13B7D1c121A5c0e8", // gen 7 (2026-06-09, audit-3 batch)
