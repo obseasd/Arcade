@@ -32,12 +32,16 @@ interface Props {
   onConfirm: (newlySelected: TokenOption[]) => void;
 }
 
+// Keep this list identical to TokenSelectModal's PINNED (Swap + Limit) so
+// the pinned chips are the same everywhere the user picks a token. It used
+// to pin WUSDC + BTC here, which diverged from the Swap/Limit chips
+// (EURC + cirBTC) and confused users switching between the surfaces.
 const PINNED: PinnedTemplate[] = [
   { symbol: "USDC", name: "USD Coin" },
-  { symbol: "WUSDC", name: "Wrapped USDC" },
   { symbol: "ETH", name: "Wrapped Ether" },
+  { symbol: "EURC", name: "Euro Coin" },
   { symbol: "USDT", name: "Tether" },
-  { symbol: "BTC", name: "Wrapped BTC" },
+  { symbol: "cirBTC", name: "Circle Wrapped BTC" },
 ];
 
 export function MultiTokenSelectModal({
@@ -75,13 +79,13 @@ export function MultiTokenSelectModal({
         address:
           p.symbol === "USDC"
             ? ADDRESSES.usdc
-            : p.symbol === "WUSDC"
-              ? ADDRESSES.wusdc
-              : p.symbol === "ETH"
-                ? ADDRESSES.seedEth
+            : p.symbol === "ETH"
+              ? ADDRESSES.seedEth
+              : p.symbol === "EURC"
+                ? ADDRESSES.eurc
                 : p.symbol === "USDT"
                   ? ADDRESSES.usdt
-                  : p.symbol === "BTC"
+                  : p.symbol === "cirBTC"
                     ? ADDRESSES.cirBtc
                     : undefined,
       })),

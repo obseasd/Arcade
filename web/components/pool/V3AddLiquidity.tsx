@@ -367,11 +367,11 @@ export function V3AddLiquidity({
         query: { enabled: !!account },
     });
 
-    const { ensureAllowance: approve0 } = useApproveIfNeeded(
+    const { ensureAllowance: approve0, allowance: npmAllowance0 } = useApproveIfNeeded(
         t0.address,
         ADDRESSES.v3PositionManager,
     );
-    const { ensureAllowance: approve1 } = useApproveIfNeeded(
+    const { ensureAllowance: approve1, allowance: npmAllowance1 } = useApproveIfNeeded(
         t1.address,
         ADDRESSES.v3PositionManager,
     );
@@ -589,6 +589,20 @@ export function V3AddLiquidity({
     const enoughBalance1 =
         belowRange ? true : a1WouldUse >= 0n && a1WouldUse <= balance1Raw;
     const enoughBalance = enoughBalance0 && enoughBalance1;
+
+    // Honest tx accounting for the dual-token path. The pool-create + mint
+    // folds into ONE atomic NPM.multicall on Arc, but ERC20 approvals to
+    // the NPM CANNOT be folded in (approve lives on the token contract, not
+    // the NPM, and there is no Permit2 pull path here). So each token whose
+    // NPM allowance is short of the typed amount costs one extra wallet
+    // signature BEFORE the atomic tx. We surface that count in the CTA so
+    // the button never advertises "1 transaction" and then prompts three.
+    const leg0NeedsApproval =
+        mode === "dual" && a0WouldUse > 0n && npmAllowance0 < a0WouldUse;
+    const leg1NeedsApproval =
+        mode === "dual" && a1WouldUse > 0n && npmAllowance1 < a1WouldUse;
+    const pendingApprovals =
+        (leg0NeedsApproval ? 1 : 0) + (leg1NeedsApproval ? 1 : 0);
 
     // Audit low [28]: gate submit on poolAddrQ loading. The page used to
     // submit with a stale hasPool=false closure if the user hit Submit
@@ -1370,6 +1384,19 @@ export function V3AddLiquidity({
                     {chainId === ARC_TESTNET_CHAIN_ID
                         ? ", then add your liquidity in the same single transaction."
                         : ", then add your liquidity."}
+                    {pendingApprovals > 0 && (
+                        <>
+                            {" "}
+                            First you&apos;ll approve{" "}
+                            {pendingApprovals === 2
+                                ? "both tokens"
+                                : "one token"}{" "}
+                            to the position manager ({pendingApprovals} extra{" "}
+                            {pendingApprovals === 2 ? "txs" : "tx"}); token
+                            approvals can&apos;t be folded into the pool
+                            transaction. Total: {pendingApprovals + 1} txs.
+                        </>
+                    )}
                 </div>
             )}
             {feeTierEnabled && hasPool && isFirstLP && (
@@ -1616,9 +1643,13 @@ export function V3AddLiquidity({
                                 ? "Minting + enabling auto-management…"
                                 : "Minting position…"
                             : chainId === ARC_TESTNET_CHAIN_ID
-                                ? autoMode !== 0
-                                    ? "Creating pool + adding liquidity (1 transaction) + auto-management…"
-                                    : "Creating pool + adding liquidity (1 transaction)…"
+                                ? pendingApprovals > 0
+                                    ? autoMode !== 0
+                                        ? "Approving + creating pool + adding liquidity + auto-management…"
+                                        : "Approving + creating pool + adding liquidity…"
+                                    : autoMode !== 0
+                                        ? "Creating pool + adding liquidity (1 transaction) + auto-management…"
+                                        : "Creating pool + adding liquidity (1 transaction)…"
                                 : autoMode !== 0
                                     ? "Initialising pool + minting + auto-management…"
                                     : "Initialising pool + minting…"
@@ -1639,8 +1670,14 @@ export function V3AddLiquidity({
                               : !enoughBalance1
                                 ? `Insufficient ${t1.symbol} balance`
                                 : hasPool
-                                  ? "Add concentrated liquidity"
-                                  : "Create pool + add liquidity"}
+                                  ? pendingApprovals > 0
+                                    ? `Approve ${pendingApprovals} + add liquidity (${pendingApprovals + 1} txs)`
+                                    : "Add concentrated liquidity"
+                                  : pendingApprovals > 0
+                                    ? `Approve ${pendingApprovals} + create pool + add liquidity (${pendingApprovals + 1} txs)`
+                                    : chainId === ARC_TESTNET_CHAIN_ID
+                                      ? "Create pool + add liquidity (1 tx)"
+                                      : "Create pool + add liquidity"}
             </button>
         </div>
     );

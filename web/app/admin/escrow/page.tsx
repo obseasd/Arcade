@@ -99,10 +99,10 @@ function AdminBody() {
     return (
         <div className="mx-auto max-w-3xl px-4 py-10 sm:px-6">
             <Link
-                href="/"
+                href="/admin"
                 className="mb-6 inline-flex items-center gap-2 text-sm text-arc-text-muted transition-colors hover:text-arc-text"
             >
-                <ArrowLeft className="h-4 w-4" /> Home
+                <ArrowLeft className="h-4 w-4" /> Admin
             </Link>
 
             <div className="mb-8 flex items-start gap-3">
@@ -117,7 +117,7 @@ function AdminBody() {
             </div>
 
             <Link
-                href="/stats"
+                href="/stats?from=admin"
                 className="mb-6 flex items-center justify-between gap-4 rounded-2xl border border-arc-cta-hover/30 bg-arc-cta-hover/5 p-4 transition-colors hover:bg-arc-cta-hover/10 sm:p-5"
             >
                 <div className="flex items-start gap-3">

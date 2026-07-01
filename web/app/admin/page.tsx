@@ -64,7 +64,7 @@ export default function AdminIndex() {
             status: { label: "Live", tone: "ok" },
         },
         {
-            href: "/stats",
+            href: "/stats?from=admin",
             title: "Stats",
             description:
                 "Live Arcade activity on Arc: USDC gas paid, transactions routed, unique wallets, tokens launched.",

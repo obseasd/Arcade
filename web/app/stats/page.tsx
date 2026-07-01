@@ -41,7 +41,19 @@ export const revalidate = 30;
 const HISTORY_WINDOW_DAYS = 30;
 const HISTORY_WINDOW_MS = HISTORY_WINDOW_DAYS * 24 * 60 * 60 * 1000;
 
-export default async function StatsPage() {
+export default async function StatsPage({
+    searchParams,
+}: {
+    searchParams: Promise<{ from?: string }>;
+}) {
+    // /stats is shared: reachable from the public home AND from the admin
+    // hub. When the admin hub links here it appends ?from=admin so the
+    // back arrow returns to /admin instead of bouncing the owner all the
+    // way out to the public home.
+    const { from } = await searchParams;
+    const backHref = from === "admin" ? "/admin" : "/";
+    const backLabel = from === "admin" ? "Admin" : "Home";
+
     const persisted = await getLatestPersistedSnapshot();
     let snap: StatsSnapshot;
     let usingPersisted = false;
@@ -69,10 +81,10 @@ export default async function StatsPage() {
     return (
         <div className="mx-auto max-w-5xl px-4 py-10 sm:px-6 sm:py-14">
             <Link
-                href="/"
+                href={backHref}
                 className="mb-6 inline-flex items-center gap-2 text-sm text-arc-text-muted transition-colors hover:text-arc-text"
             >
-                <ArrowLeft className="h-4 w-4" /> Home
+                <ArrowLeft className="h-4 w-4" /> {backLabel}
             </Link>
 
             <header className="mb-10">
