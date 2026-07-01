@@ -420,7 +420,9 @@ export function MultiSwapCard({ tab, onTabChange }: MultiSwapCardProps) {
         address: l.route.approval.token,
         abi: erc20Abi,
         functionName: "approve",
-        args: [l.route.approval.spender, maxUint256],
+        // Exact leg amount + 2% buffer, not maxUint256 (defense-in-depth: cap a
+        // compromised spender's reach to this leg; buffer absorbs rounding).
+        args: [l.route.approval.spender, l.amount + (l.amount * 200n) / 10_000n],
       });
       calls.push({
         address: l.route.executor.router,
