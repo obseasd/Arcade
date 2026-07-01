@@ -51,7 +51,7 @@ describe("parseCctpV2Message", () => {
         const msg = buildMessage({
             version: 1,
             sourceDomain: 0, // Ethereum
-            destinationDomain: 12, // Arc per CCTP V2 reservation
+            destinationDomain: 26, // Arc (Circle CCTP domain 26, mainnet + testnet)
             nonce: 42n,
             mintRecipient: recipient,
         });
@@ -59,7 +59,7 @@ describe("parseCctpV2Message", () => {
         expect(parsed).not.toBeNull();
         expect(parsed!.version).toBe(1);
         expect(parsed!.sourceDomain).toBe(0);
-        expect(parsed!.destinationDomain).toBe(12);
+        expect(parsed!.destinationDomain).toBe(26);
         expect(parsed!.nonce).toBe(42n);
         expect(parsed!.mintRecipient.toLowerCase()).toBe(("0x" + recipient).toLowerCase());
     });
@@ -79,7 +79,7 @@ describe("parseCctpV2Message", () => {
         const msg = buildMessage({
             version: 1,
             sourceDomain: 0,
-            destinationDomain: 12,
+            destinationDomain: 26,
             nonce: 1n,
             mintRecipient: recipient,
         });

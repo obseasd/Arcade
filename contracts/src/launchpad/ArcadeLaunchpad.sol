@@ -899,7 +899,20 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
             platformCut = raised >= MIGRATION_FEE ? MIGRATION_FEE : raised;
             usdcForLP = raised - platformCut;
         }
-        uint256 tokensForLP = MIGRATION_LP_TOKENS;
+        // Audit 2026-07-01 (MEV): seed the pair at the curve's CLEARING price so
+        // the DEX opens exactly where the curve just closed, instead of ~30%
+        // below it. The old code seeded the full MIGRATION_LP_TOKENS against
+        // usdcForLP, which priced the pair under the curve's final price and
+        // handed a risk-free back-run to the first arber on every graduation.
+        // Scale tokensForLP to the clearing ratio currentUsdc : currentTokens
+        // (currentTokens == MIGRATION_LP_TOKENS at 100% since migration only
+        // fires at tokensSold == CURVE_SUPPLY), and burn the un-seeded remainder
+        // of the LP allotment so nothing is stranded in the launchpad.
+        uint256 currentUsdc = VIRTUAL_USDC_RESERVE + raised;
+        uint256 tokensForLP = (usdcForLP * MIGRATION_LP_TOKENS) / currentUsdc;
+        uint256 burnExcess;
+        unchecked { burnExcess = MIGRATION_LP_TOKENS - tokensForLP; }
+        if (burnExcess > 0) IERC20(tokenAddr).safeTransfer(DEAD, burnExcess);
 
         if (platformCut > 0) {
             _safePayUsdc(treasury, platformCut);

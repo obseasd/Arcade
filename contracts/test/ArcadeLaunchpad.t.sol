@@ -123,8 +123,27 @@ contract ArcadeLaunchpadTest is Test {
         // The V2 pair should hold the migration LP tokens + the collected USDC (minus fees)
         uint256 pairUsdc = usdc.balanceOf(state.v2Pair);
         uint256 pairTokens = IERC20(token).balanceOf(state.v2Pair);
-        assertEq(pairTokens, launchpad.MIGRATION_LP_TOKENS(), "200M tokens in pair");
         assertGt(pairUsdc, 0, "USDC in pair");
+        // Audit 2026-07-01: the pair is now seeded at the curve's CLEARING price,
+        // so fewer than the full LP allotment is used and the remainder is burned.
+        assertLt(pairTokens, launchpad.MIGRATION_LP_TOKENS(), "clearing-scaled seed uses < full allotment");
+        // pair price == clearing price: pairUsdc/pairTokens == clearingUsdc/currentTokens,
+        // where clearingUsdc = VIRTUAL_USDC_RESERVE + raised (20k) and currentTokens
+        // == MIGRATION_LP_TOKENS at 100%. Cross-multiplied to avoid division rounding.
+        uint256 clearingUsdc = 5_000e6 + 20_000e6;
+        assertApproxEqRel(
+            pairUsdc * launchpad.MIGRATION_LP_TOKENS(),
+            pairTokens * clearingUsdc,
+            1e15, // 0.1%
+            "pair seeded at the curve clearing price"
+        );
+        // The un-seeded remainder of the LP allotment was burned to DEAD.
+        assertApproxEqAbs(
+            IERC20(token).balanceOf(launchpad.DEAD()),
+            launchpad.MIGRATION_LP_TOKENS() - pairTokens,
+            1e18,
+            "excess LP tokens burned"
+        );
 
         // LP tokens locked to dead address
         uint256 deadLp = IERC20(state.v2Pair).balanceOf(launchpad.DEAD());
