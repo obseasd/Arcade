@@ -603,6 +603,15 @@ export function V3AddLiquidity({
         mode === "dual" && a1WouldUse > 0n && npmAllowance1 < a1WouldUse;
     const pendingApprovals =
         (leg0NeedsApproval ? 1 : 0) + (leg1NeedsApproval ? 1 : 0);
+    // Auto-management costs one extra tx that CANNOT be folded into the
+    // mint: the NFT is minted to the user first, then safeTransferFrom'd
+    // into the Compounder with the abi.encode(mode, threshold, slippage)
+    // payload (Uniswap's mint can't carry that config, and an NPM
+    // multicall can't reference the freshly-minted tokenId). Only the
+    // dual-token path renders the auto-management picker; single-asset
+    // zaps keep the NFT in the zap helper, so no hand-off tx there.
+    const autoMgmtTx =
+        mode === "dual" && autoCompounderEnabled && autoMode !== 0 ? 1 : 0;
 
     // Audit low [28]: gate submit on poolAddrQ loading. The page used to
     // submit with a stale hasPool=false closure if the user hit Submit
@@ -1670,11 +1679,11 @@ export function V3AddLiquidity({
                               : !enoughBalance1
                                 ? `Insufficient ${t1.symbol} balance`
                                 : hasPool
-                                  ? pendingApprovals > 0
-                                    ? `Approve ${pendingApprovals} + add liquidity (${pendingApprovals + 1} txs)`
+                                  ? pendingApprovals + autoMgmtTx > 0
+                                    ? `${pendingApprovals > 0 ? `Approve ${pendingApprovals} + ` : ""}add liquidity${autoMgmtTx ? " + auto-mgmt" : ""} (${1 + pendingApprovals + autoMgmtTx} txs)`
                                     : "Add concentrated liquidity"
-                                  : pendingApprovals > 0
-                                    ? `Approve ${pendingApprovals} + create pool + add liquidity (${pendingApprovals + 1} txs)`
+                                  : pendingApprovals + autoMgmtTx > 0
+                                    ? `${pendingApprovals > 0 ? `Approve ${pendingApprovals} + ` : ""}create pool + add liquidity${autoMgmtTx ? " + auto-mgmt" : ""} (${1 + pendingApprovals + autoMgmtTx} txs)`
                                     : chainId === ARC_TESTNET_CHAIN_ID
                                       ? "Create pool + add liquidity (1 tx)"
                                       : "Create pool + add liquidity"}
