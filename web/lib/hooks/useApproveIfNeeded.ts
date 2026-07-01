@@ -1,7 +1,12 @@
 "use client";
 
 import { useCallback } from "react";
-import { Address, erc20Abi, maxUint256 } from "viem";
+import { Address, erc20Abi } from "viem";
+
+/** Buffer added on top of the exact trade amount when approving, in bps.
+ *  Absorbs fee-on-transfer / rounding so the follow-up call does not
+ *  false-revert on a hair-short allowance. */
+const APPROVE_BUFFER_BPS = 200n; // 2%
 import { useAccount, useReadContract, useWriteContract, usePublicClient } from "wagmi";
 
 /**
@@ -28,11 +33,17 @@ export function useApproveIfNeeded(token: Address | undefined, spender: Address 
       if (!token || !spender || !owner) throw new Error("Missing token/spender/owner");
       const current = (allowance.data as bigint | undefined) ?? 0n;
       if (current >= amount) return;
+      // Approve the EXACT trade amount plus a small buffer instead of
+      // maxUint256. Unlimited approvals are what turned the V3-router callback
+      // bug into a full-wallet drain; an exact+buffer approval caps a
+      // compromised spender's reach to this trade's size. Cost: an approve per
+      // trade (the standard serious-DEX default).
+      const approveAmount = amount + (amount * APPROVE_BUFFER_BPS) / 10_000n;
       const hash = await writeContractAsync({
         address: token,
         abi: erc20Abi,
         functionName: "approve",
-        args: [spender, maxUint256],
+        args: [spender, approveAmount],
       });
       if (publicClient) {
         await publicClient.waitForTransactionReceipt({ hash });
