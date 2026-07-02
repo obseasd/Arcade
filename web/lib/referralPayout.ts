@@ -1,4 +1,6 @@
+import { verifyTypedData, type Address } from "viem";
 import { getSql, isDbConfigured } from "@/lib/db";
+import { arcTestnet } from "@/lib/chains";
 
 /**
  * Referral PAYOUT layer (Phase 2). Disabled by default and built so the two
@@ -46,14 +48,22 @@ export async function getVerifiedEarningsUsdMicros(
     return 0n;
 }
 
-/** Sum of everything already paid to this referrer (status = 'paid'). */
+/**
+ * Sum of everything paid OR in-flight for this referrer. Counts BOTH 'paid'
+ * and 'pending' (fee audit 2026-07-02): a reserved-but-not-yet-settled claim
+ * must reduce claimable so two concurrent claim requests can't each see the
+ * full amount and both send. A pending row is only ever released (deleted)
+ * when the payout provably never submitted, so counting it here can never
+ * strand funds.
+ */
 export async function getClaimedUsdMicros(referrer: string): Promise<bigint> {
     if (!isDbConfigured() || !isAddr(referrer)) return 0n;
     const sql = getSql();
     const rows = (await sql`
         SELECT COALESCE(SUM(amount_usd_micros), 0) AS claimed
         FROM referral_claims
-        WHERE referrer_address = ${norm(referrer)} AND status = 'paid'
+        WHERE referrer_address = ${norm(referrer)}
+          AND status IN ('paid', 'pending')
     `) as { claimed: string | number }[];
     return BigInt(rows[0]?.claimed ?? 0);
 }
@@ -66,18 +76,98 @@ export async function getClaimableUsdMicros(referrer: string): Promise<bigint> {
     return verified > claimed ? verified - claimed : 0n;
 }
 
-/** Persist a settled claim so future claimable amounts subtract it. */
-export async function recordClaim(
+/**
+ * Reserve a claim BEFORE sending USDC. Inserts a 'pending' row; the partial
+ * unique index uq_referral_claims_one_pending (migration 008) means at most
+ * one pending claim can exist per referrer, so a concurrent or retried
+ * request that races here gets `null` (the INSERT violates the index) and the
+ * caller MUST NOT send. Returns the new claim id on success, null when a
+ * claim is already in flight or on any failure (fail-closed: never pay).
+ */
+export async function reserveClaim(
     referrer: string,
     amountUsdMicros: bigint,
-    txHash: string | null,
-): Promise<void> {
-    if (!isDbConfigured() || !isAddr(referrer) || amountUsdMicros <= 0n) return;
+): Promise<number | null> {
+    if (!isDbConfigured() || !isAddr(referrer) || amountUsdMicros <= 0n) return null;
+    const sql = getSql();
+    try {
+        const rows = (await sql`
+            INSERT INTO referral_claims (referrer_address, amount_usd_micros, status)
+            VALUES (${norm(referrer)}, ${amountUsdMicros.toString()}::bigint, 'pending')
+            RETURNING id
+        `) as { id: string | number }[];
+        return rows.length > 0 ? Number(rows[0].id) : null;
+    } catch {
+        // Unique-index violation (a pending claim already exists) or any other
+        // error: treat as "cannot reserve" so no payout is sent.
+        return null;
+    }
+}
+
+/** Settle a reserved claim after the USDC transfer landed. */
+export async function settleClaim(id: number, txHash: string): Promise<void> {
+    if (!isDbConfigured()) return;
     const sql = getSql();
     await sql`
-        INSERT INTO referral_claims (referrer_address, amount_usd_micros, tx_hash)
-        VALUES (${norm(referrer)}, ${amountUsdMicros.toString()}::bigint, ${txHash})
+        UPDATE referral_claims
+        SET status = 'paid', tx_hash = ${txHash}
+        WHERE id = ${id}::bigint AND status = 'pending'
     `;
+}
+
+/**
+ * Release a reserved claim. Call ONLY when the payout transfer provably never
+ * submitted (sendUsdcFromTreasury threw before broadcasting). A
+ * submitted-but-unconfirmed transfer must NOT be released: the signer is
+ * required to return its tx hash so the claim settles instead, otherwise the
+ * pending row correctly blocks a re-claim until an operator reconciles.
+ */
+export async function releaseClaim(id: number): Promise<void> {
+    if (!isDbConfigured()) return;
+    const sql = getSql();
+    await sql`
+        DELETE FROM referral_claims WHERE id = ${id}::bigint AND status = 'pending'
+    `;
+}
+
+/**
+ * Verify an EIP-712 signature proving the caller controls `referrer`. The
+ * claim recipient is always `referrer` itself, so funds can't be redirected;
+ * this gate stops a third party from triggering / griefing someone else's
+ * payout (draining the referral budget on their behalf) and enforces a
+ * short-lived deadline so a captured signature can't be replayed forever.
+ */
+export async function verifyClaimSignature(args: {
+    referrer: string;
+    deadline: bigint;
+    signature: string;
+}): Promise<boolean> {
+    if (!isAddr(args.referrer)) return false;
+    if (!/^0x[0-9a-fA-F]+$/.test(args.signature)) return false;
+    try {
+        return await verifyTypedData({
+            address: args.referrer as Address,
+            domain: {
+                name: "ArcadeReferral",
+                version: "1",
+                chainId: arcTestnet.id,
+            },
+            types: {
+                Claim: [
+                    { name: "referrer", type: "address" },
+                    { name: "deadline", type: "uint256" },
+                ],
+            },
+            primaryType: "Claim",
+            message: {
+                referrer: args.referrer as Address,
+                deadline: args.deadline,
+            },
+            signature: args.signature as `0x${string}`,
+        });
+    } catch {
+        return false;
+    }
 }
 
 /**

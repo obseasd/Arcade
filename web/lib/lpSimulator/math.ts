@@ -263,7 +263,14 @@ export function sampleCumulativeSold(c: SimulatorConfig, buckets = 80): Array<{ 
     for (const pos of pool.positions) {
       const sqrtLo = Math.sqrt(pos.lowerPrice);
       const sqrtHi = Math.sqrt(pos.upperPrice);
-      const sqrtEnd = Math.min(sqrtP, sqrtHi);
+      // Clamp the sample point INTO [sqrtLo, sqrtHi]. Without the lower
+      // clamp, a market cap below a position's lower bound gives
+      // sqrtEnd < sqrtLo, and tokensInRange (L * (1/sqrtLo - 1/sqrtEnd))
+      // returns a NEGATIVE amount, so the cumulative-sold line could
+      // decrease and even go negative (a position not yet entered must
+      // contribute 0, not negative). The Standard preset samples from
+      // mcap 31.5k, below position 1's 35k lower bound, so this fired.
+      const sqrtEnd = Math.max(sqrtLo, Math.min(sqrtP, sqrtHi));
       sold += tokensInRange(pos.liquidity, sqrtLo, sqrtEnd);
     }
     out.push({ mcap, sold: totalPoolTokens > 0 ? sold / totalPoolTokens : 0 });
