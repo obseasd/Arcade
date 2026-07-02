@@ -209,9 +209,9 @@ export default async function StatsPage({
                         launchpad and the V4 launchpad prototype (when deployed).
                     </li>
                     <li>
-                        The page is rendered server-side and cached for 5 minutes.
-                        Refresh more frequently and you get the same cached
-                        snapshot back.
+                        The page is rendered server-side and cached for 30
+                        seconds. Refresh more frequently and you get the same
+                        cached snapshot back.
                     </li>
                     {snap.truncated && (
                         <li className="text-arc-warn">

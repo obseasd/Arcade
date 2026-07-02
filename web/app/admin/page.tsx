@@ -79,6 +79,14 @@ export default function AdminIndex() {
             Icon: Receipt,
             status: { label: "Live", tone: "ok" },
         },
+        {
+            href: "/admin/observability",
+            title: "Observability",
+            description:
+                "Sentry status summary + quick-links for error and performance monitoring across the app.",
+            Icon: Activity,
+            status: { label: "Setup", tone: "warn" },
+        },
     ];
 
     return (

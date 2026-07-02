@@ -401,11 +401,13 @@ export function RemoveLiquidityModalV3({
                     NPM multicall closes it. */}
                 {isManaged && (
                     <div className="rounded-xl border border-arc-cta-hover/30 bg-arc-cta-hover/5 p-3 text-[11px] text-arc-text-muted">
-                        Auto-managed position: one signature closes
-                        everything. The auto-compounder hands the NFT
-                        back, the position is fully removed, and the
-                        NFT is burned — all atomic via Multicall3From.
-                        Amount locked at 100%.
+                        Auto-managed position: this runs as 4 separate
+                        signatures, in order. The auto-compounder hands the
+                        NFT back, then the position is decreased, fees are
+                        collected, and the NFT is burned. They can&apos;t be
+                        bundled into one tx: Arc&apos;s callFrom precompile
+                        (Multicall3From) is currently unavailable. Amount
+                        locked at 100%.
                     </div>
                 )}
                 {/* Percentage picker. Big readout up top so the user reads

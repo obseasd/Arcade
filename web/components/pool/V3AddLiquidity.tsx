@@ -193,8 +193,9 @@ export function V3AddLiquidity({
     const poolLiquidity = (poolLiquidityQ.data as bigint | undefined) ?? 0n;
 
     // Verify the picked fee tier is enabled on the factory. The Arc V3
-    // factory (DeploySecurityV3.s.sol) only enables 1% / 2% / 3% — picking
-    // 0.30% reverts at createPool with a generic message. Detect early and
+    // factory enables 0.05% / 0.30% / 1% / 2% / 3% (verified on-chain via
+    // feeAmountTickSpacing); 0.01% is NOT enabled, and picking a disabled
+    // tier reverts at createPool with a generic message. Detect early and
     // surface a clear banner.
     const factoryTickSpacingQ = useReadContract({
         address: ADDRESSES.v3Factory,

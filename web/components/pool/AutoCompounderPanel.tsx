@@ -374,7 +374,10 @@ function DepositModal({
 
     const [tokenIdInput, setTokenIdInput] = useState("");
     const [mode, setMode] = useState<CompounderModeId>(1); // default RECEIVE
-    const [thresholdUsdc, setThresholdUsdc] = useState("0.10");
+    // Default at the contract's MIN_FEE_MICROS_FLOOR (1 USDC). The old "0.10"
+    // default produced 100_000 micros and depositPosition reverted with
+    // MIN_FEE_TOO_LOW on the no-edit happy path (pages audit 2026-07-02).
+    const [thresholdUsdc, setThresholdUsdc] = useState("1.00");
     const [slippagePct, setSlippagePct] = useState("0.50");
     const [busy, setBusy] = useState(false);
     const [step, setStep] = useState<"idle" | "approving" | "depositing">("idle");
@@ -410,10 +413,23 @@ function DepositModal({
     );
 
     const tokenIdToUse = tokenIdInput || userTokenIds[0] || "";
+    // ArcadeAutoCompounder enforces MIN_FEE_MICROS_FLOOR = 1_000_000 (1 USDC).
+    const MIN_THRESHOLD_USDC = 1.0;
     const thresholdMicros = useMemo(() => {
         const parsed = Number(thresholdUsdc);
-        if (!Number.isFinite(parsed) || parsed < 0) return 0n;
-        return BigInt(Math.floor(parsed * 1_000_000));
+        if (!Number.isFinite(parsed) || parsed < 0) return 1_000_000n;
+        const micros = BigInt(Math.floor(parsed * 1_000_000));
+        // Clamp to the on-chain floor so a sub-1-USDC input can't reach
+        // depositPosition and revert MIN_FEE_TOO_LOW.
+        return micros < 1_000_000n ? 1_000_000n : micros;
+    }, [thresholdUsdc]);
+    // Snap the input up to the floor when the user leaves the field, so they
+    // see the bumped value rather than silently sending a different one.
+    const onThresholdBlur = useCallback(() => {
+        const parsed = Number(thresholdUsdc);
+        if (!Number.isFinite(parsed) || parsed < MIN_THRESHOLD_USDC) {
+            setThresholdUsdc(MIN_THRESHOLD_USDC.toFixed(2));
+        }
     }, [thresholdUsdc]);
     const slippageBps = useMemo(() => {
         const parsed = Number(slippagePct);
@@ -609,11 +625,12 @@ function DepositModal({
                             inputMode="decimal"
                             value={thresholdUsdc}
                             onChange={(e) => setThresholdUsdc(e.target.value)}
+                            onBlur={onThresholdBlur}
                             disabled={busy}
                             className="w-full rounded-xl border border-arc-border bg-arc-bg p-3 text-sm text-arc-text outline-none focus:border-arc-primary"
                         />
                         <p className="mt-1 text-[10px] text-arc-text-faint">
-                            Trigger when pending fees ≥ this amount.
+                            Trigger when pending fees ≥ this amount (min 1 USDC).
                         </p>
                     </div>
                     <div>
