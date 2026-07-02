@@ -10,12 +10,20 @@ import {IArcadeV2Router} from "../src/dex/interfaces/IArcadeV2Router.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 /**
- * Redeploy ONLY ArcadeMultiSwap with the H-07 per-leg minOut fix. Stateless
- * aggregator, so a clean standalone redeploy. REUSES the current stack
- * addresses (from deployments.json). After deploy, set
- * NEXT_PUBLIC_MULTISWAP_ADDRESS to the new address (Vercel + deployments.json)
- * and redeploy the frontend. V4 legs stay disabled (v4Router/v4Launchpad = 0,
- * V4 not live) unless the envs are set.
+ * Redeploy ONLY ArcadeMultiSwap. Stateless aggregator, so a clean standalone
+ * redeploy that REUSES the current stack addresses (from deployments.json).
+ *
+ * Current reason (fee audit 2026-07-02 HIGH-1): _routeOne now checks migration
+ * BEFORE the plain-V2 branch, so migrated-token <-> USDC legs route through the
+ * launchpad (buyMigrated / sellMigrated / swapMigratedRoute) and pay the 0.30%
+ * post-migration royalty instead of bypassing it via a royalty-free V2 swap.
+ * The constructor signature is unchanged; only the launchpad it points at must
+ * be the one that implements buyMigrated / sellMigrated (the live gen-11
+ * launchpad already does). Also carries the earlier H-07 per-leg minOut fix.
+ *
+ * After deploy, set NEXT_PUBLIC_MULTISWAP_ADDRESS to the new address (Vercel +
+ * deployments.json) and redeploy the frontend. V4 legs stay disabled
+ * (v4Router / v4Launchpad = 0) unless the envs are set.
  *
  * Usage:
  *   PRIVATE_KEY=0x... ARC_USDC_ADDRESS=0x3600...0000 \

@@ -73,24 +73,35 @@ function rowToSnapshot(r: RawRow): PersistedSnapshot {
 }
 
 /**
- * Audit 2026-06-18 H-05: the MAX-across-all-history strategy used to
- * lock the public counters to ANY single corrupted row forever. The
- * team already hit this once on `volume_usdc_micros` (a corrupted row
- * landed 2.6e25 micros = $26 quadrillion in the table — preserved as
- * a comment below) but the FILTER clause was applied to ONLY the
- * volume column. The other six monotonic columns (tx_count,
- * unique_wallets, tokens_launched, v4_tokens_launched, v4_hook_launches,
- * estimated_usdc_gas_micros) were unfiltered — a single bad scan could
- * stamp an impossible value into any of them and the dashboard would
- * display that forever with no recovery path short of a manual DELETE.
+ * Monotonic public counters (2026-07-02).
  *
- * Mitigation: cap the MAX to the most recent N hours of cron-tagged
- * snapshots. Transient anomalies age out automatically. The window is
- * generous (default 168h = 7 days, covers a week of cron outage) so the
- * headline stays cumulative across normal operations but a single bad
- * row stops affecting the dashboard ~7 days later.
+ * History: the MAX-across-all-cron-rows strategy once locked the counters
+ * to ANY single corrupted row forever (a bad scan landed 2.6e25 micros =
+ * $26 quadrillion in volume_usdc_micros). The first mitigation capped the
+ * MAX to the most recent 168h of cron rows so anomalies aged out. But that
+ * ALSO ages out genuine peaks: when a busy period rolls past the window and
+ * the ~500k-block scan can only see recent (quieter) activity, the headline
+ * SHRINKS even though every metric only grows on chain. That is the
+ * "stats went down" report.
+ *
+ * Fix: take the MAX across ALL cron rows again (append-only, so every past
+ * peak is still in the table and the headline recovers its all-time high),
+ * but guard EVERY column with a per-column sanity ceiling so a single
+ * corrupted scan can never poison it. Counts can't realistically exceed
+ * MAX_SANE_COUNT on testnet; the two micro columns keep the original
+ * sub-$1B ceiling. A corrupted row above a ceiling is excluded from the
+ * MAX outright (not aged out), so the counters are both monotonic AND
+ * corruption-resistant.
+ *
+ * Note: without an indexer these are still best-effort (the per-scan value
+ * is a windowed count, so the all-time MAX is a lower bound, not the true
+ * cumulative). Monotonic-non-decreasing is the property the dashboard
+ * needs; true cumulative ships with the indexer roadmap item.
  */
-const PERSISTED_MAX_WINDOW_HOURS = 168;
+// Far above any realistic testnet count; catches absurd corruption only.
+const MAX_SANE_COUNT = 100_000_000;
+// $1B in USDC micros: the original volume ceiling, reused for both micro cols.
+const MAX_SANE_MICROS = "1000000000000000";
 
 /** Returns the most recent persisted snapshot, or null when the DB is
  *  empty or not configured. Used by /stats as the primary read. */
@@ -122,34 +133,36 @@ export async function getLatestPersistedSnapshot(): Promise<PersistedSnapshot | 
                 ORDER BY snapshot_at DESC
                 LIMIT 1
             ),
-            recent AS (
-                SELECT *
-                FROM stats_snapshots
-                WHERE snapshot_at >= NOW() - (${PERSISTED_MAX_WINDOW_HOURS}::text || ' hours')::interval
-                  AND source = 'cron'
+            sane AS (
+                SELECT * FROM stats_snapshots WHERE source = 'cron'
             )
             SELECT
                 latest.snapshot_at,
                 latest.as_of_block,
-                MAX(r.tx_count)                  AS tx_count,
-                MAX(r.unique_wallets)            AS unique_wallets,
-                MAX(r.tokens_launched)           AS tokens_launched,
-                MAX(r.v4_tokens_launched)        AS v4_tokens_launched,
-                MAX(r.v4_hook_launches)          AS v4_hook_launches,
-                -- Pre-fix snapshots (before the decodeEventLog + 10M-USDC
-                -- sanity ceiling shipped in 7f7716b) wrote inflated
-                -- volume figures up to 2.6e25 micros = $26 quadrillion.
-                -- The 7-day MAX window plus the original < 1e15
-                -- (less-than-$1B) FILTER keep the headline clean even
-                -- if a fresh bug ever lands an inflated row inside the
-                -- window.
-                MAX(r.volume_usdc_micros)
-                    FILTER (WHERE r.volume_usdc_micros < 1000000000000000)
-                                                  AS volume_usdc_micros,
-                MAX(r.estimated_usdc_gas_micros) AS estimated_usdc_gas_micros,
+                -- All-time MAX per column, each guarded by a per-column
+                -- sanity ceiling so a single corrupted scan is EXCLUDED
+                -- from the MAX (not aged out). Every past peak is still in
+                -- this append-only table, so the headline recovers its
+                -- all-time high and never regresses.
+                MAX(s.tx_count)
+                    FILTER (WHERE s.tx_count < ${MAX_SANE_COUNT})           AS tx_count,
+                MAX(s.unique_wallets)
+                    FILTER (WHERE s.unique_wallets < ${MAX_SANE_COUNT})     AS unique_wallets,
+                MAX(s.tokens_launched)
+                    FILTER (WHERE s.tokens_launched < ${MAX_SANE_COUNT})    AS tokens_launched,
+                MAX(s.v4_tokens_launched)
+                    FILTER (WHERE s.v4_tokens_launched < ${MAX_SANE_COUNT}) AS v4_tokens_launched,
+                MAX(s.v4_hook_launches)
+                    FILTER (WHERE s.v4_hook_launches < ${MAX_SANE_COUNT})   AS v4_hook_launches,
+                MAX(s.volume_usdc_micros)
+                    FILTER (WHERE s.volume_usdc_micros < ${MAX_SANE_MICROS}::NUMERIC)
+                                                                            AS volume_usdc_micros,
+                MAX(s.estimated_usdc_gas_micros)
+                    FILTER (WHERE s.estimated_usdc_gas_micros < ${MAX_SANE_MICROS}::NUMERIC)
+                                                                            AS estimated_usdc_gas_micros,
                 latest.truncated,
                 latest.source
-            FROM recent r
+            FROM sane s
             CROSS JOIN latest
             GROUP BY latest.snapshot_at, latest.as_of_block, latest.truncated, latest.source
         `) as unknown as RawRow[];
