@@ -2,7 +2,7 @@
 
 import dynamic from "next/dynamic";
 import { useMemo, useState } from "react";
-import type { SimulatorConfig } from "@/lib/lpSimulator/math";
+import { mcapToTick, type SimulatorConfig } from "@/lib/lpSimulator/math";
 import { DEFAULT_PRESET_ID, getPreset, type PresetDef } from "@/lib/lpSimulator/presets";
 import { positionColor } from "@/lib/lpSimulator/colors";
 import { PositionsList } from "@/components/lp-simulator/PositionsList";
@@ -151,9 +151,7 @@ function LegendItem({ color, label }: { color: string; label: string }) {
 
 function ExportConfig({ config }: { config: SimulatorConfig }) {
   const [open, setOpen] = useState(false);
-  const startingTick = Math.floor(
-    Math.log(config.startingMcap / config.totalSupply) / Math.log(1.0001),
-  );
+  const startingTick = mcapToTick(config.startingMcap, config.totalSupply);
   const json = JSON.stringify(
     {
       pair: "USDC",
@@ -166,8 +164,8 @@ function ExportConfig({ config }: { config: SimulatorConfig }) {
       },
       feeBps: config.feeBps,
       positions: config.positions.map((p) => ({
-        lowerTick: Math.floor(Math.log(p.lowerMcap / config.totalSupply) / Math.log(1.0001)),
-        upperTick: Math.floor(Math.log(p.upperMcap / config.totalSupply) / Math.log(1.0001)),
+        lowerTick: mcapToTick(p.lowerMcap, config.totalSupply),
+        upperTick: mcapToTick(p.upperMcap, config.totalSupply),
         pctOfPool: p.pctOfPool,
       })),
     },

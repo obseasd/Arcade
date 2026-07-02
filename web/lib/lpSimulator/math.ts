@@ -87,7 +87,11 @@ export function buildPool(c: SimulatorConfig): PoolState {
     };
   }
   const poolSupply = c.totalSupply * poolFraction(c);
-  const startingPrice = c.startingMcap / c.totalSupply;
+  // Floor startingMcap at 1 for symmetry with the per-position lowerMcap
+  // guard below (line uses Math.max(p.lowerMcap, 1)): a 0 / negative
+  // startingMcap would otherwise yield a 0 / negative startingPrice and
+  // NaN out sqrt(startingPrice) downstream.
+  const startingPrice = Math.max(c.startingMcap, 1) / c.totalSupply;
   const positions: ResolvedPosition[] = c.positions
     .map((p, index) => {
       const lowerPrice = Math.max(p.lowerMcap, 1) / c.totalSupply;
@@ -278,8 +282,10 @@ export function sampleCumulativeSold(c: SimulatorConfig, buckets = 80): Array<{ 
   return out;
 }
 
-/** mcapToTick / tickToMcap (Uniswap V3): tick = log(price) / log(1.0001). */
-function mcapToTick(mcap: number, totalSupply: number): number {
+/** mcapToTick / tickToMcap (Uniswap V3): tick = log(price) / log(1.0001).
+ *  Exported so the page's Export-config panel derives ticks from the SAME
+ *  formula instead of re-inlining log(mcap/supply)/log(1.0001) by hand. */
+export function mcapToTick(mcap: number, totalSupply: number): number {
   const price = mcap / totalSupply;
   return Math.floor(Math.log(price) / Math.log(1.0001));
 }
