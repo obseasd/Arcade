@@ -13,6 +13,13 @@ import {
 import { AUTO_COMPOUNDER_ABI } from "@/lib/abis/autoCompounder";
 import { ADDRESSES } from "@/lib/constants";
 import { isDbConfigured } from "@/lib/db";
+import { quoteUsdcValueForPair } from "@/lib/compounderQuote";
+
+/** tokenId -> the position's two token addresses, for USDC pricing. */
+type PosAddrMap = Map<
+    string,
+    { token0Address: string | null; token1Address: string | null }
+>;
 import {
     getActivePositions,
     insertEvent,
@@ -199,6 +206,23 @@ export async function POST(req: NextRequest) {
         handlerErrors: 0,
     };
 
+    // Build a tokenId -> token-addresses map so each Compounded / FeesPushed
+    // event can be priced in USDC the same way the cron does (fee audit
+    // 2026-07-02 MEDIUM-1: reconcile-first rows used to store usd = 0
+    // permanently). Only active positions carry token addresses; a withdrawn
+    // position's events fall back to usd = 0, unchanged from before.
+    const activeForQuote = await getActivePositions().catch(() => []);
+    const posByTokenId = new Map<
+        string,
+        { token0Address: string | null; token1Address: string | null }
+    >();
+    for (const pos of activeForQuote) {
+        posByTokenId.set(pos.tokenId, {
+            token0Address: pos.token0Address,
+            token1Address: pos.token1Address,
+        });
+    }
+
     for (let from = fromBlock; from <= head; from += BLOCK_WINDOW) {
         const to = from + BLOCK_WINDOW - 1n > head ? head : from + BLOCK_WINDOW - 1n;
         const logs = await publicClient
@@ -232,9 +256,9 @@ export async function POST(req: NextRequest) {
                 } else if (topic0 === TOPIC_MODE_CHANGED) {
                     await reconcileModeChanged(log, publicClient, summary);
                 } else if (topic0 === TOPIC_COMPOUNDED) {
-                    await reconcileCompounded(log, publicClient, summary);
+                    await reconcileCompounded(log, publicClient, summary, posByTokenId);
                 } else if (topic0 === TOPIC_FEES_PUSHED) {
-                    await reconcileFeesPushed(log, publicClient, summary);
+                    await reconcileFeesPushed(log, publicClient, summary, posByTokenId);
                 }
             } catch (err) {
                 // Per-event failures must NOT abort the whole sweep —
@@ -369,6 +393,7 @@ async function reconcileCompounded(
     log: EvmLog,
     publicClient: ReturnType<typeof createPublicClient>,
     summary: RunSummary,
+    posByTokenId: PosAddrMap,
 ): Promise<void> {
     const decoded = decodeEventLog({
         abi: AUTO_COMPOUNDER_ABI,
@@ -396,17 +421,25 @@ async function reconcileCompounded(
     void args.amount1Used;
     void args.amount0Leftover;
     void args.amount1Leftover;
-    const chainBlockAtIso = await blockTimestampIso(
-        publicClient,
-        log.blockNumber ?? 0n,
-    );
+    // LOW-3 (fee audit 2026-07-02): Compounded emits GROSS collected fees +
+    // the protocol cut separately; store NET (gross - cut) so reconcile rows
+    // are on the same basis as the cron writes and as FeesPushed.
+    const net0 =
+        args.fee0Collected > args.protocolFee0 ? args.fee0Collected - args.protocolFee0 : 0n;
+    const net1 =
+        args.fee1Collected > args.protocolFee1 ? args.fee1Collected - args.protocolFee1 : 0n;
+    const [usdValueMicros, chainBlockAtIso] = await Promise.all([
+        quoteEventUsd(publicClient, posByTokenId, args.tokenId.toString(), net0, net1),
+        blockTimestampIso(publicClient, log.blockNumber ?? 0n),
+    ]);
     const ok = await insertEvent({
         tokenId: args.tokenId.toString(),
         eventType: "Compounded",
-        amount0: args.fee0Collected.toString(),
-        amount1: args.fee1Collected.toString(),
+        amount0: net0.toString(),
+        amount1: net1.toString(),
         protocolFee0: args.protocolFee0.toString(),
         protocolFee1: args.protocolFee1.toString(),
+        usdValueMicros: usdValueMicros.toString(),
         txHash: log.transactionHash ?? null,
         blockNumber: log.blockNumber?.toString() ?? null,
         chainBlockAtIso,
@@ -425,6 +458,7 @@ async function reconcileFeesPushed(
     log: EvmLog,
     publicClient: ReturnType<typeof createPublicClient>,
     summary: RunSummary,
+    posByTokenId: PosAddrMap,
 ): Promise<void> {
     const decoded = decodeEventLog({
         abi: AUTO_COMPOUNDER_ABI,
@@ -444,10 +478,18 @@ async function reconcileFeesPushed(
     summary.feesPushed++;
     void args.caller;
     void args.recipient;
-    const chainBlockAtIso = await blockTimestampIso(
-        publicClient,
-        log.blockNumber ?? 0n,
-    );
+    // FeesPushed amount0/amount1 are already NET of the protocol cut (the
+    // contract subtracts it before emitting), so price them directly.
+    const [usdValueMicros, chainBlockAtIso] = await Promise.all([
+        quoteEventUsd(
+            publicClient,
+            posByTokenId,
+            args.tokenId.toString(),
+            args.amount0,
+            args.amount1,
+        ),
+        blockTimestampIso(publicClient, log.blockNumber ?? 0n),
+    ]);
     await insertEvent({
         tokenId: args.tokenId.toString(),
         eventType: "FeesPushed",
@@ -455,10 +497,34 @@ async function reconcileFeesPushed(
         amount1: args.amount1.toString(),
         protocolFee0: args.protocolFee0.toString(),
         protocolFee1: args.protocolFee1.toString(),
+        usdValueMicros: usdValueMicros.toString(),
         txHash: log.transactionHash ?? null,
         blockNumber: log.blockNumber?.toString() ?? null,
         chainBlockAtIso,
     });
+}
+
+/** Price a (fee0, fee1) pair in USDC micros for the position identified by
+ *  tokenId, using its token addresses from the active-position map. Returns
+ *  0 when the position isn't in the map (e.g. withdrawn) or the quote fails,
+ *  mirroring the cron's best-effort behaviour so a quote hiccup never blocks
+ *  the event write. */
+async function quoteEventUsd(
+    publicClient: ReturnType<typeof createPublicClient>,
+    posByTokenId: PosAddrMap,
+    tokenId: string,
+    fee0: bigint,
+    fee1: bigint,
+): Promise<bigint> {
+    const pos = posByTokenId.get(tokenId);
+    if (!pos) return 0n;
+    return quoteUsdcValueForPair(
+        publicClient,
+        pos.token0Address,
+        pos.token1Address,
+        fee0,
+        fee1,
+    ).catch(() => 0n);
 }
 
 async function blockTimestampIso(

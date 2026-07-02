@@ -142,16 +142,43 @@ export function useCreatorEarnings(): CreatorEarningsResult {
     query: { enabled: mine.length > 0, refetchInterval: PREVIEW_REFETCH_MS },
   });
 
+  // Resolve each position's paired token so pendingUsd only treats the
+  // paired side as USD 1:1 when it is actually USDC. previewFees returns the
+  // paired amount in the paired token's native units, which is USDC (6 dp)
+  // for standard/deep/legacy pools but WETH (18 dp) for the weth pool type.
+  // Dividing a WETH amount by 1e6 (fee audit 2026-07-02 LOW-2) blew the
+  // pending figure up by ~1e12 (a few dollars showed as ~$1B). We mirror the
+  // historical scan, which contributes 0 USD for non-USDC payouts.
+  const posInfoCalls = useReadContracts({
+    contracts: mine.map((p) => ({
+      address: ADDRESSES.v3Locker,
+      abi: V3_LOCKER_ABI,
+      functionName: "getPosition" as const,
+      args: [p.positionId] as const,
+    })),
+    query: { enabled: mine.length > 0 },
+  });
+
   const pendingUsd = useMemo(() => {
     if (!previewCalls.data) return 0;
+    const usdc = ADDRESSES.usdc.toLowerCase();
     let sum = 0n;
-    for (const r of previewCalls.data) {
+    for (let i = 0; i < previewCalls.data.length; i++) {
+      const r = previewCalls.data[i];
       if (r?.status !== "success") continue;
+      const info = posInfoCalls.data?.[i];
+      // Skip until we know the paired token; counting it before we can
+      // confirm it is USDC is what produced the ~$1B WETH artifact.
+      if (info?.status !== "success") continue;
+      const pairedToken = (
+        info.result as { pairedToken?: Address } | undefined
+      )?.pairedToken;
+      if (!pairedToken || pairedToken.toLowerCase() !== usdc) continue;
       const [paired] = r.result as readonly [bigint, bigint];
       sum += paired;
     }
     return Number(sum) / 10 ** USDC_DECIMALS;
-  }, [previewCalls.data]);
+  }, [previewCalls.data, posInfoCalls.data]);
 
   // 4) Historical claims via RQ-cached chunked scan. Stable key for the set
   // of positions we scan; without this, wagmi refetches would flip object

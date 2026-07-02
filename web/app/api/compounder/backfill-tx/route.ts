@@ -11,7 +11,8 @@ import {
 } from "viem";
 import { AUTO_COMPOUNDER_ABI } from "@/lib/abis/autoCompounder";
 import { isDbConfigured } from "@/lib/db";
-import { insertEvent } from "@/lib/compounderPersistence";
+import { insertEvent, getPosition } from "@/lib/compounderPersistence";
+import { quoteUsdcValueForPair } from "@/lib/compounderQuote";
 
 /**
  * Single-tx Compounded event backfill.
@@ -163,17 +164,37 @@ export async function POST(req: NextRequest) {
                     protocolFee0: bigint;
                     protocolFee1: bigint;
                 };
+                // LOW-3 / MEDIUM-1 (fee audit 2026-07-02): store NET fees
+                // (Compounded emits gross + a separate protocol cut) and price
+                // them in USDC so a backfilled row is not stuck at $0.
+                const net0 =
+                    args.fee0Collected > args.protocolFee0
+                        ? args.fee0Collected - args.protocolFee0
+                        : 0n;
+                const net1 =
+                    args.fee1Collected > args.protocolFee1
+                        ? args.fee1Collected - args.protocolFee1
+                        : 0n;
                 result.tokenId = args.tokenId.toString();
-                result.amount0 = args.fee0Collected.toString();
-                result.amount1 = args.fee1Collected.toString();
+                result.amount0 = net0.toString();
+                result.amount1 = net1.toString();
                 try {
+                    const pos = await getPosition(args.tokenId.toString());
+                    const usdValueMicros = await quoteUsdcValueForPair(
+                        publicClient,
+                        pos?.token0Address ?? null,
+                        pos?.token1Address ?? null,
+                        net0,
+                        net1,
+                    ).catch(() => 0n);
                     const ok = await insertEvent({
                         tokenId: args.tokenId.toString(),
                         eventType: "Compounded",
-                        amount0: args.fee0Collected.toString(),
-                        amount1: args.fee1Collected.toString(),
+                        amount0: net0.toString(),
+                        amount1: net1.toString(),
                         protocolFee0: args.protocolFee0.toString(),
                         protocolFee1: args.protocolFee1.toString(),
+                        usdValueMicros: usdValueMicros.toString(),
                         txHash: hash,
                         blockNumber: receipt.blockNumber.toString(),
                         chainBlockAtIso,
@@ -196,6 +217,16 @@ export async function POST(req: NextRequest) {
                 result.amount0 = args.amount0.toString();
                 result.amount1 = args.amount1.toString();
                 try {
+                    // FeesPushed amount0/amount1 are already net of the
+                    // protocol cut; price them directly (MEDIUM-1).
+                    const pos = await getPosition(args.tokenId.toString());
+                    const usdValueMicros = await quoteUsdcValueForPair(
+                        publicClient,
+                        pos?.token0Address ?? null,
+                        pos?.token1Address ?? null,
+                        args.amount0,
+                        args.amount1,
+                    ).catch(() => 0n);
                     const ok = await insertEvent({
                         tokenId: args.tokenId.toString(),
                         eventType: "FeesPushed",
@@ -203,6 +234,7 @@ export async function POST(req: NextRequest) {
                         amount1: args.amount1.toString(),
                         protocolFee0: args.protocolFee0.toString(),
                         protocolFee1: args.protocolFee1.toString(),
+                        usdValueMicros: usdValueMicros.toString(),
                         txHash: hash,
                         blockNumber: receipt.blockNumber.toString(),
                         chainBlockAtIso,

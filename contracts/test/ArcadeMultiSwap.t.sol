@@ -107,7 +107,12 @@ contract ArcadeMultiSwapTest is Test {
         assertEq(IERC20(tokenA).balanceOf(bob), totalOut, "balance matches return");
     }
 
-    function test_swapToSingle_twoMigratedInputs_toUsdc_noRoyalty() public {
+    // HIGH-1 (2026-07-02 fee audit): selling migrated tokens to USDC through
+    // MultiSwap MUST charge the post-migration royalty. The old routing hit a
+    // plain V2 swap first (because `oneSideUsdc` is true), bypassing the
+    // royalty entirely -- this test previously asserted "noRoyalty" and locked
+    // in the bug. It now asserts the royalty is paid via sellMigrated.
+    function test_swapToSingle_twoMigratedInputs_toUsdc_chargesRoyalty() public {
         uint256 boughtA = _bobBuysMigrated(tokenA, 500e6);
         uint256 boughtB = _bobBuysMigrated(tokenB, 500e6);
 
@@ -126,11 +131,32 @@ contract ArcadeMultiSwapTest is Test {
         vm.stopPrank();
 
         assertGt(totalOut, 0);
-        // Each leg is a direct V2 swap (tokenX <-> USDC pair exists), so the
-        // launchpad's royalty path is NOT triggered.
-        assertEq(usdc.balanceOf(treasury), t0, "treasury unchanged");
-        assertEq(usdc.balanceOf(creatorA), ca0, "creatorA unchanged");
-        assertEq(usdc.balanceOf(creatorB), cb0, "creatorB unchanged");
+        // Each leg now routes through launchpad.sellMigrated, so the 0.30%
+        // royalty (0.20% platform / 0.10% creator) is skimmed on every leg.
+        assertGt(usdc.balanceOf(treasury), t0, "treasury paid royalty");
+        assertGt(usdc.balanceOf(creatorA), ca0, "creatorA paid royalty");
+        assertGt(usdc.balanceOf(creatorB), cb0, "creatorB paid royalty");
+    }
+
+    // HIGH-1: buying a migrated token with USDC through MultiSwap must also
+    // charge the royalty (buyMigrated path), not the old royalty-free V2 buy.
+    function test_swapToSingle_usdcToMigrated_chargesRoyalty() public {
+        uint256 t0 = usdc.balanceOf(treasury);
+        uint256 ca0 = usdc.balanceOf(creatorA);
+
+        _resetInputs();
+        _pushInput(address(usdc), 500e6);
+
+        vm.startPrank(bob);
+        usdc.approve(address(multiSwap), type(uint256).max);
+        uint256 totalOut = multiSwap.swapToSingle(inputsBuf, tokenA, 0, block.timestamp + 60);
+        vm.stopPrank();
+
+        assertGt(totalOut, 0, "got tokens");
+        assertEq(IERC20(tokenA).balanceOf(bob), totalOut, "balance matches return");
+        // Royalty skimmed from the USDC input and split platform / creator.
+        assertGt(usdc.balanceOf(treasury), t0, "treasury paid royalty");
+        assertGt(usdc.balanceOf(creatorA), ca0, "creatorA paid royalty");
     }
 
     function test_swapToSingle_migratedToMigrated_multihop_chargesRoyalty() public {

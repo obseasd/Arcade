@@ -335,9 +335,13 @@ contract ArcadeV3Locker is IUniswapV3MintCallback {
         // Audit M-3: if recipient[0] IS the Twitter escrow, the dust
         // would arrive without per-slot creditSlot accounting and end
         // up as free-balance the escrow owner could rescue. Skip the
-        // sweep in that case - the few wei of dust stays in the locker
-        // and is recoverable later via adminRescue when no active
-        // position references the token (post-protocol-wind-down).
+        // sweep in that case. Fee audit 2026-07-02 LOW-5: the few wei of
+        // dust then stays in the locker PERMANENTLY. adminRescue cannot
+        // reclaim it, because the launch token's activeTokenRefCount is
+        // incremented on lock and never decremented (positions are
+        // permanent), so its refcount is always >= 1 and adminRescue's
+        // `activeTokenRefCount == 0` guard can never pass. This is an
+        // accepted dust-scale loss, not a deferred recovery.
         address sweepTo = p.recipients[0].recipient;
         if (sweepTo != twitterEscrow) _sweep(p.token, sweepTo);
         emit PositionLocked(positionId, p.token, p.pool, liquidity);

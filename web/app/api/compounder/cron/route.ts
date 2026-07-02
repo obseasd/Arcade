@@ -25,6 +25,7 @@ import {
 import { isDbConfigured } from "@/lib/db";
 import { AUTO_COMPOUNDER_ABI, modeIdFromLabel } from "@/lib/abis/autoCompounder";
 import { ADDRESSES } from "@/lib/constants";
+import { quoteUsdcValueForPair } from "@/lib/compounderQuote";
 
 /**
  * Compounder cron scanner.
@@ -629,6 +630,12 @@ async function recordOutcome(
     let succeeded = false;
     let resolvedFee0 = p.fee0;
     let resolvedFee1 = p.fee1;
+    // LOW-3 (fee audit 2026-07-02): protocol cut recorded per event so
+    // Compounded rows are stored NET (same basis as FeesPushed, which the
+    // contract already returns net). pushFees carries no separate cut here
+    // (p.fee* is already net), so these stay 0 for the FeesPushed path.
+    let resolvedProtocolFee0 = 0n;
+    let resolvedProtocolFee1 = 0n;
     for (const lg of receipt.logs) {
         // Audit 2026-06-29 (HIGH): only trust logs EMITTED BY the compounder.
         // Without this, a malicious token (compoundable since V3 createPool is
@@ -649,12 +656,21 @@ async function recordOutcome(
                 tokenId: bigint;
                 fee0Collected?: bigint;
                 fee1Collected?: bigint;
+                protocolFee0?: bigint;
+                protocolFee1?: bigint;
             };
             if (args && args.tokenId === BigInt(p.position.tokenId)) {
                 succeeded = true;
                 if (p.kind === "compound") {
-                    resolvedFee0 = args.fee0Collected ?? p.fee0;
-                    resolvedFee1 = args.fee1Collected ?? p.fee1;
+                    // Compounded emits GROSS collected fees + the protocol cut
+                    // separately; store NET (gross - cut) so it lines up with
+                    // FeesPushed, and keep the cut for the breakdown columns.
+                    resolvedProtocolFee0 = args.protocolFee0 ?? 0n;
+                    resolvedProtocolFee1 = args.protocolFee1 ?? 0n;
+                    const gross0 = args.fee0Collected ?? p.fee0;
+                    const gross1 = args.fee1Collected ?? p.fee1;
+                    resolvedFee0 = gross0 > resolvedProtocolFee0 ? gross0 - resolvedProtocolFee0 : 0n;
+                    resolvedFee1 = gross1 > resolvedProtocolFee1 ? gross1 - resolvedProtocolFee1 : 0n;
                 }
                 break;
             }
@@ -717,6 +733,8 @@ async function recordOutcome(
             eventType: p.kind === "compound" ? "Compounded" : "FeesPushed",
             amount0: resolvedFee0.toString(),
             amount1: resolvedFee1.toString(),
+            protocolFee0: resolvedProtocolFee0.toString(),
+            protocolFee1: resolvedProtocolFee1.toString(),
             usdValueMicros: usdValueMicros.toString(),
             txHash: batchHash,
             blockNumber: receipt.blockNumber.toString(),
@@ -733,108 +751,9 @@ async function recordOutcome(
     }
 }
 
-// Minimal V3 quoter ABI used to price each fee leg in USDC. We do not
-// import the full V3 ABI module here because the cron route stays
-// node-runtime-only and the route-handler bundle should not pull the
-// whole client-side router into the serverless package.
-const QUOTER_ABI = [
-    {
-        type: "function",
-        name: "quoteExactInputSingle",
-        stateMutability: "nonpayable",
-        inputs: [
-            { name: "tokenIn", type: "address" },
-            { name: "tokenOut", type: "address" },
-            { name: "fee", type: "uint24" },
-            { name: "amountIn", type: "uint256" },
-        ],
-        outputs: [{ name: "amountOut", type: "uint256" }],
-    },
-] as const;
-
-const V3_FEE_TIERS = [100, 500, 3000, 10000] as const;
-
-/** Return the USDC-equivalent micros of (amount0 of token0) + (amount1
- *  of token1). When a leg's input token IS USDC, no quote is needed —
- *  the amount maps 1:1 into the sum. For non-USDC legs we fan out the
- *  arcade-v3 quoter across every standard fee tier and take the
- *  highest non-zero quote. A leg that has no quotable route at any
- *  tier contributes 0; the row is still written so the UI never sees
- *  a missing event but the headline metric undercounts honestly.
- *
- *  Audit H3 fix: both legs run in parallel via Promise.all, and
- *  inside quoteLegToUsdc the 4-tier fan-out also runs in parallel.
- *  Previous sequential implementation took ~4 × 500ms × 2 legs =
- *  ~4s per position, which combined with the 25-position cap
- *  (since reduced to 6) pushed every run past the 60s function
- *  ceiling. Parallel fan-out is one slowest-RPC-latency per
- *  position instead, recovering ~3s of the budget. */
-async function quoteUsdcValueForPair(
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    publicClient: any,
-    token0Address: string | null,
-    token1Address: string | null,
-    fee0: bigint,
-    fee1: bigint,
-): Promise<bigint> {
-    const usdc = ADDRESSES.usdc as Address;
-    if (!usdc || usdc === "0x0000000000000000000000000000000000000000") return 0n;
-    const quoter = ADDRESSES.v3Quoter as Address;
-    if (!quoter || quoter === "0x0000000000000000000000000000000000000000") return 0n;
-
-    const [leg0Micros, leg1Micros] = await Promise.all([
-        quoteLegToUsdc(
-            publicClient,
-            quoter,
-            usdc,
-            token0Address as Address | null,
-            fee0,
-        ),
-        quoteLegToUsdc(
-            publicClient,
-            quoter,
-            usdc,
-            token1Address as Address | null,
-            fee1,
-        ),
-    ]);
-    return leg0Micros + leg1Micros;
-}
-
-async function quoteLegToUsdc(
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    publicClient: any,
-    quoter: Address,
-    usdc: Address,
-    token: Address | null,
-    amount: bigint,
-): Promise<bigint> {
-    if (amount === 0n) return 0n;
-    if (!token || token === "0x0000000000000000000000000000000000000000") return 0n;
-    if (token.toLowerCase() === usdc.toLowerCase()) return amount;
-    // H3 inner fan-out also parallel: each tier resolves to (amount or
-    // null), Math.max(...) picks the winner. Failed tiers contribute 0
-    // via withTimeout fall-through so a slow RPC for one tier can never
-    // hold up the whole leg.
-    const tierResults: bigint[] = await Promise.all(
-        V3_FEE_TIERS.map(async (tier): Promise<bigint> => {
-            const raw = await withTimeout<bigint>(
-                publicClient
-                    .readContract({
-                        address: quoter,
-                        abi: QUOTER_ABI,
-                        functionName: "quoteExactInputSingle",
-                        args: [token, usdc, tier, amount],
-                    })
-                    .then((v: unknown) => v as bigint)
-                    .catch((): bigint => 0n),
-                RPC_TIMEOUT_MS,
-            );
-            return raw ?? 0n;
-        }),
-    );
-    let best = 0n;
-    for (const r of tierResults) if (r > best) best = r;
-    return best;
-}
+// quoteUsdcValueForPair moved to @/lib/compounderQuote (imported at the top
+// of this file) so the reconcile worker computes the SAME usd_value_micros
+// this cron does. Previously reconcile/backfill wrote events with usd = 0,
+// permanently undercounting the "Total claimed" USD headline (fee audit
+// 2026-07-02 MEDIUM-1).
 

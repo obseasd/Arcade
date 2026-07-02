@@ -56,6 +56,16 @@ interface IArcadeLaunchpad {
     /// @notice Returns true iff `tokenAddr` is a known launchpad token whose curve has migrated.
     function isMigrated(address tokenAddr) external view returns (bool);
 
+    /// @notice Buy a migrated token with USDC via V2, skimming the post-migration royalty from the USDC input.
+    function buyMigrated(address tokenAddr, uint256 usdcIn, uint256 minTokensOut, uint256 deadline)
+        external
+        returns (uint256 tokensOut);
+
+    /// @notice Sell a migrated token for USDC via V2, skimming the post-migration royalty from the USDC output.
+    function sellMigrated(address tokenAddr, uint256 tokensIn, uint256 minUsdcOut, uint256 deadline)
+        external
+        returns (uint256 usdcOut);
+
     /// @notice Royalty-aware multi-hop swap A -> USDC -> B with launchpad royalty on each migrated leg.
     /// @param deadline unix timestamp after which the call reverts (passed through to the V2 router on every leg).
     function swapMigratedRoute(

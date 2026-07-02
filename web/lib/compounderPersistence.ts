@@ -614,8 +614,14 @@ export async function insertEvent(input: {
                 protocol_fee1     = EXCLUDED.protocol_fee1,
                 usd_value_micros  = EXCLUDED.usd_value_micros,
                 chain_block_at    = COALESCE(compounder_events.chain_block_at, EXCLUDED.chain_block_at)
-            WHERE compounder_events.amount0 = 0
-              AND compounder_events.amount1 = 0
+            -- Heal a row that was first written with zero amounts (the missing
+            -- row the reconciler backfills) OR one written with usd = 0 (fee
+            -- audit 2026-07-02 MEDIUM-1: a reconcile/backfill row that landed
+            -- before it computed USD). The usd_value_micros = 0 guard is on
+            -- the EXISTING row, so a real USD value can never be overwritten
+            -- with 0.
+            WHERE (compounder_events.amount0 = 0 AND compounder_events.amount1 = 0)
+               OR compounder_events.usd_value_micros = 0
         `;
         return true;
     } catch (err) {

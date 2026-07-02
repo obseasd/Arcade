@@ -36,6 +36,13 @@ const TRANSFER_EVENT = parseAbiItem(
     "event Transfer(address indexed from, address indexed to, uint256 value)",
 );
 
+// Launchpad TokenCreated, used only to collect the tx hashes of real token
+// creations so a $3.000000 transfer is recognized as a creation fee only when
+// it shares a tx with one of these (fee audit 2026-07-02 LOW-1).
+const TOKEN_CREATED_EVENT = parseAbiItem(
+    "event TokenCreated(address indexed token, address indexed creator, uint8 mode, address creator2, uint16 creator2ShareBps, string name, string symbol, string metadataURI)",
+);
+
 const lc = (a: string) => a.toLowerCase();
 
 /** Format a 6-decimal USDC raw bigint into a human string (e.g. "12.50"). */
@@ -69,19 +76,38 @@ export async function GET() {
         creationFeeRaw = 0n;
     }
 
-    // Categorize an inbound transfer by its `from` address + amount. Transfers
-    // FROM a recognized Arcade fee contract, OR of exactly the creation fee,
-    // count as protocol fees. On testnet the treasury is the deployer EOA, also
-    // used for trading, so other inbound USDC (trade proceeds, direct sends) is
-    // listed but NOT summed into the fee total.
-    const classify = (from: string, amount: bigint): { reason: string; isFee: boolean } => {
+    // Set of tx hashes (lowercased) that emitted a launchpad TokenCreated in
+    // the scanned window. Populated below, before the classify pass runs.
+    // Fee audit 2026-07-02 LOW-1: the creation fee used to be recognized by
+    // its exact $3.000000 amount ALONE, so any inbound transfer of exactly
+    // $3 (a trade proceed, a round-number send) to the treasury EOA inflated
+    // the headline as a phantom "creation fee". We now require the transfer
+    // to share a tx with an actual TokenCreated event.
+    const creationTxHashes = new Set<string>();
+
+    // Categorize an inbound transfer by its `from` address + amount + tx.
+    // Transfers FROM a recognized Arcade fee contract, OR of exactly the
+    // creation fee AND emitted in a real token-creation tx, count as protocol
+    // fees. On testnet the treasury is the deployer EOA, also used for
+    // trading, so other inbound USDC (trade proceeds, direct sends) is listed
+    // but NOT summed into the fee total.
+    const classify = (
+        from: string,
+        amount: bigint,
+        txHash: string,
+    ): { reason: string; isFee: boolean } => {
         const f = lc(from);
         if (f === lc(addrs.launchpad)) {
             return { reason: "Launchpad fee (migration / snipe skim)", isFee: true };
         }
         if (f === lc(addrs.v3Locker)) return { reason: "Locked-LP protocol fee", isFee: true };
         if (f === lc(addrs.autoCompounder)) return { reason: "Auto-compounder protocol fee", isFee: true };
-        if (creationFeeRaw > 0n && amount === creationFeeRaw) {
+        if (
+            creationFeeRaw > 0n &&
+            amount === creationFeeRaw &&
+            txHash &&
+            creationTxHashes.has(lc(txHash))
+        ) {
             return { reason: "Launchpad token creation fee", isFee: true };
         }
         return { reason: "Direct transfer / trade proceeds (not a protocol fee)", isFee: false };
@@ -151,6 +177,32 @@ export async function GET() {
         }),
     );
 
+    // Populate creationTxHashes: scan the launchpad's TokenCreated events over
+    // the same window. Only the current launchpad is scanned; a token created
+    // on an older generation within the window (right after a redeploy) would
+    // be listed as "not a fee" rather than falsely counted -- the safe
+    // direction (a small under-count beats the $3-trade over-count this fixes).
+    if (creationFeeRaw > 0n && addrs.launchpad) {
+        const launchpad = addrs.launchpad as Address;
+        for (let from = fromBlock; from <= head; from += BLOCK_WINDOW) {
+            const to = from + BLOCK_WINDOW - 1n > head ? head : from + BLOCK_WINDOW - 1n;
+            try {
+                const created = await client.getLogs({
+                    address: launchpad,
+                    event: TOKEN_CREATED_EVENT,
+                    fromBlock: from,
+                    toBlock: to,
+                });
+                for (const c of created) {
+                    if (c.transactionHash) creationTxHashes.add(lc(c.transactionHash));
+                }
+            } catch (e) {
+                truncated = true;
+                console.warn(`[admin/fees] TokenCreated getLogs ${from}..${to} failed:`, e);
+            }
+        }
+    }
+
     let feeRaw = 0n; // only recognized protocol fees
     let grossRaw = 0n; // every inbound transfer (incl. trades / direct)
     const items = logs
@@ -158,7 +210,8 @@ export async function GET() {
             const amount = l.args.value ?? 0n;
             const fromAddr = (l.args.from ?? "0x0000000000000000000000000000000000000000") as string;
             const block = l.blockNumber ?? 0n;
-            const { reason, isFee } = classify(fromAddr, amount);
+            const txHash = l.transactionHash ?? "";
+            const { reason, isFee } = classify(fromAddr, amount, txHash);
             grossRaw += amount;
             if (isFee) feeRaw += amount;
             return {

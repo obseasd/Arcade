@@ -292,13 +292,24 @@ function FeeRow({ item }: { item: FeeItem }) {
     );
 }
 
-/** Reduce a "12.500000" 6-dec human string to 2 fractional digits, grouped. */
+/** Reduce a "12.500000" 6-dec human string to 2 fractional digits, grouped.
+ *  Fee audit 2026-07-02 LOW-4: rounds to the nearest cent instead of
+ *  truncating, so 12.999999 reads $13.00 rather than $12.99. Works in
+ *  integer micros (BigInt) to avoid float error. */
 function formatTwo(human: string): string {
     const neg = human.startsWith("-");
     const clean = neg ? human.slice(1) : human;
     const [whole = "0", frac = ""] = clean.split(".");
-    const grouped = Number(whole).toLocaleString("en-US");
-    return `${neg ? "-" : ""}${grouped}.${(frac + "00").slice(0, 2)}`;
+    let micros: bigint;
+    try {
+        micros = BigInt(whole || "0") * 1_000_000n + BigInt((frac + "000000").slice(0, 6));
+    } catch {
+        return `${neg ? "-" : ""}${human}`;
+    }
+    const cents = (micros + 5_000n) / 10_000n; // round half up to cents
+    const grouped = (cents / 100n).toLocaleString("en-US");
+    const centPart = (cents % 100n).toString().padStart(2, "0");
+    return `${neg ? "-" : ""}${grouped}.${centPart}`;
 }
 
 function formatWhen(ts: number): string {
