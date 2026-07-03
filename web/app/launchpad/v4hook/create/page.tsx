@@ -1,4 +1,5 @@
 "use client";
+import { V4PreviewBanner } from "@/components/launchpad/V4PreviewBanner";
 
 import { ArrowLeft, Lock, Image as ImageIcon, Upload } from "lucide-react";
 import Image from "next/image";
@@ -283,6 +284,7 @@ function Inner() {
 
     return (
         <div className="mx-auto max-w-2xl px-4 py-10 sm:px-6">
+            <V4PreviewBanner />
             <div className="mb-6 flex items-center gap-3">
                 <Link
                     href="/launchpad"

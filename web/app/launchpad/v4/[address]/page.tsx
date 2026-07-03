@@ -1,4 +1,5 @@
 "use client";
+import { V4PreviewBanner } from "@/components/launchpad/V4PreviewBanner";
 
 import {
     ArrowLeft,
@@ -226,6 +227,7 @@ function V4DetailInner() {
 
     return (
         <div className="mx-auto max-w-5xl px-4 py-10 sm:px-6">
+            <V4PreviewBanner />
             <div className="mb-6 flex items-center gap-3">
                 <Link
                     aria-label="Back to launches"
@@ -459,12 +461,14 @@ function ActionsCard({
             <h2 className="mb-3 text-sm font-medium text-arc-text-muted">Actions</h2>
             <div className="space-y-2">
                 {!poolInitialised && (
-                    <Link
-                        href="/launchpad/v4"
-                        className="block rounded-xl border border-arc-primary/40 bg-arc-primary/10 px-4 py-2 text-center text-sm font-medium text-arc-primary hover:bg-arc-primary/20"
+                    <button
+                        type="button"
+                        disabled
+                        title="V4 pool initialisation is not wired yet (preview)"
+                        className="block w-full rounded-xl border border-arc-border bg-arc-surface px-4 py-2 text-center text-sm text-arc-text-muted disabled:cursor-not-allowed"
                     >
-                        Initialise pool (creator)
-                    </Link>
+                        Initialise pool (preview - not live yet)
+                    </button>
                 )}
                 <button type="button"
                     disabled
@@ -509,10 +513,15 @@ function TimelineCard({ entries }: { entries: TimelineEntry[] }) {
                                     block #{e.blockNumber.toString()}
                                 </span>
                             </div>
-                            <div className="flex items-center gap-2 text-xs text-arc-text-faint">
+                            <a
+                                href={`https://testnet.arcscan.app/tx/${e.txHash}`}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="flex items-center gap-2 text-xs text-arc-text-faint transition-colors hover:text-arc-text"
+                            >
                                 <span>{e.txHash.slice(0, 10)}...</span>
                                 <ExternalLink className="h-3 w-3" />
-                            </div>
+                            </a>
                         </div>
                     ))}
                 </div>

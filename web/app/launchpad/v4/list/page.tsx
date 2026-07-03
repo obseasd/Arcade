@@ -1,4 +1,5 @@
 "use client";
+import { V4PreviewBanner } from "@/components/launchpad/V4PreviewBanner";
 
 import { ArrowLeft, Plus, Search, Lock, Clock, ShieldCheck, ShieldOff } from "lucide-react";
 import Link from "next/link";
@@ -64,6 +65,7 @@ function V4ListInner() {
 
     return (
         <div className="mx-auto max-w-7xl px-4 py-10 sm:px-6">
+            <V4PreviewBanner />
             <div className="mb-6 flex items-center gap-3">
                 <Link
                     href="/launchpad"
