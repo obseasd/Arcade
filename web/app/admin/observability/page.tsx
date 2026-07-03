@@ -9,9 +9,8 @@ import {
     Bell,
     Clock,
     LineChart,
-    Server,
-    ShieldCheck,
 } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 /**
  * Observability admin page (audit A-6). Surfaces the Sentry-backed
@@ -73,42 +72,14 @@ const LINKS: DashboardLink[] = [
     },
 ];
 
-const INSTRUMENTATION_POINTS = [
-    {
-        path: "components/swap/SwapCard.tsx",
-        events: ["trackSwap(success)", "trackSwap(failure, errorClass)"],
-        why: "Per-DEX success / failure rates, USD-weighted volume, slippage outcomes.",
-    },
-    {
-        path: "components/bridge/BridgeCard.tsx",
-        events: [
-            "trackBridge(burn)",
-            "trackBridge(attesting_timeout)",
-            "trackBridge(mint_success)",
-            "trackBridge(mint_revert)",
-        ],
-        why: "End-to-end bridge funnel. Identifies where users drop off (attestation stalls vs mint failures).",
-    },
-    {
-        path: "app/api/twitter-callback/route.ts",
-        events: [
-            "trackClaim(oauth_complete)",
-            "trackClaim(sig_issued)",
-            "trackClaim(quota_hit)",
-        ],
-        why: "OAuth handshake health, sig issuance volume, rate-limit pressure.",
-    },
-    {
-        path: "lib/routing/useRouteQuotes.ts",
-        events: ["trackProviderTiming(provider, latencyMs)"],
-        why: "Latency distribution per provider — catch a slow Synthra RPC before it tanks the aggregator.",
-    },
-];
-
 export default function ObservabilityPage() {
+    // Sentry is "on" only when a DSN is set. Without it the tracking helpers
+    // no-op, so nothing is recorded and the dashboard links below point at an
+    // empty project.
+    const connected = Boolean(process.env.NEXT_PUBLIC_SENTRY_DSN);
     return (
-        <div className="mx-auto w-full max-w-4xl px-4 py-12">
-            <header className="mb-8">
+        <div className="mx-auto w-full max-w-3xl px-4 py-12">
+            <header className="mb-6">
                 <Link
                     href="/admin"
                     className="mb-3 inline-flex items-center gap-1 text-xs text-arc-text-muted hover:text-arc-text"
@@ -120,67 +91,62 @@ export default function ObservabilityPage() {
                     Observability
                 </h1>
                 <p className="mt-2 max-w-2xl text-sm text-arc-text-muted">
-                    Sentry-backed monitoring for swap, bridge, and claim flows.
-                    Audit finding A-6 flagged the pre-existing zero-telemetry
-                    state as a mainnet blocker: without it the team triages user
-                    reports by guessing.
+                    Error and performance monitoring for Arcade&apos;s swap,
+                    bridge, and claim flows, powered by Sentry. This page is the
+                    jump-off point to the dashboards.
                 </p>
             </header>
 
-            <section className="rounded-2xl border border-arc-warn/40 bg-arc-warn/5 p-5">
-                <div className="flex items-start gap-3">
-                    <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-arc-warn" />
-                    <div>
-                        <h2 className="text-sm font-semibold text-arc-text">
-                            Setup status
-                        </h2>
-                        <p className="mt-1 text-xs text-arc-text-muted">
-                            Sentry SDK + tracking helpers ship in commit{" "}
-                            <code className="rounded bg-black/40 px-1 py-0.5 font-mono text-[10px]">
-                                4470f8a+
-                            </code>{" "}
-                            but the operator still has to (a) create the Sentry
-                            project, (b) set <code>NEXT_PUBLIC_SENTRY_DSN</code>{" "}
-                            in Vercel, (c) set <code>NEXT_PUBLIC_SENTRY_ORG</code>{" "}
-                            + <code>NEXT_PUBLIC_SENTRY_PROJECT</code> for the
-                            dashboard links below. Without the DSN, telemetry
-                            calls become no-ops — no errors, no events shipped.
-                        </p>
-                        <ol className="mt-3 list-decimal space-y-1 pl-5 text-xs text-arc-text-muted">
-                            <li>
-                                Sign up at{" "}
-                                <a
-                                    href="https://sentry.io/signup/"
-                                    className="text-arc-cta-hover hover:underline"
-                                    target="_blank"
-                                    rel="noreferrer"
-                                >
-                                    sentry.io
-                                </a>{" "}
-                                — free tier covers 10k events / mo (sufficient
-                                for testnet + small prod).
-                            </li>
-                            <li>
-                                Create a Next.js project. Copy the DSN and the
-                                org / project slug shown after setup.
-                            </li>
-                            <li>
-                                Vercel project settings → Environment Variables
-                                → add the three NEXT_PUBLIC_SENTRY_* values.
-                                Redeploy.
-                            </li>
-                            <li>
-                                Click the dashboard links below to verify the
-                                first event lands within ~30 s of a swap.
-                            </li>
-                        </ol>
-                    </div>
+            {/* Connection status */}
+            <section
+                className={cn(
+                    "rounded-2xl border p-5",
+                    connected
+                        ? "border-arc-success/40 bg-arc-success/5"
+                        : "border-arc-warn/40 bg-arc-warn/5",
+                )}
+            >
+                <div className="flex items-center gap-2">
+                    <span
+                        className={cn(
+                            "h-2 w-2 rounded-full",
+                            connected ? "bg-arc-success" : "bg-arc-warn",
+                        )}
+                    />
+                    <h2 className="text-sm font-semibold text-arc-text">
+                        {connected ? "Connected" : "Not connected yet"}
+                    </h2>
                 </div>
+                {connected ? (
+                    <p className="mt-2 text-xs text-arc-text-muted">
+                        Telemetry is streaming to Sentry. Use the dashboards
+                        below to triage errors and watch performance.
+                    </p>
+                ) : (
+                    <p className="mt-2 text-xs text-arc-text-muted">
+                        Sentry isn&apos;t wired up, so nothing is being recorded
+                        yet and the links below open an empty project. To turn it
+                        on: create a project at{" "}
+                        <a
+                            href="https://sentry.io/signup/"
+                            className="text-arc-cta-hover hover:underline"
+                            target="_blank"
+                            rel="noreferrer"
+                        >
+                            sentry.io
+                        </a>
+                        , then set <code>NEXT_PUBLIC_SENTRY_DSN</code>,{" "}
+                        <code>NEXT_PUBLIC_SENTRY_ORG</code> and{" "}
+                        <code>NEXT_PUBLIC_SENTRY_PROJECT</code> in Vercel and
+                        redeploy.
+                    </p>
+                )}
             </section>
 
+            {/* Dashboards */}
             <section className="mt-8">
                 <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-arc-text-faint">
-                    Dashboards
+                    Dashboards{connected ? "" : " (available once connected)"}
                 </h2>
                 <div className="grid gap-3 sm:grid-cols-2">
                     {LINKS.map((link) => (
@@ -205,45 +171,6 @@ export default function ObservabilityPage() {
                     ))}
                 </div>
             </section>
-
-            <section className="mt-10">
-                <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-arc-text-faint">
-                    Instrumentation points
-                </h2>
-                <div className="space-y-2">
-                    {INSTRUMENTATION_POINTS.map((point) => (
-                        <div
-                            key={point.path}
-                            className="rounded-xl border border-arc-border bg-white/[0.015] p-4"
-                        >
-                            <div className="flex items-center gap-2 font-mono text-xs text-arc-text">
-                                <Server className="h-3 w-3 text-arc-text-faint" />
-                                {point.path}
-                            </div>
-                            <div className="mt-2 flex flex-wrap gap-1">
-                                {point.events.map((ev) => (
-                                    <code
-                                        key={ev}
-                                        className="rounded bg-black/40 px-1.5 py-0.5 font-mono text-[10px] text-arc-text-muted"
-                                    >
-                                        {ev}
-                                    </code>
-                                ))}
-                            </div>
-                            <p className="mt-2 text-[11px] text-arc-text-muted">
-                                {point.why}
-                            </p>
-                        </div>
-                    ))}
-                </div>
-            </section>
-
-            <footer className="mt-12 border-t border-arc-border pt-6 text-xs text-arc-text-faint">
-                When the DSN is wired, the page above becomes the team&apos;s
-                daily-driver dashboard. Until then, the trackXxx helpers
-                gracefully no-op so no Sentry vendor lock-in lands in the
-                shipped binary.
-            </footer>
         </div>
     );
 }
