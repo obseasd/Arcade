@@ -159,21 +159,23 @@ export function readPendingClaim(
     return loadAll(account)[entryKey(token, slotIndex)];
 }
 
-/** Builds a `/claim?...` URL from a stored entry, so a banner click resumes the flow. */
+/**
+ * Builds a `/claim?...` URL from a stored entry, so a banner click resumes
+ * the flow.
+ *
+ * Pages audit 2026-07-02: carry ONLY identifiers (a resume marker + token +
+ * slotIndex), never the signature or amounts. The /claim page reads the full
+ * signed payload back from localStorage via `readPendingClaim`. Putting the
+ * sig in the URL both (a) leaked it into browser history, the exact thing the
+ * HttpOnly-cookie delivery was added to prevent, and (b) no longer worked,
+ * since the page now reads the payload from the cookie and ignored these URL
+ * params entirely, so "Finish claim" landed on an empty page.
+ */
 export function resumeClaimUrl(claim: PendingTwitterClaim): string {
     const params = new URLSearchParams({
+        resume: "1",
         token: claim.token,
-        positionId: claim.positionId,
         slotIndex: claim.slotIndex,
-        recipient: claim.recipient,
-        pairedToken: claim.pairedToken,
-        pairedAmount: claim.pairedAmount,
-        clankerToken: claim.clankerToken,
-        clankerAmount: claim.clankerAmount,
-        deadline: claim.deadline,
-        nonce: claim.nonce,
-        sig: claim.sig,
-        handle: claim.handle,
     });
     return `/claim?${params.toString()}`;
 }

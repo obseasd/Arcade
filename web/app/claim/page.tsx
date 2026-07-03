@@ -3,13 +3,13 @@
 import { CheckCircle2, Coins, ExternalLink, Twitter, XCircle } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { Address, encodeFunctionData, formatUnits, isAddress } from "viem";
 import { useAccount, usePublicClient, useReadContract, useWriteContract } from "wagmi";
 import { erc20Abi } from "viem";
 import { TWITTER_ESCROW_V3_ABI } from "@/lib/abis/twitterEscrowV3";
 import { V3_LOCKER_ABI } from "@/lib/abis/v3";
-import { removePendingClaim, savePendingClaim } from "@/lib/pendingClaims";
+import { readPendingClaim, removePendingClaim, savePendingClaim } from "@/lib/pendingClaims";
 import { ADDRESSES, LAUNCHPAD_TOKEN_DECIMALS, USDC_DECIMALS } from "@/lib/constants";
 import { pushToast } from "@/lib/toast";
 import { cn, formatAddress, formatToken, formatUSDC } from "@/lib/utils";
@@ -39,6 +39,9 @@ interface ClaimPayload {
 
 function ClaimPageInner() {
   const params = useSearchParams();
+  // Resume navigations (the "Finish claim" banner) carry ?resume=1 and have
+  // NO OAuth cookie; their payload is read from localStorage below.
+  const isResume = params.get("resume") === "1";
   const router = useRouter();
   const { address: account } = useAccount();
   const publicClient = usePublicClient();
@@ -54,6 +57,10 @@ function ClaimPageInner() {
   const [payloadStatus, setPayloadStatus] = useState<"loading" | "ready" | "absent">("loading");
 
   useEffect(() => {
+    // Skip the one-shot cookie fetch on a resume: there is no cookie, and
+    // fetching would 404 -> 'absent'. The resume effect below hydrates from
+    // localStorage instead.
+    if (isResume) return;
     let cancelled = false;
     (async () => {
       try {
@@ -85,23 +92,62 @@ function ClaimPageInner() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [isResume]);
+
+  // Resume payload, derived SYNCHRONOUSLY from localStorage (pages audit
+  // 2026-07-02). The "Finish claim" banner navigates here with
+  // ?resume=1&token&slotIndex (identifiers only, no signature); the full
+  // signed payload was saved to localStorage by `authorize`. Deriving it in a
+  // memo (not an effect) avoids the setState-in-effect / effect-chain
+  // patterns. readPendingClaim is SSR-safe (loadAll returns {} without
+  // window), so this is null on the server and on the first client render
+  // until the wallet reconnects, matching hydration.
+  const resumePayload = useMemo<ClaimPayload | null>(() => {
+    if (!isResume || !account) return null;
+    const rToken = params.get("token");
+    const rSlot = params.get("slotIndex");
+    if (!rToken || !isAddress(rToken) || rSlot === null) return null;
+    const pending = readPendingClaim(account, rToken as Address, rSlot);
+    if (!pending) return null;
+    return {
+      token: pending.token,
+      positionId: pending.positionId,
+      slotIndex: Number(pending.slotIndex),
+      recipient: pending.recipient,
+      pairedToken: pending.pairedToken,
+      pairedAmount: pending.pairedAmount,
+      clankerToken: pending.clankerToken,
+      clankerAmount: pending.clankerAmount,
+      deadline: pending.deadline,
+      nonce: pending.nonce,
+      sig: pending.sig,
+      handle: pending.handle,
+    };
+  }, [isResume, account, params]);
+
+  // Unify the cookie (OAuth) and localStorage (resume) sources.
+  const effectivePayload = payload ?? resumePayload;
+  const effectiveStatus: "loading" | "ready" | "absent" = isResume
+    ? resumePayload
+      ? "ready"
+      : "absent"
+    : payloadStatus;
 
   // Error stays in URL params (the audit only flagged the signed data
   // leak, error codes are not sensitive).
   const error = params.get("error");
-  const handle = payload?.handle ?? null;
-  const token = payload?.token ?? null;
-  const positionIdStr = payload?.positionId ?? null;
-  const slotIndexStr = payload ? String(payload.slotIndex) : null;
-  const recipient = payload?.recipient ?? null;
-  const pairedToken = payload?.pairedToken ?? null;
-  const pairedAmountStr = payload?.pairedAmount ?? null;
-  const clankerToken = payload?.clankerToken ?? null;
-  const clankerAmountStr = payload?.clankerAmount ?? null;
-  const deadlineStr = payload?.deadline ?? null;
-  const nonce = payload?.nonce ?? null;
-  const sig = payload?.sig ?? null;
+  const handle = effectivePayload?.handle ?? null;
+  const token = effectivePayload?.token ?? null;
+  const positionIdStr = effectivePayload?.positionId ?? null;
+  const slotIndexStr = effectivePayload ? String(effectivePayload.slotIndex) : null;
+  const recipient = effectivePayload?.recipient ?? null;
+  const pairedToken = effectivePayload?.pairedToken ?? null;
+  const pairedAmountStr = effectivePayload?.pairedAmount ?? null;
+  const clankerToken = effectivePayload?.clankerToken ?? null;
+  const clankerAmountStr = effectivePayload?.clankerAmount ?? null;
+  const deadlineStr = effectivePayload?.deadline ?? null;
+  const nonce = effectivePayload?.nonce ?? null;
+  const sig = effectivePayload?.sig ?? null;
 
   const hasSigParams =
     token &&
@@ -192,7 +238,7 @@ function ClaimPageInner() {
   // this gate the page would briefly render the Lobby ("nothing to claim")
   // before the payload arrives, which is jarring after a successful
   // OAuth handshake.
-  if (payloadStatus === "loading") {
+  if (effectiveStatus === "loading") {
     return (
       <div className="mx-auto max-w-2xl px-4 py-16 text-center text-arc-text-muted">
         Loading claim…
