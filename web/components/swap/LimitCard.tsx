@@ -412,6 +412,11 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
         expirySeconds > 0 &&
         ADDRESSES.orbsTwap !== zeroAddress &&
         ADDRESSES.orbsExchangeV2 !== zeroAddress &&
+        // Pages audit 2026-07-02: every order is encoded with exchange =
+        // orbsExchangeV2, which can only fill against V2 pools. A V3-path
+        // pair would place an order that can never fill, so block it here
+        // (the route panel shows a clear "not supported" note).
+        !isV3Path &&
         !submitting &&
         !isWriting;
 
@@ -665,11 +670,11 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
                             />
                             <span>via</span>
                             <span className="font-medium text-arc-text">
-                                {isV3Path ? "Arcade V3" : "Arcade V2"}
+                                Arcade V2
                             </span>
                             {isV3Path && (
-                                <span className="ml-1 rounded-full border border-arc-success/40 bg-arc-success/10 px-1.5 py-0.5 text-[10px] font-medium text-arc-success">
-                                    locked-LP pool
+                                <span className="ml-1 rounded-full border border-arc-warn/40 bg-arc-warn/10 px-1.5 py-0.5 text-[10px] font-medium text-arc-warn">
+                                    V3 limit orders not supported yet
                                 </span>
                             )}
                         </div>

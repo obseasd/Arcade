@@ -55,12 +55,18 @@ export function useTokenTrades(args: {
   token: Address | undefined;
   mode: number | undefined;
   pool?: Address;
+  /** Launchpad that actually holds this (curve) token. Defaults to the live
+   *  launchpad; pass the resolved per-generation address for older tokens so
+   *  the Buy/Sell scan + live watch hit the right contract (pages audit
+   *  2026-07-02: prior-generation curve tokens showed "No trades yet"). */
+  launchpad?: Address;
 }): {
   trades: Trade[];
   isLoading: boolean;
   latestBlock: bigint;
 } {
   const { token, mode, pool } = args;
+  const lp = args.launchpad ?? ADDRESSES.launchpad;
   const publicClient = usePublicClient();
   const queryClient = useQueryClient();
 
@@ -95,8 +101,9 @@ export function useTokenTrades(args: {
       token?.toLowerCase() ?? null,
       mode ?? null,
       pool?.toLowerCase() ?? null,
+      lp.toLowerCase(),
     ],
-    [token, mode, pool],
+    [token, mode, pool, lp],
   );
 
   const { data, isLoading, isFetching } = useQuery<ScanResult>({
@@ -157,14 +164,14 @@ export function useTokenTrades(args: {
           } else {
             const [buys, sells] = await Promise.all([
               publicClient.getLogs({
-                address: ADDRESSES.launchpad,
+                address: lp,
                 event: BUY_EVT,
                 args: { token },
                 fromBlock: from,
                 toBlock: end,
               }),
               publicClient.getLogs({
-                address: ADDRESSES.launchpad,
+                address: lp,
                 event: SELL_EVT,
                 args: { token },
                 fromBlock: from,
@@ -252,14 +259,14 @@ export function useTokenTrades(args: {
   // tear down/re-subscribe the WebSocket each tick.
   const tokenArgs = useMemo(() => (token ? { token } : undefined), [token]);
   useWatchEvent({
-    address: !isV3 ? ADDRESSES.launchpad : undefined,
+    address: !isV3 ? lp : undefined,
     event: BUY_EVT,
     args: tokenArgs,
     enabled: !isV3 && !!token,
     onLogs: onBuy,
   });
   useWatchEvent({
-    address: !isV3 ? ADDRESSES.launchpad : undefined,
+    address: !isV3 ? lp : undefined,
     event: SELL_EVT,
     args: tokenArgs,
     enabled: !isV3 && !!token,

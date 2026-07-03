@@ -369,9 +369,22 @@ function CreateTokenInner() {
   const { ensureAllowance } = useApproveIfNeeded(ADDRESSES.usdc, ADDRESSES.launchpad);
   const { writeContractAsync } = useWriteContract();
 
+  // Fold the creator-buy USDC into the balance gate. Launch pulls BOTH the
+  // 3 USDC creation fee AND the optional creator-buy in the same tx (pages
+  // audit 2026-07-02: gating on the fee alone enabled Launch when the wallet
+  // could not cover the buy, reverting at transferFrom). Only V3 non-WETH
+  // launches take a creator-buy, mirroring the onSubmit derivation.
+  let creatorBuyUsdcPreview = 0n;
+  if (isV3 && !isWethPool && creatorBuyStr.trim()) {
+    try {
+      creatorBuyUsdcPreview = parseUnits(creatorBuyStr.trim(), 6);
+    } catch {
+      creatorBuyUsdcPreview = 0n;
+    }
+  }
   const hasFee =
     (usdcBalance.data as bigint | undefined) !== undefined &&
-    (usdcBalance.data as bigint) >= CREATION_FEE_USDC;
+    (usdcBalance.data as bigint) >= CREATION_FEE_USDC + creatorBuyUsdcPreview;
 
   const valid = name.trim().length > 0 && symbol.trim().length > 0 && symbol.trim().length <= 12;
 

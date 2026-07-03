@@ -133,7 +133,7 @@ export default function LpSimulatorPage() {
         </div>
 
         <div className={cn(mobileTab === "simulate" ? "block" : "hidden", "lg:block")}>
-          <SimulationPanel config={config} quotePriceUsd={1} quoteSymbol="USDC" />
+          <SimulationPanel config={config} quotePriceUsd={1} quoteSymbol="USDC" onConfigChange={setConfig} />
         </div>
       </div>
     </div>

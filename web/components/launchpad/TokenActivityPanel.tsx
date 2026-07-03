@@ -43,7 +43,7 @@ export function TokenActivityPanel({ token, symbol, mode, pool, totalSupplyRaw, 
         </TabButton>
       </div>
       {tab === "transactions" ? (
-        <TransactionsTab token={token} symbol={symbol} mode={mode} pool={pool} />
+        <TransactionsTab token={token} symbol={symbol} mode={mode} pool={pool} launchpadAddress={launchpadAddress} />
       ) : (
         <HoldersTab token={token} totalSupplyRaw={totalSupplyRaw} launchpadAddress={launchpadAddress} />
       )}
@@ -82,13 +82,15 @@ function TransactionsTab({
   symbol,
   mode,
   pool,
+  launchpadAddress,
 }: {
   token: Address;
   symbol: string;
   mode?: number;
   pool?: Address;
+  launchpadAddress?: Address;
 }) {
-  const { trades, isLoading } = useTokenTrades({ token, mode, pool });
+  const { trades, isLoading } = useTokenTrades({ token, mode, pool, launchpad: launchpadAddress });
   const explorerUrl = arcTestnet.blockExplorers?.default.url ?? "https://testnet.arcscan.app";
 
   if (isLoading && trades.length === 0) {

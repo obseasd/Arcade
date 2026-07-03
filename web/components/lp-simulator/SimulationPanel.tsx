@@ -10,6 +10,10 @@ interface Props {
   /** Price of the quote token in USD (1 for USDC). */
   quotePriceUsd: number;
   quoteSymbol: string;
+  /** Lift the fee-tier choice into the shared config so the projection and
+   *  the exported config agree (pages audit 2026-07-02: the panel kept its
+   *  own feeBps state, so the two surfaces diverged). */
+  onConfigChange?: (c: SimulatorConfig) => void;
 }
 
 const QUICK_BUYS = [100, 500, 1_000, 5_000, 10_000, 50_000];
@@ -31,10 +35,12 @@ function fmtNum(v: number, dp = 4): string {
   return v.toLocaleString(undefined, { maximumFractionDigits: dp });
 }
 
-export function SimulationPanel({ config, quotePriceUsd, quoteSymbol }: Props) {
+export function SimulationPanel({ config, quotePriceUsd, quoteSymbol, onConfigChange }: Props) {
   const [buys, setBuys] = useState<number[]>([]);
   const [custom, setCustom] = useState("");
-  const [feeBps, setFeeBps] = useState(config.feeBps);
+  // Fee tier lives in the shared config (single source of truth) so the
+  // projection below and the Export-config panel never disagree.
+  const feeBps = config.feeBps;
 
   const result = useMemo(() => {
     let state = buildPool(config);
@@ -175,7 +181,7 @@ export function SimulationPanel({ config, quotePriceUsd, quoteSymbol }: Props) {
             {[100, 200, 300].map((b) => (
               <button type="button"
                 key={b}
-                onClick={() => setFeeBps(b)}
+                onClick={() => onConfigChange?.({ ...config, feeBps: b })}
                 className={cn(
                   "rounded-md border px-2 py-1.5 text-xs font-medium transition-colors",
                   feeBps === b

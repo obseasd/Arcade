@@ -3,7 +3,7 @@
 import { ArrowDownUp, ChevronDown, Loader2, CheckCircle2, Pencil } from "lucide-react";
 import Image from "next/image";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { erc20Abi, formatUnits, parseUnits } from "viem";
+import { erc20Abi, formatUnits, isAddress, parseUnits } from "viem";
 import { getPublicClient } from "@wagmi/core";
 import {
   useAccount,
@@ -255,12 +255,26 @@ export function BridgeCard() {
       if (!srcCfg || !dstCfg) return;
       // B-8: require the burnTxHash to be in this wallet's history.
       const history = loadBridgeHistory(account);
-      const known = history.some(
+      const entry = history.find(
         (h) => h.burnTxHash?.toLowerCase() === detail.burnTxHash!.toLowerCase(),
       );
-      if (!known) return;
+      if (!entry) return;
       setSrcChainId(detail.srcChainId);
       setDstChainId(detail.dstChainId);
+      // Restore the custom recipient from history (pages audit 2026-07-02:
+      // the retry dropped it, so the mint-time recipient check's
+      // expectedRecipient fell back to the connected wallet, never matched
+      // the burn's mintRecipient, and the attestation poll ran forever for
+      // custom-recipient burns).
+      if (
+        entry.recipient &&
+        isAddress(entry.recipient) &&
+        (!account || entry.recipient.toLowerCase() !== account.toLowerCase())
+      ) {
+        setRecipientOverride(entry.recipient as Address);
+      } else {
+        setRecipientOverride(null);
+      }
       if (detail.amountRaw6) {
         try {
           setAmountStr(formatUnits(BigInt(detail.amountRaw6), 6));

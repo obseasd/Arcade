@@ -157,6 +157,7 @@ export default function TokenDetailPage() {
     mode: state ? Number(state.mode) : undefined,
     pool: isClanker ? (state?.v2Pair as Address | undefined) : undefined,
     refreshKey,
+    launchpad: tokenStateLaunchpad,
   });
 
   // Live updates via WebSocket: bump refreshKey whenever a trade happens on

@@ -122,13 +122,13 @@ interface PoolSubRow {
 }
 
 export default function ExplorePage() {
-    const { pairs: v2Pairs, tokens: v2Tokens } = useV2Tokens();
-    const { tokens: v3Tokens, feeOf: v3FeeOf, poolOf: v3PoolOf } = useV3Tokens();
+    const { pairs: v2Pairs, tokens: v2Tokens, isLoading: v2Loading } = useV2Tokens();
+    const { tokens: v3Tokens, feeOf: v3FeeOf, poolOf: v3PoolOf, isLoading: v3Loading } = useV3Tokens();
     // Manually-created V3 pools (not launchpad-driven). USDC/SeedETH style
     // pools land here so they appear in the explore list alongside the
     // launchpad's locked-LP CLANKER_V3 pools.
-    const { pools: v3FactoryPools } = useV3FactoryPools();
-    const { tokens: launchpadTokens } = useLaunchpadTokens();
+    const { pools: v3FactoryPools, isLoading: v3FactoryLoading } = useV3FactoryPools();
+    const { tokens: launchpadTokens, isLoading: launchpadLoading } = useLaunchpadTokens();
 
     const [filter, setFilter] = useState<Filter>("all");
     const [q, setQ] = useState("");
@@ -155,6 +155,12 @@ export default function ExplorePage() {
         ]),
         query: { enabled: v2Pairs.length > 0 },
     });
+
+    // True while ANY pool source is still resolving. Used to gate the
+    // skeleton / "No pools" empty state so neither flashes before V3 /
+    // launchpad rows arrive (pages audit 2026-07-02).
+    const anyDataLoading =
+        reservesQ.isLoading || v2Loading || v3Loading || v3FactoryLoading || launchpadLoading;
 
     // Launchpad CLANKER_V3 pools were previously rendered with tvlUsdc=0n
     // because the page only fetched USDC.balanceOf for the v3FactoryPools
@@ -666,20 +672,25 @@ export default function ExplorePage() {
                 </button>
             </div>
 
-            {/* Pool list / grid */}
-            {reservesQ.isLoading && (
+            {/* Pool list / grid. Pages audit 2026-07-02: the gate used to key
+                ONLY on reservesQ (V2 reserves), which is disabled -> isLoading
+                false when there are no V2 pairs, so a V3-only universe (or V2
+                resolving before V3) flashed "No pools" before V3 rows arrived.
+                Fold every source's loading flag in, and show rows as soon as
+                any exist. */}
+            {anyDataLoading && filteredRows.length === 0 && (
                 <div className="space-y-3">
                     {[...Array(6)].map((_, i) => (
                         <SkeletonCard key={i} className="h-20" />
                     ))}
                 </div>
             )}
-            {!reservesQ.isLoading && filteredRows.length === 0 && (
+            {!anyDataLoading && filteredRows.length === 0 && (
                 <div className="arc-card p-12 text-center text-sm text-arc-text-muted">
                     No pools match the current filter.
                 </div>
             )}
-            {!reservesQ.isLoading && filteredRows.length > 0 && viewMode === "list" && (
+            {filteredRows.length > 0 && viewMode === "list" && (
                 <div className="space-y-3 pt-2">
                     {pageRows.map((row) => (
                         <PoolPairRowCard
@@ -693,7 +704,7 @@ export default function ExplorePage() {
                     ))}
                 </div>
             )}
-            {!reservesQ.isLoading && filteredRows.length > 0 && viewMode === "card" && (
+            {filteredRows.length > 0 && viewMode === "card" && (
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
                     {/* One card per (pair, version+fee) combo - V2 and V3
                         variants stand apart. flatMap preserves the pair's
@@ -876,6 +887,9 @@ function ChartCard({
                                     totalUsd={totalUsd}
                                     v3Usd={v3Usd}
                                     v2Usd={v2Usd}
+                                    lastTotal={series[series.length - 1]?.total ?? 1}
+                                    lastV3={series[series.length - 1]?.v3 ?? 1}
+                                    lastV2={series[series.length - 1]?.v2 ?? 1}
                                 />
                             )}
                         />
@@ -924,6 +938,9 @@ function ChartTooltip({
     totalUsd,
     v3Usd,
     v2Usd,
+    lastTotal,
+    lastV3,
+    lastV2,
 }: {
     payload: ReadonlyArray<{ payload?: { total: number; v3: number; v2: number; label: string } }> | undefined;
     singleLine?: boolean;
@@ -931,14 +948,23 @@ function ChartTooltip({
     totalUsd: number;
     v3Usd: number;
     v2Usd: number;
+    /** Endpoint of the synthetic series (= "now"), used to scale the hovered
+     *  point PROPORTIONALLY to the current snapshot. */
+    lastTotal: number;
+    lastV3: number;
+    lastV2: number;
 }) {
     const point = payload?.[0]?.payload;
     if (!point) return null;
     // Scale the synthetic 0-1 curve to the actual snapshot so the numbers
-    // displayed on hover trend along with the line.
-    const tot = totalUsd > 0 ? point.total * (totalUsd / Math.max(point.total, 0.01)) : 0;
-    const v3 = v3Usd > 0 ? point.v3 * (v3Usd / Math.max(point.v3, 0.01)) : 0;
-    const v2 = v2Usd > 0 ? point.v2 * (v2Usd / Math.max(point.v2, 0.01)) : 0;
+    // displayed on hover trend along with the line. Pages audit 2026-07-02:
+    // the old `point.x * (xUsd / Math.max(point.x, 0.01))` self-cancelled to a
+    // constant (point.x always > 0.01), pinning every hovered day to the
+    // current value. Scale by the series ENDPOINT so earlier points read
+    // proportionally smaller than the current snapshot.
+    const tot = lastTotal > 0 ? (point.total / lastTotal) * totalUsd : 0;
+    const v3 = lastV3 > 0 ? (point.v3 / lastV3) * v3Usd : 0;
+    const v2 = lastV2 > 0 ? (point.v2 / lastV2) * v2Usd : 0;
     return (
         <div className="rounded-xl border border-arc-border bg-black/30 px-3 py-2 text-xs shadow-arc-card backdrop-blur-xl">
             <div className="mb-1 text-arc-text-muted">{point.label}</div>

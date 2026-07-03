@@ -40,8 +40,14 @@ export function useLaunchpadVolume(args: {
   mode: number | undefined;
   pool?: Address | undefined;
   refreshKey?: number;
+  /** Launchpad that actually holds this (curve) token. Defaults to the live
+   *  launchpad; pass the resolved per-generation address for older tokens so
+   *  the Buy/Sell volume scan hits the right contract (pages audit 2026-07-02:
+   *  prior-generation curve tokens read volume 0 / "-"). */
+  launchpad?: Address;
 }): VolumeState {
   const { token, mode, pool } = args;
+  const lp = args.launchpad ?? ADDRESSES.launchpad;
   // refreshKey deliberately ignored: live trades arrive via WS to the trade
   // panel which already calls queryClient.setQueryData, so bumping
   // refreshKey here would force a full 200k-block re-scan per trade.
@@ -55,6 +61,7 @@ export function useLaunchpadVolume(args: {
       token?.toLowerCase() ?? null,
       mode ?? null,
       pool?.toLowerCase() ?? null,
+      lp.toLowerCase(),
     ],
     enabled: !!publicClient && !!token && mode !== undefined,
     staleTime: STALE_MS,
@@ -131,13 +138,13 @@ export function useLaunchpadVolume(args: {
         const [buys, sells] = await Promise.all([
           scanLogsChunked(
             publicClient,
-            { address: ADDRESSES.launchpad, event: BUY_EVT, args: { token } },
+            { address: lp, event: BUY_EVT, args: { token } },
             latest,
             { chunk: CHUNK_SMALL, maxBack: MAX_BACK_TRADES, label: "lp.Buy" },
           ),
           scanLogsChunked(
             publicClient,
-            { address: ADDRESSES.launchpad, event: SELL_EVT, args: { token } },
+            { address: lp, event: SELL_EVT, args: { token } },
             latest,
             { chunk: CHUNK_SMALL, maxBack: MAX_BACK_TRADES, label: "lp.Sell" },
           ),
