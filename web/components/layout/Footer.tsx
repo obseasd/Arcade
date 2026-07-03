@@ -1,4 +1,4 @@
-import { Github, Globe, BookOpen } from "lucide-react";
+import { Github, BookOpen } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 
@@ -64,15 +64,6 @@ export function Footer() {
 
         {/* Center: social/doc icons - centered on viewport axis */}
         <div className="flex items-center justify-center gap-5 text-arc-gray">
-          <a
-            href="https://www.arcade.trading"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="transition-colors hover:text-arc-cta-hover"
-            aria-label="Website"
-          >
-            <Globe className="h-4 w-4" />
-          </a>
           <a
             href="https://x.com/ArcadeSwap"
             target="_blank"
