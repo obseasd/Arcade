@@ -20,6 +20,23 @@ function DiscordIcon({ className }: { className?: string }) {
   );
 }
 
+/** Inline X (formerly Twitter) glyph. lucide-react only ships the legacy
+ *  bird `Twitter` icon, so the current X wordmark is inlined here, same
+ *  pattern as the Discord glyph above (fill follows the surrounding
+ *  text colour so hover states match the other footer icons). */
+function XIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      aria-hidden
+      className={className}
+    >
+      <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
+    </svg>
+  );
+}
+
 export function Footer() {
   return (
     <footer
@@ -48,13 +65,22 @@ export function Footer() {
         {/* Center: social/doc icons - centered on viewport axis */}
         <div className="flex items-center justify-center gap-5 text-arc-gray">
           <a
-            href="https://arcade.example/"
+            href="https://www.arcade.trading"
             target="_blank"
             rel="noopener noreferrer"
             className="transition-colors hover:text-arc-cta-hover"
             aria-label="Website"
           >
             <Globe className="h-4 w-4" />
+          </a>
+          <a
+            href="https://x.com/ArcadeSwap"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="transition-colors hover:text-arc-cta-hover"
+            aria-label="X (Twitter)"
+          >
+            <XIcon className="h-4 w-4" />
           </a>
           <a
             href="https://discord.gg/NTx4Rkq2p5"
