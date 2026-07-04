@@ -23,10 +23,16 @@ export const USYC_ADDRESS =
  * (usyc.docs.hashnote.com/overview/smart-contracts), verified on-chain:
  * Teller.asset() == USDC and Teller.oracle() == USYC_ORACLE_ADDRESS.
  *
- * Interface is Hashnote's standard Teller:
- *   buy(uint256 amount)  -> pull `amount` USDC (asset, 6dp), mint USYC to caller
- *   sell(uint256 amount) -> burn `amount` USYC (6dp), send USDC to caller
- * Approve USDC to the Teller before buy, USYC before sell.
+ * The Teller is an ERC-4626 vault (USDC = asset, USYC = share), verified by
+ * decoding a real mint tx from the Hashnote dashboard:
+ *   deposit(uint256 assets, address receiver) -> pull `assets` USDC (6dp),
+ *       mint USYC shares to `receiver`. Selector 0x6e553f65.
+ *   redeem(uint256 shares, address receiver, address owner) -> burn `shares`
+ *       USYC from `owner`, send USDC to `receiver`. When owner == caller no
+ *       USYC approval is needed.
+ * Approve USDC to the Teller before deposit. USYC accrues yield, so the
+ * exchange rate is ~1.13 USDC per USYC (read previewDeposit/previewRedeem for
+ * the exact quote). Verified on-chain: deposit(1 USDC) minted ~0.884 USYC.
  */
 export const USYC_TELLER_ADDRESS =
     "0x9fdF14c5B14173D74C08Af27AebFf39240dC105A" as const;
@@ -37,17 +43,38 @@ export const USYC_ORACLE_ADDRESS =
 export const USYC_TELLER_ABI = [
     {
         type: "function",
-        name: "buy",
+        name: "deposit",
         stateMutability: "nonpayable",
-        inputs: [{ name: "amount", type: "uint256" }],
-        outputs: [{ name: "payout", type: "uint256" }],
+        inputs: [
+            { name: "assets", type: "uint256" },
+            { name: "receiver", type: "address" },
+        ],
+        outputs: [{ name: "shares", type: "uint256" }],
     },
     {
         type: "function",
-        name: "sell",
+        name: "redeem",
         stateMutability: "nonpayable",
-        inputs: [{ name: "amount", type: "uint256" }],
-        outputs: [{ name: "payout", type: "uint256" }],
+        inputs: [
+            { name: "shares", type: "uint256" },
+            { name: "receiver", type: "address" },
+            { name: "owner", type: "address" },
+        ],
+        outputs: [{ name: "assets", type: "uint256" }],
+    },
+    {
+        type: "function",
+        name: "previewDeposit",
+        stateMutability: "view",
+        inputs: [{ name: "assets", type: "uint256" }],
+        outputs: [{ name: "shares", type: "uint256" }],
+    },
+    {
+        type: "function",
+        name: "previewRedeem",
+        stateMutability: "view",
+        inputs: [{ name: "shares", type: "uint256" }],
+        outputs: [{ name: "assets", type: "uint256" }],
     },
     {
         type: "function",

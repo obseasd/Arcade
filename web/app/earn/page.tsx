@@ -177,10 +177,6 @@ function UsycActions({
         ADDRESSES.usdc,
         USYC_TELLER_ADDRESS,
     );
-    const { ensureAllowance: approveUsyc } = useApproveIfNeeded(
-        USYC_ADDRESS,
-        USYC_TELLER_ADDRESS,
-    );
 
     const [mode, setMode] = useState<"deposit" | "redeem">("deposit");
     const [amount, setAmount] = useState("");
@@ -205,22 +201,25 @@ function UsycActions({
         setBusy(true);
         try {
             if (isDeposit) {
+                // ERC-4626 deposit: approve USDC to the Teller, then
+                // deposit(assets, receiver) mints USYC shares to the user.
                 await approveUsdc(amountRaw);
                 const hash = await writeContractAsync({
                     address: USYC_TELLER_ADDRESS,
                     abi: USYC_TELLER_ABI,
-                    functionName: "buy",
-                    args: [amountRaw],
+                    functionName: "deposit",
+                    args: [amountRaw, account],
                 });
                 const r = await publicClient.waitForTransactionReceipt({ hash });
                 if (r.status !== "success") throw new Error("reverted");
             } else {
-                await approveUsyc(amountRaw);
+                // ERC-4626 redeem: burn the user's own USYC shares for USDC.
+                // owner == caller, so no USYC approval is needed.
                 const hash = await writeContractAsync({
                     address: USYC_TELLER_ADDRESS,
                     abi: USYC_TELLER_ABI,
-                    functionName: "sell",
-                    args: [amountRaw],
+                    functionName: "redeem",
+                    args: [amountRaw, account, account],
                 });
                 const r = await publicClient.waitForTransactionReceipt({ hash });
                 if (r.status !== "success") throw new Error("reverted");
@@ -297,7 +296,8 @@ function UsycActions({
                 </div>
                 <div className="mt-1 text-[11px] text-arc-text-muted">
                     Balance: {formatUSDC(inBal, USDC_DECIMALS, 2)} {inSym}. You
-                    receive {outSym} at the Teller&apos;s oracle rate (~1:1).
+                    receive {outSym} at the vault&apos;s oracle rate (USYC
+                    accrues yield, so ~1 USYC is worth a bit more than 1 USDC).
                 </div>
             </div>
 
