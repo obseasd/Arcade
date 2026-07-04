@@ -9,6 +9,7 @@ import { Modal } from "./Modal";
 import { TokenIcon } from "./TokenIcon";
 import { AutoTokenIcon } from "./AutoTokenIcon";
 import { ADDRESSES } from "@/lib/constants";
+import { USYC_ADDRESS } from "@/lib/abis/usyc";
 import { arcTestnet } from "@/lib/chains";
 import { useTokenPrices } from "@/lib/hooks/useTokenPrices";
 import { cn } from "@/lib/utils";
@@ -51,6 +52,7 @@ const PINNED: PinnedTemplate[] = [
   // Community USDT on Arc testnet uses 18 decimals, not the canonical 6.
   { symbol: "USDT", name: "Tether", decimals: 18 },
   { symbol: "cirBTC", name: "Circle Wrapped BTC", decimals: 8 },
+  { symbol: "USYC", name: "Hashnote US Yield Coin", decimals: 6 },
 ];
 
 export function TokenSelectModal({ open, onClose, tokens, onSelect, selectedAddress, excludeAddress }: Props) {
@@ -85,6 +87,7 @@ export function TokenSelectModal({ open, onClose, tokens, onSelect, selectedAddr
       if (p.symbol === "EURC") return { ...p, address: ADDRESSES.eurc };
       if (p.symbol === "cirBTC") return { ...p, address: ADDRESSES.cirBtc };
       if (p.symbol === "USDT") return { ...p, address: ADDRESSES.usdt };
+      if (p.symbol === "USYC") return { ...p, address: USYC_ADDRESS };
       return p;
     });
   }, []);

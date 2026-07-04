@@ -42,12 +42,25 @@ import {
 import { encodePermit2PermitInput } from "@/lib/routing/universalRouter";
 import { type BatchSwapCall } from "@/lib/routing/batchSwap";
 import { cn, formatToken, formatUSDC } from "@/lib/utils";
+import { USYC_ADDRESS } from "@/lib/abis/usyc";
 
 const USDC_TOKEN: TokenOption = {
   address: ADDRESSES.usdc,
   symbol: "USDC",
   name: "USD Coin",
   decimals: USDC_DECIMALS,
+  pinned: true,
+};
+
+// USYC (Hashnote tokenized T-Bills) has no AMM pool - it's a transfer-gated
+// RWA. It's swappable only via the Hashnote ERC-4626 Teller (usyc-teller
+// route provider): USDC->USYC = subscribe, USYC->USDC = redeem. Pinned so it
+// shows in the token list; the aggregator surfaces the Teller route.
+const USYC_TOKEN: TokenOption = {
+  address: USYC_ADDRESS,
+  symbol: "USYC",
+  name: "Hashnote US Yield Coin",
+  decimals: 6,
   pinned: true,
 };
 
@@ -85,7 +98,7 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
   const allTokens: TokenOption[] = useMemo(() => {
     const seen = new Set<string>();
     const out: TokenOption[] = [];
-    for (const t of [USDC_TOKEN, ...v2Tokens, ...v3Tokens, ...curveTokens]) {
+    for (const t of [USDC_TOKEN, USYC_TOKEN, ...v2Tokens, ...v3Tokens, ...curveTokens]) {
       const k = t.address.toLowerCase();
       if (seen.has(k)) continue;
       seen.add(k);
@@ -567,7 +580,14 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
     !!activeRoute &&
     (activeRoute.provider === "synthra-v3" ||
       activeRoute.provider === "unitflow-v3" ||
-      activeRoute.provider === "xylonet-v1");
+      activeRoute.provider === "xylonet-v1" ||
+      activeRoute.provider === "usyc-teller");
+  // The USYC Teller is an external route for EXECUTION (its pre-built
+  // executor calls deposit/redeem directly) but unlike the UR routes it
+  // needs a classic ERC20 approve to the Teller for deposit (USDC->USYC);
+  // redeem (USYC->USDC) burns the caller's own shares so approval.amount is
+  // 0 and no approve is issued. Handled at the approval step in onConfirm.
+  const isTellerRoute = activeRoute?.provider === "usyc-teller";
 
   // Audit A-1: computedAmountOut drives the For field. When ANY route
   // is active (external OR arcade-v3 / arcade-v2 / xylonet via the
@@ -1077,7 +1097,13 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
       // classic-approval Arcade routes (V2 / V3 / launchpad) we now run the
       // approve (when the allowance is short) and the swap as two direct
       // txs from the user's wallet; msg.sender is the user on each for free.
-      const needsApprove = !isExternalRoute && currentAllowance < approvalAmount;
+      // Classic ERC20 approve is needed for the Arcade routes AND for the
+      // USYC Teller deposit leg (approval.amount > 0). The Teller redeem leg
+      // and the Permit2-backed UR routes skip this.
+      const needsApprove =
+        (!isExternalRoute ||
+          (isTellerRoute && (activeRoute?.approval.amount ?? 0n) > 0n)) &&
+        currentAllowance < approvalAmount;
 
       // Permit2-backed external routes (Synthra UR, UnitFlow UR) need a
       // one-time max approve to Permit2 instead of per-router approves.

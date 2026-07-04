@@ -28,6 +28,11 @@ import { arcTestnet } from "@/lib/chains";
 import { ADDRESSES, CREATION_FEE_USDC, USDC_DECIMALS } from "@/lib/constants";
 import { quoteBestLeg } from "@/lib/routing/multiLegQuote";
 import { LAUNCHPAD_ABI } from "@/lib/abis/launchpad";
+import {
+    USYC_ADDRESS,
+    USYC_TELLER_ADDRESS,
+    USYC_TELLER_ABI,
+} from "@/lib/abis/usyc";
 import { encodePermit2PermitInput, type Permit2PermitSingle } from "@/lib/routing/universalRouter";
 import {
     PERMIT2_ADDRESS,
@@ -710,6 +715,115 @@ export function getCreateTokenPlan(params: {
                 description: `Launch token ${params.symbol} (${params.name}) in mode ${mode}.`,
             },
         ],
+    };
+}
+
+// ===== USYC (Hashnote tokenized T-Bills) subscribe / redeem =====
+
+/**
+ * USYC is a transfer-restricted RWA: it has NO AMM pool (a pool can't custody
+ * an entitlement-gated token), so the only USDC<->USYC path is the Hashnote
+ * ERC-4626 Teller. This lets an agent earn ~4-5% T-Bill yield on idle USDC:
+ *   action="deposit" (subscribe): USDC -> USYC via deposit(assets, receiver)
+ *   action="redeem":              USYC -> USDC via redeem(shares, receiver, owner)
+ *
+ * The agent's Circle Wallet MUST be entitled (whitelisted) by Hashnote/Circle
+ * or the Teller reverts. Quote comes from previewDeposit / previewRedeem, so
+ * amountOut matches execution. Deposit needs a USDC approve to the Teller;
+ * redeem burns the caller's own shares (owner == caller) so needs no approve.
+ */
+export async function getUsycPlan(params: {
+    action: "deposit" | "redeem";
+    amountIn: bigint;
+    recipient: Address;
+    owner?: Address;
+}): Promise<SwapPlan> {
+    const isDeposit = params.action === "deposit";
+    const tokenIn = isDeposit ? ADDRESSES.usdc : USYC_ADDRESS;
+    const tokenOut = isDeposit ? USYC_ADDRESS : ADDRESSES.usdc;
+    const decimalsIn = 6;
+    const decimalsOut = 6;
+
+    let amountOut = 0n;
+    try {
+        amountOut = (await arc.readContract({
+            address: USYC_TELLER_ADDRESS,
+            abi: USYC_TELLER_ABI,
+            functionName: isDeposit ? "previewDeposit" : "previewRedeem",
+            args: [params.amountIn],
+        })) as bigint;
+    } catch {
+        return {
+            ok: false,
+            reason: "USYC Teller preview reverted (is the wallet entitled/whitelisted by Hashnote?).",
+            code: "USYC_PREVIEW_FAILED",
+            retryable: false,
+            amountIn: params.amountIn.toString(),
+            calls: [],
+        };
+    }
+    if (amountOut === 0n) {
+        return {
+            ok: false,
+            reason: "USYC Teller quoted 0 out for this amount.",
+            code: "USYC_ZERO_OUT",
+            retryable: false,
+            amountIn: params.amountIn.toString(),
+            calls: [],
+        };
+    }
+
+    const calls: ContractCall[] = [];
+    if (isDeposit) {
+        // Subscribe pulls `assets` USDC from the caller: approve the Teller.
+        calls.push(
+            ...(await oneApprove(
+                params.owner,
+                ADDRESSES.usdc,
+                USYC_TELLER_ADDRESS,
+                params.amountIn,
+                "Hashnote USYC Teller (subscribe)",
+            )),
+        );
+        calls.push({
+            chain: ARC_CHAIN,
+            contractAddress: USYC_TELLER_ADDRESS,
+            abiFunctionSignature: "deposit(uint256,address)",
+            abiParameters: [params.amountIn.toString(), params.recipient],
+            description: `Subscribe ${fmtAmount(params.amountIn, decimalsIn)} USDC into USYC (receiver ${params.recipient}).`,
+        });
+    } else {
+        calls.push({
+            chain: ARC_CHAIN,
+            contractAddress: USYC_TELLER_ADDRESS,
+            abiFunctionSignature: "redeem(uint256,address,address)",
+            abiParameters: [
+                params.amountIn.toString(),
+                params.recipient,
+                params.owner ?? params.recipient,
+            ],
+            description: `Redeem ${fmtAmount(params.amountIn, decimalsIn)} USYC back into USDC (receiver ${params.recipient}).`,
+        });
+    }
+
+    return {
+        ok: true,
+        provider: "usyc-teller",
+        executable: true,
+        amountIn: params.amountIn.toString(),
+        amountInFmt: fmtAmount(params.amountIn, decimalsIn),
+        amountOut: amountOut.toString(),
+        amountOutFmt: fmtAmount(amountOut, decimalsOut),
+        effectivePrice:
+            params.amountIn > 0n
+                ? fmtAmount((amountOut * 10n ** BigInt(decimalsIn)) / params.amountIn, decimalsOut)
+                : null,
+        tokenIn: tokenMeta(tokenIn, decimalsIn),
+        tokenOut: tokenMeta(tokenOut, decimalsOut),
+        note: isDeposit
+            ? "USDC -> USYC via the Hashnote ERC-4626 Teller. USYC accrues ~4-5% T-Bill yield; the wallet must be Hashnote-entitled."
+            : "USYC -> USDC via the Hashnote ERC-4626 Teller. Burns the caller's own shares (no approval needed).",
+        calls,
     };
 }
 

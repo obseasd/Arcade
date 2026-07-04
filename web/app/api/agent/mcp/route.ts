@@ -119,6 +119,21 @@ const TOOLS = [
         annotations: { title: "Launchpad buy/sell/create", ...WR },
     },
     {
+        name: "arcade_usyc",
+        description: "Park idle USDC into USYC (Hashnote tokenized US T-Bills, ~4-5% yield) or redeem it back. USYC is a transfer-gated RWA with no AMM pool; this Teller (deposit/redeem) is the only USDC<->USYC path. The wallet must be Hashnote-entitled. Run calls[] in order.",
+        inputSchema: {
+            type: "object",
+            properties: {
+                action: { type: "string", enum: ["deposit", "redeem"], description: "deposit = USDC->USYC (subscribe); redeem = USYC->USDC." },
+                amountIn: { type: "string", description: "RAW 6-decimal units: USDC for deposit, USYC for redeem." },
+                recipient: { type: "string", description: "The agent's wallet address; the output token is sent here." },
+                owner: { type: "string", description: "Optional: defaults to recipient. Redeem burns this owner's USYC shares." },
+            },
+            required: ["action", "amountIn", "recipient"],
+        },
+        annotations: { title: "USYC subscribe/redeem", ...WR },
+    },
+    {
         name: "arcade_multiswap",
         description: "Build a basket-converge swap: many input tokens into one output token in a single settlement (Arcade aggregator).",
         inputSchema: {
@@ -168,6 +183,8 @@ function toRequest(name: string, args: Record<string, unknown>, base: string): {
             return post("/swap/finalize");
         case "arcade_launchpad":
             return post("/launchpad");
+        case "arcade_usyc":
+            return post("/usyc");
         case "arcade_multiswap":
             return post("/multiswap");
         default:

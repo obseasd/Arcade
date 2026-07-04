@@ -9,6 +9,7 @@ import { arcadeV3Provider } from "./arcadeV3";
 import { arcadeV2Provider } from "./arcadeV2";
 import { unitflowV3Provider } from "./unitflowV3";
 import { xylonetV1Provider } from "./xylonetV1";
+import { usycTellerV1Provider } from "./usycTellerV1";
 
 /**
  * Aggregator hook: fans out a quote request to every registered provider
@@ -39,6 +40,7 @@ const PROVIDERS: RouteProvider[] = [
   synthraV3Provider,
   unitflowV3Provider,
   xylonetV1Provider,
+  usycTellerV1Provider,
 ];
 
 export interface UseRouteQuotesArgs {

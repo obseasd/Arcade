@@ -131,6 +131,30 @@ export async function GET(req: NextRequest) {
                     responses: { "200": { description: "ok" } },
                 },
             },
+            "/usyc": {
+                post: {
+                    summary: "Subscribe/redeem USYC (Hashnote tokenized T-Bills) for ~4-5% yield on idle USDC",
+                    description:
+                        "USYC is a transfer-gated RWA with no AMM pool; the Hashnote ERC-4626 Teller is the only USDC<->USYC path. deposit = USDC->USYC (subscribe), redeem = USYC->USDC. The wallet must be Hashnote-entitled or the Teller reverts.",
+                    requestBody: {
+                        content: {
+                            "application/json": {
+                                schema: {
+                                    type: "object",
+                                    required: ["action", "amountIn", "recipient"],
+                                    properties: {
+                                        action: { type: "string", enum: ["deposit", "redeem"] },
+                                        amountIn: { type: "string", description: "raw 6-decimal units (USDC for deposit, USYC for redeem)" },
+                                        recipient: { type: "string", description: "the agent wallet receiving the output token" },
+                                        owner: { type: "string", description: "optional; defaults to recipient (redeem burns owner's shares)" },
+                                    },
+                                },
+                            },
+                        },
+                    },
+                    responses: { "200": { description: "ok", content: { "application/json": { schema: { $ref: "#/components/schemas/BuildPlan" } } } } },
+                },
+            },
             "/multiswap": {
                 post: {
                     summary: "Converge a basket of tokens into one output (aggregator)",

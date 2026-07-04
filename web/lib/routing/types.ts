@@ -5,7 +5,7 @@ import { Address } from "viem";
  * the auto-pick logic. Add a new entry here, register a Provider in
  * `lib/routing/index.ts`, and the aggregator picks it up automatically.
  */
-export type ProviderId = "arcade-v3" | "arcade-v2" | "synthra-v3" | "unitflow-v3" | "xylonet-v1";
+export type ProviderId = "arcade-v3" | "arcade-v2" | "synthra-v3" | "unitflow-v3" | "xylonet-v1" | "usyc-teller";
 
 /**
  * Display metadata shown next to a route card (logo, name, tag color).
@@ -161,5 +161,11 @@ export const PROVIDER_META: Record<ProviderId, ProviderMeta> = {
     label: "XyloNet",
     longLabel: "XyloNet StableSwap (Curve invariant + V2-style router)",
     accent: "text-amber-400",
+  },
+  "usyc-teller": {
+    id: "usyc-teller",
+    label: "USYC Teller",
+    longLabel: "Hashnote USYC ERC-4626 Teller (subscribe / redeem)",
+    accent: "text-sky-400",
   },
 };
