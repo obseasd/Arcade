@@ -1,2 +1,6 @@
 node_modules/
 package-lock.json
+
+.circle-entity-secret
+.circle-recovery.dat
+recovery_file_*.dat

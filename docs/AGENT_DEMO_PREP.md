@@ -39,23 +39,32 @@ launchpad, portfolio, etc.).
 
 ## Step 2 - Create + fund the Circle Wallet
 
-1. Circle console (https://console.circle.com): create an **API key** and
-   register an **entity secret** (32-byte hex). Keep both.
-2. Provision the ARC-TESTNET wallet with the helper (one command):
+1. Circle console (https://console.circle.com): create an **API key**.
+2. One-shot setup (generates + registers the entity secret, creates the
+   ARC-TESTNET wallet). Secrets are saved to gitignored local files and never
+   printed:
 
    ```bash
    cd agent-mcp
    npm install
    export CIRCLE_API_KEY=...
-   export CIRCLE_ENTITY_SECRET=...
-   node create-wallet.mjs   # prints walletId + address
+   node setup-circle.mjs      # prints walletId + address
+   export CIRCLE_ENTITY_SECRET="$(cat .circle-entity-secret)"
    export CIRCLE_WALLET_ID=<printed id>
    ```
 
+   (If you already registered an entity secret, skip setup-circle.mjs, set
+   CIRCLE_ENTITY_SECRET yourself, and run `node create-wallet.mjs` instead.)
+
 3. Fund the printed address with testnet USDC. Easiest: from the treasury
-   wallet `0x3a0Dd90212838f32a953Acd4B32596b62859324A` (holds ~1700 test USDC),
-   send a few USDC to the Circle wallet address. USDC is the gas token, so this
-   also covers gas.
+   wallet `0x3a0Dd90212838f32a953Acd4B32596b62859324A` (holds test USDC), send
+   a few USDC to the Circle wallet address. USDC is the gas token, so this also
+   covers gas.
+
+> PROVEN end to end (2026-07-04): an agent fetched a launchpad buy descriptor
+> from the live API, and circle-execute.mjs ran the approve + buy through a
+> Circle Wallet on Arc; the wallet received the tokens. So the full loop works
+> before you even record.
 
 ## Step 3 - Wire the execution bridge
 
