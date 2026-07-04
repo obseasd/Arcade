@@ -292,7 +292,7 @@ export async function getSwapPlan(params: {
             requiresPermit2Signature: true,
             nextStep:
                 "Run permit2.approve once (token -> Permit2), sign permit2.typedData with Circle sign/typedData, then POST /api/agent/swap/finalize with the same params plus { permit: permit2.permit, signature }.",
-            note: "Permit2 venue. (1) run permit2.approve once, (2) sign permit2.typedData with your wallet, (3) POST /api/agent/swap/finalize with the same params plus { permit: permit2.permit, signature } to get the execute call.",
+            note: "Permit2 venue. (1) run permit2.approve once, (2) sign permit2.typedData with your wallet, (3) POST /api/agent/swap/finalize with the same params plus { permit: permit2.permit, signature } to get the execute call. permit2.typedData includes the EIP712Domain type for Circle sign/typedData; viem/ethers signers must omit that one type before signing.",
             permit2: {
                 approve: approvalCall(params.tokenIn, PERMIT2_ADDRESS, maxUint256, "Permit2"),
                 typedData,
@@ -343,6 +343,19 @@ export async function getSwapPlan(params: {
 // ===== Permit2 (2-step agent flow) =====
 
 const PERMIT_TYPES = {
+    // EIP712Domain is included explicitly because Circle's sign/typedData
+    // (the agent-wallet target) validates the full EIP-712 schema and rejects
+    // a typedData whose domain fields are not declared ("extra data provided
+    // in the message"). Including it does NOT change the produced signature
+    // (the domain separator is computed the same way), so the signature stays
+    // valid for Permit2 on-chain. viem/ethers signers OMIT EIP712Domain and
+    // will reject it, so those clients must strip this one type before signing
+    // (noted in the swap response).
+    EIP712Domain: [
+        { name: "name", type: "string" },
+        { name: "chainId", type: "uint256" },
+        { name: "verifyingContract", type: "address" },
+    ],
     PermitDetails: [
         { name: "token", type: "address" },
         { name: "amount", type: "uint160" },

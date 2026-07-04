@@ -58,8 +58,20 @@ export async function POST(req: NextRequest) {
         const name = String(body.name ?? "");
         const symbol = String(body.symbol ?? "");
         if (!name || !symbol) return bad("name and symbol are required");
-        const mode = body.mode !== undefined ? Number(body.mode) : 0;
-        if (![0, 1, 2].includes(mode)) return bad("mode must be 0 (PUMP), 1 (CLANKER), or 2 (CLANKER_V3)");
+        // Accept the numeric mode (0/1/2) OR the case-insensitive string enum
+        // (PUMP/CLANKER/CLANKER_V3). Agents naturally pass the name, so
+        // rejecting the string was an agent-usability foot-gun.
+        const MODE_BY_NAME: Record<string, number> = { pump: 0, clanker: 1, clanker_v3: 2, clankerv3: 2 };
+        let mode = 0;
+        if (body.mode !== undefined) {
+            if (typeof body.mode === "string" && MODE_BY_NAME[body.mode.trim().toLowerCase()] !== undefined) {
+                mode = MODE_BY_NAME[body.mode.trim().toLowerCase()];
+            } else {
+                mode = Number(body.mode);
+            }
+        }
+        if (![0, 1, 2].includes(mode))
+            return bad("mode must be 0/1/2 or PUMP/CLANKER/CLANKER_V3");
         const creator2 = addr(body.creator2) ?? undefined;
         const creator2ShareBps =
             body.creator2ShareBps !== undefined ? Number(body.creator2ShareBps) : undefined;
