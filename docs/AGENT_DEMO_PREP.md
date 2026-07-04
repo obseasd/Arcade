@@ -39,15 +39,23 @@ launchpad, portfolio, etc.).
 
 ## Step 2 - Create + fund the Circle Wallet
 
-1. Circle console (https://console.circle.com) -> Developer-controlled wallets.
-2. Register an **entity secret** (32-byte hex) and keep it safe. Grab your
-   **API key**.
-3. Create a wallet set + a wallet on blockchain **ARC-TESTNET**. Note the
-   **wallet id** and its **address**.
-4. Fund that address with testnet USDC. Easiest: from the treasury wallet
-   `0x3a0Dd90212838f32a953Acd4B32596b62859324A` (holds ~1700 test USDC), send a
-   few USDC to the Circle wallet address. USDC is the gas token, so this also
-   covers gas.
+1. Circle console (https://console.circle.com): create an **API key** and
+   register an **entity secret** (32-byte hex). Keep both.
+2. Provision the ARC-TESTNET wallet with the helper (one command):
+
+   ```bash
+   cd agent-mcp
+   npm install
+   export CIRCLE_API_KEY=...
+   export CIRCLE_ENTITY_SECRET=...
+   node create-wallet.mjs   # prints walletId + address
+   export CIRCLE_WALLET_ID=<printed id>
+   ```
+
+3. Fund the printed address with testnet USDC. Easiest: from the treasury
+   wallet `0x3a0Dd90212838f32a953Acd4B32596b62859324A` (holds ~1700 test USDC),
+   send a few USDC to the Circle wallet address. USDC is the gas token, so this
+   also covers gas.
 
 ## Step 3 - Wire the execution bridge
 
