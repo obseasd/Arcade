@@ -10,12 +10,53 @@
  * underlying ERC20 reads (balanceOf, totalSupply, symbol, decimals)
  * are fully public, which is what this minimal ABI covers.
  *
- * Future work: wire the Teller contract + entitlements UI when we have
- * a KYC-applied treasury wallet or a per-user KYC flow.
+ * Mint/redeem is wired through the Hashnote Teller below (the wallet must be
+ * entitled/whitelisted by Hashnote; a non-entitled wallet reverts).
  */
 
 export const USYC_ADDRESS =
     "0xe9185F0c5F296Ed1797AaE4238D26CCaBEadb86C" as const;
+
+/**
+ * Hashnote Teller on Arc Testnet: the mint/redeem contract (separate from the
+ * USYC ERC20). Addresses from the Hashnote USYC docs
+ * (usyc.docs.hashnote.com/overview/smart-contracts), verified on-chain:
+ * Teller.asset() == USDC and Teller.oracle() == USYC_ORACLE_ADDRESS.
+ *
+ * Interface is Hashnote's standard Teller:
+ *   buy(uint256 amount)  -> pull `amount` USDC (asset, 6dp), mint USYC to caller
+ *   sell(uint256 amount) -> burn `amount` USYC (6dp), send USDC to caller
+ * Approve USDC to the Teller before buy, USYC before sell.
+ */
+export const USYC_TELLER_ADDRESS =
+    "0x9fdF14c5B14173D74C08Af27AebFf39240dC105A" as const;
+
+export const USYC_ORACLE_ADDRESS =
+    "0x52b56c7642E71dc54714d879127d97cd0B3D4581" as const;
+
+export const USYC_TELLER_ABI = [
+    {
+        type: "function",
+        name: "buy",
+        stateMutability: "nonpayable",
+        inputs: [{ name: "amount", type: "uint256" }],
+        outputs: [{ name: "payout", type: "uint256" }],
+    },
+    {
+        type: "function",
+        name: "sell",
+        stateMutability: "nonpayable",
+        inputs: [{ name: "amount", type: "uint256" }],
+        outputs: [{ name: "payout", type: "uint256" }],
+    },
+    {
+        type: "function",
+        name: "asset",
+        stateMutability: "view",
+        inputs: [],
+        outputs: [{ name: "", type: "address" }],
+    },
+] as const;
 
 export const USYC_HASHNOTE_PRODUCT_URL =
     "https://www.hashnote.com/products/usyc";
