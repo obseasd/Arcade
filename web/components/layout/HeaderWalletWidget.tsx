@@ -6,6 +6,7 @@ import {
     ArrowRightLeft,
     ChevronDown,
     Copy,
+    DollarSign,
     Download,
     LineChart,
     LogOut,
@@ -235,6 +236,14 @@ export function HeaderWalletWidget() {
                                     </button>
 
                                     <div className="flex shrink-0 items-center gap-1">
+                                        <Link
+                                            href="/earn"
+                                            onClick={() => setMenuOpen(false)}
+                                            title="Earn (USYC)"
+                                            className="rounded-lg p-2 text-arc-text-muted transition-colors hover:bg-white/5 hover:text-arc-text"
+                                        >
+                                            <DollarSign className="h-4 w-4" />
+                                        </Link>
                                         {isEscrowOwner && (
                                             <Link
                                                 href="/admin"

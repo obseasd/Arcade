@@ -14,7 +14,6 @@ const NAV_ITEMS = [
   { href: "/explore", label: "Explore" },
   { href: "/positions", label: "Positions" },
   { href: "/bridge", label: "Bridge" },
-  { href: "/earn", label: "Earn" },
 ];
 
 export function Navbar() {

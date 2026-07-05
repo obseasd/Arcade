@@ -18,6 +18,7 @@ const PNG_LOGOS: Record<string, string> = {
   WBTC: "/btc.png",
   CIRBTC: "/cirbtc.png",
   USDT: "/usdt.png",
+  USYC: "/usyc.svg",
 };
 
 interface Props {
