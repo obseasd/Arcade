@@ -1,5 +1,5 @@
 {
-  "note": "Arcade contract addresses on Arc testnet, kept in sync with the Vercel NEXT_PUBLIC_* env block. Update both files after every redeploy.",
+  "note": "Redeployed 2026-07-05: full stack with the batched security fixes (seed-gate migration, CLANKER_V3 anchor, identity fixes, EIP-170 size fit). Deployer/treasury/signer = 0x3a0Dd9 (testnet).",
   "chain": {
     "name": "Arc Testnet",
     "chainId": 5042002,
@@ -11,21 +11,21 @@
     "USDC": "0x3600000000000000000000000000000000000000",
     "WETH": "0x9570EBA9eE39Aa4933f64d6add280faAB289a847",
     "treasury": "0x3a0Dd90212838f32a953Acd4B32596b62859324A",
-    "v2Factory": "0x165635364a52A6D0BC0322B6d16C7d311E68e08d",
-    "v2Router": "0x58b32D5fBCBf25Db5B08AAF04301E04c32670969",
-    "v2Zap": "0x5e5ec475A046fd8F4a60d1026E2A4BE2f30f5B67",
-    "launchpad": "0x70E9d457423eF35711886f7dc7535A8caeBA7cfE",
-    "multiSwap": "0x7368E29704eD3344B735936419526D97Da3f8acc",
+    "v2Factory": "0x42d124E08d2c68E65a80797149D515d757E5d2E7",
+    "v2Router": "0xcbc9BAC5108c947dA205c23627F0a46D1D399098",
+    "v2Zap": "0xbd7dc8ce88ca5160a0756303ea477caadf5a5f9a",
+    "launchpad": "0x6f6c8faE27639F2Cf4FbFbc3E8DB666d53C404cf",
+    "multiSwap": "0x661504c4b7420d19f12b1ab7dc1a28885ae8fdca",
     "v3Factory": "0x7E875574062613de8A4d43cDA21628368914c01A",
-    "v3Locker": "0x9D3AD3EcCcA3B0BcE14974120c859040D6733d02",
-    "v3Router": "0x6D7eF7bfd624A67CB16C9a7127090B428E52c39F",
+    "v3Locker": "0x75A11AAd60D5E93A77eB178ff709D16d837C53e0",
+    "v3Router": "0x1956f1c7e5d084a1b84f551b257a8ed34d27c7dd",
     "v3Quoter": "0x77264120b8155aFfbcDD6B0E23d5F47264052656",
-    "v3Zap": "0xC7386c6c7Bee0AD3799A8046Eceb7Ed2E7E621c8",
+    "v3Zap": "0x061ff7df38c8096041712bb827dc74313e53b23f",
     "v3PositionManager": "0x9A0955174A200FcaFA232c9A2111771B8Ee4100b",
     "v3PositionDescriptor": "0xC0aD09fD485f640f8f26Eea11D7C2A676751EE58",
-    "tokenVault": "0x9B3597FeEcA0BBF4488eB0C26C156893d57E258a",
+    "tokenVault": "0x683b4077f2a39f285aed4f42e5db18ff522bf9f7",
     "autoCompounder": "0xA1B0d300E5d03Bc093770cac63fc1a578DCaF969",
-    "identityIssuer": "0x912a31937e292006b65c0CE6ffEC01b00682cf5a",
+    "identityIssuer": "0xffc2f62201f3d5b5aa63c563b41d1b93c07a648e",
     "identityRegistry": "0x8004A818BFB912233c491871b3d84c89A494BD9e",
     "arcadeHook": "0x90b7D816862f9ca2E2Fa8B8Dde2BF855E623BecE",
     "lockedVault": "0xC7D1481364b18Ddb8fa55d93C454e681b791202E",
@@ -34,7 +34,7 @@
     "v4Quoter": "0x51Da2cA6a663dFE704A11Bdbb107df0E4365c5F8",
     "v4Router": "0x1Ac821216edcbA5da28DA6e2096ce490a962fc41",
     "seedETH": "0xcA34959A856c82214Bb3b2b7777342dE30459F83",
-    "twitterEscrow": "0xC72206E0719Bfa4070538932880eCB2465F74A9B",
+    "twitterEscrow": "0xBcf3fa2E82A8AbA1026350d6560491203C1Dc705",
     "twitterEscrowSigner": "0x3a0Dd90212838f32a953Acd4B32596b62859324A",
     "twitterEscrowOwner": "0x3a0Dd90212838f32a953Acd4B32596b62859324A"
   },
@@ -54,12 +54,39 @@
     "usdcDecimals": 6,
     "totalSupply": "1000000000",
     "creationFeeUsdc": "3000000",
-    "v3FeeTiers": [10000, 20000, 30000],
+    "v3FeeTiers": [
+      10000,
+      20000,
+      30000
+    ],
     "poolTypes": {
-      "standard": { "id": 0, "paired": "USDC", "startMcapUsdc": "35000000000", "positions": 3 },
-      "legacy": { "id": 1, "paired": "USDC", "startMcapRange": ["1000000", "1000000000000"], "positions": 1 },
-      "deep": { "id": 2, "paired": "USDC", "startMcapUsdc": "50000000000", "positions": 3 },
-      "weth": { "id": 3, "paired": "WETH", "startMcapWeth": "10000000000000000000", "positions": 3 }
+      "standard": {
+        "id": 0,
+        "paired": "USDC",
+        "startMcapUsdc": "35000000000",
+        "positions": 3
+      },
+      "legacy": {
+        "id": 1,
+        "paired": "USDC",
+        "startMcapRange": [
+          "1000000",
+          "1000000000000"
+        ],
+        "positions": 1
+      },
+      "deep": {
+        "id": 2,
+        "paired": "USDC",
+        "startMcapUsdc": "50000000000",
+        "positions": 3
+      },
+      "weth": {
+        "id": 3,
+        "paired": "WETH",
+        "startMcapWeth": "10000000000000000000",
+        "positions": 3
+      }
     }
   }
 }
