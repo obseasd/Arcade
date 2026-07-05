@@ -10,6 +10,7 @@ import {
     type Hex,
 } from "viem";
 import { AUTO_COMPOUNDER_ABI } from "@/lib/abis/autoCompounder";
+import { ADDRESSES } from "@/lib/constants";
 import { isDbConfigured } from "@/lib/db";
 import { insertEvent, getPosition } from "@/lib/compounderPersistence";
 import { quoteUsdcValueForPair } from "@/lib/compounderQuote";
@@ -141,7 +142,13 @@ export async function POST(req: NextRequest) {
         insertError?: string;
     }> = [];
 
+    const compounderAddress = (ADDRESSES.autoCompounder as string).toLowerCase();
     for (const log of receipt.logs) {
+        // Only trust Compounded/FeesPushed logs emitted BY the compounder.
+        // Without this, anyone can deploy a contract that emits an identically-
+        // shaped event in an unrelated tx and have the reconciler credit a
+        // forged compound (mirror of the cron route's emitter gate).
+        if (!log.address || log.address.toLowerCase() !== compounderAddress) continue;
         const topic0 = log.topics[0];
         if (!topic0) continue;
         if (topic0 !== TOPIC_COMPOUNDED && topic0 !== TOPIC_FEES_PUSHED) {

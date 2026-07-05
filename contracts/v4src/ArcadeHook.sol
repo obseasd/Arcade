@@ -683,10 +683,13 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
 
         emit CurveBuy(poolId, msg.sender, r.actualGross, r.tokensOut);
 
-        // Cap path: the curve is now exhausted. Trigger graduation atomically
-        // so the next caller observes status = Graduated and the V4 swap path
-        // is unlocked. The pool gets initialised + seeded inside _graduate.
-        if (r.refund > 0) _graduate(token, state);
+        // The curve is exhausted when tokensSold reaches CURVE_SUPPLY. Graduate
+        // on that, NOT on `refund > 0`: an exact-fill buy (newUsdcReserve lands
+        // exactly at the cap) and the cap-branch ceil-clip both fill the curve
+        // with refund == 0, and gating on refund would leave the launch
+        // permanently stuck at the cap (every later buy reverts ZeroAmount, so
+        // _graduate becomes unreachable and the AMM pool is never seeded).
+        if (ArcadeV4Curve.isGraduated(state.tokensSold)) _graduate(token, state);
 
         return (r.tokensOut, r.actualGross);
     }

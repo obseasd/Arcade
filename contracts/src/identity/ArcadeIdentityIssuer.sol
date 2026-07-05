@@ -121,13 +121,35 @@ contract ArcadeIdentityIssuer {
      *                     + bonded count + wallet) but the tier itself
      *                     is verified here.
      */
-    function mint(uint8 claimedTier, string calldata uri) external returns (uint256 tokenId) {
+    function mint(uint8 claimedTier, string calldata /* uri: ignored, built on-chain */)
+        external
+        returns (uint256 tokenId)
+    {
         if (claimedTier == TIER_NONE || claimedTier > TIER_DIAMOND) revert InvalidTier();
         (uint256 v2n, uint256 v4n) = _bondedCountsOf(msg.sender);
         uint8 earned = _tierFromCount(v2n + v4n);
         if (earned < claimedTier) revert InsufficientLaunches();
-        tokenId = registry.mint(msg.sender, uri);
+        // Build the tokenURI on-chain from the VERIFIED tier. A caller-supplied
+        // URI let anyone display "Diamond" regardless of their real tier, making
+        // the whole reputation badge decorative. Now the metadata cannot diverge
+        // from what was proven on-chain.
+        tokenId = registry.mint(msg.sender, _tierUri(claimedTier));
         emit IdentityMinted(msg.sender, claimedTier, tokenId, v2n, v4n);
+    }
+
+    /// @dev Deterministic, unspoofable tokenURI for a verified tier. Plain
+    /// `data:application/json` so no off-chain hosting is trusted.
+    function _tierUri(uint8 tier) internal pure returns (string memory) {
+        string memory name = tier == TIER_DIAMOND ? "Diamond" : tier == TIER_GOLD ? "Gold" : "Silver";
+        return string(
+            abi.encodePacked(
+                'data:application/json,{"name":"Arcade Identity: ',
+                name,
+                '","description":"On-chain-verified Arcade creator tier.","attributes":[{"trait_type":"Tier","value":"',
+                name,
+                '"}]}'
+            )
+        );
     }
 
     // ===== Views =====
@@ -156,7 +178,14 @@ contract ArcadeIdentityIssuer {
         for (uint256 i = 0; i < total; i++) {
             address t = launchpad.allTokens(i);
             IArcadeLaunchpadView.TokenState memory s = launchpad.tokens(t);
-            if (s.creator == creator && s.migrated) {
+            // H-12: CLANKER_V3 (mode 2) launches are migrated=true from birth
+            // and skip the bonding curve, so they MUST NOT count - otherwise a
+            // scammer mints 10 worthless CLANKER_V3 tokens for 30 USDC and earns
+            // Diamond. Only genuine curve graduations (PUMP/CLANKER) count.
+            if (
+                s.creator == creator && s.migrated
+                    && s.mode != IArcadeLaunchpadView.LaunchMode.CLANKER_V3
+            ) {
                 v2n++;
             }
         }
