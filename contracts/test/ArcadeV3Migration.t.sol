@@ -185,6 +185,27 @@ contract ArcadeV3MigrationTest is Test {
         vm.stopPrank();
     }
 
+    // Audit 2026-07-05 MEDIUM (CLANKER_V3 upward pre-init mispricing): a hostile
+    // pre-init of the predictable pool on the HARMFUL side (up for a token0
+    // launch, down for a token1 launch) beyond the ~5% guard now REVERTS the
+    // launch (clean, retryable) instead of completing a permanently mispriced,
+    // unrecoverable launch. A normal launch (no pre-init, pool opened at intent)
+    // is unaffected - exercised by test_launchesImmediatelySingleSided et al.
+    function test_clankerV3_hostilePreInit_reverts() public {
+        address predicted = vm.computeCreateAddress(address(launchpad), vm.getNonce(address(launchpad)));
+        bool tokenIsToken0 = predicted < address(usdc);
+        address pool = IArcadeV3Factory(v3Factory).createPool(address(usdc), predicted, FEE);
+        // Far on the harmful side: token0 sold above -> init HIGH; token1 -> LOW.
+        uint160 hostile = tokenIsToken0 ? uint160(1e30) : uint160(1e19);
+        IArcadeV3Pool(pool).initialize(hostile);
+
+        vm.startPrank(creator);
+        usdc.approve(address(launchpad), type(uint256).max);
+        vm.expectRevert(); // InvalidRoute(): harmful-deviation guard
+        launchpad.createToken("Poison", "PZN", "ipfs://x", IArcadeLaunchpad.LaunchMode.CLANKER_V3, address(0), 0);
+        vm.stopPrank();
+    }
+
     // Audit 2026-07-05 HIGH (CLANKER_V3 pre-init brick): the locker now anchors
     // its single-sided bands to max/min(liveTick, intendedTick) instead of the
     // intended price alone, so pool.mint (which computes owed amounts from the

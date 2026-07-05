@@ -33,9 +33,13 @@ export async function POST(req: NextRequest) {
         return bad("amountIn must be a positive integer (raw 6-decimal units)");
 
     const recipient = addr(body.recipient);
-    if (!recipient) return bad("recipient must be an address");
+    // addr() accepts the zero address (it matches the 0x+40-hex regex); reject
+    // it here so a deposit can't mint USYC shares to 0x0 (burning the USDC).
+    if (!recipient || /^0x0{40}$/i.test(recipient))
+        return bad("recipient must be a non-zero address");
 
     const owner = addr(body.owner) ?? undefined;
+    if (owner && /^0x0{40}$/i.test(owner)) return bad("owner must be a non-zero address");
 
     return ok(
         await getUsycPlan({

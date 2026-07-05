@@ -853,7 +853,7 @@ export async function getMultiswapPlan(params: {
         params.inputs.map(async (i) => {
             // Same-token passthrough: leg output == amount, no USDC hop.
             if (i.token.toLowerCase() === outLower) {
-                return { out: i.amount, usdcMid: 0n };
+                return { out: i.amount, usdcMid: 0n, quoted: true };
             }
             const decimalsIn = await getDecimals(i.token);
             // Leg output -> tokenOut.
@@ -892,9 +892,24 @@ export async function getMultiswapPlan(params: {
                 ).catch(() => null);
                 usdcMid = rMid ? rMid.amountOut : 0n;
             }
-            return { out, usdcMid };
+            return { out, usdcMid, quoted: rOut !== null };
         }),
     );
+
+    // H-07 (agent path): fail CLOSED if any non-passthrough leg could not be
+    // quoted. Emitting a 0 floor for it (applyFloor(0) == 0) would route that
+    // leg with no slippage protection, re-opening the single-leg-drain the
+    // per-leg minOut was added to close. Refuse the whole plan instead.
+    if (perLeg.some((p) => !p.quoted)) {
+        return {
+            ok: false,
+            reason: "one or more inputs could not be quoted; refusing to route without a per-leg slippage floor",
+            code: "MULTISWAP_LEG_UNQUOTED",
+            retryable: true,
+            amountIn: total.toString(),
+            calls: [],
+        };
+    }
 
     const applyFloor = (v: bigint) => (v * BigInt(10_000 - slippageBps)) / 10_000n;
     const minOutArr = perLeg.map((p) => applyFloor(p.out));

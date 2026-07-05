@@ -56,6 +56,10 @@ interface IArcadeLaunchpad {
     /// @notice Returns true iff `tokenAddr` is a known launchpad token whose curve has migrated.
     function isMigrated(address tokenAddr) external view returns (bool);
 
+    /// @notice Returns true iff `tokenAddr` is a CLANKER_V3 launch (trades only
+    /// on its locked V3 pool). Mode-based, not V2-pair-presence based.
+    function isClankerV3(address tokenAddr) external view returns (bool);
+
     /// @notice Buy a migrated token with USDC via V2, skimming the post-migration royalty from the USDC input.
     function buyMigrated(address tokenAddr, uint256 usdcIn, uint256 minTokensOut, uint256 deadline)
         external

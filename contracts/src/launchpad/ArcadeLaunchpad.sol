@@ -1066,15 +1066,33 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         // slot0 value, and the locker (_computeRanges anchors its bands to the
         // passed sqrtPriceX96 tick) then placed the ENTIRE launch supply at the
         // attacker's price, letting them buy it cheap (steal-the-supply).
-        // Keep sqrtPriceX96 at the INTENDED launch price so the locked bands
-        // are always anchored to intent regardless of any pre-init. We still
-        // require the pool to be initialised (sp != 0) so the locker's mint can
-        // proceed; a momentarily mispriced spot is arbed back, and the
-        // creator-buy path below already enforces an FDV-based minOut. This
-        // also avoids the L-2 brick: a pre-init at a wrong price no longer
-        // reverts here, it is simply ignored.
+        // Keep sqrtPriceX96 at the INTENDED launch price. The locker anchors
+        // its bands to max/min(liveTick, intendedTick) so the mint stays
+        // single-sided against the live tick (never owes the paired token), and
+        // the ~5% harmful-deviation guard below reverts a materially hostile
+        // pre-init instead of completing a mispriced launch. A small pre-init is
+        // absorbed by the anchor; the creator-buy path also enforces an
+        // FDV-based minOut.
         (uint160 sp,,,,,,) = IArcadeV3Pool(pool).slot0();
         if (sp == 0) revert InvalidRoute();
+        // Audit 2026-07-05: bound a hostile pre-init. A legit launch opens the
+        // pool at exactly `sqrtPriceX96`; only an attacker pre-inits the
+        // (address-predictable) pool at another price. The locker's max/min
+        // tick anchor absorbs a small deviation, but a large one on the HARMFUL
+        // side (UP for a token0 launch, DOWN for a token1 launch) would open the
+        // pool far off intent with no counter-liquidity to arb it back, leaving
+        // a completed-but-permanently-mispriced launch. Bound the harmful-side
+        // deviation to ~5% (in sqrt-price) so material griefs REVERT (creator
+        // retries on a fresh nonce/address) instead of silently corrupting.
+        {
+            uint256 intended = uint256(sqrtPriceX96);
+            uint256 live = uint256(sp);
+            if (tokenAddr == token0) {
+                if (live > (intended * 105) / 100) revert InvalidRoute();
+            } else {
+                if (live < (intended * 95) / 100) revert InvalidRoute();
+            }
+        }
 
         // L-02: flip migrated state BEFORE the external locker call so that
         // any view of `isMigrated(token)` invoked during the locker's
@@ -1155,6 +1173,14 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
     function isMigrated(address tokenAddr) external view returns (bool) {
         TokenState storage s = tokens[tokenAddr];
         return s.token != address(0) && s.migrated;
+    }
+
+    /// @notice Authoritative CLANKER_V3 check for routers (e.g. ArcadeMultiSwap)
+    /// deciding V3-vs-V2 routing. Uses the launch mode, NOT the presence/absence
+    /// of a V2 pair (which anyone can create for a V3 token to flip routing).
+    function isClankerV3(address tokenAddr) external view returns (bool) {
+        TokenState storage s = tokens[tokenAddr];
+        return s.token != address(0) && s.mode == LaunchMode.CLANKER_V3;
     }
 
     /// @notice Current anti-sniper tax rate (bps) for `tokenAddr`, decaying

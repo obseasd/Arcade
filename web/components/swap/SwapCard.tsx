@@ -1054,9 +1054,18 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
   const fetching =
     !aggregatorReady &&
     (quoteOut.isFetching || quoteIn.isFetching || quoteMigratedOut.isFetching);
+  // USYC only trades via the Hashnote Teller (an exact-input synthetic route).
+  // In exact-output ("For") mode activeRoute is null, so a USDC/USYC swap would
+  // fall through to the legacy V2 path (no USDC/USYC pair) and submit a doomed
+  // tx. Gate the swap to exact-input whenever USYC is involved.
+  const isUsycPair =
+    tokenIn.address.toLowerCase() === USYC_ADDRESS.toLowerCase() ||
+    tokenOut?.address.toLowerCase() === USYC_ADDRESS.toLowerCase();
+
   const canSwap =
     !!account &&
     !!tokenOut &&
+    !(isUsycPair && !exactIn) &&
     !v3Unsupported &&
     // Audit 2026-06-11 bug #5: curve-only tokens have no aggregator path,
     // so the Swap button stays disabled and the user is steered to the

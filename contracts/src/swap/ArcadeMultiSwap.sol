@@ -234,12 +234,13 @@ contract ArcadeMultiSwap is ReentrancyGuard {
         emit MultiSwap(msg.sender, tokenOut, inputs.length, totalOut);
     }
 
-    /// @dev Returns true iff `token` is a launchpad token that has no V2 pair
-    /// (ie a Clanker V3 launch). We treat this as "V3 token" — must route via
-    /// the V3 router, not the V2 path.
+    /// @dev Returns true iff `token` is a Clanker V3 launch — must route via the
+    /// V3 router, not the V2 path. Uses the launchpad's authoritative mode, NOT
+    /// the presence/absence of a V2 pair: an attacker can create a rogue V2 pair
+    /// for a V3 token, and the old getPair==0 heuristic would then mis-route the
+    /// V3 token through that poisoned pair with false slippage protection.
     function _isV3LaunchToken(address token) internal view returns (bool) {
-        if (!launchpad.isMigrated(token)) return false;
-        return v2Factory.getPair(token, address(USDC)) == address(0);
+        return launchpad.isClankerV3(token);
     }
 
     /// @dev Returns true iff `token` is registered in the V4 launchpad and
