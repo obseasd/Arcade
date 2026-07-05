@@ -25,6 +25,15 @@ contract ArcadeV2Pair is ArcadeV2ERC20 {
     address public token0;
     address public token1;
 
+    /// @notice If nonzero, only this address may perform the FIRST mint (and any
+    ///         sync while totalSupply == 0). Set once by the factory at creation
+    ///         for launchpad-owned pairs so the deterministic pair address cannot
+    ///         be pre-minted / poisoned before the launchpad seeds it at
+    ///         graduation. Normal pairs leave this zero and stay fully
+    ///         permissionless. Once the first (gated) mint lands, the pair is
+    ///         permissionless forever.
+    address public seedGate;
+
     uint112 private reserve0;
     uint112 private reserve1;
     uint32 private blockTimestampLast;
@@ -70,10 +79,11 @@ contract ArcadeV2Pair is ArcadeV2ERC20 {
         factory = msg.sender;
     }
 
-    function initialize(address _token0, address _token1) external {
+    function initialize(address _token0, address _token1, address _seedGate) external {
         if (msg.sender != factory) revert Forbidden();
         token0 = _token0;
         token1 = _token1;
+        seedGate = _seedGate;
     }
 
     function getReserves() public view returns (uint112 _r0, uint112 _r1, uint32 _ts) {
@@ -132,6 +142,13 @@ contract ArcadeV2Pair is ArcadeV2ERC20 {
 
         bool feeOn = _mintFee(_r0, _r1);
         uint256 _totalSupply = totalSupply;
+        // Seed gate: on a launchpad-owned pair, only the launchpad may perform
+        // the first mint. Blocks an attacker from pre-minting LP (L-1 theft) or
+        // seeding a poisoned reserve that would revert / mis-price the
+        // launchpad's graduation seed (H-1 brick). No-op for normal pairs.
+        if (_totalSupply == 0 && seedGate != address(0) && msg.sender != seedGate) {
+            revert Forbidden();
+        }
         if (_totalSupply == 0) {
             liquidity = Math.sqrt(amount0 * amount1) - MINIMUM_LIQUIDITY;
             _mint(address(0xdead), MINIMUM_LIQUIDITY); // permanent lock (avoid address(0) on 0.8.x)
@@ -208,6 +225,12 @@ contract ArcadeV2Pair is ArcadeV2ERC20 {
     }
 
     function sync() external lock {
+        // While the pair is unseeded, gate sync too: otherwise an attacker could
+        // donate tokens and sync them into reserves, defeating the pre-seed skim
+        // and forcing the launchpad's first mint to open at a poisoned price.
+        if (totalSupply == 0 && seedGate != address(0) && msg.sender != seedGate) {
+            revert Forbidden();
+        }
         _update(
             IERC20Minimal(token0).balanceOf(address(this)),
             IERC20Minimal(token1).balanceOf(address(this)),

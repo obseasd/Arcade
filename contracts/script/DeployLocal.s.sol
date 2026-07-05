@@ -49,6 +49,8 @@ contract DeployLocal is Script {
         ArcadeLaunchpad launchpad = new ArcadeLaunchpad(
             IERC20(address(usdc)), factory, address(router), deployer, IArcadeV3Factory(v3Factory), address(0)
         );
+        // Authorize the launchpad to create seed-gated migration pairs.
+        factory.setLaunchpad(address(launchpad));
 
         // V3 locker + swap router + quoter so CLANKER_V3 tokens are tradeable.
         // Local deploys don't wire the Twitter escrow integration - pass 0.

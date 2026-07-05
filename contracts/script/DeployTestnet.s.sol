@@ -44,6 +44,8 @@ contract DeployTestnet is Script {
         ArcadeLaunchpad launchpad = new ArcadeLaunchpad(
             IERC20(usdc), factory, address(router), treasury, IArcadeV3Factory(v3Factory), weth
         );
+        // Authorize the launchpad to create seed-gated migration pairs.
+        factory.setLaunchpad(address(launchpad));
 
         // Optional Twitter escrow address. When set, the locker mirrors any
         // payout routed to it via the escrow's `creditSlot(...)` so the V3

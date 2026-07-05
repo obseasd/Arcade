@@ -300,6 +300,15 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
 
         emit TokenCreated(tokenAddr, msg.sender, mode, creator2, s.creator2ShareBps, name_, symbol_, metadataURI);
 
+        // Curve modes (PUMP/CLANKER) migrate to a V2 pair at graduation. Claim
+        // the deterministic USDC/token pair NOW, seed-gated to this launchpad, so
+        // no one can pre-mint or poison it before we seed it. Atomic with the
+        // token mint, so the pair address cannot be front-run. CLANKER_V3 has no
+        // curve and never migrates, so it needs no pair.
+        if (mode != LaunchMode.CLANKER_V3) {
+            v2Factory.createPairGated(address(USDC), tokenAddr);
+        }
+
         // CLANKER_V3 is a true Clanker-style launch: NO bonding curve. The
         // token goes straight into a locked single-sided V3 position and is
         // tradeable immediately. `buy`/`sell` (curve ops) revert for it since
@@ -936,29 +945,23 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         //  - H-1 (brick): with amountMin = 0 it never reverts on a poisoned or
         //    skewed pair, so migration always completes.
         // For the normal (empty) pair it adds the full seed and refunds nothing.
-        USDC.forceApprove(v2Router, usdcForLP);
-        IERC20(tokenAddr).forceApprove(v2Router, tokensForLP);
-        // Audit 2026-06-29: addLiquidity(min=0) does NOT "never revert" — a
-        // skewed pre-minted pair can make the quoted optimal amount round one
-        // side to 0, so pair.mint reverts (InsufficientLiquidityMinted) and the
-        // inline migration bricks the curve forever (H-1 regression). Wrap it in
-        // try/catch: on failure the token STILL graduates (no brick) and the
-        // seed USDC is routed to the treasury instead of the corrupted pair.
-        // The residual allowance to our own trusted immutable router is benign.
-        try IArcadeV2Router(v2Router).addLiquidity(
-            address(USDC), tokenAddr, usdcForLP, tokensForLP, 0, 0, DEAD, block.timestamp
-        ) returns (uint256 usedUsdc, uint256 usedToken, uint256) {
-            // Refund the precise un-seeded remainder (nonzero only when a skewed
-            // pair was pre-minted). USDC to treasury, leftover tokens to DEAD.
-            uint256 leftoverUsdc = usdcForLP - usedUsdc;
-            if (leftoverUsdc > 0) _safePayUsdc(treasury, leftoverUsdc);
-            uint256 leftoverToken = tokensForLP - usedToken;
-            if (leftoverToken > 0) IERC20(tokenAddr).safeTransfer(DEAD, leftoverToken);
-        } catch {
-            // Seeding the poisoned pair reverted: graduate anyway, seed to treasury.
-            _safePayUsdc(treasury, usdcForLP);
-        }
+        // Seed the pair directly at the curve's clearing price. The pair was
+        // pre-created seed-gated to this launchpad in createToken, so its first
+        // mint (and any sync while unseeded) is restricted to us: no attacker can
+        // hold pre-existing LP or sync a donation into the reserves. We still
+        // skim first to burn any RAW donated balance (reserves are 0, so skim
+        // sends the full donation to DEAD), guaranteeing the pool opens exactly
+        // at usdcForLP : tokensForLP. Because both sides are nonzero, the empty-
+        // pair sqrt-mint yields liquidity > 0 and can never revert, so migration
+        // always completes with a real, correctly priced market. This removes the
+        // old router.addLiquidity(min=0) path that trusted attacker reserves for
+        // pricing (L-1) and the try/catch that graduated market-less on a poisoned
+        // pair (H-1 regression). LP is minted to DEAD = permanently locked.
         address pair = v2Factory.getPair(address(USDC), tokenAddr);
+        IArcadeV2Pair(pair).skim(DEAD);
+        USDC.safeTransfer(pair, usdcForLP);
+        IERC20(tokenAddr).safeTransfer(pair, tokensForLP);
+        IArcadeV2Pair(pair).mint(DEAD);
         s.v2Pair = pair;
         emit Migrated(tokenAddr, pair, usdcForLP, tokensForLP);
     }

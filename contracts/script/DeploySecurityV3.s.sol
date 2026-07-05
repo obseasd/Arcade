@@ -141,6 +141,8 @@ contract DeploySecurityV3 is Script {
             IArcadeV3Factory(d.v3Factory),
             cfg.weth
         );
+        // Authorize the launchpad to create seed-gated migration pairs.
+        d.factory.setLaunchpad(address(d.launchpad));
 
         // 5) Locker (0.7.6 bytecode) carries launchpad + factory + escrow.
         // M-06: locker re-validates `paired ∈ {USDC, WETH}` at lockSingleSided.

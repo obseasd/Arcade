@@ -10,9 +10,14 @@ interface IArcadeV2Factory {
     function getPair(address tokenA, address tokenB) external view returns (address pair);
     function allPairs(uint256) external view returns (address pair);
     function allPairsLength() external view returns (uint256);
+    function launchpad() external view returns (address);
 
     function createPair(address tokenA, address tokenB) external returns (address pair);
+    /// @notice Launchpad-only. Creates the pair and marks it seed-gated to the
+    ///         launchpad so its first mint cannot be front-run / poisoned.
+    function createPairGated(address tokenA, address tokenB) external returns (address pair);
 
     function setFeeTo(address) external;
     function setFeeToSetter(address) external;
+    function setLaunchpad(address) external;
 }

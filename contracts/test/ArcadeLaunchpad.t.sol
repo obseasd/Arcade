@@ -31,6 +31,8 @@ contract ArcadeLaunchpadTest is Test {
         launchpad = new ArcadeLaunchpad(
             IERC20(address(usdc)), factory, address(router), treasury, IArcadeV3Factory(address(0)), address(0)
         );
+        // Authorize the launchpad to create seed-gated pairs (feeToSetter == this).
+        factory.setLaunchpad(address(launchpad));
 
         // Fund users
         usdc.mint(creator, 100 * 10 ** 6);
@@ -431,54 +433,49 @@ contract ArcadeLaunchpadTest is Test {
 
     // ============= M-09: V2 pair pre-donation skim ========================
 
-    function test_M09_v2PairPreDonationSkimmedToTreasury() public {
-        // Renamed-in-spirit-only post audit L-1: skim() was removed from
-        // the migration path (it was a no-op against pre-minted LP and
-        // donations now bake into DEAD's LP via the V2 mint formula
-        // sqrt(b0*b1) - 1000 on first mint). This test now verifies the
-        // donation IS absorbed into the locked LP rather than sitting on
-        // the pair as an attackable balance imbalance, while the
-        // pre-mint case (audit L-1 / H-1) is exercised in
-        // test_H1_v2PairPreMint_migrationStillCompletes below.
+    function test_M09_v2PairPreDonationSkimmedToDead() public {
+        // New invariant (2026-07-05): the launchpad pre-creates the USDC/token
+        // pair seed-gated to itself at token creation, so an attacker cannot
+        // mint or sync it. A raw USDC donation to the pair is skimmed to DEAD at
+        // migration (reserves are 0, sync is gated), so the pool opens at exactly
+        // the clearing price and the donation never dilutes or mis-prices the seed.
         address token = _createToken();
-
-        address pair = factory.createPair(address(usdc), token);
+        address pair = factory.getPair(address(usdc), token);
+        assertTrue(pair != address(0), "launchpad pre-created the gated pair");
 
         uint256 donation = 5_000 * 10 ** 6;
-        vm.startPrank(bob);
-        usdc.approve(address(launchpad), type(uint256).max);
+        vm.prank(bob);
         usdc.transfer(pair, donation);
-        vm.stopPrank();
+
+        uint256 deadBefore = usdc.balanceOf(launchpad.DEAD());
 
         vm.startPrank(alice);
         usdc.approve(address(launchpad), type(uint256).max);
         launchpad.buy(token, 100_000 * 10 ** 6, 0);
         vm.stopPrank();
 
-        // After migration the pair holds the seed PLUS the donation —
-        // both went into the V2 mint, both belong to the DEAD LP.
+        // Pair holds ONLY the seed; the donation was skimmed out to DEAD.
         uint256 pairUsdc = usdc.balanceOf(pair);
         uint256 expectedSeed = 20_000 * 10 ** 6 - launchpad.MIGRATION_FEE();
-        assertApproxEqAbs(
-            pairUsdc,
-            expectedSeed + donation,
-            2,
-            "pair holds seed + donation (both locked in DEAD's LP)"
-        );
+        assertApproxEqAbs(pairUsdc, expectedSeed, 2, "pair holds only the seed (donation skimmed)");
+        assertGe(usdc.balanceOf(launchpad.DEAD()) - deadBefore, donation, "donation skimmed to DEAD");
     }
 
-    /// @notice Audit 2026-06-28 H-1: a pre-minted V2 pair must NOT brick
-    /// migration. The previous hard-revert (audit L-1) was a permanent
-    /// griefing DoS: dust LP on the canonical pair froze migration forever.
-    /// Migration now seeds via the router's addLiquidity, which (a) completes
-    /// despite the poisoned pair and (b) adds only proportional liquidity, so
-    /// the pre-miner never captures the seed (L-1 still defended), with the
-    /// un-seeded USDC refunded to the treasury.
-    function test_H1_v2PairPreMint_migrationStillCompletes() public {
+    /// @notice Audit 2026-07-05: the launchpad pre-creates the canonical
+    /// USDC/token pair seed-gated to itself at token creation, closing the
+    /// pre-mint / poisoning vector (audit L-1 / H-1) at the source: an attacker
+    /// can neither re-create the pair nor perform its first mint/sync. Migration
+    /// seeds it directly at the clearing price and can never brick.
+    function test_H1_v2PairPreMint_blockedAndMigrationSeedsCleanly() public {
         address token = _createToken();
-        address pair = factory.createPair(address(usdc), token);
+        address pair = factory.getPair(address(usdc), token);
+        assertTrue(pair != address(0), "gated pair pre-created at token creation");
 
-        // Attacker pre-mints real LP on the canonical pair.
+        // Attacker cannot re-create the pair (already exists) ...
+        vm.expectRevert();
+        factory.createPair(address(usdc), token);
+
+        // ... and cannot perform the first mint or sync (seed-gated to launchpad).
         deal(address(usdc), bob, 1_000 * 10 ** 6);
         vm.startPrank(bob);
         usdc.approve(address(launchpad), type(uint256).max);
@@ -486,32 +483,30 @@ contract ArcadeLaunchpadTest is Test {
         uint256 bobTokenBal = IERC20(token).balanceOf(bob);
         usdc.transfer(pair, 100 * 10 ** 6);
         IERC20(token).transfer(pair, bobTokenBal);
+        vm.expectRevert(); // Forbidden: only the launchpad (seedGate) may first-mint
         IArcadeV2Pair(pair).mint(bob);
-        uint256 bobLp = IERC20(pair).balanceOf(bob);
+        vm.expectRevert(); // sync is gated too while unseeded
+        IArcadeV2Pair(pair).sync();
         vm.stopPrank();
 
         uint256 treasuryBefore = usdc.balanceOf(treasury);
 
-        // Graduate the curve. With the H-1 fix this MUST NOT revert.
+        // Graduate the curve: migration completes and seeds the locked DEAD LP.
         vm.startPrank(alice);
         usdc.approve(address(launchpad), type(uint256).max);
         launchpad.buy(token, 100_000 * 10 ** 6, 0);
-
-        // Migration completed: any further buy reverts (already migrated).
-        vm.expectRevert();
+        vm.expectRevert(); // already migrated
         launchpad.buy(token, 1_000 * 10 ** 6, 0);
         vm.stopPrank();
 
-        // The seed went to the locked DEAD LP, not the pre-miner.
+        // The seed is locked in DEAD's LP; the attacker captured nothing.
         assertGt(IERC20(pair).balanceOf(launchpad.DEAD()), 0, "DEAD holds the seeded LP");
-        // The pre-miner's LP is unchanged: no seed was donated to bob's position.
-        assertEq(IERC20(pair).balanceOf(bob), bobLp, "pre-miner LP unchanged");
-        // Treasury received at least the migration fee (proves migration ran),
-        // plus the refunded un-seeded USDC.
+        assertEq(IERC20(pair).balanceOf(bob), 0, "attacker holds no LP");
+        // Treasury got the migration fee (seed is exact now; no refund path).
         assertGe(
             usdc.balanceOf(treasury) - treasuryBefore,
             launchpad.MIGRATION_FEE(),
-            "treasury got fee + refund"
+            "treasury got MIGRATION_FEE"
         );
     }
 

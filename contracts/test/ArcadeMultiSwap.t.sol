@@ -40,6 +40,7 @@ contract ArcadeMultiSwapTest is Test {
         launchpad = new ArcadeLaunchpad(
             IERC20(address(usdc)), factory, address(router), treasury, IArcadeV3Factory(address(0)), address(0)
         );
+        factory.setLaunchpad(address(launchpad));
         multiSwap = new ArcadeMultiSwap(
             IERC20(address(usdc)),
             factory,
