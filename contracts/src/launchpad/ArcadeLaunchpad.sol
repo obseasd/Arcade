@@ -292,13 +292,16 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         TokenState storage s = tokens[tokenAddr];
         s.token = tokenAddr;
         s.creator = msg.sender;
-        s.creator2 = creator2;
-        s.creator2ShareBps = creator2 == address(0) ? 0 : creator2ShareBps;
+        // creator2 is a CLANKER-only feature (per the NatSpec): PUMP is a plain
+        // 50/50 platform/creator split and ignores any creator2 passed in.
+        bool useCreator2 = mode == LaunchMode.CLANKER && creator2 != address(0);
+        s.creator2 = useCreator2 ? creator2 : address(0);
+        s.creator2ShareBps = useCreator2 ? creator2ShareBps : 0;
         s.mode = mode;
         s.createdAt = uint64(block.timestamp);
         allTokens.push(tokenAddr);
 
-        emit TokenCreated(tokenAddr, msg.sender, mode, creator2, s.creator2ShareBps, name_, symbol_, metadataURI);
+        emit TokenCreated(tokenAddr, msg.sender, mode, s.creator2, s.creator2ShareBps, name_, symbol_, metadataURI);
 
         // Curve modes (PUMP/CLANKER) migrate to a V2 pair at graduation. Claim
         // the deterministic USDC/token pair NOW, seed-gated to this launchpad, so
@@ -674,6 +677,11 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         TokenState storage s = tokens[tokenAddr];
         if (s.token == address(0)) revert UnknownToken();
         if (!s.migrated) revert NotMigrated();
+        // CLANKER_V3 tokens have NO V2 pair (they trade on the locked V3 pool),
+        // and are `migrated` from birth. Routing them here would swap through an
+        // attacker-creatable, unauthenticated V2 pair with false slippage
+        // protection. Force them onto the V3 router instead.
+        if (s.mode == LaunchMode.CLANKER_V3) revert InvalidRoute();
         if (usdcIn == 0) revert ZeroAmount();
         if (v2Router == address(0)) revert NoRouter();
 
@@ -706,6 +714,9 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         TokenState storage s = tokens[tokenAddr];
         if (s.token == address(0)) revert UnknownToken();
         if (!s.migrated) revert NotMigrated();
+        // CLANKER_V3 has no V2 pair (see buyMigrated) - reject to avoid routing
+        // through an attacker-creatable pair with false slippage protection.
+        if (s.mode == LaunchMode.CLANKER_V3) revert InvalidRoute();
         if (tokensIn == 0) revert ZeroAmount();
         if (v2Router == address(0)) revert NoRouter();
 
@@ -782,6 +793,9 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         // purpose router for anyone willing to forceApprove. Royalty is
         // only charged when at least one side is a migrated launch.
         if (!inMigrated && !outMigrated) revert InvalidRoute();
+        // CLANKER_V3 tokens have no V2 pair; routing them here would hit an
+        // attacker-creatable pair. They must trade via the V3 router only.
+        if (sIn.mode == LaunchMode.CLANKER_V3 || sOut.mode == LaunchMode.CLANKER_V3) revert InvalidRoute();
 
         // --- Leg 1: tokenIn -> USDC ---
         IERC20(tokenIn).safeTransferFrom(msg.sender, address(this), tokensIn);
@@ -863,6 +877,9 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         // Quote mirror of the swapMigratedRoute guard so the UI knows the
         // route is invalid before the user signs.
         if (!inMigrated && !outMigrated) return (0, 0);
+        if (tokens[tokenIn].mode == LaunchMode.CLANKER_V3 || tokens[tokenOut].mode == LaunchMode.CLANKER_V3) {
+            return (0, 0);
+        }
 
         uint256[] memory leg1 = IArcadeV2Router(v2Router).getAmountsOut(
             tokensIn, _path2(tokenIn, address(USDC))
@@ -1098,9 +1115,19 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
             // an order-of-magnitude pre-init corruption.
             uint256 expectedOut = (creatorBuyUsdc * TOTAL_SUPPLY) / mcap;
             uint256 minOut = (expectedOut * 7500) / 10000;
-            IArcadeV3Router(v3Router).exactInputSingle(
+            // Best-effort: a pre-initialized (poisoned) pool can push the price
+            // so the 75% minOut reverts. Don't let the OPTIONAL creator buy brick
+            // the whole launch - on failure, refund the creator and complete the
+            // launch without the buy. (The locker fix already guarantees the LP
+            // seed itself never reverts on a poisoned pre-init.)
+            try IArcadeV3Router(v3Router).exactInputSingle(
                 address(USDC), tokenAddr, fee, s.creator, creatorBuyUsdc, minOut, block.timestamp + 600
-            );
+            ) returns (uint256) {
+                // bought successfully
+            } catch {
+                USDC.forceApprove(v3Router, 0);
+                USDC.safeTransfer(s.creator, creatorBuyUsdc);
+            }
         }
     }
 

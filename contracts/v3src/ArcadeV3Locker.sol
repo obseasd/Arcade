@@ -365,8 +365,18 @@ contract ArcadeV3Locker is IUniswapV3MintCallback {
         address token0 = pos.token0;
         address token1 = pos.token1;
         bool tokenIsToken0 = p.token == token0;
+        // Anchor the bands beyond the pool's LIVE tick as well as the intended
+        // price. pool.mint computes owed amounts from slot0.tick, not from the
+        // passed sqrtPriceX96, so if someone pre-initialized the pool at an
+        // out-of-band tick, bands anchored only to the intended price would
+        // straddle the live tick and make mint owe the paired token the locker
+        // does not hold -> TRANSFER_FAIL -> the whole launch bricks. Clamping to
+        // max(live,intended) (token0) / min(live,intended) (token1) keeps every
+        // mint single-sided against the live tick while never selling supply
+        // past the intended FDV (so the 2026-06-29 steal-the-supply stays shut).
+        (, int24 liveTick,,,,,) = IUniswapV3Pool(p.pool).slot0();
         (int24[3] memory lowers, int24[3] memory uppers) =
-            _computeRanges(tokenIsToken0, p.sqrtPriceX96, IUniswapV3Pool(p.pool).tickSpacing(), n);
+            _computeRanges(tokenIsToken0, p.sqrtPriceX96, liveTick, IUniswapV3Pool(p.pool).tickSpacing(), n);
 
         bytes memory cb = abi.encode(token0, token1);
         _expectedPool = p.pool;
@@ -410,12 +420,18 @@ contract ArcadeV3Locker is IUniswapV3MintCallback {
     /// @dev Computes the 1 or 3 single-sided tick bands sitting on the far side
     /// of the launch price. With 3 ranges the supply concentrates near the start
     /// (band 0 = closest), spreading out to ~4x then ~25x and beyond.
-    function _computeRanges(bool tokenIsToken0, uint160 sqrtPriceX96, int24 spacing, uint8 n)
+    function _computeRanges(bool tokenIsToken0, uint160 sqrtPriceX96, int24 liveTick, int24 spacing, uint8 n)
         internal
         pure
         returns (int24[3] memory lowers, int24[3] memory uppers)
     {
-        int24 cur = TickMath.getTickAtSqrtRatio(sqrtPriceX96);
+        int24 intendedTick = TickMath.getTickAtSqrtRatio(sqrtPriceX96);
+        // token0 launch: sell ABOVE the higher of (live, intended) so mint is
+        // token0-only and price never opens below intent. token1 launch: sell
+        // BELOW the lower of (live, intended), symmetric.
+        int24 cur = tokenIsToken0
+            ? (liveTick > intendedTick ? liveTick : intendedTick)
+            : (liveTick < intendedTick ? liveTick : intendedTick);
         int24 maxUsable = (TickMath.MAX_TICK / spacing) * spacing;
         int24 minUsable = -maxUsable;
         int24 o1 = (BAND_OFF_1 / spacing) * spacing;

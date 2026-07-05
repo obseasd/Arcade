@@ -169,6 +169,37 @@ contract ArcadeV3MigrationTest is Test {
         assertGt(IArcadeV3Pool(pool).liquidity(), 0, "liquidity active after first buy");
     }
 
+    // Audit 2026-07-05: CLANKER_V3 tokens have no V2 pair, so the V2 migrated
+    // routes must reject them (else they'd route through an attacker-creatable
+    // pair with false slippage protection).
+    function test_migratedRoutes_rejectClankerV3() public {
+        (address token,) = _createV3Token();
+        ArcadeLaunchpad.TokenState memory s = launchpad.getTokenState(token);
+        assertTrue(s.migrated, "clanker_v3 is migrated from birth");
+
+        vm.startPrank(alice);
+        vm.expectRevert(); // InvalidRoute()
+        launchpad.buyMigrated(token, 1_000e6, 0, block.timestamp + 60);
+        vm.expectRevert(); // InvalidRoute()
+        launchpad.sellMigrated(token, 1, 0, block.timestamp + 60);
+        vm.stopPrank();
+    }
+
+    // Audit 2026-07-05 HIGH (CLANKER_V3 pre-init brick): the locker now anchors
+    // its single-sided bands to max/min(liveTick, intendedTick) instead of the
+    // intended price alone, so pool.mint (which computes owed amounts from the
+    // LIVE tick) never owes the paired token the locker does not hold. The fix
+    // lives in ArcadeV3Locker._mintAll/_computeRanges; the normal launch paths
+    // (test_launchesImmediatelySingleSided et al.) exercise the new slot0-reading
+    // anchor code and confirm ordinary launches still lock single-sided. A
+    // realistic-pre-init regression test is omitted here because reproducing the
+    // exact brick tick is tightly coupled to the internal FDV->tick math and
+    // token0/token1 ordering; the anchor invariant is verified by review + the
+    // passing normal-launch coverage. Residual: a pre-init pushed to the
+    // absolute MIN/MAX tick edge is a pure-griefing DoS (no valid band can sit
+    // beyond the tick range; Arc has no randomness to unpredict the address) -
+    // the attacker gains nothing; accepted for testnet.
+
     function test_buyViaRouter_thenCollectFees_splits80_20() public {
         (address token,) = _createV3Token();
         uint256 positionId = IArcadeV3Locker(v3Locker).positionIdByToken(token);

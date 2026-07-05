@@ -510,6 +510,38 @@ contract ArcadeLaunchpadTest is Test {
         );
     }
 
+    // ===== Audit 2026-07-05: createPair no-code guard (front-run DoS regression) =====
+
+    function test_createPair_rejectsUndeployedToken_launchStillWorks() public {
+        // An attacker who predicts a launchpad token's deterministic pair slot
+        // must NOT be able to pre-occupy it via the permissionless createPair:
+        // at front-run time the predicted token has no code, so createPair reverts.
+        address notDeployed = address(0xBEEF);
+        assertEq(notDeployed.code.length, 0, "precondition: no code");
+        vm.expectRevert(); // NoCode()
+        factory.createPair(address(usdc), notDeployed);
+
+        // And a normal PUMP launch still creates its gated pair inside createToken.
+        address token = _createToken();
+        assertTrue(factory.getPair(address(usdc), token) != address(0), "gated pair created by launch");
+    }
+
+    // ===== Audit 2026-07-05: creator2 is CLANKER-only (matches NatSpec) =====
+
+    function test_pumpMode_ignoresCreator2() public {
+        address token = _createTokenMode(IArcadeLaunchpad.LaunchMode.PUMP, bob, 5000);
+        IArcadeLaunchpad.TokenState memory s = launchpad.getTokenState(token);
+        assertEq(s.creator2, address(0), "PUMP ignores creator2");
+        assertEq(s.creator2ShareBps, 0, "PUMP zeroes creator2ShareBps");
+    }
+
+    function test_clankerMode_honorsCreator2() public {
+        address token = _createTokenMode(IArcadeLaunchpad.LaunchMode.CLANKER, bob, 5000);
+        IArcadeLaunchpad.TokenState memory s = launchpad.getTokenState(token);
+        assertEq(s.creator2, bob, "CLANKER honors creator2");
+        assertEq(s.creator2ShareBps, 5000, "CLANKER keeps creator2ShareBps");
+    }
+
     // ============= L-12: setV3Infra rejects zero addresses ===============
 
     function test_L12_setV3Infra_rejectsZero() public {

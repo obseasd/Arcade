@@ -18,6 +18,7 @@ contract ArcadeV2Factory is IArcadeV2Factory {
     error ZeroAddress();
     error PairExists();
     error Forbidden();
+    error NoCode();
 
     constructor(address _feeToSetter) {
         feeToSetter = _feeToSetter;
@@ -28,6 +29,15 @@ contract ArcadeV2Factory is IArcadeV2Factory {
     }
 
     function createPair(address tokenA, address tokenB) external override returns (address pair) {
+        // Both tokens must already be deployed. A launchpad token's pair address
+        // is deterministic (CREATE from the launchpad), so without this guard an
+        // attacker could pre-occupy that slot via this permissionless path BEFORE
+        // the token exists, making the launchpad's later createPairGated revert
+        // (PairExists) and bricking every PUMP/CLANKER launch. At front-run time
+        // the predicted token has no code; the launchpad only calls
+        // createPairGated AFTER `new ArcadeLaunchToken` deploys code, and every
+        // legitimate USDC pool pairs already-deployed tokens, so this is safe.
+        if (tokenA.code.length == 0 || tokenB.code.length == 0) revert NoCode();
         return _createPair(tokenA, tokenB, address(0));
     }
 
