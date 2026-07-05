@@ -89,13 +89,8 @@ async function main() {
         console.error(`\nArcade refused: ${plan.error ?? plan.reason ?? "unknown"}`);
         process.exit(1);
     }
-    const calls = plan.calls ?? [];
-    if (!calls.length) {
-        console.error("\nNo calls[] to execute (nothing to sign).");
-        return;
-    }
 
-    // 2) Execute the descriptors with the agent's Circle wallet.
+    // 2) Wallet needed from here on.
     const { CIRCLE_API_KEY, CIRCLE_ENTITY_SECRET, CIRCLE_WALLET_ID } = process.env;
     const missing = ["CIRCLE_API_KEY", "CIRCLE_ENTITY_SECRET", "CIRCLE_WALLET_ID"].filter(
         (k) => !process.env[k],
@@ -108,7 +103,61 @@ async function main() {
         apiKey: CIRCLE_API_KEY,
         entitySecret: CIRCLE_ENTITY_SECRET,
     });
+
+    let calls = plan.calls ?? [];
     const results = [];
+
+    // 2a) Permit2 venues (Synthra/UnitFlow): the /swap plan is not directly
+    // executable. Run the 3-step flow: approve Permit2 -> sign the PermitSingle
+    // typedData with Circle -> POST /swap/finalize to get the execute() call.
+    if (plan.requiresPermit2Signature && plan.permit2) {
+        const body = JSON.parse(bodyArg ?? "{}");
+        const p2 = plan.permit2;
+        // Step 1: one-time approve of the Permit2 contract (idempotent; a
+        // standing max allowance means this is a no-op refresh).
+        console.error("[permit2] approving Permit2 contract...");
+        const ar = await executeOne(c, CIRCLE_WALLET_ID, p2.approve);
+        results.push({ fn: "approve->Permit2", ...ar });
+        console.error(`[executed] approve->Permit2 -> ${ar.txHash ?? ar.state}`);
+        // Step 2: sign the PermitSingle typedData. Circle wants the whole
+        // typed-data object (incl. EIP712Domain) as a JSON string.
+        console.error("[permit2] signing PermitSingle typedData with Circle...");
+        const signed = await c.signTypedData({
+            walletId: CIRCLE_WALLET_ID,
+            data: JSON.stringify(p2.typedData),
+        });
+        const signature = signed?.data?.signature;
+        if (!signature) throw new Error("Circle signTypedData returned no signature");
+        // Step 3: finalize -> execute() descriptor.
+        console.error("[permit2] finalizing to get execute() call...");
+        const finRes = await fetch(`${BASE}/swap/finalize`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+                tokenIn: body.tokenIn,
+                tokenOut: body.tokenOut,
+                amountIn: body.amountIn,
+                recipient: body.recipient,
+                slippageBps: body.slippageBps,
+                permit: p2.permit,
+                signature,
+            }),
+        });
+        const finPlan = await finRes.json();
+        if (finPlan.ok === false) {
+            console.error(`\nfinalize refused: ${finPlan.error ?? finPlan.reason ?? "unknown"}`);
+            process.exit(1);
+        }
+        calls = finPlan.calls ?? [];
+    }
+
+    if (!calls.length) {
+        console.error("\nNo calls[] to execute (nothing to sign).");
+        console.log(JSON.stringify({ ok: true, endpoint, results }, null, 2));
+        return;
+    }
+
+    // 2b) Execute the (possibly finalized) descriptors in order.
     for (const d of calls) {
         const r = await executeOne(c, CIRCLE_WALLET_ID, d);
         results.push({ fn: d.abiFunctionSignature, ...r });
