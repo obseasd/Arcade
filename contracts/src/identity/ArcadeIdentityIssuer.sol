@@ -83,6 +83,11 @@ contract ArcadeIdentityIssuer {
     IERC8004Identity public immutable registry;
     address public immutable owner;
 
+    /// @notice Highest tier each wallet has already minted. mint() only allows
+    /// strict upgrades (Silver -> Gold -> Diamond), so a qualified creator can't
+    /// spam unlimited duplicate identity NFTs / events at the same tier.
+    mapping(address => uint8) public mintedTier;
+
     // Cap the bonded-count walk so an attacker can't grief us with a
     // pathological launchpad that has millions of address entries. The
     // launchpad is owner-gated for new launches so this is defensive
@@ -94,6 +99,7 @@ contract ArcadeIdentityIssuer {
     error InsufficientLaunches();
     error InvalidTier();
     error NotOwner();
+    error AlreadyMinted();
 
     event IdentityMinted(
         address indexed creator,
@@ -129,6 +135,10 @@ contract ArcadeIdentityIssuer {
         (uint256 v2n, uint256 v4n) = _bondedCountsOf(msg.sender);
         uint8 earned = _tierFromCount(v2n + v4n);
         if (earned < claimedTier) revert InsufficientLaunches();
+        // Only strict upgrades: blocks unlimited duplicate mints at a tier the
+        // wallet already holds (event/registry spam).
+        if (claimedTier <= mintedTier[msg.sender]) revert AlreadyMinted();
+        mintedTier[msg.sender] = claimedTier;
         // Build the tokenURI on-chain from the VERIFIED tier. A caller-supplied
         // URI let anyone display "Diamond" regardless of their real tier, making
         // the whole reputation badge decorative. Now the metadata cannot diverge

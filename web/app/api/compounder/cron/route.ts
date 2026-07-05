@@ -559,20 +559,15 @@ async function prepareOne(
                 `token=${position.tokenId} reason=compound:${sim.skip}`,
             );
             if (sim.skip === "NOT_DEPOSITED") {
+                // Reconcile directly against the DB (mirror of the RECEIVE
+                // path). The previous cross-service HTTP hop to the
+                // UNAUTHENTICATED /api/compounder/positions endpoint added a
+                // rate-limit/503 failure mode and a missing-ownerAddress
+                // inconsistency for no benefit.
                 try {
-                    const baseUrl =
-                        process.env.NEXT_PUBLIC_BASE_URL ??
-                        "https://www.arcade.trading";
-                    await fetch(`${baseUrl}/api/compounder/positions`, {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({
-                            action: "withdraw",
-                            tokenId: position.tokenId,
-                        }),
-                    });
+                    await markWithdrawn(position.tokenId);
                 } catch {
-                    // best-effort
+                    // best-effort - the reconcile cron will retry
                 }
             }
             return null;

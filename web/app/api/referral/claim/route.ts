@@ -63,9 +63,11 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: "invalid signature" }, { status: 401 });
     }
 
+    // --- Setup: compute + reserve. A throw here is pre-payment, safe to 500. ---
     let reservationId: number | null = null;
+    let claimable = 0n;
     try {
-        const claimable = await getClaimableUsdMicros(referrer);
+        claimable = await getClaimableUsdMicros(referrer);
         if (claimable <= 0n) {
             return NextResponse.json({ ok: true, claimed: "0", reason: "nothing claimable" });
         }
@@ -78,20 +80,40 @@ export async function POST(req: NextRequest) {
                 { status: 409 },
             );
         }
-        // Pays `referrer` (recipient is the referrer itself, never caller-
-        // supplied), then settles the reservation to 'paid'.
-        const txHash = await sendUsdcFromTreasury(referrer, claimable);
-        await settleClaim(reservationId, txHash);
-        return NextResponse.json({ ok: true, claimed: claimable.toString(), txHash });
     } catch (e) {
-        // The signer contract: throw ONLY when the transfer never broadcast.
-        // In that case release the reservation so the referrer can retry; a
-        // submitted-but-unconfirmed transfer must instead return its hash so
-        // the claim settles rather than reaching here.
-        if (reservationId !== null) await releaseClaim(reservationId);
+        return NextResponse.json(
+            { error: e instanceof Error ? e.message : "claim setup failed" },
+            { status: 500 },
+        );
+    }
+
+    // --- Pay. A throw here means the transfer NEVER broadcast (signer
+    // contract), so releasing the reservation for a retry is safe. ---
+    let txHash: string;
+    try {
+        txHash = await sendUsdcFromTreasury(referrer, claimable);
+    } catch (e) {
+        await releaseClaim(reservationId);
         return NextResponse.json(
             { error: e instanceof Error ? e.message : "claim failed" },
             { status: 500 },
         );
     }
+
+    // --- Settle. The USDC is already OUT. NEVER release from here: releasing
+    // would re-open `claimable` and allow a double-pay of an already-broadcast
+    // transfer. If settle fails, leave the reservation in place (it keeps
+    // offsetting claimable) and report paid-but-unsettled for operator
+    // reconcile. ---
+    try {
+        await settleClaim(reservationId, txHash);
+    } catch {
+        return NextResponse.json({
+            ok: true,
+            claimed: claimable.toString(),
+            txHash,
+            settled: false,
+        });
+    }
+    return NextResponse.json({ ok: true, claimed: claimable.toString(), txHash });
 }

@@ -446,6 +446,13 @@ contract ArcadeTwitterEscrowV3 is Ownable2Step, Pausable, ReentrancyGuard {
         if (pairedToken == clankerToken) revert InvalidTokens();
 
         uint256 executeAfter = block.timestamp + claimTimelock;
+        // Refuse an authorization that could never be claimed: if the signed
+        // deadline falls before the timelock's executeAfter, claim() would
+        // always revert on the deadline and the slot would silently freeze
+        // (SlotPending) until an owner veto. Reject at authorize time instead.
+        // No-op when claimTimelock == 0 (testnet), since deadline >= now is
+        // already enforced above.
+        if (deadline < executeAfter) revert DeadlineInPast();
         pendingClaims[nonce] = PendingClaim({
             recipient: recipient,
             pairedToken: pairedToken,
