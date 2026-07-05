@@ -112,21 +112,23 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
     uint16 internal constant MAX_SNIPE_BPS = 5_000;
 
     address public constant DEAD = 0x000000000000000000000000000000000000dEaD;
+    // The v2Factory/v2Router/v3Factory/deployer immutables below are `internal`
+    // (no external reader, verified) to reclaim EIP-170 headroom.
 
     // --- Immutables ---
 
     IERC20 public immutable USDC;
-    IArcadeV2Factory public immutable v2Factory;
-    address public immutable v2Router;
+    IArcadeV2Factory internal immutable v2Factory;
+    address internal immutable v2Router;
     address public immutable treasury;
     /// @notice Uniswap V3 factory (for CLANKER_V3 vault migrations). May be the
     /// zero address on deployments that don't use V3 vaults.
-    IArcadeV3Factory public immutable v3Factory;
+    IArcadeV3Factory internal immutable v3Factory;
     /// @notice WETH on Arc, used as the quote token for POOL_WETH launches.
     /// May be the zero address on deployments that don't offer WETH pools.
     address public immutable weth;
     /// @notice Deployer, allowed to wire the V3 locker exactly once.
-    address public immutable deployer;
+    address internal immutable deployer;
     /// @notice ArcadeV3Locker that permanently holds CLANKER_V3 LP positions.
     /// Set once post-deploy (the locker needs this contract's address at its
     /// own construction, so the wiring is circular and resolved via a setter).
@@ -138,7 +140,10 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
 
     // --- State ---
 
-    mapping(address => TokenState) public tokens;
+    // `internal`: nothing reads tokens() directly (frontend uses getTokenState;
+    // routers use isMigrated/getTokenState/creatorBondedCount). Dropping the
+    // redundant struct auto-getter reclaims EIP-170 headroom.
+    mapping(address => TokenState) internal tokens;
     /// @notice Count of a creator's tokens that have GRADUATED off the bonding
     /// curve (PUMP/CLANKER via _migrate). CLANKER_V3 never graduates via the
     /// curve, so it is never counted. O(1) read for the identity issuer's tier
@@ -766,6 +771,28 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
      * works but charges nothing; the user should call the V2 router
      * directly in that case to save gas.
      */
+    /// @dev Shared validation + classification for the token<->token migrated
+    /// route (swapMigratedRoute + its quote). Returns `ok=false` for an
+    /// unroutable pair: same token, either side USDC, either side CLANKER_V3, or
+    /// neither side a migrated launch. Royalty is only charged on migrated sides.
+    function _migratedPair(address tokenIn, address tokenOut)
+        internal
+        view
+        returns (bool inMig, bool outMig, bool ok)
+    {
+        if (tokenIn == tokenOut || tokenIn == address(USDC) || tokenOut == address(USDC)) {
+            return (false, false, false);
+        }
+        TokenState storage sIn = tokens[tokenIn];
+        TokenState storage sOut = tokens[tokenOut];
+        if (sIn.mode == LaunchMode.CLANKER_V3 || sOut.mode == LaunchMode.CLANKER_V3) {
+            return (false, false, false);
+        }
+        inMig = sIn.token != address(0) && sIn.migrated;
+        outMig = sOut.token != address(0) && sOut.migrated;
+        ok = inMig || outMig;
+    }
+
     function swapMigratedRoute(
         address tokenIn,
         address tokenOut,
@@ -777,30 +804,11 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         if (block.timestamp > deadline) revert Expired();
         if (v2Router == address(0)) revert NoRouter();
         if (tokensIn == 0) revert ZeroAmount();
-        // Same token / USDC short-circuits aren't unknown tokens, they're just
-        // unsupported routes here. Use `InvalidRoute()` so the caller can
-        // disambiguate from a never-launched token.
-        if (
-            tokenIn == tokenOut
-                || tokenIn == address(USDC)
-                || tokenOut == address(USDC)
-        ) revert InvalidRoute();
-
-        TokenState storage sIn = tokens[tokenIn];
-        TokenState storage sOut = tokens[tokenOut];
-        bool inMigrated = sIn.token != address(0) && sIn.migrated;
-        bool outMigrated = sOut.token != address(0) && sOut.migrated;
-
-        // Audit fix (swap-migrated-route-frees-arbitrary-pairs): refuse to
-        // route a pair where neither side is a registered launchpad token.
-        // Without this guard, the function happily multi-hops any two V2
-        // tokens through USDC for zero royalty, making it a free general-
-        // purpose router for anyone willing to forceApprove. Royalty is
-        // only charged when at least one side is a migrated launch.
-        if (!inMigrated && !outMigrated) revert InvalidRoute();
-        // CLANKER_V3 tokens have no V2 pair; routing them here would hit an
-        // attacker-creatable pair. They must trade via the V3 router only.
-        if (sIn.mode == LaunchMode.CLANKER_V3 || sOut.mode == LaunchMode.CLANKER_V3) revert InvalidRoute();
+        // Shared validation (rejects same-token / USDC-side / CLANKER_V3 /
+        // neither-side-migrated) + per-side classification. `_migratedPair` is
+        // reused by quoteSwapMigratedRoute so the two stay in lockstep.
+        (bool inMigrated, bool outMigrated, bool ok) = _migratedPair(tokenIn, tokenOut);
+        if (!ok) revert InvalidRoute();
 
         // --- Leg 1: tokenIn -> USDC ---
         IERC20(tokenIn).safeTransferFrom(msg.sender, address(this), tokensIn);
@@ -838,14 +846,14 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
             if (inMigrated) {
                 uint256 royaltyA = (usdcMidOriginal * MIGRATED_ROYALTY_BPS) / FEE_DENOMINATOR;
                 if (royaltyA > 0) {
-                    _distributeMigratedFee(sIn, royaltyA);
+                    _distributeMigratedFee(tokens[tokenIn], royaltyA);
                     usdcMid -= royaltyA;
                 }
             }
             if (outMigrated) {
                 uint256 royaltyB = (usdcMidOriginal * MIGRATED_ROYALTY_BPS) / FEE_DENOMINATOR;
                 if (royaltyB > 0) {
-                    _distributeMigratedFee(sOut, royaltyB);
+                    _distributeMigratedFee(tokens[tokenOut], royaltyB);
                     usdcMid -= royaltyB;
                 }
             }
@@ -856,8 +864,9 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         uint256[] memory leg2 = IArcadeV2Router(v2Router).swapExactTokensForTokens(
             usdcMid, minTokensOut, _path2(address(USDC), tokenOut), msg.sender, deadline
         );
+        // The router already enforces minTokensOut as amountOutMin, so leg2[1]
+        // is guaranteed >= minTokensOut here (no redundant re-check needed).
         tokensOut = leg2[1];
-        if (tokensOut < minTokensOut) revert Slippage();
     }
 
     /**
@@ -871,20 +880,9 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         returns (uint256 tokensOut, uint256 totalRoyaltyUsdc)
     {
         if (v2Router == address(0) || tokensIn == 0) return (0, 0);
-        if (
-            tokenIn == tokenOut
-                || tokenIn == address(USDC)
-                || tokenOut == address(USDC)
-        ) return (0, 0);
-
-        bool inMigrated = tokens[tokenIn].token != address(0) && tokens[tokenIn].migrated;
-        bool outMigrated = tokens[tokenOut].token != address(0) && tokens[tokenOut].migrated;
-        // Quote mirror of the swapMigratedRoute guard so the UI knows the
-        // route is invalid before the user signs.
-        if (!inMigrated && !outMigrated) return (0, 0);
-        if (tokens[tokenIn].mode == LaunchMode.CLANKER_V3 || tokens[tokenOut].mode == LaunchMode.CLANKER_V3) {
-            return (0, 0);
-        }
+        // Same shared validation as swapMigratedRoute (invalid routes quote 0).
+        (bool inMigrated, bool outMigrated, bool ok) = _migratedPair(tokenIn, tokenOut);
+        if (!ok) return (0, 0);
 
         uint256[] memory leg1 = IArcadeV2Router(v2Router).getAmountsOut(
             tokensIn, _path2(tokenIn, address(USDC))
@@ -1176,14 +1174,6 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
     function isMigrated(address tokenAddr) external view returns (bool) {
         TokenState storage s = tokens[tokenAddr];
         return s.token != address(0) && s.migrated;
-    }
-
-    /// @notice Authoritative CLANKER_V3 check for routers (e.g. ArcadeMultiSwap)
-    /// deciding V3-vs-V2 routing. Uses the launch mode, NOT the presence/absence
-    /// of a V2 pair (which anyone can create for a V3 token to flip routing).
-    function isClankerV3(address tokenAddr) external view returns (bool) {
-        TokenState storage s = tokens[tokenAddr];
-        return s.token != address(0) && s.mode == LaunchMode.CLANKER_V3;
     }
 
     /// @notice Current anti-sniper tax rate (bps) for `tokenAddr`, decaying

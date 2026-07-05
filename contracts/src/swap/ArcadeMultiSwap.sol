@@ -240,7 +240,7 @@ contract ArcadeMultiSwap is ReentrancyGuard {
     /// for a V3 token, and the old getPair==0 heuristic would then mis-route the
     /// V3 token through that poisoned pair with false slippage protection.
     function _isV3LaunchToken(address token) internal view returns (bool) {
-        return launchpad.isClankerV3(token);
+        return launchpad.getTokenState(token).mode == IArcadeLaunchpad.LaunchMode.CLANKER_V3;
     }
 
     /// @dev Returns true iff `token` is registered in the V4 launchpad and
