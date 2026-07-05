@@ -80,25 +80,25 @@ export function useV3Tokens() {
     contracts: addrs.map((a) => ({
       address: ADDRESSES.launchpad,
       abi: LAUNCHPAD_ABI,
-      functionName: "tokens",
+      // getTokenState replaces the removed public `tokens` getter (dropped to
+      // fit the launchpad under EIP-170). Returns the SAME data, but as a named
+      // struct object rather than a positional tuple.
+      functionName: "getTokenState",
       args: [a],
     })),
     query: { enabled: addrs.length > 0 },
   });
 
-  // tokens() returns a tuple; mode is index 4 (uint8), migrated is index 7 (bool).
   const v3Addrs: Address[] = [];
   const v3Pools: Address[] = []; // parallel to v3Addrs (the V3 pool per token)
   if (stateCalls.data) {
     for (let i = 0; i < addrs.length; i++) {
       const r = stateCalls.data[i];
       if (r?.status !== "success") continue;
-      const tuple = r.result as unknown as readonly unknown[];
-      const mode = Number(tuple[4]);
-      const migrated = Boolean(tuple[7]);
-      if (mode === CLANKER_V3_MODE && migrated) {
+      const st = r.result as unknown as { mode: number; migrated: boolean; v2Pair: Address };
+      if (Number(st.mode) === CLANKER_V3_MODE && Boolean(st.migrated)) {
         v3Addrs.push(addrs[i]);
-        v3Pools.push(tuple[10] as Address); // v2Pair field stores the V3 pool
+        v3Pools.push(st.v2Pair); // v2Pair field stores the V3 pool
       }
     }
   }

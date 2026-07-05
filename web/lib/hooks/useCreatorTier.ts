@@ -117,7 +117,9 @@ export function useCreatorTier(
         contracts: tokenAddrs.map((addr) => ({
             address: ADDRESSES.launchpad,
             abi: LAUNCHPAD_ABI,
-            functionName: "tokens" as const,
+            // getTokenState replaces the removed public `tokens` getter
+            // (dropped for EIP-170); returns the same data as a named struct.
+            functionName: "getTokenState" as const,
             args: [addr] as const,
         })),
         query: { enabled: enabled && tokenAddrs.length > 0 },
@@ -140,10 +142,13 @@ export function useCreatorTier(
             // worthless CLANKER_V3 tokens for 30 USDC and earn Diamond.
             // Bond is the gate; CLANKER_V3 = locked LP at creation, no
             // bond demonstrated.
-            const tuple = r.result as readonly unknown[];
-            const tokenCreator = (tuple?.[1] as Address | undefined)?.toLowerCase();
-            const migrated = Boolean(tuple?.[7]);
-            if (tokenCreator === lcCreator && migrated) n += 1;
+            const st = r.result as { creator?: Address; migrated?: boolean; mode?: number } | undefined;
+            const tokenCreator = st?.creator?.toLowerCase();
+            const migrated = Boolean(st?.migrated);
+            // H-12: exclude CLANKER_V3 (mode 2) - migrated from birth, no bond.
+            // Matches the launchpad's on-chain creatorBondedCount tally.
+            const isClankerV3 = Number(st?.mode) === 2;
+            if (tokenCreator === lcCreator && migrated && !isClankerV3) n += 1;
         }
         return n;
     }, [creator, statesQ.data]);

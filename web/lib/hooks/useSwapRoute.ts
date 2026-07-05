@@ -59,13 +59,13 @@ export function useSwapRoute(tokenIn?: Address, tokenOut?: Address): SwapRoute {
       {
         address: ADDRESSES.launchpad,
         abi: LAUNCHPAD_ABI,
-        functionName: "tokens",
+        functionName: "getTokenState",
         args: tokenIn ? [tokenIn] : undefined,
       },
       {
         address: ADDRESSES.launchpad,
         abi: LAUNCHPAD_ABI,
-        functionName: "tokens",
+        functionName: "getTokenState",
         args: tokenOut ? [tokenOut] : undefined,
       },
     ],
@@ -123,11 +123,13 @@ export function useSwapRoute(tokenIn?: Address, tokenOut?: Address): SwapRoute {
     // royalty is paid on the relevant leg(s).
     const inState = migrationProbe.data?.[0];
     const outState = migrationProbe.data?.[1];
-    // tokens(...) returns a tuple. `migrated` is the 8th field (index 7).
+    // getTokenState(...) returns a named struct (zeroed for non-launchpad
+    // tokens, so `migrated` is just false). Replaced the removed `tokens`
+    // getter (dropped for EIP-170).
     const inMigrated =
-      inState?.status === "success" && Array.isArray(inState.result) && !!(inState.result as readonly unknown[])[7];
+      inState?.status === "success" && !!(inState.result as { migrated?: boolean } | undefined)?.migrated;
     const outMigrated =
-      outState?.status === "success" && Array.isArray(outState.result) && !!(outState.result as readonly unknown[])[7];
+      outState?.status === "success" && !!(outState.result as { migrated?: boolean } | undefined)?.migrated;
     return {
       path: [tokenIn, ADDRESSES.usdc, tokenOut],
       hops: 2,
