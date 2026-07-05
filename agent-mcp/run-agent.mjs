@@ -29,8 +29,26 @@
  */
 
 import { initiateDeveloperControlledWalletsClient } from "@circle-fin/developer-controlled-wallets";
+import { createPublicClient, http, parseEventLogs } from "viem";
 
 const BASE = process.env.ARCADE_BASE || "https://www.arcade.trading/api/agent";
+const RPC = process.env.NEXT_PUBLIC_ARC_RPC_URL || "https://rpc.testnet.arc.network";
+
+// Minimal event ABI to recover a freshly-created launchpad token address.
+const TOKEN_CREATED_EVENT = {
+    type: "event",
+    name: "TokenCreated",
+    inputs: [
+        { name: "token", type: "address", indexed: true },
+        { name: "creator", type: "address", indexed: true },
+        { name: "mode", type: "uint8" },
+        { name: "creator2", type: "address" },
+        { name: "creator2ShareBps", type: "uint16" },
+        { name: "name", type: "string" },
+        { name: "symbol", type: "string" },
+        { name: "metadataURI", type: "string" },
+    ],
+};
 const READ_ONLY = new Set(["quote", "markets", "trending", "portfolio"]);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -158,12 +176,40 @@ async function main() {
     }
 
     // 2b) Execute the (possibly finalized) descriptors in order.
+    let createTxHash = null;
     for (const d of calls) {
         const r = await executeOne(c, CIRCLE_WALLET_ID, d);
         results.push({ fn: d.abiFunctionSignature, ...r });
         console.error(`[executed] ${d.abiFunctionSignature} -> ${r.txHash ?? r.state}`);
+        if (d.abiFunctionSignature.startsWith("createToken")) createTxHash = r.txHash;
     }
-    console.log(JSON.stringify({ ok: true, endpoint, results }, null, 2));
+
+    // 2c) On a launchpad create, decode the new token address from the
+    // TokenCreated event so you can immediately buy it.
+    let createdToken = null;
+    if (createTxHash) {
+        try {
+            const pc = createPublicClient({ transport: http(RPC, { timeout: 15000 }) });
+            let receipt = null;
+            for (let i = 0; i < 10 && !receipt; i++) {
+                try {
+                    receipt = await pc.getTransactionReceipt({ hash: createTxHash });
+                } catch {
+                    await sleep(2000);
+                }
+            }
+            const evs = receipt ? parseEventLogs({ abi: [TOKEN_CREATED_EVENT], logs: receipt.logs }) : [];
+            createdToken = evs[0]?.args?.token ?? null;
+            if (createdToken) {
+                console.error(`\n[created token] ${createdToken}`);
+                console.error(`Buy it: node run-agent.mjs launchpad '{"action":"buy","token":"${createdToken}","amountUsdcIn":"1000000"}'`);
+            }
+        } catch (e) {
+            console.error(`[warn] could not decode created token: ${e?.message ?? e}`);
+        }
+    }
+
+    console.log(JSON.stringify({ ok: true, endpoint, createdToken, results }, null, 2));
 }
 
 main().catch((e) => {
