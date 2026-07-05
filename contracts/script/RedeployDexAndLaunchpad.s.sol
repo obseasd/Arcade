@@ -4,6 +4,7 @@ pragma solidity ^0.8.24;
 import {Script, console2} from "forge-std/Script.sol";
 import {ArcadeV2Factory} from "../src/dex/ArcadeV2Factory.sol";
 import {ArcadeV2Router} from "../src/dex/ArcadeV2Router.sol";
+import {ArcadeV2Zap} from "../src/dex/ArcadeV2Zap.sol";
 import {ArcadeLaunchpad} from "../src/launchpad/ArcadeLaunchpad.sol";
 import {IArcadeLaunchpad} from "../src/launchpad/interfaces/IArcadeLaunchpad.sol";
 import {ArcadeMultiSwap, IArcadeV4SwapRouterMin, IArcadeV4LaunchpadMin} from "../src/swap/ArcadeMultiSwap.sol";
@@ -47,6 +48,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
  *                                    the deployer EOA)
  *           ARCADE_BACKEND_SIGNER  = escrow trusted signer
  *           V3_FACTORY             = reused v3 factory
+ *           V3_NPM                 = reused v3 NonfungiblePositionManager (for the V3 zap)
  *         Optional env:
  *           ESCROW_OWNER (default deployer), ARC_WETH_ADDRESS (default known WETH),
  *           V4_ROUTER (default 0), V4_LAUNCHPAD (default 0)
@@ -73,6 +75,7 @@ contract RedeployDexAndLaunchpad is Script {
         address weth = vm.envOr("ARC_WETH_ADDRESS", address(0x9570EBA9eE39Aa4933f64d6add280faAB289a847));
 
         address v3Factory = vm.envAddress("V3_FACTORY");
+        address v3Npm = vm.envAddress("V3_NPM"); // reused V3 NonfungiblePositionManager (for the V3 zap)
         address v4Router = vm.envOr("V4_ROUTER", address(0));
         address v4Launchpad = vm.envOr("V4_LAUNCHPAD", address(0));
 
@@ -124,6 +127,12 @@ contract RedeployDexAndLaunchpad is Script {
             IArcadeV4LaunchpadMin(v4Launchpad)
         );
 
+        // 10. Zaps. The V2 zap MUST be fresh (it targets the new factory/router).
+        //     The V3 zap carries the delta-only-sweep theft fix, so redeploy it
+        //     too (it reuses the unchanged v3 factory + NPM).
+        ArcadeV2Zap v2Zap = new ArcadeV2Zap(address(factory), address(router));
+        address v3Zap = _deployV3Zap(v3Factory, v3Npm);
+
         vm.stopBroadcast();
 
         console2.log("==== RedeployDexAndLaunchpad (seed-gate migration fix) ====");
@@ -137,6 +146,8 @@ contract RedeployDexAndLaunchpad is Script {
         console2.log("v3Router:         ", v3Router);
         console2.log("tokenVault:       ", address(tokenVault));
         console2.log("multiSwap:        ", address(multiSwap));
+        console2.log("v2Zap:            ", address(v2Zap));
+        console2.log("v3Zap:            ", v3Zap);
         console2.log("--------------------------------------------------------");
         console2.log("NEXT_PUBLIC_V2_FACTORY_ADDRESS=", address(factory));
         console2.log("NEXT_PUBLIC_V2_ROUTER_ADDRESS=", address(router));
@@ -146,6 +157,20 @@ contract RedeployDexAndLaunchpad is Script {
         console2.log("NEXT_PUBLIC_V3_ROUTER_ADDRESS=", v3Router);
         console2.log("NEXT_PUBLIC_TOKEN_VAULT_ADDRESS=", address(tokenVault));
         console2.log("NEXT_PUBLIC_MULTISWAP_ADDRESS=", address(multiSwap));
+        console2.log("NEXT_PUBLIC_V2_ZAP_ADDRESS=", address(v2Zap));
+        console2.log("NEXT_PUBLIC_V3_ZAP_ADDRESS=", v3Zap);
+    }
+
+    function _deployV3Zap(address factory_, address npm_) internal returns (address zap) {
+        // ArcadeV3Zap constructor: (address factory_, address npm_)
+        bytes memory code = abi.encodePacked(
+            vm.getCode("out-v3/ArcadeV3Zap.sol/ArcadeV3Zap.json"),
+            abi.encode(factory_, npm_)
+        );
+        assembly {
+            zap := create(0, add(code, 0x20), mload(code))
+        }
+        require(zap != address(0), "v3 zap deploy failed");
     }
 
     // ---- V3 0.7.6 deployment helpers (out-v3 artifacts) ----
