@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
+import {Base64} from "@openzeppelin/contracts/utils/Base64.sol";
+
 /**
  * @title ArcadeIdentityIssuer
  * @notice Wraps Arc's ERC-8004 Identity Registry to enforce
@@ -42,6 +44,8 @@ interface IArcadeLaunchpadView {
     function getTokensCount() external view returns (uint256);
     function allTokens(uint256 index) external view returns (address);
     function tokens(address token) external view returns (TokenState memory);
+    /// @notice O(1) count of a creator's PUMP/CLANKER curve graduations.
+    function creatorBondedCount(address creator) external view returns (uint256);
 }
 
 interface IArcadeHookView {
@@ -151,15 +155,19 @@ contract ArcadeIdentityIssuer {
     /// `data:application/json` so no off-chain hosting is trusted.
     function _tierUri(uint8 tier) internal pure returns (string memory) {
         string memory name = tier == TIER_DIAMOND ? "Diamond" : tier == TIER_GOLD ? "Gold" : "Silver";
-        return string(
+        // base64-encoded so strict metadata parsers accept it (a plain
+        // `data:application/json,{...}` with unescaped braces/quotes is rejected
+        // by some clients).
+        string memory json = string(
             abi.encodePacked(
-                'data:application/json,{"name":"Arcade Identity: ',
+                '{"name":"Arcade Identity: ',
                 name,
                 '","description":"On-chain-verified Arcade creator tier.","attributes":[{"trait_type":"Tier","value":"',
                 name,
                 '"}]}'
             )
         );
+        return string(abi.encodePacked("data:application/json;base64,", Base64.encode(bytes(json))));
     }
 
     // ===== Views =====
@@ -178,27 +186,14 @@ contract ArcadeIdentityIssuer {
     }
 
     function _bondedCountsOf(address creator) internal view returns (uint256 v2n, uint256 v4n) {
-        // V2 launchpad: count tokens where creator matches AND migrated.
-        // CLANKER_V3 (mode 2) launches do NOT count: they skip the
-        // bonding curve entirely, so a scammer could mint 10 worthless
-        // CLANKER_V3 tokens for 30 USDC and earn Diamond if we counted
-        // them. Audit 2026-06-18 H-12.
-        uint256 total = launchpad.getTokensCount();
-        if (total > SAFE_COUNT_CAP) total = SAFE_COUNT_CAP;
-        for (uint256 i = 0; i < total; i++) {
-            address t = launchpad.allTokens(i);
-            IArcadeLaunchpadView.TokenState memory s = launchpad.tokens(t);
-            // H-12: CLANKER_V3 (mode 2) launches are migrated=true from birth
-            // and skip the bonding curve, so they MUST NOT count - otherwise a
-            // scammer mints 10 worthless CLANKER_V3 tokens for 30 USDC and earns
-            // Diamond. Only genuine curve graduations (PUMP/CLANKER) count.
-            if (
-                s.creator == creator && s.migrated
-                    && s.mode != IArcadeLaunchpadView.LaunchMode.CLANKER_V3
-            ) {
-                v2n++;
-            }
-        }
+        // V2 launchpad: O(1) read of the launchpad's own bonded tally. This
+        // counts PUMP/CLANKER curve graduations only; the launchpad increments
+        // it in _migrate, which CLANKER_V3 never reaches (H-12: CLANKER_V3 is
+        // migrated=true from birth and must NOT count, else a scammer mints 10
+        // worthless CLANKER_V3 tokens for 30 USDC and earns Diamond). Replaces a
+        // capped O(n) allTokens scan that silently under-counted any creator
+        // whose launches sat past index SAFE_COUNT_CAP once the list grew.
+        v2n = launchpad.creatorBondedCount(creator);
         // V4 ArcadeHook: count graduated launches (status == 2).
         if (address(arcadeHook) != address(0)) {
             uint256 hookTotal = arcadeHook.tokensCount();

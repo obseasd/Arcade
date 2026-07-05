@@ -139,6 +139,11 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
     // --- State ---
 
     mapping(address => TokenState) public tokens;
+    /// @notice Count of a creator's tokens that have GRADUATED off the bonding
+    /// curve (PUMP/CLANKER via _migrate). CLANKER_V3 never graduates via the
+    /// curve, so it is never counted. O(1) read for the identity issuer's tier
+    /// gate (replaces an O(n) allTokens scan that truncated past a cap).
+    mapping(address => uint256) public creatorBondedCount;
     address[] public allTokens;
 
     struct Comment {
@@ -911,6 +916,9 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         TokenState storage s = tokens[tokenAddr];
         s.migrated = true;
         s.migratedAt = uint64(block.timestamp);
+        // O(1) bonded-launch tally for the identity tier gate (PUMP/CLANKER
+        // graduations only; CLANKER_V3 never reaches _migrate).
+        creatorBondedCount[s.creator] += 1;
 
         // H-05: take MIGRATION_FEE off the top to the treasury. With the
         // standard 20k raised, the pair gets 17.5k seed + 2.5k goes to
@@ -1075,24 +1083,17 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         // FDV-based minOut.
         (uint160 sp,,,,,,) = IArcadeV3Pool(pool).slot0();
         if (sp == 0) revert InvalidRoute();
-        // Audit 2026-07-05: bound a hostile pre-init. A legit launch opens the
-        // pool at exactly `sqrtPriceX96`; only an attacker pre-inits the
-        // (address-predictable) pool at another price. The locker's max/min
-        // tick anchor absorbs a small deviation, but a large one on the HARMFUL
-        // side (UP for a token0 launch, DOWN for a token1 launch) would open the
-        // pool far off intent with no counter-liquidity to arb it back, leaving
-        // a completed-but-permanently-mispriced launch. Bound the harmful-side
-        // deviation to ~5% (in sqrt-price) so material griefs REVERT (creator
-        // retries on a fresh nonce/address) instead of silently corrupting.
-        {
-            uint256 intended = uint256(sqrtPriceX96);
-            uint256 live = uint256(sp);
-            if (tokenAddr == token0) {
-                if (live > (intended * 105) / 100) revert InvalidRoute();
-            } else {
-                if (live < (intended * 95) / 100) revert InvalidRoute();
-            }
-        }
+        // Anchor-only, deliberately NO price-deviation revert here. The V3 pool
+        // address is CREATE-nonce predictable and Uniswap createPool/initialize
+        // are permissionless, so an attacker can pre-init the predicted pool for
+        // gas only. A hard revert on deviation would hand that attacker a cheap,
+        // repeatable brick-DoS of the launch (verified 2026-07-05). Instead we
+        // keep sqrtPriceX96 at the INTENDED price and let the locker anchor its
+        // bands to max/min(liveTick, intendedTick): the mint stays single-sided
+        // (never owes the paired token), so a hostile pre-init yields at worst a
+        // mispriced-but-tradeable launch, never a brick. The creator-buy below
+        // still enforces an FDV-based minOut. (Arc has no randomness to make the
+        // address unpredictable; completing-mispriced beats bricking.)
 
         // L-02: flip migrated state BEFORE the external locker call so that
         // any view of `isMigrated(token)` invoked during the locker's
