@@ -1076,11 +1076,13 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         // attacker's price, letting them buy it cheap (steal-the-supply).
         // Keep sqrtPriceX96 at the INTENDED launch price. The locker anchors
         // its bands to max/min(liveTick, intendedTick) so the mint stays
-        // single-sided against the live tick (never owes the paired token), and
-        // the ~5% harmful-deviation guard below reverts a materially hostile
-        // pre-init instead of completing a mispriced launch. A small pre-init is
-        // absorbed by the anchor; the creator-buy path also enforces an
-        // FDV-based minOut.
+        // single-sided against the live tick (never owes the paired token), so a
+        // hostile pre-init yields at worst a mispriced-but-tradeable launch, not
+        // a brick (see the anchor-only note below). The creator-buy path also
+        // enforces an FDV-based minOut. (Residual: a pre-init pushed to the
+        // absolute MIN/MAX tick edge can still revert inside the locker's band
+        // math - a pure grief the attacker gains nothing from, unavoidable
+        // without pool-address unpredictability that Arc has no randomness for.)
         (uint160 sp,,,,,,) = IArcadeV3Pool(pool).slot0();
         if (sp == 0) revert InvalidRoute();
         // Anchor-only, deliberately NO price-deviation revert here. The V3 pool
