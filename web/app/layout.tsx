@@ -49,7 +49,7 @@ export const metadata: Metadata = {
     title: "Arcade",
     description: "USDC-native AMM and fair-launch tokenization on Arc.",
     images: ["/api/og/brand"],
-    site: "@arcade",
+    site: "@ArcadeSwap",
   },
 };
 
@@ -64,6 +64,13 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         url: "https://www.arcade.trading",
         logo: "https://www.arcade.trading/arcdlogo22.png",
         description: "USDC-native DEX and bonding-curve launchpad on Circle's Arc L1.",
+        // sameAs strengthens the brand entity so Google links the domain to
+        // its known social profiles (a signal that correlates with sitelinks
+        // eligibility and a richer brand result).
+        sameAs: [
+          "https://x.com/ArcadeSwap",
+          "https://discord.gg/NTx4Rkq2p5",
+        ],
       },
       {
         "@type": "WebSite",
