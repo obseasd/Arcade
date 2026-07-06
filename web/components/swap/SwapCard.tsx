@@ -1793,7 +1793,9 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
                   ? "UnitFlow V3"
                   : activeRoute.provider === "xylonet-v1"
                     ? "XyloNet"
-                    : "External"
+                    : activeRoute.provider === "usyc-teller"
+                      ? "Circle"
+                      : "External"
               : isV3Swap
                 ? "Arcade V3"
                 : "Arcade V2"
@@ -1806,7 +1808,9 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
                   ? "/unitflow.svg"
                   : activeRoute.provider === "xylonet-v1"
                     ? "/xylonet.svg"
-                    : undefined
+                    : activeRoute.provider === "usyc-teller"
+                      ? "/circle.png"
+                      : undefined
               : undefined
           }
         />
