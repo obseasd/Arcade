@@ -111,11 +111,6 @@ export default function Home() {
             animate="show"
             className="flex flex-col items-center"
           >
-            <motion.div variants={fadeUp} className="arc-pill mb-6">
-              <span className="h-1.5 w-1.5 rounded-full bg-arc-success" />
-              Live on Arc Testnet
-            </motion.div>
-
             <motion.h1
               variants={fadeUp}
               className="max-w-3xl font-display text-5xl font-semibold tracking-tight text-arc-text sm:text-6xl"
