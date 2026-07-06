@@ -164,7 +164,7 @@ export const PROVIDER_META: Record<ProviderId, ProviderMeta> = {
   },
   "usyc-teller": {
     id: "usyc-teller",
-    label: "USYC Teller",
+    label: "USYC",
     longLabel: "Hashnote USYC ERC-4626 Teller (subscribe / redeem)",
     accent: "text-sky-400",
   },

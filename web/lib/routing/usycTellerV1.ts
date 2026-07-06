@@ -68,7 +68,7 @@ export const usycTellerV1Provider: RouteProvider = {
     return {
       provider: "usyc-teller",
       amountOut,
-      pathLabel: isDeposit ? "subscribe (Teller)" : "redeem (Teller)",
+      pathLabel: isDeposit ? "subscribe Circle" : "redeem Circle",
       approval: {
         token: req.tokenIn,
         spender: USYC_TELLER_ADDRESS,

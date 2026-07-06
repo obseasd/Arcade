@@ -18,6 +18,7 @@ const PROVIDER_LOGOS: Partial<Record<ProviderId, string>> = {
   "synthra-v3": "/synthra.svg",
   "unitflow-v3": "/unitflow.svg",
   "xylonet-v1": "/xylonet.svg",
+  "usyc-teller": "/circle.png",
 };
 
 /**
