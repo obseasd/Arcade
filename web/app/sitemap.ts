@@ -13,8 +13,8 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     const staticUrls: MetadataRoute.Sitemap = [
         { url: base, priority: 1, changeFrequency: "daily" },
         { url: `${base}/swap`, priority: 0.9, changeFrequency: "daily" },
-        { url: `${base}/launchpad`, priority: 0.9, changeFrequency: "hourly" },
-        { url: `${base}/explore`, priority: 0.8, changeFrequency: "hourly" },
+        { url: `${base}/launchpad`, priority: 0.9, changeFrequency: "daily" },
+        { url: `${base}/explore`, priority: 0.8, changeFrequency: "daily" },
         { url: `${base}/earn`, priority: 0.8, changeFrequency: "daily" },
         { url: `${base}/stats`, priority: 0.7, changeFrequency: "daily" },
         { url: `${base}/docs`, priority: 0.7, changeFrequency: "weekly" },
@@ -52,7 +52,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
         )) as (string | null)[];
         tokenUrls = addrs
             .filter((a): a is string => !!a && /^0x[0-9a-fA-F]{40}$/.test(a))
-            .map((a) => ({ url: `${base}/launchpad/${a}`, priority: 0.6, changeFrequency: "hourly" as const }));
+            .map((a) => ({ url: `${base}/launchpad/${a}`, priority: 0.6, changeFrequency: "daily" as const }));
     } catch {
         // RPC blip: still serve the static sitemap.
     }
