@@ -361,10 +361,14 @@ export function BridgeCard() {
   const isArcDest = dstChainId === ARC_CHAIN_ID;
   const buyTokenOptions = useMemo<TokenOption[]>(() => {
     const seen = new Set<string>();
+    const usdcLc = ADDRESSES.usdc.toLowerCase();
     const out: TokenOption[] = [];
     for (const t of [...v2Tokens, ...v3Tokens]) {
       const a = t.address.toLowerCase();
       if (seen.has(a)) continue;
+      // You can't "buy" USDC with USDC — it's the input asset. Exclude it so
+      // the buy target is always a real token (launchpad / cirBTC / EURC / ...).
+      if (a === usdcLc) continue;
       seen.add(a);
       out.push({
         address: t.address,
@@ -382,6 +386,8 @@ export function BridgeCard() {
     BRIDGE_BUY_ENABLED &&
     buyOnArrival &&
     !!buyToken &&
+    // Never fold a USDC->USDC "buy" (no-op that just refunds).
+    buyToken.address.toLowerCase() !== ADDRESSES.usdc.toLowerCase() &&
     isArcDest &&
     !isSolanaBridgeId(srcChainId);
 
