@@ -1414,6 +1414,7 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
       }
       pushToast({
         kind: "swap",
+        action: "Swap",
         tokenAddress: tokenOut.address,
         tokenSymbol: tokenOut.symbol,
         amountFormatted: outFormatted,

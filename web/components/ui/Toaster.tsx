@@ -237,7 +237,7 @@ function ToastCard({ payload, onClose }: { payload: ToastPayload; onClose: () =>
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5 text-xs text-arc-text-muted">
-            <span>Confirmed</span>
+            <span>{payload.action ? `${payload.action} confirmed` : "Confirmed"}</span>
             <CheckCircle2 className="h-3.5 w-3.5 text-arc-success" />
           </div>
           <div className="mt-0.5 text-sm font-semibold tabular-nums text-arc-text">

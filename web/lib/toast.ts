@@ -11,6 +11,9 @@ import { Address } from "viem";
 
 export interface SwapToastPayload {
   kind: "swap";
+  /** Header verb, eg "Swap", "Bridge", "Trade", "Buy". Renders as
+   *  "{action} confirmed". Falls back to a bare "Confirmed" when omitted. */
+  action?: string;
   /** Address of the token the user received. */
   tokenAddress?: Address;
   tokenSymbol?: string;

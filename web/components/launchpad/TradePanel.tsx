@@ -198,6 +198,7 @@ export function TradePanel({
       }
       pushToast({
         kind: "swap",
+        action: side === "buy" ? "Buy" : "Sell",
         tokenAddress: side === "buy" ? token : ADDRESSES.usdc,
         tokenSymbol: side === "buy" ? symbol : "USDC",
         tokenImage: side === "buy" ? image : undefined,

@@ -599,6 +599,7 @@ function CreateTokenInner() {
       }
       pushToast({
         kind: "swap",
+        action: "Launch",
         tokenAddress: newAddr ?? undefined,
         tokenSymbol: `$${symbol.trim() || "TOKEN"}`,
         tokenImage: image || undefined,

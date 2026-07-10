@@ -586,6 +586,7 @@ export function MultiSwapCard({ tab, onTabChange }: MultiSwapCardProps) {
       if (usdcToSwap > 0n) reportReferralTrade(account, usdcToSwap);
       pushToast({
         kind: "swap",
+      action: "Swap",
         tokenAddress: outputToken.address,
         tokenSymbol: outputToken.symbol,
         amountFormatted: outFormatted,

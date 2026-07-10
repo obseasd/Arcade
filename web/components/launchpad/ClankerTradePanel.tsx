@@ -178,6 +178,7 @@ export function ClankerTradePanel({ token, symbol, pool, image, onTradeSuccess }
       if (refVol > 0n) reportReferralTrade(account, refVol);
       pushToast({
         kind: "swap",
+        action: "Trade",
         tokenAddress: side === "buy" ? token : ADDRESSES.usdc,
         tokenSymbol: outTokenSymbol,
         tokenImage: side === "buy" ? image : undefined,

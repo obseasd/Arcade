@@ -572,6 +572,7 @@ export function BridgeCard() {
           : `https://testnet.arcscan.app/address/${account}`;
       pushToast({
         kind: "swap",
+        action: "Bridge",
         tokenSymbol: "USDC",
         amountFormatted: formatUSDC(amountSnapshot, 6, 2),
         explorerUrl: destExplorer,
@@ -1076,6 +1077,7 @@ export function BridgeCard() {
       setStep({ kind: "done", mintTxHash: hash, dstId: step.dstId });
       pushToast({
         kind: "swap",
+        action: "Bridge",
         tokenSymbol: "USDC",
         amountFormatted: formatUSDC(amountRaw, 6, 2),
         explorerUrl: `${dstChainCfg.explorer}/tx/${hash}`,
