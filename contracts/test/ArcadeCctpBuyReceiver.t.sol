@@ -78,6 +78,38 @@ contract MockLaunchpad {
     }
 }
 
+/// AMM fallback: swaps USDC -> path[last] at `rate`, delivered to `to`.
+contract MockV2Router {
+    MintableERC20 public usdc;
+    uint256 public rate = 3;
+    bool public failMode;
+
+    constructor(MintableERC20 _usdc) {
+        usdc = _usdc;
+    }
+
+    function setFail(bool f) external {
+        failMode = f;
+    }
+
+    function swapExactTokensForTokens(
+        uint256 amountIn,
+        uint256 amountOutMin,
+        address[] calldata path,
+        address to,
+        uint256
+    ) external returns (uint256[] memory amounts) {
+        require(!failMode, "amm fail");
+        usdc.transferFrom(msg.sender, address(this), amountIn);
+        uint256 out = amountIn * rate;
+        require(out >= amountOutMin, "amm slippage");
+        MintableERC20(path[path.length - 1]).mint(to, out);
+        amounts = new uint256[](2);
+        amounts[0] = amountIn;
+        amounts[1] = out;
+    }
+}
+
 /* -------------------------------- tests ------------------------------- */
 
 contract ArcadeCctpBuyReceiverTest is Test {
@@ -85,6 +117,7 @@ contract ArcadeCctpBuyReceiverTest is Test {
     MintableERC20 token;
     MockMessageTransmitter mt;
     MockLaunchpad launchpad;
+    MockV2Router v2Router;
     ArcadeCctpBuyReceiver receiver;
 
     address beneficiary = makeAddr("beneficiary");
@@ -96,10 +129,12 @@ contract ArcadeCctpBuyReceiverTest is Test {
         token = new MintableERC20("Launch", "LAUNCH");
         mt = new MockMessageTransmitter(usdc);
         launchpad = new MockLaunchpad(usdc);
+        v2Router = new MockV2Router(usdc);
         receiver = new ArcadeCctpBuyReceiver(
             address(mt),
             address(usdc),
-            address(launchpad)
+            address(launchpad),
+            address(v2Router)
         );
     }
 
@@ -143,14 +178,26 @@ contract ArcadeCctpBuyReceiverTest is Test {
         assertEq(usdc.balanceOf(address(receiver)), 0, "receiver drained");
     }
 
-    function test_refundsUsdcWhenBuyReverts() public {
+    function test_refundsUsdcWhenBothRoutesRevert() public {
         launchpad.setFail(true);
+        v2Router.setFail(true);
         bytes memory m = _msg(address(receiver), AMT, beneficiary, address(token), 0);
         receiver.receiveAndBuy(m, "");
         assertEq(usdc.balanceOf(beneficiary), AMT, "USDC returned to beneficiary");
         assertEq(token.balanceOf(beneficiary), 0, "no tokens");
         assertEq(usdc.balanceOf(address(receiver)), 0, "receiver drained");
-        assertEq(usdc.allowance(address(receiver), address(launchpad)), 0, "approval reset");
+        assertEq(usdc.allowance(address(receiver), address(launchpad)), 0, "launchpad approval reset");
+        assertEq(usdc.allowance(address(receiver), address(v2Router)), 0, "router approval reset");
+    }
+
+    function test_ammFallback_deliversTokenWhenNotACurveToken() public {
+        // Curve buy reverts (migrated / cirBTC / EURC) -> AMM route delivers.
+        launchpad.setFail(true);
+        bytes memory m = _msg(address(receiver), AMT, beneficiary, address(token), 0);
+        receiver.receiveAndBuy(m, "");
+        assertEq(token.balanceOf(beneficiary), AMT * 3, "tokens delivered via AMM (rate 3)");
+        assertEq(usdc.balanceOf(beneficiary), 0, "no USDC refund on success");
+        assertEq(usdc.balanceOf(address(receiver)), 0, "receiver drained");
     }
 
     function test_trustless_attackerCannotRedirect() public {

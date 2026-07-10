@@ -20,6 +20,16 @@ interface IArcadeLaunchpadBuy {
         returns (uint256 tokensOut, uint256 usdcSpent, uint256 refund);
 }
 
+interface IV2Router {
+    function swapExactTokensForTokens(
+        uint256 amountIn,
+        uint256 amountOutMin,
+        address[] calldata path,
+        address to,
+        uint256 deadline
+    ) external returns (uint256[] memory amounts);
+}
+
 /**
  * @title ArcadeCctpBuyReceiver
  * @notice "Bridge and buy" landing contract on Arc. A user on another chain
@@ -51,6 +61,9 @@ contract ArcadeCctpBuyReceiver is ReentrancyGuard {
     IMessageTransmitterV2 public immutable messageTransmitter;
     IERC20 public immutable usdc;
     address public immutable launchpad;
+    /// V2 router used as an AMM fallback when the token isn't a live curve
+    /// token (migrated launch, cirBTC, EURC, any USDC-paired token).
+    address public immutable v2Router;
 
     // Byte offsets of fields inside the full CCTP V2 `message`.
     uint256 private constant MINT_RECIPIENT_OFFSET = 184; // body(148) + 36
@@ -70,16 +83,23 @@ contract ArcadeCctpBuyReceiver is ReentrancyGuard {
     error NotForThisReceiver();
     error NothingMinted();
 
-    constructor(address _messageTransmitter, address _usdc, address _launchpad) {
+    constructor(
+        address _messageTransmitter,
+        address _usdc,
+        address _launchpad,
+        address _v2Router
+    ) {
         require(
             _messageTransmitter != address(0) &&
                 _usdc != address(0) &&
-                _launchpad != address(0),
+                _launchpad != address(0) &&
+                _v2Router != address(0),
             "zero addr"
         );
         messageTransmitter = IMessageTransmitterV2(_messageTransmitter);
         usdc = IERC20(_usdc);
         launchpad = _launchpad;
+        v2Router = _v2Router;
     }
 
     /**
@@ -113,6 +133,8 @@ contract ArcadeCctpBuyReceiver is ReentrancyGuard {
         uint256 minted = usdc.balanceOf(address(this)) - balBefore;
         if (minted == 0) revert NothingMinted();
 
+        // Route 1: the bonding-curve launchpad (works only for a live,
+        // non-migrated curve token).
         usdc.forceApprove(launchpad, minted);
         try IArcadeLaunchpadBuy(launchpad).buy(token, minted, minTokensOut) returns (
             uint256 tokensOut,
@@ -127,16 +149,47 @@ contract ArcadeCctpBuyReceiver is ReentrancyGuard {
             // existing stuck balance is never swept into this transfer.
             uint256 leftover = usdc.balanceOf(address(this)) - balBefore;
             if (leftover > 0) usdc.safeTransfer(beneficiary, leftover);
-            emit BridgeBuy(beneficiary, token, minted, tokensOut, true);
-        } catch {
-            // Buy failed (migrated/slippage/unknown token) — return the bridged
-            // USDC so the user still receives their funds on Arc.
             usdc.forceApprove(launchpad, 0);
-            usdc.safeTransfer(beneficiary, minted);
-            emit BridgeBuy(beneficiary, token, minted, 0, false);
+            emit BridgeBuy(beneficiary, token, minted, tokensOut, true);
             return;
+        } catch {
+            // Not a live curve token (migrated / cirBTC / EURC / unknown) — fall
+            // through to the AMM.
+            usdc.forceApprove(launchpad, 0);
         }
-        usdc.forceApprove(launchpad, 0);
+
+        // Route 2: AMM fallback. Swap USDC -> token via the V2 router, delivered
+        // straight to the beneficiary. Covers migrated launches and any
+        // USDC-paired token (cirBTC, EURC, ...).
+        usdc.forceApprove(v2Router, minted);
+        address[] memory path = new address[](2);
+        path[0] = address(usdc);
+        path[1] = token;
+        try
+            IV2Router(v2Router).swapExactTokensForTokens(
+                minted,
+                minTokensOut,
+                path,
+                beneficiary,
+                block.timestamp
+            )
+        returns (uint256[] memory amounts) {
+            usdc.forceApprove(v2Router, 0);
+            emit BridgeBuy(
+                beneficiary,
+                token,
+                minted,
+                amounts.length > 0 ? amounts[amounts.length - 1] : 0,
+                true
+            );
+            return;
+        } catch {
+            usdc.forceApprove(v2Router, 0);
+        }
+
+        // Both routes failed — return the bridged USDC so funds are never stuck.
+        usdc.safeTransfer(beneficiary, minted);
+        emit BridgeBuy(beneficiary, token, minted, 0, false);
     }
 
     /// @dev Read a 32-byte word at `offset` inside the `message` calldata bytes.

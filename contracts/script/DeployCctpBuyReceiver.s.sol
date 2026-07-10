@@ -23,12 +23,14 @@ contract DeployCctpBuyReceiver is Script {
         address messageTransmitter = vm.envAddress("MESSAGE_TRANSMITTER_V2");
         address usdc = vm.envAddress("ARC_USDC_ADDRESS");
         address launchpad = vm.envAddress("LAUNCHPAD_ADDRESS");
+        address v2Router = vm.envAddress("V2_ROUTER_ADDRESS");
 
         vm.startBroadcast(pk);
         ArcadeCctpBuyReceiver receiver = new ArcadeCctpBuyReceiver(
             messageTransmitter,
             usdc,
-            launchpad
+            launchpad,
+            v2Router
         );
         vm.stopBroadcast();
 
@@ -36,6 +38,7 @@ contract DeployCctpBuyReceiver is Script {
         console2.log("  messageTransmitter:", messageTransmitter);
         console2.log("  usdc:", usdc);
         console2.log("  launchpad:", launchpad);
+        console2.log("  v2Router:", v2Router);
         console2.log("Set NEXT_PUBLIC_CCTP_BUY_RECEIVER to the address above.");
     }
 }
