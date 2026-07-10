@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Address } from "viem";
-import { usePublicClient, useWriteContract } from "wagmi";
+import { usePublicClient, useSignTypedData, useWriteContract } from "wagmi";
 import { buildReferralLink, getStoredReferrer } from "@/lib/referral";
 import { registerReferrerOnChain } from "@/lib/referralOnchain";
 import { arcTestnet } from "@/lib/chains";
@@ -33,7 +33,9 @@ const MIN_VOLUME_MICROS = 10_000n; // $0.01
  * payout/claim flow lands in Phase 2.
  */
 export function ReferralsPanel({ account }: { account: Address | undefined }) {
-    const [stats, setStats] = useState<ReferralStats | null>(null);
+    const [stats, setStats] = useState<
+        (ReferralStats & { detailWithheld?: boolean }) | null
+    >(null);
     const [loading, setLoading] = useState(false);
     const [copied, setCopied] = useState(false);
     const [claiming, setClaiming] = useState(false);
@@ -63,6 +65,51 @@ export function ReferralsPanel({ account }: { account: Address | undefined }) {
         setConfirmState("idle");
         setConfirmMsg(null);
     }, [account]);
+
+    // Reveal the per-wallet downline. GET /stats returns coarse totals only
+    // (audit 2026-07-08: the detailed graph was an unauthenticated leak); the
+    // referrer signs an EIP-712 message (same gate as /claim) to prove they
+    // own `account`, and POST returns their own referred wallets.
+    const { signTypedDataAsync } = useSignTypedData();
+    const [revealing, setRevealing] = useState(false);
+    const [revealed, setRevealed] = useState(false);
+
+    const onReveal = useCallback(async () => {
+        if (!account) return;
+        setRevealing(true);
+        try {
+            const deadline = BigInt(Math.floor(Date.now() / 1000) + 300);
+            const signature = await signTypedDataAsync({
+                domain: { name: "ArcadeReferral", version: "1", chainId: arcTestnet.id },
+                types: {
+                    Claim: [
+                        { name: "referrer", type: "address" },
+                        { name: "deadline", type: "uint256" },
+                    ],
+                },
+                primaryType: "Claim",
+                message: { referrer: account, deadline },
+            });
+            const res = await fetch("/api/referral/stats", {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({
+                    referrer: account,
+                    deadline: deadline.toString(),
+                    signature,
+                }),
+            });
+            const data = (await res.json()) as ReferralStats;
+            if (res.ok) {
+                setStats(data);
+                setRevealed(true);
+            }
+        } catch {
+            /* user rejected the signature or the request failed */
+        } finally {
+            setRevealing(false);
+        }
+    }, [account, signTypedDataAsync]);
 
     const onConfirmReferrer = useCallback(async () => {
         if (!account || !myReferrer || !publicClient) return;
@@ -94,10 +141,13 @@ export function ReferralsPanel({ account }: { account: Address | undefined }) {
         }
         let cancelled = false;
         setLoading(true);
+        setRevealed(false);
         (async () => {
             try {
                 const res = await fetch(`/api/referral/stats?referrer=${account}`);
-                const data = (await res.json()) as ReferralStats;
+                const data = (await res.json()) as ReferralStats & {
+                    detailWithheld?: boolean;
+                };
                 if (!cancelled) setStats(data);
             } catch {
                 /* soft-fail */
@@ -239,11 +289,36 @@ export function ReferralsPanel({ account }: { account: Address | undefined }) {
             <div className="rounded-2xl border border-arc-border bg-white/[0.015] p-5">
                 <div className="mb-3 flex items-center justify-between">
                     <div className="text-sm font-semibold text-arc-text">
-                        Referred wallets {stats ? `(${activeReferred.length})` : ""}
+                        Referred wallets{" "}
+                        {stats
+                            ? `(${stats.detailWithheld && !revealed ? stats.referredCount : activeReferred.length})`
+                            : ""}
                     </div>
                 </div>
                 {loading && !stats ? (
                     <div className="py-6 text-center text-sm text-arc-text-muted">Loading…</div>
+                ) : stats?.detailWithheld && !revealed ? (
+                    <div className="py-6 text-center text-sm text-arc-text-muted">
+                        {stats.referredCount > 0 ? (
+                            <>
+                                <div>
+                                    You have {stats.referredCount} referred wallet
+                                    {stats.referredCount > 1 ? "s" : ""}. Sign to reveal the
+                                    details — only you can view your own downline.
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={onReveal}
+                                    disabled={revealing}
+                                    className="arc-button-primary mt-3 px-4 py-2 text-sm disabled:opacity-50"
+                                >
+                                    {revealing ? "Signing…" : "Reveal referred wallets"}
+                                </button>
+                            </>
+                        ) : (
+                            "No active referrals yet. Share your link to start earning."
+                        )}
+                    </div>
                 ) : activeReferred.length === 0 ? (
                     <div className="py-6 text-center text-sm text-arc-text-muted">
                         No active referrals yet. Share your link to start earning.
