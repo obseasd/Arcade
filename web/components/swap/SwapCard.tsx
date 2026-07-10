@@ -5,7 +5,7 @@ import Image from "next/image";
 import { useSearchParams } from "next/navigation";
 import { useRef } from "react";
 import { useEffect, useMemo, useState } from "react";
-import { erc20Abi, formatUnits, parseUnits } from "viem";
+import { erc20Abi, formatUnits, maxUint256, parseUnits } from "viem";
 import { useAccount, useReadContract, useReadContracts, useWriteContract, usePublicClient } from "wagmi";
 import { ROUTER_ABI } from "@/lib/abis/dex";
 import { LAUNCHPAD_ABI } from "@/lib/abis/launchpad";
@@ -41,6 +41,7 @@ import {
 } from "@/lib/permit2";
 import { encodePermit2PermitInput } from "@/lib/routing/universalRouter";
 import { type BatchSwapCall } from "@/lib/routing/batchSwap";
+import { batchApproveAndSwap } from "@/lib/routing/batchApproveAndSwap";
 import { cn, formatToken, formatUSDC } from "@/lib/utils";
 import { USYC_ADDRESS } from "@/lib/abis/usyc";
 
@@ -1114,6 +1115,15 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
           (isTellerRoute && (activeRoute?.approval.amount ?? 0n) > 0n)) &&
         currentAllowance < approvalAmount;
 
+      // Fast-path: for classic Arcade routes (V2 / V3 / launchpad) that still
+      // need an approval, fold approve+swap into ONE Multicall3From signature
+      // when Arc's callFrom precompile is healthy, with an automatic fallback
+      // to the two-tx path (see batchApproveAndSwap). Gated on a public client
+      // (needed to simulate the batch first) and never applied to external /
+      // Permit2 / value-bearing routes.
+      const willFoldApproveIntoSwap =
+        !isExternalRoute && needsApprove && !!publicClient;
+
       // Permit2-backed external routes (Synthra UR, UnitFlow UR) need a
       // one-time max approve to Permit2 instead of per-router approves.
       // After that, the per-swap "approval" is an off-chain EIP-712 sig
@@ -1132,9 +1142,11 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
       ) {
         // WRAP_ETH variant — no ERC20 allowance needed, value is sent
         // with the tx. Skip ensureAllowance entirely.
-      } else if (needsApprove) {
+      } else if (needsApprove && !willFoldApproveIntoSwap) {
         // Over-approval to the router is harmless (trusted contract) but
         // the smaller amount keeps the allowance footprint honest.
+        // (When willFoldApproveIntoSwap, the approve is deferred into the
+        // single-signature Multicall3From batch in the classic branch below.)
         await ensureAllowance(approvalAmount);
       }
       setTx({ status: "pending", message: "Submitting swap…" });
@@ -1309,16 +1321,46 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
           };
         }
 
-        // The approve (if any) already ran above as its own direct tx, so
-        // here we just send the swap directly.
-        hash = await writeContractAsync({
-          address: swapCall.address,
-          abi: swapCall.abi,
-          functionName: swapCall.functionName,
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          args: swapCall.args as any,
-          chainId: arcTestnet.id,
-        });
+        // Execute the swap. When an approval is still needed (first trade of
+        // this token->router pair), fold approve+swap into ONE Multicall3From
+        // signature via the sender-preserving callFrom precompile, falling
+        // back to two direct txs if the precompile is unhealthy. When the
+        // allowance is already sufficient, send the swap directly.
+        if (willFoldApproveIntoSwap && publicClient) {
+          const res = await batchApproveAndSwap({
+            approve: {
+              address: tokenIn.address,
+              abi: erc20Abi,
+              functionName: "approve",
+              args: [swapSpender, maxUint256],
+            },
+            swap: swapCall,
+            account,
+            writeContractAsync,
+            publicClient,
+            chainId: arcTestnet.id,
+            onMode: (m) =>
+              setTx({
+                status: "pending",
+                message:
+                  m === "batched"
+                    ? "Submitting swap…"
+                    : "Approving, then swapping…",
+              }),
+          });
+          hash = res.hash;
+        } else {
+          // The approve (if any) already ran above as its own direct tx, so
+          // here we just send the swap directly.
+          hash = await writeContractAsync({
+            address: swapCall.address,
+            abi: swapCall.abi,
+            functionName: swapCall.functionName,
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            args: swapCall.args as any,
+            chainId: arcTestnet.id,
+          });
+        }
       }
       // Audit high [26]: viem's waitForTransactionReceipt returns a
       // receipt for BOTH success and revert. Without an explicit status
