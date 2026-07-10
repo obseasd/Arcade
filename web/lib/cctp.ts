@@ -169,6 +169,22 @@ export const TOKEN_MESSENGER_V2_ABI = [
     outputs: [],
   },
   {
+    type: "function",
+    name: "depositForBurnWithHook",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "amount", type: "uint256" },
+      { name: "destinationDomain", type: "uint32" },
+      { name: "mintRecipient", type: "bytes32" },
+      { name: "burnToken", type: "address" },
+      { name: "destinationCaller", type: "bytes32" },
+      { name: "maxFee", type: "uint256" },
+      { name: "minFinalityThreshold", type: "uint32" },
+      { name: "hookData", type: "bytes" },
+    ],
+    outputs: [],
+  },
+  {
     type: "event",
     name: "DepositForBurn",
     inputs: [
@@ -203,11 +219,44 @@ export const MESSAGE_TRANSMITTER_V2_ABI = [
   },
 ] as const;
 
+/** ArcadeCctpBuyReceiver on Arc: redeem an attested transfer and buy the
+ *  committed token in one tx (see contracts/src/cctp/ArcadeCctpBuyReceiver.sol). */
+export const CCTP_BUY_RECEIVER_ABI = [
+  {
+    type: "function",
+    name: "receiveAndBuy",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "message", type: "bytes" },
+      { name: "attestation", type: "bytes" },
+    ],
+    outputs: [],
+  },
+] as const;
+
 // ============ Helpers ============
 
 /** Pad an Ethereum address (20 bytes) to a 32-byte mintRecipient. */
 export function addressToBytes32(addr: Address): `0x${string}` {
   return ("0x" + "00".repeat(12) + addr.slice(2).toLowerCase()) as `0x${string}`;
+}
+
+/**
+ * Extract the mintRecipient address from a CCTP V2 message. It sits at byte
+ * 184 (MessageV2 body @148 + BurnMessageV2 mintRecipient @36), left-padded in
+ * a 32-byte word. Used at claim time to detect a "bridge and buy" transfer
+ * (mintRecipient == ArcadeCctpBuyReceiver) so we route the claim through
+ * receiveAndBuy instead of a plain receiveMessage — derived from the attested
+ * message itself, so it survives a page refresh with no extra state. Returns
+ * null on a malformed/short message.
+ */
+export function mintRecipientFromMessage(
+  message: `0x${string}`,
+): Address | null {
+  const hex = message.slice(2);
+  if (hex.length < (184 + 32) * 2) return null;
+  const word = hex.slice(184 * 2, (184 + 32) * 2); // the 32-byte word
+  return ("0x" + word.slice(24)) as Address; // low 20 bytes = the address
 }
 
 /**

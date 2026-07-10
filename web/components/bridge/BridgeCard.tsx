@@ -3,7 +3,7 @@
 import { ArrowDownUp, ChevronDown, Loader2, CheckCircle2, Pencil } from "lucide-react";
 import Image from "next/image";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { erc20Abi, formatUnits, isAddress, parseUnits } from "viem";
+import { encodeAbiParameters, erc20Abi, formatUnits, isAddress, parseUnits } from "viem";
 import { getPublicClient } from "@wagmi/core";
 import {
   useAccount,
@@ -16,9 +16,11 @@ import {
 import {
   CCTP_V2_MESSAGE_TRANSMITTER,
   CCTP_V2_TOKEN_MESSENGER,
+  CCTP_BUY_RECEIVER_ABI,
   MESSAGE_TRANSMITTER_V2_ABI,
   TOKEN_MESSENGER_V2_ABI,
   addressToBytes32,
+  mintRecipientFromMessage,
   fetchAttestation,
   fetchAttestationDetailed,
   getCctpChain,
@@ -38,6 +40,15 @@ import { ChainSelectModal } from "@/components/ui/ChainSelectModal";
 import { TokenIcon } from "@/components/ui/TokenIcon";
 import { RecipientEditModal } from "./RecipientEditModal";
 import { cn, formatAddress, formatUSDC } from "@/lib/utils";
+import { ADDRESSES } from "@/lib/constants";
+import { TokenSelectModal, type TokenOption } from "@/components/ui/TokenSelectModal";
+import { useV2Tokens } from "@/lib/hooks/useV2Tokens";
+import { useV3Tokens } from "@/lib/hooks/useV3Tokens";
+
+/** Feature flag for the CCTP "bridge and buy" flow. On by default; set
+ *  NEXT_PUBLIC_BRIDGE_BUY_ENABLED="false" to remove it entirely (clean
+ *  fallback to the plain bridge — the toggle simply never renders). */
+const BRIDGE_BUY_ENABLED = process.env.NEXT_PUBLIC_BRIDGE_BUY_ENABLED !== "false";
 import {
   clearPendingBridge,
   loadPendingBridge,
@@ -144,6 +155,10 @@ export function BridgeCard() {
   const [fastTransfer, setFastTransfer] = useState(false);
   const [recipientOverride, setRecipientOverride] = useState<Address | null>(null);
   const [recipientModalOpen, setRecipientModalOpen] = useState(false);
+  // CCTP "bridge and buy": opt-in per transfer (default off), only for Arc dest.
+  const [buyOnArrival, setBuyOnArrival] = useState(false);
+  const [buyToken, setBuyToken] = useState<TokenOption | null>(null);
+  const [buyTokenPickerOpen, setBuyTokenPickerOpen] = useState(false);
   // True iff the active step machine was rehydrated from a previous session.
   // We use this to show a recovery banner instead of the normal new-burn UI.
   const [resumedFromStorage, setResumedFromStorage] = useState(false);
@@ -338,6 +353,37 @@ export function BridgeCard() {
     () => getCctpChain(dstChainId) ?? SOLANA_PSEUDO_CHAIN,
     [dstChainId],
   );
+
+  // "Bridge and buy" target list (Arc V2 + V3 launchpad tokens). Reads go to
+  // Arc RPC directly, same as the swap token pickers.
+  const { tokens: v2Tokens } = useV2Tokens();
+  const { tokens: v3Tokens } = useV3Tokens();
+  const isArcDest = dstChainId === ARC_CHAIN_ID;
+  const buyTokenOptions = useMemo<TokenOption[]>(() => {
+    const seen = new Set<string>();
+    const out: TokenOption[] = [];
+    for (const t of [...v2Tokens, ...v3Tokens]) {
+      const a = t.address.toLowerCase();
+      if (seen.has(a)) continue;
+      seen.add(a);
+      out.push({
+        address: t.address,
+        symbol: t.symbol ?? "TOKEN",
+        name: t.name ?? "Token",
+        decimals: t.decimals ?? 18,
+        pinned: false,
+      });
+    }
+    return out;
+  }, [v2Tokens, v3Tokens]);
+  // Whether this transfer will fold a buy into the arrival claim (standard EVM
+  // burn path only — not the Solana source flow).
+  const useBuyHook =
+    BRIDGE_BUY_ENABLED &&
+    buyOnArrival &&
+    !!buyToken &&
+    isArcDest &&
+    !isSolanaBridgeId(srcChainId);
 
   // Solana bridge mode: one side is the Solana sentinel. App Kit only
   // bridges Solana <-> Arc, so the pickers force Arc on the opposite side.
@@ -593,27 +639,56 @@ export function BridgeCard() {
       }
       setStep({ kind: "burning" });
       // Use the override recipient if set, otherwise the connected wallet.
-      const mintRecipient32 = addressToBytes32(recipientOverride ?? account);
+      // For "bridge and buy", the mintRecipient is the ArcadeCctpBuyReceiver
+      // (USDC lands there and is bought+forwarded on arrival); the beneficiary
+      // who receives the bought tokens is encoded in the hook.
+      const beneficiary = (recipientOverride ?? account) as Address;
+      const mintRecipient32 = addressToBytes32(
+        useBuyHook ? ADDRESSES.cctpBuyReceiver : beneficiary,
+      );
       const destinationCaller = ("0x" + "00".repeat(32)) as `0x${string}`;
       // Fast Transfer: short finality + non-zero maxFee (1 bp upper bound; Iris
       // typically charges much less). Standard Transfer: full finality, no fee.
       const maxFee = fastTransfer ? amountRaw / 10_000n : 0n; // ≤0.01% of the amount
       const minFinality = fastTransfer ? 1000 : 2000;
-      const burnHash = await writeContractAsync({
-        address: CCTP_V2_TOKEN_MESSENGER,
-        abi: TOKEN_MESSENGER_V2_ABI,
-        functionName: "depositForBurn",
-        args: [
-          amountRaw,
-          dstChain.cctpDomain,
-          mintRecipient32,
-          srcChain.usdc,
-          destinationCaller,
-          maxFee,
-          minFinality,
-        ],
-        chainId: srcChain.id,
-      });
+      // hookData = abi.encode(beneficiary, token, minTokensOut). minOut is 0:
+      // the arrival price is unknowable at burn time, and the receiver refunds
+      // the USDC to the beneficiary if the buy reverts, so 0 is safe here.
+      const burnHash = useBuyHook
+        ? await writeContractAsync({
+            address: CCTP_V2_TOKEN_MESSENGER,
+            abi: TOKEN_MESSENGER_V2_ABI,
+            functionName: "depositForBurnWithHook",
+            args: [
+              amountRaw,
+              dstChain.cctpDomain,
+              mintRecipient32,
+              srcChain.usdc,
+              destinationCaller,
+              maxFee,
+              minFinality,
+              encodeAbiParameters(
+                [{ type: "address" }, { type: "address" }, { type: "uint256" }],
+                [beneficiary, buyToken!.address, 0n],
+              ),
+            ],
+            chainId: srcChain.id,
+          })
+        : await writeContractAsync({
+            address: CCTP_V2_TOKEN_MESSENGER,
+            abi: TOKEN_MESSENGER_V2_ABI,
+            functionName: "depositForBurn",
+            args: [
+              amountRaw,
+              dstChain.cctpDomain,
+              mintRecipient32,
+              srcChain.usdc,
+              destinationCaller,
+              maxFee,
+              minFinality,
+            ],
+            chainId: srcChain.id,
+          });
       await srcClient.waitForTransactionReceipt({ hash: burnHash });
       // Persist now - funds are committed on the source chain. If the page
       // refreshes before mint, the user can resume claim from this entry.
@@ -708,8 +783,15 @@ export function BridgeCard() {
           (dstChainCfg && parsed.destinationDomain !== dstChainCfg.cctpDomain) ||
           // B-1: fail closed when expectedRecipient is missing
           !expectedRecipient ||
-          parsed.mintRecipient.toLowerCase() !==
-            addressToBytes32(expectedRecipient as Address).toLowerCase()
+          // Accept either the user's own mintRecipient OR our bridge-and-buy
+          // receiver (the attestation is already bound to this burnTxHash).
+          (parsed.mintRecipient.toLowerCase() !==
+            addressToBytes32(expectedRecipient as Address).toLowerCase() &&
+            !(
+              BRIDGE_BUY_ENABLED &&
+              parsed.mintRecipient.toLowerCase() ===
+                addressToBytes32(ADDRESSES.cctpBuyReceiver).toLowerCase()
+            ))
         ) {
           // eslint-disable-next-line no-console
           console.warn("[CCTP] Iris payload mismatch, ignoring", { parsed });
@@ -840,8 +922,13 @@ export function BridgeCard() {
         parsed.sourceDomain !== step.srcDomain ||
         (dstChainCfg && parsed.destinationDomain !== dstChainCfg.cctpDomain) ||
         !expectedRecipient ||
-        parsed.mintRecipient.toLowerCase() !==
-          addressToBytes32(expectedRecipient as Address).toLowerCase()
+        (parsed.mintRecipient.toLowerCase() !==
+          addressToBytes32(expectedRecipient as Address).toLowerCase() &&
+          !(
+            BRIDGE_BUY_ENABLED &&
+            parsed.mintRecipient.toLowerCase() ===
+              addressToBytes32(ADDRESSES.cctpBuyReceiver).toLowerCase()
+          ))
       ) {
         return;
       }
@@ -922,13 +1009,32 @@ export function BridgeCard() {
           // RPC failure — fall through to the on-chain guard.
         }
       }
-      const hash = await writeContractAsync({
-        address: CCTP_V2_MESSAGE_TRANSMITTER,
-        abi: MESSAGE_TRANSMITTER_V2_ABI,
-        functionName: "receiveMessage",
-        args: [step.message, step.attestation],
-        chainId: step.dstId,
-      });
+      // "Bridge and buy" detection: if the attested message mints to the
+      // ArcadeCctpBuyReceiver, claim through receiveAndBuy (mint + buy +
+      // forward, atomic) instead of a plain receiveMessage. Derived from the
+      // message itself, so it works even after a page refresh with no extra
+      // state — and if the receiver isn't wired, we fall back to receiveMessage.
+      const claimMintRecipient = mintRecipientFromMessage(step.message);
+      const isBridgeBuy =
+        BRIDGE_BUY_ENABLED &&
+        !!claimMintRecipient &&
+        ADDRESSES.cctpBuyReceiver !== ("0x0000000000000000000000000000000000000000" as Address) &&
+        claimMintRecipient.toLowerCase() === ADDRESSES.cctpBuyReceiver.toLowerCase();
+      const hash = isBridgeBuy
+        ? await writeContractAsync({
+            address: ADDRESSES.cctpBuyReceiver,
+            abi: CCTP_BUY_RECEIVER_ABI,
+            functionName: "receiveAndBuy",
+            args: [step.message, step.attestation],
+            chainId: step.dstId,
+          })
+        : await writeContractAsync({
+            address: CCTP_V2_MESSAGE_TRANSMITTER,
+            abi: MESSAGE_TRANSMITTER_V2_ABI,
+            functionName: "receiveMessage",
+            args: [step.message, step.attestation],
+            chainId: step.dstId,
+          });
       // Audit Bridge H-4: broadcast the burn ONLY after the wallet
       // accepts the submission. Previously the broadcast fired at the
       // top of doMint; if the user rejected the wallet popup, other
@@ -1040,6 +1146,8 @@ export function BridgeCard() {
     !insufficient &&
     !sameChain &&
     !underMinFast &&
+    // Buy toggled on but no token picked yet -> block the send.
+    !(buyOnArrival && !buyToken) &&
     step.kind === "idle";
 
   return (
@@ -1166,6 +1274,46 @@ export function BridgeCard() {
         </div>
       )}
 
+      {/* Bridge and buy (opt-in, Arc destination only). Off => plain bridge. */}
+      {BRIDGE_BUY_ENABLED && isArcDest && !solanaMode && !sameChain && (
+        <div className="mt-3 rounded-xl border border-arc-border bg-white/[0.015] p-3">
+          <label className="flex cursor-pointer items-center justify-between gap-3">
+            <div className="min-w-0">
+              <div className="text-sm font-medium text-arc-text">Buy a token on arrival</div>
+              <div className="text-xs text-arc-text-muted">
+                Bridge + buy in one flow — bought on Arc when the transfer lands.
+                If the buy can&apos;t fill, your USDC is delivered instead.
+              </div>
+            </div>
+            <input
+              type="checkbox"
+              checked={buyOnArrival}
+              disabled={isProcessing}
+              onChange={(e) => setBuyOnArrival(e.target.checked)}
+              className="h-4 w-4 shrink-0 accent-arc-cta-hover"
+            />
+          </label>
+          {buyOnArrival && (
+            <button
+              type="button"
+              disabled={isProcessing}
+              onClick={() => setBuyTokenPickerOpen(true)}
+              className="mt-2 flex w-full items-center justify-between rounded-lg border border-arc-border bg-arc-bg px-3 py-2 text-sm disabled:opacity-50"
+            >
+              {buyToken ? (
+                <span className="flex items-center gap-2 text-arc-text">
+                  <TokenIcon symbol={buyToken.symbol} size={18} />
+                  {buyToken.symbol}
+                </span>
+              ) : (
+                <span className="text-arc-text-muted">Select a token to buy</span>
+              )}
+              <ChevronDown className="h-4 w-4 text-arc-text-muted" />
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Route info line - same style as SwapCard. Always visible when the
           chain pair is valid, even before the user types an amount.
           Fixed height so the row doesn't grow when the flash badge appears,
@@ -1285,7 +1433,11 @@ export function BridgeCard() {
                   ? "Enter amount"
                   : insufficient
                     ? "Insufficient USDC"
-                    : `Bridge to ${dstChain.name}`}
+                    : buyOnArrival && !buyToken
+                      ? "Select a token to buy"
+                      : useBuyHook
+                        ? `Bridge & buy ${buyToken!.symbol}`
+                        : `Bridge to ${dstChain.name}`}
           </button>
         ) : step.kind === "minting" ? (
           // Action-required: the attestation is ready and the user has to
@@ -1373,6 +1525,19 @@ export function BridgeCard() {
         ownAccount={account}
         onSave={setRecipientOverride}
       />
+
+      {BRIDGE_BUY_ENABLED && (
+        <TokenSelectModal
+          open={buyTokenPickerOpen}
+          onClose={() => setBuyTokenPickerOpen(false)}
+          tokens={buyTokenOptions}
+          onSelect={(t) => {
+            setBuyToken(t);
+            setBuyTokenPickerOpen(false);
+          }}
+          selectedAddress={buyToken?.address}
+        />
+      )}
 
       {/* Pickers */}
       <ChainSelectModal
