@@ -2,7 +2,10 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Address } from "viem";
-import { buildReferralLink } from "@/lib/referral";
+import { usePublicClient, useWriteContract } from "wagmi";
+import { buildReferralLink, getStoredReferrer } from "@/lib/referral";
+import { registerReferrerOnChain } from "@/lib/referralOnchain";
+import { arcTestnet } from "@/lib/chains";
 import type { ReferralStats } from "@/lib/referralPersistence";
 import { formatAddress } from "@/lib/utils";
 
@@ -35,6 +38,54 @@ export function ReferralsPanel({ account }: { account: Address | undefined }) {
     const [copied, setCopied] = useState(false);
     const [claiming, setClaiming] = useState(false);
     const [claimMsg, setClaimMsg] = useState<string | null>(null);
+
+    // On-chain referral anchoring. If the connected wallet arrived through
+    // someone's link (?ref=), it can sign a Memo tx to make that first-touch
+    // link unforgeable on-chain (see referralOnchain.ts). This is the referred
+    // user's own action — nobody can register it on their behalf.
+    const { writeContractAsync } = useWriteContract();
+    const publicClient = usePublicClient();
+    const [myReferrer, setMyReferrer] = useState<Address | null>(null);
+    const [confirmState, setConfirmState] = useState<
+        "idle" | "confirming" | "done"
+    >("idle");
+    const [confirmMsg, setConfirmMsg] = useState<string | null>(null);
+
+    useEffect(() => {
+        if (!account) {
+            setMyReferrer(null);
+            return;
+        }
+        const r = getStoredReferrer();
+        setMyReferrer(
+            r && r.toLowerCase() !== account.toLowerCase() ? (r as Address) : null,
+        );
+        setConfirmState("idle");
+        setConfirmMsg(null);
+    }, [account]);
+
+    const onConfirmReferrer = useCallback(async () => {
+        if (!account || !myReferrer || !publicClient) return;
+        setConfirmState("confirming");
+        setConfirmMsg(null);
+        try {
+            const hash = await registerReferrerOnChain(
+                writeContractAsync,
+                account,
+                myReferrer,
+                arcTestnet.id,
+            );
+            await publicClient.waitForTransactionReceipt({ hash });
+            setConfirmState("done");
+            setConfirmMsg("Referral anchored on-chain — it can no longer be overwritten.");
+        } catch (e) {
+            setConfirmState("idle");
+            setConfirmMsg(
+                (e as { shortMessage?: string })?.shortMessage ??
+                    "Could not confirm on-chain.",
+            );
+        }
+    }, [account, myReferrer, publicClient, writeContractAsync]);
 
     useEffect(() => {
         if (!account) {
@@ -130,6 +181,37 @@ export function ReferralsPanel({ account }: { account: Address | undefined }) {
                     </button>
                 </div>
             </div>
+
+            {/* Your referrer — anchor first-touch on-chain (unforgeable) */}
+            {myReferrer && (
+                <div className="rounded-2xl border border-arc-border bg-white/[0.015] p-5">
+                    <div className="text-sm font-semibold text-arc-text">Your referrer</div>
+                    <p className="mt-1 text-xs text-arc-text-muted">
+                        You were referred by{" "}
+                        <span className="text-arc-text">{formatAddress(myReferrer)}</span>. Anchor
+                        it on-chain so the attribution is{" "}
+                        <span className="text-arc-text">unforgeable</span> and ready for payouts —
+                        one tiny transaction, and only you can sign it.
+                    </p>
+                    <div className="mt-3 flex flex-wrap items-center gap-2">
+                        <button
+                            type="button"
+                            onClick={onConfirmReferrer}
+                            disabled={confirmState !== "idle"}
+                            className="arc-button-primary shrink-0 px-4 py-2 text-sm disabled:opacity-50"
+                        >
+                            {confirmState === "confirming"
+                                ? "Confirming…"
+                                : confirmState === "done"
+                                  ? "Confirmed on-chain ✓"
+                                  : "Confirm on-chain"}
+                        </button>
+                        {confirmMsg && (
+                            <span className="text-xs text-arc-text-muted">{confirmMsg}</span>
+                        )}
+                    </div>
+                </div>
+            )}
 
             {/* Totals */}
             <div className="grid grid-cols-3 gap-3">
