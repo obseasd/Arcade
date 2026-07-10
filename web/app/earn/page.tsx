@@ -25,6 +25,10 @@ import { cn, formatUSDC } from "@/lib/utils";
  * entitlement-gated (KYC): a non-whitelisted wallet reverts, which the form
  * catches and explains. Balance reads are fully public.
  */
+/** Protocol treasury (deployer/treasury/signer on testnet). Read-only here. */
+const TREASURY_ADDRESS = (process.env.NEXT_PUBLIC_TREASURY_ADDRESS ||
+    "0x3a0Dd90212838f32a953Acd4B32596b62859324A") as `0x${string}`;
+
 export default function EarnPage() {
     const { address: account } = useAccount();
 
@@ -45,6 +49,27 @@ export default function EarnPage() {
 
     const usdcBal = (usdc.data as bigint | undefined) ?? 0n;
     const usycBal = (usyc.data as bigint | undefined) ?? 0n;
+
+    // Protocol treasury USYC position — idle protocol capital put to work in
+    // USYC yield instead of sitting dormant. previewRedeem gives the current
+    // USDC value of the treasury's shares; because USYC's price accrues, that
+    // value sits above the nominal share count — the visible yield.
+    const treasuryUsyc = useReadContract({
+        address: USYC_ADDRESS,
+        abi: USYC_ABI,
+        functionName: "balanceOf",
+        args: [TREASURY_ADDRESS],
+        query: { refetchInterval: 30_000 },
+    });
+    const treasuryUsycBal = (treasuryUsyc.data as bigint | undefined) ?? 0n;
+    const treasuryValue = useReadContract({
+        address: USYC_TELLER_ADDRESS,
+        abi: USYC_TELLER_ABI,
+        functionName: "previewRedeem",
+        args: treasuryUsycBal > 0n ? [treasuryUsycBal] : undefined,
+        query: { enabled: treasuryUsycBal > 0n, refetchInterval: 30_000 },
+    });
+    const treasuryUsdcValue = (treasuryValue.data as bigint | undefined) ?? 0n;
 
     const refreshBalances = () => {
         void usdc.refetch();
@@ -155,6 +180,65 @@ export default function EarnPage() {
                     </div>
                 </div>
             </div>
+
+            {/* Protocol treasury yield — idle protocol capital working in USYC. */}
+            {treasuryUsycBal > 0n && (
+                <div className="arc-card mt-4 overflow-hidden">
+                    <div className="flex items-start gap-4 p-5">
+                        <TokenIcon symbol="USYC" size={40} />
+                        <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2">
+                                <span className="font-display text-base font-semibold text-arc-text">
+                                    Protocol treasury yield
+                                </span>
+                                <span className="inline-flex items-center gap-1 rounded-md border border-arc-success/40 bg-arc-success/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-arc-success">
+                                    live
+                                </span>
+                            </div>
+                            <p className="mt-1 text-sm text-arc-text-muted">
+                                Arcade routes idle protocol capital into USYC (Circle /
+                                Hashnote tokenized T-Bills) instead of leaving it
+                                dormant. The position accrues yield as USYC&apos;s price
+                                grows — the current value sits above the share count.
+                            </p>
+                        </div>
+                    </div>
+                    <div className="grid grid-cols-3 border-t border-arc-border/40">
+                        <div className="border-r border-arc-border/40 p-4">
+                            <div className="text-[10px] uppercase tracking-wider text-arc-text-faint">
+                                Treasury USYC
+                            </div>
+                            <div className="mt-1 flex items-baseline gap-1.5">
+                                <TokenIcon symbol="USYC" size={14} />
+                                <span className="font-display text-base font-semibold tabular-nums text-arc-text">
+                                    {formatUSDC(treasuryUsycBal, USDC_DECIMALS, 2)}
+                                </span>
+                            </div>
+                        </div>
+                        <div className="border-r border-arc-border/40 p-4">
+                            <div className="text-[10px] uppercase tracking-wider text-arc-text-faint">
+                                Current value
+                            </div>
+                            <div className="mt-1 flex items-baseline gap-1.5">
+                                <TokenIcon symbol="USDC" size={14} />
+                                <span className="font-display text-base font-semibold tabular-nums text-arc-success">
+                                    {treasuryUsdcValue > 0n
+                                        ? formatUSDC(treasuryUsdcValue, USDC_DECIMALS, 2)
+                                        : "…"}
+                                </span>
+                            </div>
+                        </div>
+                        <div className="p-4">
+                            <div className="text-[10px] uppercase tracking-wider text-arc-text-faint">
+                                Yield rate
+                            </div>
+                            <div className="mt-1 font-display text-base font-semibold tabular-nums text-arc-text">
+                                ~4-5% APR
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }
