@@ -44,6 +44,7 @@ import { ADDRESSES } from "@/lib/constants";
 import { TokenSelectModal, type TokenOption } from "@/components/ui/TokenSelectModal";
 import { useV2Tokens } from "@/lib/hooks/useV2Tokens";
 import { useV3Tokens } from "@/lib/hooks/useV3Tokens";
+import { ROUTER_ABI } from "@/lib/abis/dex";
 
 /** Feature flag for the CCTP "bridge and buy" flow. On by default; set
  *  NEXT_PUBLIC_BRIDGE_BUY_ENABLED="false" to remove it entirely (clean
@@ -475,6 +476,28 @@ export function BridgeCard() {
   const insufficient = balRaw > 0n && amountRaw > balRaw;
   const sameChain = srcChainId === dstChainId;
 
+  // Preview the AMM output on Arc so the user sees the rate BEFORE bridging
+  // (a mispriced/thin pool can pay far less than 1:1 — the testnet USDC/EURC
+  // pool prices EURC at ~31 USDC). Reverts for a pure curve token (no V2 pair);
+  // then buyQuoteOut stays 0 and the launchpad curve handles it with no floor.
+  const buyQuoteQ = useReadContract({
+    address: ADDRESSES.router,
+    abi: ROUTER_ABI,
+    functionName: "getAmountsOut",
+    args:
+      useBuyHook && buyToken
+        ? [amountRaw, [ADDRESSES.usdc, buyToken.address] as const]
+        : undefined,
+    chainId: ARC_CHAIN_ID,
+    query: { enabled: useBuyHook && amountRaw > 0n },
+  });
+  const buyQuoteOut = useMemo(() => {
+    const a = buyQuoteQ.data as readonly bigint[] | undefined;
+    return a && a.length > 0 ? a[a.length - 1] : 0n;
+  }, [buyQuoteQ.data]);
+  // 15% tolerance for cross-chain price drift during the ~30-60s bridge.
+  const buyMinOut = buyQuoteOut > 0n ? (buyQuoteOut * 85n) / 100n : 0n;
+
   // Fees only apply when Fast Transfer is enabled: 0.05% Arcade + up to 0.01%
   // Circle. Standard Transfer stays completely free.
   const arcadeFee =
@@ -658,9 +681,9 @@ export function BridgeCard() {
       // typically charges much less). Standard Transfer: full finality, no fee.
       const maxFee = fastTransfer ? amountRaw / 10_000n : 0n; // ≤0.01% of the amount
       const minFinality = fastTransfer ? 1000 : 2000;
-      // hookData = abi.encode(beneficiary, token, minTokensOut). minOut is 0:
-      // the arrival price is unknowable at burn time, and the receiver refunds
-      // the USDC to the beneficiary if the buy reverts, so 0 is safe here.
+      // hookData = abi.encode(beneficiary, token, minTokensOut). minOut is the
+      // AMM quote minus 15% (cross-chain drift); 0 for a pure curve token. If
+      // arrival slips below it, the receiver refunds the USDC to the beneficiary.
       const burnHash = useBuyHook
         ? await writeContractAsync({
             address: CCTP_V2_TOKEN_MESSENGER,
@@ -676,7 +699,7 @@ export function BridgeCard() {
               minFinality,
               encodeAbiParameters(
                 [{ type: "address" }, { type: "address" }, { type: "uint256" }],
-                [beneficiary, buyToken!.address, 0n],
+                [beneficiary, buyToken!.address, buyMinOut],
               ),
             ],
             chainId: srcChain.id,
@@ -1318,6 +1341,28 @@ export function BridgeCard() {
               )}
               <ChevronDown className="h-4 w-4 text-arc-text-muted" />
             </button>
+          )}
+          {/* Output preview so a mispriced/thin pool is visible before bridging. */}
+          {useBuyHook && amountRaw > 0n && (
+            <div className="mt-2 text-xs">
+              {buyQuoteQ.isLoading ? (
+                <span className="text-arc-text-muted">Quoting…</span>
+              ) : buyQuoteOut > 0n ? (
+                <span className="text-arc-text-muted">
+                  You receive ~
+                  <span className="text-arc-text">
+                    {formatUnits(buyQuoteOut, buyToken?.decimals ?? 18)}{" "}
+                    {buyToken?.symbol}
+                  </span>{" "}
+                  (min {formatUnits(buyMinOut, buyToken?.decimals ?? 18)})
+                </span>
+              ) : (
+                <span className="text-arc-text-muted">
+                  No AMM pool — will try the launchpad curve, else your USDC is
+                  delivered.
+                </span>
+              )}
+            </div>
           )}
         </div>
       )}
