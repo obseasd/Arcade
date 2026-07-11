@@ -3,7 +3,7 @@
 import { ArrowDownUp, ChevronDown, Loader2, CheckCircle2, Pencil } from "lucide-react";
 import Image from "next/image";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { encodeAbiParameters, erc20Abi, formatUnits, isAddress, parseUnits } from "viem";
+import { encodeAbiParameters, erc20Abi, formatUnits, isAddress, parseUnits, zeroAddress } from "viem";
 import { getPublicClient } from "@wagmi/core";
 import {
   useAccount,
@@ -42,9 +42,8 @@ import { RecipientEditModal } from "./RecipientEditModal";
 import { cn, formatAddress, formatUSDC } from "@/lib/utils";
 import { ADDRESSES } from "@/lib/constants";
 import { TokenSelectModal, type TokenOption } from "@/components/ui/TokenSelectModal";
-import { useV2Tokens } from "@/lib/hooks/useV2Tokens";
-import { useV3Tokens } from "@/lib/hooks/useV3Tokens";
 import { ROUTER_ABI } from "@/lib/abis/dex";
+import { USYC_ADDRESS } from "@/lib/abis/usyc";
 
 /** Feature flag for the CCTP "bridge and buy" flow. On by default; set
  *  NEXT_PUBLIC_BRIDGE_BUY_ENABLED="false" to remove it entirely (clean
@@ -355,32 +354,23 @@ export function BridgeCard() {
     [dstChainId],
   );
 
-  // "Bridge and buy" target list (Arc V2 + V3 launchpad tokens). Reads go to
-  // Arc RPC directly, same as the swap token pickers.
-  const { tokens: v2Tokens } = useV2Tokens();
-  const { tokens: v3Tokens } = useV3Tokens();
   const isArcDest = dstChainId === ARC_CHAIN_ID;
-  const buyTokenOptions = useMemo<TokenOption[]>(() => {
-    const seen = new Set<string>();
-    const usdcLc = ADDRESSES.usdc.toLowerCase();
-    const out: TokenOption[] = [];
-    for (const t of [...v2Tokens, ...v3Tokens]) {
-      const a = t.address.toLowerCase();
-      if (seen.has(a)) continue;
-      // You can't "buy" USDC with USDC — it's the input asset. Exclude it so
-      // the buy target is always a real token (launchpad / cirBTC / EURC / ...).
-      if (a === usdcLc) continue;
-      seen.add(a);
-      out.push({
-        address: t.address,
-        symbol: t.symbol ?? "TOKEN",
-        name: t.name ?? "Token",
-        decimals: t.decimals ?? 18,
-        pinned: false,
-      });
-    }
-    return out;
-  }, [v2Tokens, v3Tokens]);
+  // "Bridge and buy" targets: a fixed whitelist of canonical Arc tokens
+  // (USDC is the input, so it is never a target). Zero-address entries (an
+  // unconfigured token) are dropped.
+  const buyTokenOptions = useMemo<TokenOption[]>(
+    () =>
+      (
+        [
+          { address: ADDRESSES.seedEth, symbol: "ETH", name: "Ether", decimals: 18 },
+          { address: ADDRESSES.eurc, symbol: "EURC", name: "Euro Coin", decimals: 6 },
+          { address: USYC_ADDRESS, symbol: "USYC", name: "Hashnote US Yield Coin", decimals: 6 },
+          { address: ADDRESSES.cirBtc, symbol: "cirBTC", name: "Circle Wrapped BTC", decimals: 8 },
+          { address: ADDRESSES.usdt, symbol: "USDT", name: "Tether", decimals: 18 },
+        ] as TokenOption[]
+      ).filter((t) => !!t.address && t.address !== zeroAddress),
+    [],
+  );
   // Whether this transfer will fold a buy into the arrival claim (standard EVM
   // burn path only — not the Solana source flow).
   const useBuyHook =
