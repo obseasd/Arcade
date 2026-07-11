@@ -77,6 +77,12 @@ export const ADDRESSES = {
    *  2026-07-08; env-overridable for the next redeploy. */
   cctpBuyReceiver: (process.env.NEXT_PUBLIC_CCTP_BUY_RECEIVER ??
     "0xad17aadea14248c25d405f5e85aee45a729e9f76") as Address,
+  /** ArcadeIncentiveDistributor: escrow-backed liquidity-incentive campaigns
+   *  (Merkl-style) — the on-chain backend for /swap/incentivize. Deployed
+   *  2026-07-11; env-overridable. When zeroAddress the incentivize form falls
+   *  back to its "contact ops" placeholder. */
+  incentiveDistributor: (process.env.NEXT_PUBLIC_INCENTIVE_DISTRIBUTOR ??
+    "0xa8fA80926A9145160A7e6Cb811E5B538F1305698") as Address,
   // --- ArcadeHook production stack (V4 Phase 2, behind NEXT_PUBLIC_V4_HOOK_ENABLED) ---
   // Unified hook subsuming launchpad + V2 stack + V3 locker. Uses atomic
   // createLaunch + direct hook.buy/hook.sell during Curving phase.

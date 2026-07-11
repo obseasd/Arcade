@@ -3,10 +3,13 @@
 import { ArrowLeft, Calendar, ChevronDown, Info, Plus, X } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { Address, erc20Abi, isAddress, parseUnits } from "viem";
-import { useAccount, useReadContract } from "wagmi";
+import { Address, erc20Abi, isAddress, parseUnits, zeroAddress } from "viem";
+import { useAccount, usePublicClient, useReadContract, useWriteContract } from "wagmi";
 
 import { ADDRESSES, USDC_DECIMALS } from "@/lib/constants";
+import { arcTestnet } from "@/lib/chains";
+import { INCENTIVE_DISTRIBUTOR_ABI } from "@/lib/incentiveDistributor";
+import { runBatchedOrSequential } from "@/lib/routing/runBatchedOrSequential";
 import { useV2Tokens } from "@/lib/hooks/useV2Tokens";
 import { useV3Tokens } from "@/lib/hooks/useV3Tokens";
 import { TokenSelectModal, type TokenOption } from "@/components/ui/TokenSelectModal";
@@ -56,6 +59,14 @@ export default function IncentivizePage() {
     const { address: account, isConnected } = useAccount();
     const { tokens: v2Tokens } = useV2Tokens();
     const { tokens: v3Tokens } = useV3Tokens();
+    const { writeContractAsync } = useWriteContract();
+    const publicClient = usePublicClient();
+    const [submitting, setSubmitting] = useState(false);
+
+    // On-chain distributor: when set, "Launch" actually escrows the rewards
+    // instead of surfacing a "contact ops" placeholder.
+    const distributor = ADDRESSES.incentiveDistributor;
+    const distributorLive = distributor !== zeroAddress;
 
     // Merge V2 + V3 + USDC for the pickers, deduped by address.
     const tokenOptions = useMemo<TokenOption[]>(() => {
@@ -167,26 +178,92 @@ export default function IncentivizePage() {
     const rewardBalance = (rewardBalanceQ.data as bigint | undefined) ?? 0n;
     const insufficientBalance = !!rewardToken && rewardAmountBn > rewardBalance;
 
-    // --- Submit (placeholder) -----------------------------------------
+    // --- Submit --------------------------------------------------------
     const onLaunch = async () => {
         if (!isConnected) {
             pushToast({ kind: "error", title: "Connect a wallet first" });
             return;
         }
-        if (!formValid) return;
+        if (!formValid || !rewardToken || !pairAddress) return;
         if (insufficientBalance) {
-            pushToast({ kind: "error", title: `Insufficient ${rewardToken?.symbol} balance` });
+            pushToast({ kind: "error", title: `Insufficient ${rewardToken.symbol} balance` });
             return;
         }
-        // Campaign launch is operated by an external Merkl-style partner. For
-        // the MVP we surface the request to the team via a toast; once the
-        // partner integration is live this hooks into their contract.
-        pushToast({
-            kind: "info",
-            title: "Campaign request received",
-            message:
-                "Liquidity-incentive campaigns are operated by our partner. Our team will reach out to finalise this campaign within 24h.",
-        });
+
+        // When the on-chain distributor is not configured, keep the old
+        // "contact ops" placeholder so the page still works pre-deploy.
+        if (!distributorLive || !account || !publicClient) {
+            pushToast({
+                kind: "info",
+                title: "Campaign request received",
+                message:
+                    "Liquidity-incentive campaigns are being finalised. Our team will reach out within 24h.",
+            });
+            return;
+        }
+
+        setSubmitting(true);
+        try {
+            const startSec = BigInt(Math.floor(startDate.getTime() / 1000));
+            const endSec = BigInt(Math.floor(endDate.getTime() / 1000));
+
+            // approve(distributor, amount) + createCampaign, folded into ONE
+            // signature via Multicall3From when Arc's callFrom is healthy
+            // (the approve's msg.sender is preserved so the allowance is set
+            // for the user, which createCampaign's transferFrom then spends).
+            const { mode } = await runBatchedOrSequential(
+                [
+                    {
+                        address: rewardToken.address,
+                        abi: erc20Abi,
+                        functionName: "approve",
+                        args: [distributor, rewardAmountBn],
+                    },
+                    {
+                        address: distributor,
+                        abi: INCENTIVE_DISTRIBUTOR_ABI,
+                        functionName: "createCampaign",
+                        args: [
+                            pairAddress,
+                            rewardToken.address,
+                            rewardAmountBn,
+                            startSec,
+                            endSec,
+                        ],
+                    },
+                ],
+                { account, writeContractAsync, publicClient, chainId: arcTestnet.id },
+            );
+
+            pushToast({
+                kind: "info",
+                title: "Campaign launched",
+                message:
+                    `${rewardAmount} ${rewardToken.symbol} escrowed for ${token1?.symbol}/${token2?.symbol}` +
+                    (mode === "batched" ? " in a single signature." : "."),
+            });
+
+            // Reset the reward amount; keep the pair so the creator can stack.
+            setRewardAmount("");
+        } catch (e) {
+            const err = e as { shortMessage?: string; message?: string };
+            const msg = (err.shortMessage ?? err.message ?? "").toLowerCase();
+            if (
+                msg.includes("user rejected") ||
+                msg.includes("user denied") ||
+                msg.includes("rejected the request")
+            ) {
+                pushToast({ kind: "error", title: "Transaction rejected" });
+            } else {
+                pushToast({
+                    kind: "error",
+                    title: "Launch failed",
+                    message: err.shortMessage ?? "Could not create the campaign.",
+                });
+            }
+        } finally {
+            setSubmitting(false);
+        }
     };
 
     return (
@@ -491,35 +568,42 @@ export default function IncentivizePage() {
 
                     <button type="button"
                         onClick={onLaunch}
-                        disabled={!formValid || insufficientBalance}
+                        disabled={!formValid || insufficientBalance || submitting}
                         className={cn(
                             "arc-button-primary w-full py-4 text-base font-semibold",
-                            (!formValid || insufficientBalance) &&
+                            (!formValid || insufficientBalance || submitting) &&
                                 "cursor-not-allowed opacity-50",
                         )}
                     >
-                        {!isConnected
-                            ? "Connect wallet"
-                            : !token1 || !token2
-                              ? "Select both tokens"
-                              : !poolFound
-                                ? "No pool found for this pair"
-                                : !rewardToken
-                                  ? "Select a reward token"
-                                  : rewardAmountBn === 0n
-                                    ? "Enter a reward amount"
-                                    : durationHours < 1
-                                      ? "Duration must be at least 1 hour"
-                                      : insufficientBalance
-                                        ? `Insufficient ${rewardToken.symbol}`
-                                          : "Launch Campaign"}
+                        {submitting
+                            ? "Launching..."
+                            : !isConnected
+                              ? "Connect wallet"
+                              : !token1 || !token2
+                                ? "Select both tokens"
+                                : !poolFound
+                                  ? "No pool found for this pair"
+                                  : !rewardToken
+                                    ? "Select a reward token"
+                                    : rewardAmountBn === 0n
+                                      ? "Enter a reward amount"
+                                      : durationHours < 1
+                                        ? "Duration must be at least 1 hour"
+                                        : insufficientBalance
+                                          ? `Insufficient ${rewardToken.symbol}`
+                                          : distributorLive
+                                            ? "Launch Campaign"
+                                            : "Request Campaign"}
                     </button>
 
                     <div className="rounded-xl border border-arc-cta-hover/20 bg-arc-cta-hover/5 p-3 text-center text-xs text-arc-text-muted">
                         <Info className="mr-1 inline h-3 w-3 text-arc-cta-hover" />
-                        Liquidity-incentive campaigns are coordinated with Arcade ops while the
-                        Merkl-style partner integration is being finalised. You will hear back
-                        within 24h of submitting.
+                        {distributorLive
+                            ? "Rewards are escrowed on-chain the moment you launch, then streamed to " +
+                              "LPs over the campaign window. Any undistributed rewards are reclaimable " +
+                              "by you 3 days after it ends."
+                            : "Liquidity-incentive campaigns are being finalised. You will hear back " +
+                              "within 24h of submitting."}
                     </div>
                 </section>
             </div>
