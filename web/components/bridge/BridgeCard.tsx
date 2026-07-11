@@ -43,7 +43,6 @@ import { cn, formatAddress, formatUSDC } from "@/lib/utils";
 import { ADDRESSES } from "@/lib/constants";
 import { TokenSelectModal, type TokenOption } from "@/components/ui/TokenSelectModal";
 import { ROUTER_ABI } from "@/lib/abis/dex";
-import { USYC_ADDRESS } from "@/lib/abis/usyc";
 
 /** Feature flag for the CCTP "bridge and buy" flow. On by default; set
  *  NEXT_PUBLIC_BRIDGE_BUY_ENABLED="false" to remove it entirely (clean
@@ -364,7 +363,6 @@ export function BridgeCard() {
         [
           { address: ADDRESSES.seedEth, symbol: "ETH", name: "Ether", decimals: 18 },
           { address: ADDRESSES.eurc, symbol: "EURC", name: "Euro Coin", decimals: 6 },
-          { address: USYC_ADDRESS, symbol: "USYC", name: "Hashnote US Yield Coin", decimals: 6 },
           { address: ADDRESSES.cirBtc, symbol: "cirBTC", name: "Circle Wrapped BTC", decimals: 8 },
           { address: ADDRESSES.usdt, symbol: "USDT", name: "Tether", decimals: 18 },
         ] as TokenOption[]
