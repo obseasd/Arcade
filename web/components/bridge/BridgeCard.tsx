@@ -364,7 +364,6 @@ export function BridgeCard() {
           { address: ADDRESSES.seedEth, symbol: "ETH", name: "Ether", decimals: 18 },
           { address: ADDRESSES.eurc, symbol: "EURC", name: "Euro Coin", decimals: 6 },
           { address: ADDRESSES.cirBtc, symbol: "cirBTC", name: "Circle Wrapped BTC", decimals: 8 },
-          { address: ADDRESSES.usdt, symbol: "USDT", name: "Tether", decimals: 18 },
         ] as TokenOption[]
       ).filter((t) => !!t.address && t.address !== zeroAddress),
     [],
