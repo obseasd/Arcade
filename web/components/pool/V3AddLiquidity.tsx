@@ -798,6 +798,18 @@ export function V3AddLiquidity({
                 if (!isFinite(implicitTick)) {
                     throw new Error("Could not derive a seed tick from the amounts.");
                 }
+                // Symmetric with the poolMispriced read-guard (|tick| > 880k):
+                // a seed that near the min/max floor initialises a pool that can
+                // NEVER accept liquidity (the liquidity term rounds to 0 at the
+                // extreme), and V3 init is one-shot, so it would permanently brick
+                // this (pair, fee). isSqrtPriceInRange below only checks the LEGAL
+                // TickMath bound (±887272), which is too permissive — reject the
+                // practical brick zone here, before paying gas.
+                if (Math.abs(implicitTick) > 880_000) {
+                    throw new Error(
+                        "Seed price is too extreme: this deposit ratio would create a pool pinned near the min/max tick that can never accept liquidity. Use amounts whose ratio reflects a realistic price.",
+                    );
+                }
                 const halfWidth = Math.max(
                     tickSpacing,
                     Math.floor((tickUpper - tickLower) / 2),
