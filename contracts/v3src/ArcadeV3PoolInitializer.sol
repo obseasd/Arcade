@@ -71,10 +71,21 @@ contract ArcadeV3PoolInitializer {
             IUniswapV3Pool(pool).initialize(sqrtPriceX96);
             emit PoolInitializedClamped(pool, token0, token1, fee, sqrtPriceX96, tick);
         } else {
-            (uint160 sqrtExisting, , , , , , ) = IUniswapV3Pool(pool).slot0();
+            (uint160 sqrtExisting, int24 existingTick, , , , , ) = IUniswapV3Pool(pool).slot0();
             if (sqrtExisting == 0) {
                 IUniswapV3Pool(pool).initialize(sqrtPriceX96);
                 emit PoolInitializedClamped(pool, token0, token1, fee, sqrtPriceX96, tick);
+            } else {
+                // Already initialized — possibly by a griefer who called the
+                // factory + pool.initialize directly (see the scope note above).
+                // Guarantee a successful return always means a MINTABLE pool: if
+                // the existing price is pinned near the extreme (unmintable /
+                // bricked), revert so the caller falls back to a different fee
+                // tier instead of sending a doomed mint. (Audit 2026-07 F-1.)
+                require(
+                    existingTick > -SAFE_TICK && existingTick < SAFE_TICK,
+                    "existing pool price extreme"
+                );
             }
         }
     }
