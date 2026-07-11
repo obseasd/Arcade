@@ -78,6 +78,38 @@ contract MockLaunchpad {
     }
 }
 
+/// V3 venue: Arcade-style flat exactInputSingle. Swaps USDC -> tokenOut at
+/// `rate`, delivered to `recipient`.
+contract MockV3Router {
+    MintableERC20 public usdc;
+    uint256 public rate = 5;
+    bool public failMode;
+
+    constructor(MintableERC20 _usdc) {
+        usdc = _usdc;
+    }
+
+    function setFail(bool f) external {
+        failMode = f;
+    }
+
+    function exactInputSingle(
+        address tokenIn,
+        address tokenOut,
+        uint24,
+        address recipient,
+        uint256 amountIn,
+        uint256 amountOutMinimum,
+        uint256
+    ) external returns (uint256 amountOut) {
+        require(!failMode, "v3 fail");
+        MintableERC20(tokenIn).transferFrom(msg.sender, address(this), amountIn);
+        amountOut = amountIn * rate;
+        require(amountOut >= amountOutMinimum, "v3 slippage");
+        MintableERC20(tokenOut).mint(recipient, amountOut);
+    }
+}
+
 /// AMM fallback: swaps USDC -> path[last] at `rate`, delivered to `to`.
 contract MockV2Router {
     MintableERC20 public usdc;
@@ -118,6 +150,7 @@ contract ArcadeCctpBuyReceiverTest is Test {
     MockMessageTransmitter mt;
     MockLaunchpad launchpad;
     MockV2Router v2Router;
+    MockV3Router v3Router;
     ArcadeCctpBuyReceiver receiver;
 
     address beneficiary = makeAddr("beneficiary");
@@ -130,6 +163,7 @@ contract ArcadeCctpBuyReceiverTest is Test {
         mt = new MockMessageTransmitter(usdc);
         launchpad = new MockLaunchpad(usdc);
         v2Router = new MockV2Router(usdc);
+        v3Router = new MockV3Router(usdc);
         receiver = new ArcadeCctpBuyReceiver(
             address(mt),
             address(usdc),
@@ -139,7 +173,8 @@ contract ArcadeCctpBuyReceiverTest is Test {
     }
 
     // Build a CCTP V2 `message` with mintRecipient at byte 184, amount at byte
-    // 216, and hookData = abi.encode(beneficiary, token, minOut) at byte 376.
+    // 216, and hookData = abi.encode(ben, tok, minOut, ammRouter, v3Router,
+    // v3Fee) (192 bytes, 6 words) at byte 376.
     function _msg(
         address mintRecipient,
         uint256 amount,
@@ -147,10 +182,30 @@ contract ArcadeCctpBuyReceiverTest is Test {
         address tok,
         uint256 minOut
     ) internal pure returns (bytes memory m) {
-        m = new bytes(504);
+        // ammRouter/v3Router/v3Fee = 0 -> receiver uses its default v2Router.
+        return _msgFull(mintRecipient, amount, ben, tok, minOut, address(0), address(0), 0);
+    }
+
+    function _msgFull(
+        address mintRecipient,
+        uint256 amount,
+        address ben,
+        address tok,
+        uint256 minOut,
+        address ammRouter,
+        address v3RouterAddr,
+        uint256 v3Fee
+    ) internal pure returns (bytes memory m) {
+        m = new bytes(568);
         bytes32 mr = bytes32(uint256(uint160(mintRecipient)));
-        // router = 0 -> receiver uses its immutable default v2Router (the mock).
-        bytes memory hook = abi.encode(ben, tok, minOut, address(0)); // 128 bytes
+        bytes memory hook = abi.encode(
+            ben,
+            tok,
+            minOut,
+            ammRouter,
+            v3RouterAddr,
+            v3Fee
+        ); // 192 bytes
         assembly {
             let p := add(m, 32)
             mstore(add(p, 184), mr)
@@ -159,6 +214,8 @@ contract ArcadeCctpBuyReceiverTest is Test {
             mstore(add(p, 408), mload(add(hook, 64)))
             mstore(add(p, 440), mload(add(hook, 96)))
             mstore(add(p, 472), mload(add(hook, 128)))
+            mstore(add(p, 504), mload(add(hook, 160)))
+            mstore(add(p, 536), mload(add(hook, 192)))
         }
     }
 
@@ -200,6 +257,47 @@ contract ArcadeCctpBuyReceiverTest is Test {
         assertEq(token.balanceOf(beneficiary), AMT * 3, "tokens delivered via AMM (rate 3)");
         assertEq(usdc.balanceOf(beneficiary), 0, "no USDC refund on success");
         assertEq(usdc.balanceOf(address(receiver)), 0, "receiver drained");
+    }
+
+    function test_v3Route_deliversTokenViaV3() public {
+        // ETH-style token: not a curve token, routed via V3 (v3Router + v3Fee
+        // set). Curve reverts -> V3 leg delivers at rate 5.
+        launchpad.setFail(true);
+        bytes memory m = _msgFull(
+            address(receiver),
+            AMT,
+            beneficiary,
+            address(token),
+            0,
+            address(0), // ammRouter unused when V3 is selected
+            address(v3Router),
+            500
+        );
+        receiver.receiveAndBuy(m, "");
+        assertEq(token.balanceOf(beneficiary), AMT * 5, "tokens via V3 (rate 5)");
+        assertEq(usdc.balanceOf(beneficiary), 0, "no USDC refund on success");
+        assertEq(usdc.balanceOf(address(receiver)), 0, "receiver drained");
+        assertEq(usdc.allowance(address(receiver), address(v3Router)), 0, "v3 approval reset");
+    }
+
+    function test_v3Route_refundsWhenV3Reverts() public {
+        launchpad.setFail(true);
+        v3Router.setFail(true);
+        bytes memory m = _msgFull(
+            address(receiver),
+            AMT,
+            beneficiary,
+            address(token),
+            0,
+            address(0),
+            address(v3Router),
+            500
+        );
+        receiver.receiveAndBuy(m, "");
+        // V3 selected + failed -> refund (V2 is NOT tried when V3 is chosen).
+        assertEq(usdc.balanceOf(beneficiary), AMT, "USDC returned when V3 fails");
+        assertEq(token.balanceOf(beneficiary), 0, "no tokens");
+        assertEq(usdc.allowance(address(receiver), address(v3Router)), 0, "v3 approval reset");
     }
 
     function test_trustless_attackerCannotRedirect() public {

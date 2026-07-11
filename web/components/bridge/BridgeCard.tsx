@@ -43,6 +43,7 @@ import { cn, formatAddress, formatUSDC } from "@/lib/utils";
 import { ADDRESSES } from "@/lib/constants";
 import { TokenSelectModal, type TokenOption } from "@/components/ui/TokenSelectModal";
 import { ROUTER_ABI } from "@/lib/abis/dex";
+import { V3_QUOTER_ABI } from "@/lib/abis/v3";
 
 /** Feature flag for the CCTP "bridge and buy" flow. On by default; set
  *  NEXT_PUBLIC_BRIDGE_BUY_ENABLED="false" to remove it entirely (clean
@@ -492,18 +493,58 @@ export function BridgeCard() {
     chainId: ARC_CHAIN_ID,
     query: { enabled: useBuyHook && amountRaw > 0n },
   });
-  const { buyQuoteOut, buyRouter } = useMemo(() => {
+  // Some targets (ETH / SeedETH) have no V2 pair and live only on a V3 pool;
+  // quote USDC->token via the Arcade V3 quoter at the token's fee tier and let
+  // the receiver route through the V3 router when it wins.
+  const V3_BUY_FEE: Record<string, number> = useMemo(
+    () => ({ [ADDRESSES.seedEth.toLowerCase()]: 500 }),
+    [],
+  );
+  const buyV3Fee = buyToken ? (V3_BUY_FEE[buyToken.address.toLowerCase()] ?? 0) : 0;
+  const v3QuoteQ = useReadContract({
+    address: ADDRESSES.v3Quoter,
+    abi: V3_QUOTER_ABI,
+    functionName: "quoteExactInputSingle",
+    args:
+      buyV3Fee && buyToken
+        ? [ADDRESSES.usdc, buyToken.address, buyV3Fee, amountRaw]
+        : undefined,
+    chainId: ARC_CHAIN_ID,
+    query: { enabled: useBuyHook && amountRaw > 0n && buyV3Fee !== 0 },
+  });
+  const { buyQuoteOut, buyRouter, buyV3Router, buyV3FeeOut } = useMemo(() => {
     const last = (d: unknown) => {
       const a = d as readonly bigint[] | undefined;
       return a && a.length > 0 ? a[a.length - 1] : 0n;
     };
     const arcOut = last(arcadeQuoteQ.data);
     const xylOut = last(xyloQuoteQ.data);
+    const v3Out = (v3QuoteQ.data as bigint | undefined) ?? 0n;
+    // V3 wins: route through the V3 router (ammRouter unused), carry the fee.
+    if (buyV3Fee !== 0 && v3Out > 0n && v3Out >= arcOut && v3Out >= xylOut) {
+      return {
+        buyQuoteOut: v3Out,
+        buyRouter: zeroAddress as Address,
+        buyV3Router: ADDRESSES.v3Router,
+        buyV3FeeOut: BigInt(buyV3Fee),
+      };
+    }
     return xylOut > arcOut
-      ? { buyQuoteOut: xylOut, buyRouter: ADDRESSES.xyloRouter }
-      : { buyQuoteOut: arcOut, buyRouter: ADDRESSES.router };
-  }, [arcadeQuoteQ.data, xyloQuoteQ.data]);
-  const buyQuoteLoading = arcadeQuoteQ.isLoading || xyloQuoteQ.isLoading;
+      ? {
+          buyQuoteOut: xylOut,
+          buyRouter: ADDRESSES.xyloRouter,
+          buyV3Router: zeroAddress as Address,
+          buyV3FeeOut: 0n,
+        }
+      : {
+          buyQuoteOut: arcOut,
+          buyRouter: ADDRESSES.router,
+          buyV3Router: zeroAddress as Address,
+          buyV3FeeOut: 0n,
+        };
+  }, [arcadeQuoteQ.data, xyloQuoteQ.data, v3QuoteQ.data, buyV3Fee]);
+  const buyQuoteLoading =
+    arcadeQuoteQ.isLoading || xyloQuoteQ.isLoading || v3QuoteQ.isLoading;
   // 15% tolerance for cross-chain price drift during the ~30-60s bridge.
   const buyMinOut = buyQuoteOut > 0n ? (buyQuoteOut * 85n) / 100n : 0n;
 
@@ -690,9 +731,12 @@ export function BridgeCard() {
       // typically charges much less). Standard Transfer: full finality, no fee.
       const maxFee = fastTransfer ? amountRaw / 10_000n : 0n; // ≤0.01% of the amount
       const minFinality = fastTransfer ? 1000 : 2000;
-      // hookData = abi.encode(beneficiary, token, minTokensOut). minOut is the
-      // AMM quote minus 15% (cross-chain drift); 0 for a pure curve token. If
-      // arrival slips below it, the receiver refunds the USDC to the beneficiary.
+      // hookData = abi.encode(beneficiary, token, minTokensOut, ammRouter,
+      // v3Router, v3Fee). minOut is the best-venue quote minus 15% (cross-chain
+      // drift); 0 for a pure curve token. When v3Router+v3Fee are set the
+      // receiver routes the buy through the V3 pool (ETH); otherwise via the
+      // chosen V2-style ammRouter. If arrival slips below minOut, the receiver
+      // refunds the USDC to the beneficiary.
       const burnHash = useBuyHook
         ? await writeContractAsync({
             address: CCTP_V2_TOKEN_MESSENGER,
@@ -712,8 +756,17 @@ export function BridgeCard() {
                   { type: "address" },
                   { type: "uint256" },
                   { type: "address" },
+                  { type: "address" },
+                  { type: "uint256" },
                 ],
-                [beneficiary, buyToken!.address, buyMinOut, buyRouter],
+                [
+                  beneficiary,
+                  buyToken!.address,
+                  buyMinOut,
+                  buyRouter,
+                  buyV3Router,
+                  buyV3FeeOut,
+                ],
               ),
             ],
             chainId: srcChain.id,

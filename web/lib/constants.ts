@@ -73,10 +73,10 @@ export const ADDRESSES = {
   v4Quoter: safeAddress(process.env.NEXT_PUBLIC_V4_QUOTER_ADDRESS),
   v4Router: safeAddress(process.env.NEXT_PUBLIC_V4_ROUTER_ADDRESS),
   /** CCTP V2 "bridge and buy" landing contract on Arc (ArcadeCctpBuyReceiver).
-   *  Curve -> AMM (frontend-chosen best V2 router) -> refund. Redeployed
-   *  2026-07-08; env-overridable for the next redeploy. */
+   *  Curve -> AMM (frontend-chosen venue: V2 router OR V3 router+fee for ETH)
+   *  -> refund. Redeployed 2026-07-11 with the V3 route; env-overridable. */
   cctpBuyReceiver: (process.env.NEXT_PUBLIC_CCTP_BUY_RECEIVER ??
-    "0xad17aadea14248c25d405f5e85aee45a729e9f76") as Address,
+    "0x6654C0763DBC49f3943c18478e3d32c209B2D427") as Address,
   /** ArcadeIncentiveDistributor: escrow-backed liquidity-incentive campaigns
    *  (Merkl-style) — the on-chain backend for /swap/incentivize. Deployed
    *  2026-07-11; env-overridable. When zeroAddress the incentivize form falls

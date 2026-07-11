@@ -30,12 +30,28 @@ interface IV2Router {
     ) external returns (uint256[] memory amounts);
 }
 
+/// Arcade's V3 router uses a FLAT-parameter exactInputSingle (not the canonical
+/// Uniswap struct) with no sqrtPriceLimit. This is the venue for the USDC/ETH
+/// (SeedETH) pool, which only exists on the V3 factory.
+interface IArcadeV3Router {
+    function exactInputSingle(
+        address tokenIn,
+        address tokenOut,
+        uint24 fee,
+        address recipient,
+        uint256 amountIn,
+        uint256 amountOutMinimum,
+        uint256 deadline
+    ) external returns (uint256 amountOut);
+}
+
 /**
  * @title ArcadeCctpBuyReceiver
  * @notice "Bridge and buy" landing contract on Arc. A user on another chain
  *         calls CCTP V2 `depositForBurnWithHook` with:
  *           - mintRecipient = this contract
- *           - hookData      = abi.encode(address beneficiary, address token, uint256 minTokensOut)
+ *           - hookData      = abi.encode(beneficiary, token, minTokensOut,
+ *                             ammRouter, v3Router, v3Fee)
  *         Then ANYONE (the user, the app, a relayer) calls `receiveAndBuy` on
  *         Arc with the attested message. In one atomic tx this contract:
  *           1. calls MessageTransmitterV2.receiveMessage -> USDC is minted here,
@@ -69,9 +85,12 @@ contract ArcadeCctpBuyReceiver is ReentrancyGuard {
     uint256 private constant MINT_RECIPIENT_OFFSET = 184; // body(148) + 36
     uint256 private constant HOOK_DATA_OFFSET = 376; // body(148) + 228
     // hookData = abi.encode(address beneficiary, address token, uint256 minOut,
-    // address ammRouter) = 4 * 32 bytes. ammRouter lets the frontend pick the
-    // best V2-style venue (Arcade V2 / XyloNet / ...); 0 uses the default.
-    uint256 private constant HOOK_DATA_LEN = 128;
+    // address ammRouter, address v3Router, uint256 v3Fee) = 6 * 32 bytes.
+    //   - ammRouter: best V2-style venue (Arcade V2 / XyloNet / ...).
+    //   - v3Router + v3Fee: when BOTH non-zero, the AMM leg routes through the
+    //     Arcade V3 router at that fee tier instead of V2 (the only venue for
+    //     the USDC/ETH pool). The frontend picks exactly ONE AMM venue.
+    uint256 private constant HOOK_DATA_LEN = 192;
 
     event BridgeBuy(
         address indexed beneficiary,
@@ -127,14 +146,17 @@ contract ArcadeCctpBuyReceiver is ReentrancyGuard {
             address beneficiary,
             address token,
             uint256 minTokensOut,
-            address ammRouter
+            address ammRouter,
+            address v3Router,
+            uint256 v3Fee
         ) = abi.decode(
                 message[HOOK_DATA_OFFSET:HOOK_DATA_OFFSET + HOOK_DATA_LEN],
-                (address, address, uint256, address)
+                (address, address, uint256, address, address, uint256)
             );
         if (beneficiary == address(0) || token == address(0)) revert BadMessage();
         // Frontend-chosen V2-style venue (best route); fall back to the default.
         address router = ammRouter == address(0) ? v2Router : ammRouter;
+        bool useV3 = v3Router != address(0) && v3Fee != 0;
 
         uint256 balBefore = usdc.balanceOf(address(this));
         // Mints USDC to this contract (mintRecipient). Reverts if already used.
@@ -167,33 +189,57 @@ contract ArcadeCctpBuyReceiver is ReentrancyGuard {
             usdc.forceApprove(launchpad, 0);
         }
 
-        // Route 2: AMM. Swap USDC -> token via the frontend-chosen V2-style
-        // router (best route: XyloNet stable pool for EURC, Arcade V2 for
-        // migrated launches, ...), delivered straight to the beneficiary.
-        usdc.forceApprove(router, minted);
-        address[] memory path = new address[](2);
-        path[0] = address(usdc);
-        path[1] = token;
-        try
-            IV2Router(router).swapExactTokensForTokens(
-                minted,
-                minTokensOut,
-                path,
-                beneficiary,
-                block.timestamp
-            )
-        returns (uint256[] memory amounts) {
-            usdc.forceApprove(router, 0);
-            emit BridgeBuy(
-                beneficiary,
-                token,
-                minted,
-                amounts.length > 0 ? amounts[amounts.length - 1] : 0,
-                true
-            );
-            return;
-        } catch {
-            usdc.forceApprove(router, 0);
+        // Route 2: AMM. Exactly ONE venue, chosen by the frontend, delivered
+        // straight to the beneficiary.
+        if (useV3) {
+            // V3: USDC -> token via the Arcade V3 router at the chosen fee tier.
+            // This is the only venue for the USDC/ETH (SeedETH) pool.
+            usdc.forceApprove(v3Router, minted);
+            try
+                IArcadeV3Router(v3Router).exactInputSingle(
+                    address(usdc),
+                    token,
+                    uint24(v3Fee),
+                    beneficiary,
+                    minted,
+                    minTokensOut,
+                    block.timestamp
+                )
+            returns (uint256 amountOut) {
+                usdc.forceApprove(v3Router, 0);
+                emit BridgeBuy(beneficiary, token, minted, amountOut, true);
+                return;
+            } catch {
+                usdc.forceApprove(v3Router, 0);
+            }
+        } else {
+            // V2: USDC -> token via the frontend-chosen V2-style router
+            // (XyloNet stable pool for EURC, Arcade V2 for migrated launches).
+            usdc.forceApprove(router, minted);
+            address[] memory path = new address[](2);
+            path[0] = address(usdc);
+            path[1] = token;
+            try
+                IV2Router(router).swapExactTokensForTokens(
+                    minted,
+                    minTokensOut,
+                    path,
+                    beneficiary,
+                    block.timestamp
+                )
+            returns (uint256[] memory amounts) {
+                usdc.forceApprove(router, 0);
+                emit BridgeBuy(
+                    beneficiary,
+                    token,
+                    minted,
+                    amounts.length > 0 ? amounts[amounts.length - 1] : 0,
+                    true
+                );
+                return;
+            } catch {
+                usdc.forceApprove(router, 0);
+            }
         }
 
         // Both routes failed — return the bridged USDC so funds are never stuck.
