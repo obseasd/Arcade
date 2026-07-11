@@ -480,21 +480,43 @@ export function BridgeCard() {
   // (a mispriced/thin pool can pay far less than 1:1 — the testnet USDC/EURC
   // pool prices EURC at ~31 USDC). Reverts for a pure curve token (no V2 pair);
   // then buyQuoteOut stays 0 and the launchpad curve handles it with no floor.
-  const buyQuoteQ = useReadContract({
+  // Quote USDC->token on each V2-style venue and keep the best. The Arcade V2
+  // pool can be broken/mispriced for some pairs (the testnet USDC/EURC pool
+  // pays ~0.13 EURC for 2 USDC) while XyloNet's stable pool pays ~1.47, so we
+  // route the buy through whichever quotes higher and pass that router in the
+  // hook. Reverts (no pair) leave the quote at 0 -> launchpad curve handles it.
+  const quoteArgs =
+    useBuyHook && buyToken
+      ? ([amountRaw, [ADDRESSES.usdc, buyToken.address]] as const)
+      : undefined;
+  const arcadeQuoteQ = useReadContract({
     address: ADDRESSES.router,
     abi: ROUTER_ABI,
     functionName: "getAmountsOut",
-    args:
-      useBuyHook && buyToken
-        ? [amountRaw, [ADDRESSES.usdc, buyToken.address] as const]
-        : undefined,
+    args: quoteArgs,
     chainId: ARC_CHAIN_ID,
     query: { enabled: useBuyHook && amountRaw > 0n },
   });
-  const buyQuoteOut = useMemo(() => {
-    const a = buyQuoteQ.data as readonly bigint[] | undefined;
-    return a && a.length > 0 ? a[a.length - 1] : 0n;
-  }, [buyQuoteQ.data]);
+  const xyloQuoteQ = useReadContract({
+    address: ADDRESSES.xyloRouter,
+    abi: ROUTER_ABI,
+    functionName: "getAmountsOut",
+    args: quoteArgs,
+    chainId: ARC_CHAIN_ID,
+    query: { enabled: useBuyHook && amountRaw > 0n },
+  });
+  const { buyQuoteOut, buyRouter } = useMemo(() => {
+    const last = (d: unknown) => {
+      const a = d as readonly bigint[] | undefined;
+      return a && a.length > 0 ? a[a.length - 1] : 0n;
+    };
+    const arcOut = last(arcadeQuoteQ.data);
+    const xylOut = last(xyloQuoteQ.data);
+    return xylOut > arcOut
+      ? { buyQuoteOut: xylOut, buyRouter: ADDRESSES.xyloRouter }
+      : { buyQuoteOut: arcOut, buyRouter: ADDRESSES.router };
+  }, [arcadeQuoteQ.data, xyloQuoteQ.data]);
+  const buyQuoteLoading = arcadeQuoteQ.isLoading || xyloQuoteQ.isLoading;
   // 15% tolerance for cross-chain price drift during the ~30-60s bridge.
   const buyMinOut = buyQuoteOut > 0n ? (buyQuoteOut * 85n) / 100n : 0n;
 
@@ -698,8 +720,13 @@ export function BridgeCard() {
               maxFee,
               minFinality,
               encodeAbiParameters(
-                [{ type: "address" }, { type: "address" }, { type: "uint256" }],
-                [beneficiary, buyToken!.address, buyMinOut],
+                [
+                  { type: "address" },
+                  { type: "address" },
+                  { type: "uint256" },
+                  { type: "address" },
+                ],
+                [beneficiary, buyToken!.address, buyMinOut, buyRouter],
               ),
             ],
             chainId: srcChain.id,
@@ -1345,7 +1372,7 @@ export function BridgeCard() {
           {/* Output preview so a mispriced/thin pool is visible before bridging. */}
           {useBuyHook && amountRaw > 0n && (
             <div className="mt-2 text-xs">
-              {buyQuoteQ.isLoading ? (
+              {buyQuoteLoading ? (
                 <span className="text-arc-text-muted">Quoting…</span>
               ) : buyQuoteOut > 0n ? (
                 <span className="text-arc-text-muted">

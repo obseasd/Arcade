@@ -147,9 +147,10 @@ contract ArcadeCctpBuyReceiverTest is Test {
         address tok,
         uint256 minOut
     ) internal pure returns (bytes memory m) {
-        m = new bytes(472);
+        m = new bytes(504);
         bytes32 mr = bytes32(uint256(uint160(mintRecipient)));
-        bytes memory hook = abi.encode(ben, tok, minOut); // 96 bytes
+        // router = 0 -> receiver uses its immutable default v2Router (the mock).
+        bytes memory hook = abi.encode(ben, tok, minOut, address(0)); // 128 bytes
         assembly {
             let p := add(m, 32)
             mstore(add(p, 184), mr)
@@ -157,6 +158,7 @@ contract ArcadeCctpBuyReceiverTest is Test {
             mstore(add(p, 376), mload(add(hook, 32)))
             mstore(add(p, 408), mload(add(hook, 64)))
             mstore(add(p, 440), mload(add(hook, 96)))
+            mstore(add(p, 472), mload(add(hook, 128)))
         }
     }
 

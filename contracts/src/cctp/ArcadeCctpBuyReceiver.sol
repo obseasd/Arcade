@@ -68,8 +68,10 @@ contract ArcadeCctpBuyReceiver is ReentrancyGuard {
     // Byte offsets of fields inside the full CCTP V2 `message`.
     uint256 private constant MINT_RECIPIENT_OFFSET = 184; // body(148) + 36
     uint256 private constant HOOK_DATA_OFFSET = 376; // body(148) + 228
-    // hookData = abi.encode(address,address,uint256) = 3 * 32 bytes.
-    uint256 private constant HOOK_DATA_LEN = 96;
+    // hookData = abi.encode(address beneficiary, address token, uint256 minOut,
+    // address ammRouter) = 4 * 32 bytes. ammRouter lets the frontend pick the
+    // best V2-style venue (Arcade V2 / XyloNet / ...); 0 uses the default.
+    uint256 private constant HOOK_DATA_LEN = 128;
 
     event BridgeBuy(
         address indexed beneficiary,
@@ -121,11 +123,18 @@ contract ArcadeCctpBuyReceiver is ReentrancyGuard {
         if (mintRecipient != address(this)) revert NotForThisReceiver();
 
         // Attested intent — cannot be forged by the caller.
-        (address beneficiary, address token, uint256 minTokensOut) = abi.decode(
-            message[HOOK_DATA_OFFSET:HOOK_DATA_OFFSET + HOOK_DATA_LEN],
-            (address, address, uint256)
-        );
+        (
+            address beneficiary,
+            address token,
+            uint256 minTokensOut,
+            address ammRouter
+        ) = abi.decode(
+                message[HOOK_DATA_OFFSET:HOOK_DATA_OFFSET + HOOK_DATA_LEN],
+                (address, address, uint256, address)
+            );
         if (beneficiary == address(0) || token == address(0)) revert BadMessage();
+        // Frontend-chosen V2-style venue (best route); fall back to the default.
+        address router = ammRouter == address(0) ? v2Router : ammRouter;
 
         uint256 balBefore = usdc.balanceOf(address(this));
         // Mints USDC to this contract (mintRecipient). Reverts if already used.
@@ -158,15 +167,15 @@ contract ArcadeCctpBuyReceiver is ReentrancyGuard {
             usdc.forceApprove(launchpad, 0);
         }
 
-        // Route 2: AMM fallback. Swap USDC -> token via the V2 router, delivered
-        // straight to the beneficiary. Covers migrated launches and any
-        // USDC-paired token (cirBTC, EURC, ...).
-        usdc.forceApprove(v2Router, minted);
+        // Route 2: AMM. Swap USDC -> token via the frontend-chosen V2-style
+        // router (best route: XyloNet stable pool for EURC, Arcade V2 for
+        // migrated launches, ...), delivered straight to the beneficiary.
+        usdc.forceApprove(router, minted);
         address[] memory path = new address[](2);
         path[0] = address(usdc);
         path[1] = token;
         try
-            IV2Router(v2Router).swapExactTokensForTokens(
+            IV2Router(router).swapExactTokensForTokens(
                 minted,
                 minTokensOut,
                 path,
@@ -174,7 +183,7 @@ contract ArcadeCctpBuyReceiver is ReentrancyGuard {
                 block.timestamp
             )
         returns (uint256[] memory amounts) {
-            usdc.forceApprove(v2Router, 0);
+            usdc.forceApprove(router, 0);
             emit BridgeBuy(
                 beneficiary,
                 token,
@@ -184,7 +193,7 @@ contract ArcadeCctpBuyReceiver is ReentrancyGuard {
             );
             return;
         } catch {
-            usdc.forceApprove(v2Router, 0);
+            usdc.forceApprove(router, 0);
         }
 
         // Both routes failed — return the bridged USDC so funds are never stuck.

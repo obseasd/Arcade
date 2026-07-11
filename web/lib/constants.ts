@@ -73,10 +73,10 @@ export const ADDRESSES = {
   v4Quoter: safeAddress(process.env.NEXT_PUBLIC_V4_QUOTER_ADDRESS),
   v4Router: safeAddress(process.env.NEXT_PUBLIC_V4_ROUTER_ADDRESS),
   /** CCTP V2 "bridge and buy" landing contract on Arc (ArcadeCctpBuyReceiver).
-   *  Dual-route (launchpad curve -> AMM fallback -> refund). Redeployed
+   *  Curve -> AMM (frontend-chosen best V2 router) -> refund. Redeployed
    *  2026-07-08; env-overridable for the next redeploy. */
   cctpBuyReceiver: (process.env.NEXT_PUBLIC_CCTP_BUY_RECEIVER ??
-    "0xca001f73e117494711386e0e6e77ef7b984eae15") as Address,
+    "0xad17aadea14248c25d405f5e85aee45a729e9f76") as Address,
   // --- ArcadeHook production stack (V4 Phase 2, behind NEXT_PUBLIC_V4_HOOK_ENABLED) ---
   // Unified hook subsuming launchpad + V2 stack + V3 locker. Uses atomic
   // createLaunch + direct hook.buy/hook.sell during Curving phase.
