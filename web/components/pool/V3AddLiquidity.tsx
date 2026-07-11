@@ -224,6 +224,14 @@ export function V3AddLiquidity({
                   (slot0Q.data as readonly [bigint, number, ...unknown[]])[1],
               )
             : 0;
+    // A V3 pool initialised at (or near) the min/max tick (±887272) is a
+    // permanently broken pool: someone created it at a garbage price with no
+    // liquidity, and V3 init is one-shot (it can't be re-priced). Minting into
+    // it reverts / produces degenerate amounts (this is exactly what bricks a
+    // (pair, fee) combo). Detect it so we can warn and steer the user to a
+    // different fee tier instead of wasting a tx.
+    const poolMispriced =
+        hasPool && slot0Q.data !== undefined && Math.abs(currentTick) > 880_000;
     // Tick spacing comes from the on-chain pool when one exists; otherwise
     // we MUST fall back to the canonical fee->spacing map (see
     // defaultTickSpacingForFee). The previous "feeBps" fallback was wrong:
@@ -631,6 +639,7 @@ export function V3AddLiquidity({
             ? !!account &&
               npmEnabled &&
               feeTierEnabled &&
+              !poolMispriced &&
               !submitting &&
               !poolAddrQ.isLoading &&
               validRange &&
@@ -639,6 +648,7 @@ export function V3AddLiquidity({
             : !!account &&
               zapEnabled &&
               feeTierEnabled &&
+              !poolMispriced &&
               hasPool &&
               !submitting &&
               preset === "max" &&
@@ -1384,6 +1394,16 @@ export function V3AddLiquidity({
                     1%, 2%, or 3%. (URL overrides: <code>?fee=5</code>,{" "}
                     <code>?fee=30</code>, <code>?fee=100</code>,{" "}
                     <code>?fee=200</code>, <code>?fee=300</code>.)
+                </div>
+            )}
+            {poolMispriced && (
+                <div className="rounded-xl border border-arc-danger/40 bg-arc-danger/10 p-3 text-xs text-arc-danger">
+                    This {(feePip / 10_000).toFixed(2)}% pool was initialized at a
+                    broken price (tick at the min/max floor) and can&apos;t be
+                    re-priced — V3 initialization is one-shot. Minting here will
+                    revert. <span className="font-semibold">Pick a different fee
+                    tier</span> (0.05%, 1%, 2%…) to create a fresh, correctly
+                    priced pool.
                 </div>
             )}
             {feeTierEnabled && !hasPool && (
