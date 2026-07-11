@@ -21,6 +21,7 @@ import {
 
 import { AUTO_COMPOUNDER_ABI } from "@/lib/abis/autoCompounder";
 import { runSequential } from "@/lib/routing/runSequential";
+import { runBatchedOrSequential } from "@/lib/routing/runBatchedOrSequential";
 import { V3_NPM_ABI, V3_POOL_ABI } from "@/lib/abis/v3-npm";
 import { ADDRESSES } from "@/lib/constants";
 import { Modal } from "@/components/ui/Modal";
@@ -233,19 +234,18 @@ export function RemoveLiquidityModalV3({
             });
 
             if (isManaged) {
-                // Arc's callFrom precompile is dead, so the old "bundle
-                // withdrawPosition + decrease/collect/burn into ONE atomic
-                // Multicall3From signature" batch reverts on-chain. Run the
-                // four legs as direct txs from the user's wallet, in order:
-                //   1. withdrawPosition (Compounder.onlyDepositor)
+                // Ordered bundle across the AutoCompounder + NPM:
+                //   1. withdrawPosition (Compounder.onlyDepositor -> NFT back to user)
                 //   2. decreaseLiquidity (NPM._isApprovedOrOwner)
                 //   3. collect
                 //   4. burn (reverts unless liquidity + tokensOwed are 0,
                 //      so it must follow decrease + collect)
-                // msg.sender is the user on each tx for free. The legs run
-                // sequentially (each awaits its receipt before the next),
-                // preserving the original order.
-                await runSequential(
+                // Arc's callFrom precompile is healthy again, so this folds into
+                // ONE Multicall3From signature (msg.sender preserved so the NFT
+                // withdrawn in leg 1 is owned by the user for legs 2-4). The
+                // helper simulates first and falls back to 4 sequential direct
+                // txs if the precompile is down — never worse than before.
+                await runBatchedOrSequential(
                     [
                         {
                             address: ADDRESSES.autoCompounder,
@@ -287,7 +287,7 @@ export function RemoveLiquidityModalV3({
                             args: [tokenId],
                         },
                     ],
-                    { writeContractAsync, publicClient },
+                    { account, writeContractAsync, publicClient },
                 );
             } else {
                 // User-owned NFT: still uses the NPM's own Multicall
