@@ -96,7 +96,15 @@ CREATE INDEX IF NOT EXISTS idx_referrals_referrer_verified
 
 
 -- ---------- verify it worked ------------------------------------------
--- Expect 4 rows: verified, verified_at, referred_address, referrer_address.
+-- Expect 5 rows: referred_address, referrer_address, created_at, verified,
+-- verified_at. (An earlier version of this comment said 4 -- it forgot
+-- created_at.)
+--
+-- Read the RUN OUTPUT, not just this: statements that print "already exists,
+-- skipping" were no-ops. The 009 ones (8: ALTER, 9: ALTER, 10: CREATE INDEX)
+-- printing NO such warning is the proof the columns were genuinely missing and
+-- have now landed -- i.e. that /api/referral/register had been 500ing.
+-- Applied to production 2026-07-16: 1-7 skipped, 8-10 ran.
 SELECT column_name, data_type, column_default
   FROM information_schema.columns
  WHERE table_name = 'referrals'
