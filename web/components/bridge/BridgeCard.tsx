@@ -80,16 +80,22 @@ const ARCADE_BRIDGE_FEE_BPS = 5n; // 0.05%
 // the exact price is still whatever Circle charges, attested as `feeExecuted`.
 const CCTP_FAST_MAX_FEE_BPS = 2n;
 
-/** Is this bytes32 mintRecipient one of OUR receivers, current or historical?
- *  A burn commits its mintRecipient on the source chain, so a transfer in
- *  flight across a redeploy still names the old one. Gating on the current
- *  address alone rejected those forever as a "payload mismatch", and with
- *  destinationCaller pinned to that old receiver nobody could rescue them. */
-function isKnownReceiver32(mintRecipient32: string): boolean {
+/** The receiver generation this bytes32 mintRecipient belongs to, if any.
+ *  Returns its message sizes too: hookData grew across redeploys (96 -> 128 ->
+ *  192 bytes), so recognising the ADDRESS is not enough to route the claim --
+ *  an allowlist keyed on address alone would admit an old in-flight message
+ *  past the gates and then fail to route it, which is worse than rejecting it. */
+function receiverFor32(mintRecipient32: string) {
   const target = mintRecipient32.toLowerCase();
-  return [ADDRESSES.cctpBuyReceiver, ...ADDRESSES.cctpBuyReceiverHistory].some(
-    (a) => a !== zeroAddress && addressToBytes32(a).toLowerCase() === target,
+  return ADDRESSES.cctpBuyReceivers.find(
+    (r) =>
+      r.address !== zeroAddress &&
+      addressToBytes32(r.address).toLowerCase() === target,
   );
+}
+
+function isKnownReceiver32(mintRecipient32: string): boolean {
+  return !!receiverFor32(mintRecipient32);
 }
 const BPS_DENOMINATOR = 10_000n;
 
@@ -1235,8 +1241,14 @@ export function BridgeCard() {
       // (376 + 192 = 568), fee-forward a 32-byte one (408). `>=` would send a
       // 569-byte message to receiveAndBuy, which exact-length-reverts.
       const msgBytes = (step.message.length - 2) / 2;
-      const isBridgeBuy = !mintsToSelf && msgBytes === 568;
-      const isFeeForward = !mintsToSelf && msgBytes === 408;
+      // Match against the sizes of the generation the MESSAGE names, not the
+      // current receiver's: an in-flight buy from before a redeploy is 472 or
+      // 504 bytes, and hardcoding 568 would refuse exactly the transfers the
+      // historical allowlist exists to rescue.
+      const gen = claimMintRecipient ? receiverFor32(addressToBytes32(claimMintRecipient)) : undefined;
+      const isBridgeBuy = !mintsToSelf && !!gen && msgBytes === gen.buyBytes;
+      const isFeeForward =
+        !mintsToSelf && !!gen && gen.forwardBytes !== 0 && msgBytes === gen.forwardBytes;
       if (!mintsToSelf && !isBridgeBuy && !isFeeForward) {
         // Refuse rather than broadcast a doomed tx: burning the nonce on a
         // reverting call is how a recoverable state becomes a permanent loss.

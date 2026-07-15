@@ -87,19 +87,31 @@ export const ADDRESSES = {
    *  back to its "contact ops" placeholder. */
   incentiveDistributor: (process.env.NEXT_PUBLIC_INCENTIVE_DISTRIBUTOR ??
     "0xa8fA80926A9145160A7e6Cb811E5B538F1305698") as Address,
-  /** Receivers we have ever deployed, newest first. A bridge burn commits its
-   *  mintRecipient on the SOURCE chain, so a burn in flight when we redeploy
-   *  still names the OLD receiver. The Iris poll gates compare mintRecipient
-   *  against the current receiver, so without this an in-flight transfer would
-   *  be rejected as a "payload mismatch" forever -- and since destinationCaller
-   *  is pinned to that old receiver, nobody else could rescue it either. The
-   *  entrypoints are identical across versions, so claiming through the old
-   *  address is safe. APPEND here on every redeploy; never remove an entry. */
-  cctpBuyReceiverHistory: [
-    "0x9E87B0732BAA1aB0e001A220b505720971ED3621",
-    "0x6654C0763DBC49f3943c18478e3d32c209B2D427",
-    "0xad17aadea14248c25d405f5e85aee45a729e9f76",
-  ] as readonly Address[],
+  /** Every receiver we have deployed, newest first, WITH the buy-message size
+   *  that generation produced. A burn commits its mintRecipient on the SOURCE
+   *  chain, so a transfer in flight when we redeploy still names the OLD
+   *  receiver, and destinationCaller is pinned to it -- nobody else can rescue
+   *  it. The Iris gates and the claim router therefore both have to recognise
+   *  historical receivers.
+   *
+   *  The size is NOT constant across generations, which is the whole reason
+   *  this carries a length instead of just an address: hookData grew 96 -> 128
+   *  -> 192 bytes as the buy route gained the best-venue router and then the V3
+   *  leg, and message length is exactly 376 + hookDataLen. An earlier version
+   *  of this comment claimed "the entrypoints are identical across versions",
+   *  which was simply false: an allowlist keyed on address alone admitted those
+   *  messages past the gates and then failed to route them, which is worse than
+   *  rejecting them early.
+   *
+   *  `forwardBytes` is 0 where that generation predates receiveAndForward (it
+   *  shipped with 0x9E87), so a plain fee-forward claim can only ever name the
+   *  current receiver anyway.
+   *  APPEND on every redeploy; never remove an entry. */
+  cctpBuyReceivers: [
+    { address: "0x9E87B0732BAA1aB0e001A220b505720971ED3621", buyBytes: 568, forwardBytes: 408 },
+    { address: "0x6654C0763DBC49f3943c18478e3d32c209B2D427", buyBytes: 504, forwardBytes: 0 },
+    { address: "0xad17aadea14248c25d405f5e85aee45a729e9f76", buyBytes: 472, forwardBytes: 0 },
+  ] as readonly { address: Address; buyBytes: number; forwardBytes: number }[],
   // --- ArcadeHook production stack (V4 Phase 2, behind NEXT_PUBLIC_V4_HOOK_ENABLED) ---
   // Unified hook subsuming launchpad + V2 stack + V3 locker. Uses atomic
   // createLaunch + direct hook.buy/hook.sell during Curving phase.

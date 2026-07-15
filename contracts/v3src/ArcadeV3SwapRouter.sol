@@ -102,10 +102,29 @@ contract ArcadeV3SwapRouter is IUniswapV3SwapCallback {
     ///      Deliberately never skips the charge: the payer always pays, so a
     ///      failing destination can never become a way to dodge the tax. Only
     ///      the timing of OUR revenue is at risk, never the user's swap.
+    ///
+    ///      Note on netting: an earlier comment justified this with "the router
+    ///      holds no funds between txs", which is FALSE -- pendingSnipeFees
+    ///      holds funds across txs by design. The real reason a held balance is
+    ///      unstealable is that there is no sweep function: the only two paths
+    ///      that spend this contract's own balance are leg 2 of
+    ///      exactInputThroughUsdc (amount taken from the pool's RETURN VALUE,
+    ///      never balanceOf) and pushSnipeFees (amount = the accounted mapping,
+    ///      destination = the immutable treasury). Do not add a balanceOf-based
+    ///      sweep here without revisiting that.
     function _paySkim(address token, address payer, uint256 amount) internal {
         address treasury_ = ILaunchpadSnipe(launchpad).treasury();
-        bytes memory payload =
-            abi.encodeWithSelector(IERC20Min.transferFrom.selector, payer, treasury_, amount);
+        // Mirror _pay's payer branch. exactInputThroughUsdc skims the USDC mid
+        // with payer == address(this), and a transferFrom from ourselves needs
+        // a self-allowance we never grant: it reverted, fell back, and
+        // self-transferred -- so EVERY two-hop buy deferred its skim even with
+        // a perfectly healthy treasury, and SnipeFeeDeferred (whose only job is
+        // to alarm "the treasury is dead") fired on the happy path, destroying
+        // its own signal. Nothing was lost, but the fallback existed for a
+        // failure that had not happened.
+        bytes memory payload = payer == address(this)
+            ? abi.encodeWithSelector(IERC20Min.transfer.selector, treasury_, amount)
+            : abi.encodeWithSelector(IERC20Min.transferFrom.selector, payer, treasury_, amount);
         (bool ok, bytes memory ret) = token.call(payload);
         if (ok && (ret.length == 0 || (ret.length >= 32 && abi.decode(ret, (bool))))) return;
         // Treasury cannot receive: take it into the router instead. This still
