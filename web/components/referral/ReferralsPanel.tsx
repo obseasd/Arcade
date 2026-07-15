@@ -187,10 +187,34 @@ export function ReferralsPanel({ account }: { account: Address | undefined }) {
         setClaiming(true);
         setClaimMsg(null);
         try {
+            // The route has required { referrer, deadline, signature } since the
+            // 2026-07-02 fee audit (so nobody can trigger someone else's
+            // payout), but this button only ever sent { referrer } -- a
+            // guaranteed 400. It is invisible today because payouts are
+            // kill-switched off and the enabled:false branch answers first, so
+            // the Claim button would have broken on the DAY it was turned on at
+            // mainnet, with no test covering it. Same Claim signature the reveal
+            // already uses.
+            const deadline = BigInt(Math.floor(Date.now() / 1000) + 300);
+            const signature = await signTypedDataAsync({
+                domain: { name: "ArcadeReferral", version: "1", chainId: arcTestnet.id },
+                types: {
+                    Claim: [
+                        { name: "referrer", type: "address" },
+                        { name: "deadline", type: "uint256" },
+                    ],
+                },
+                primaryType: "Claim",
+                message: { referrer: account, deadline },
+            });
             const res = await fetch("/api/referral/claim", {
                 method: "POST",
                 headers: { "content-type": "application/json" },
-                body: JSON.stringify({ referrer: account }),
+                body: JSON.stringify({
+                    referrer: account,
+                    deadline: deadline.toString(),
+                    signature,
+                }),
             });
             const data = await res.json();
             if (data.enabled === false) {
@@ -207,7 +231,7 @@ export function ReferralsPanel({ account }: { account: Address | undefined }) {
         } finally {
             setClaiming(false);
         }
-    }, [account]);
+    }, [account, signTypedDataAsync]);
 
     if (!account) {
         return (

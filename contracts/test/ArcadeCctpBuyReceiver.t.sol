@@ -185,14 +185,14 @@ contract ArcadeCctpBuyReceiverTest is Test {
 
     // Build a CCTP V2 `message` with mintRecipient at byte 184, amount at byte
     // 216, and hookData = abi.encode(ben, tok, minOut, ammRouter, v3Router,
-    // v3Fee) (192 bytes, 6 words) at byte 376.
+    // v3Fee, buyDeadline) (224 bytes, 7 words) at byte 376.
     function _msg(
         address mintRecipient,
         uint256 amount,
         address ben,
         address tok,
         uint256 minOut
-    ) internal pure returns (bytes memory m) {
+    ) internal view returns (bytes memory m) {
         // ammRouter/v3Router/v3Fee = 0 -> receiver uses its default v2Router.
         return _msgFull(mintRecipient, amount, ben, tok, minOut, address(0), address(0), 0);
     }
@@ -206,7 +206,7 @@ contract ArcadeCctpBuyReceiverTest is Test {
         address ammRouter,
         address v3RouterAddr,
         uint256 v3Fee
-    ) internal pure returns (bytes memory m) {
+    ) internal view returns (bytes memory m) {
         // Default: STANDARD transfer, no Circle fee -> no Arcade bridge fee, so
         // the pre-existing route tests keep their exact expected amounts.
         return
@@ -235,8 +235,39 @@ contract ArcadeCctpBuyReceiverTest is Test {
         uint256 v3Fee,
         uint32 finalityExecuted,
         uint256 feeExecuted
+    ) internal view returns (bytes memory m) {
+        // Default deadline: far in the future, so every pre-existing route test
+        // keeps testing the route rather than the expiry.
+        return
+            _msgDeadline(
+                mintRecipient,
+                amount,
+                ben,
+                tok,
+                minOut,
+                ammRouter,
+                v3RouterAddr,
+                v3Fee,
+                finalityExecuted,
+                feeExecuted,
+                block.timestamp + 1 days
+            );
+    }
+
+    function _msgDeadline(
+        address mintRecipient,
+        uint256 amount,
+        address ben,
+        address tok,
+        uint256 minOut,
+        address ammRouter,
+        address v3RouterAddr,
+        uint256 v3Fee,
+        uint32 finalityExecuted,
+        uint256 feeExecuted,
+        uint256 buyDeadline
     ) internal pure returns (bytes memory m) {
-        m = new bytes(568);
+        m = new bytes(600); // 376 + 224
         bytes32 mr = bytes32(uint256(uint160(mintRecipient)));
         // finalityThresholdExecuted is a uint32 at bytes 144-147.
         bytes32 fin = bytes32(uint256(finalityExecuted) << 224);
@@ -246,8 +277,9 @@ contract ArcadeCctpBuyReceiverTest is Test {
             minOut,
             ammRouter,
             v3RouterAddr,
-            v3Fee
-        ); // 192 bytes
+            v3Fee,
+            buyDeadline
+        ); // 224 bytes, 7 words
         assembly {
             let p := add(m, 32)
             mstore(add(p, 144), fin)
@@ -260,6 +292,7 @@ contract ArcadeCctpBuyReceiverTest is Test {
             mstore(add(p, 472), mload(add(hook, 128)))
             mstore(add(p, 504), mload(add(hook, 160)))
             mstore(add(p, 536), mload(add(hook, 192)))
+            mstore(add(p, 568), mload(add(hook, 224)))
         }
     }
 
@@ -403,6 +436,63 @@ contract ArcadeCctpBuyReceiverTest is Test {
         assertEq(token.balanceOf(beneficiary), AMT * 2, "full amount bought");
     }
 
+    // --- stale-quote guard -------------------------------------------------
+
+    /// minTokensOut is fixed at BURN time, the message stays claimable forever,
+    /// and claiming is permissionless -- so without a deadline a sandwicher can
+    /// sit on the message and claim at a moment of its choosing, extracting the
+    /// whole slippage band. Past the deadline we refund USDC instead of buying
+    /// at a price the user quoted in another market.
+    function test_deadline_expiredRefundsInsteadOfBuying() public {
+        bytes memory m = _msgDeadline(
+            address(receiver), AMT, beneficiary, address(token), 0,
+            address(0), address(0), 0, STANDARD, 0, block.timestamp + 100
+        );
+        vm.warp(block.timestamp + 101);
+        receiver.receiveAndBuy(m, "");
+        assertEq(usdc.balanceOf(beneficiary), AMT, "USDC refunded in full");
+        assertEq(token.balanceOf(beneficiary), 0, "no stale buy executed");
+    }
+
+    /// One second before expiry the buy must still go through: an off-by-one
+    /// here silently refunds every in-time bridge.
+    function test_deadline_atExactDeadlineStillBuys() public {
+        bytes memory m = _msgDeadline(
+            address(receiver), AMT, beneficiary, address(token), 0,
+            address(0), address(0), 0, STANDARD, 0, block.timestamp + 100
+        );
+        vm.warp(block.timestamp + 100); // == deadline, not past it
+        receiver.receiveAndBuy(m, "");
+        assertEq(token.balanceOf(beneficiary), AMT * 2, "bought at the boundary");
+    }
+
+    /// deadline == 0 is the documented opt-out. It must NOT be read as "expired
+    /// at the epoch", which would refund every message that omits one.
+    function test_deadline_zeroMeansNoDeadline() public {
+        bytes memory m = _msgDeadline(
+            address(receiver), AMT, beneficiary, address(token), 0,
+            address(0), address(0), 0, STANDARD, 0, 0
+        );
+        vm.warp(block.timestamp + 365 days);
+        receiver.receiveAndBuy(m, "");
+        assertEq(token.balanceOf(beneficiary), AMT * 2, "no deadline -> still buys");
+    }
+
+    /// Expiry must NOT become a fee dodge: Circle already performed the
+    /// transfer and charged for it, so the bridge fee is owed whether or not we
+    /// end up buying.
+    function test_deadline_expiredStillTakesTheBridgeFee() public {
+        uint256 target = (AMT * 5) / 10_000;
+        bytes memory m = _msgDeadline(
+            address(receiver), AMT, beneficiary, address(token), 0,
+            address(0), address(0), 0, FAST, 0, block.timestamp + 100
+        );
+        vm.warp(block.timestamp + 101);
+        receiver.receiveAndBuy(m, "");
+        assertEq(usdc.balanceOf(treasury), target, "fee still owed on an expired buy");
+        assertEq(usdc.balanceOf(beneficiary), AMT - target, "refund is net of the fee");
+    }
+
     /// If Circle's own fee already meets/exceeds the target, we skim zero
     /// rather than pushing the user above the advertised all-in.
     function test_bridgeFee_neverExceedsTarget() public {
@@ -438,7 +528,10 @@ contract ArcadeCctpBuyReceiverTest is Test {
             address(receiver), AMT, beneficiary, address(token), 0,
             address(0), address(0), 0
         );
-        assertEq(m.length, 568, "buy message length");
+        // 376 + 224 (7 hookData words, incl. buyDeadline). The point of this
+        // assertion is that the two entrypoints stay MUTUALLY EXCLUSIVE as
+        // hookData grows: a buy message must never be a valid forward message.
+        assertEq(m.length, 600, "buy message length");
         vm.expectRevert(ArcadeCctpBuyReceiver.BadMessage.selector);
         receiver.receiveAndForward(m, "");
     }

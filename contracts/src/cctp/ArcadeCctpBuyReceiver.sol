@@ -112,12 +112,15 @@ contract ArcadeCctpBuyReceiver is ReentrancyGuard {
     uint256 private constant FEE_EXECUTED_OFFSET = 312; // body(148) + 164
     uint256 private constant HOOK_DATA_OFFSET = 376; // body(148) + 228
     // hookData = abi.encode(address beneficiary, address token, uint256 minOut,
-    // address ammRouter, address v3Router, uint256 v3Fee) = 6 * 32 bytes.
+    // address ammRouter, address v3Router, uint256 v3Fee, uint256 buyDeadline)
+    // = 7 * 32 bytes.
     //   - ammRouter: best V2-style venue (Arcade V2 / XyloNet / ...).
     //   - v3Router + v3Fee: when BOTH non-zero, the AMM leg routes through the
     //     Arcade V3 router at that fee tier instead of V2 (the only venue for
     //     the USDC/ETH pool). The frontend picks exactly ONE AMM venue.
-    uint256 private constant HOOK_DATA_LEN = 192;
+    //   - buyDeadline: unix seconds after which the BUY is abandoned and the
+    //     USDC is refunded to the beneficiary instead. See _buyExpired.
+    uint256 private constant HOOK_DATA_LEN = 224;
 
     event BridgeBuy(
         address indexed beneficiary,
@@ -128,6 +131,16 @@ contract ArcadeCctpBuyReceiver is ReentrancyGuard {
     );
     /// Fast-transfer bridge fee skimmed to the treasury.
     event BridgeFeeTaken(uint256 fee);
+    /// The buy was abandoned because its quote had expired; USDC was refunded.
+    /// Distinct from BridgeBuy(bought=false), which means the routes FAILED --
+    /// conflating "we chose not to trade" with "the trade broke" would hide
+    /// both.
+    event BridgeBuyExpired(
+        address indexed beneficiary,
+        address indexed token,
+        uint256 usdcRefunded,
+        uint256 deadline
+    );
     /// The treasury could not be paid (blacklisted/frozen); fee held for pull.
     event BridgeFeeDeferred(uint256 fee);
     /// Deferred fees pulled to the treasury.
@@ -214,10 +227,11 @@ contract ArcadeCctpBuyReceiver is ReentrancyGuard {
             uint256 minTokensOut,
             address ammRouter,
             address v3Router,
-            uint256 v3Fee
+            uint256 v3Fee,
+            uint256 buyDeadline
         ) = abi.decode(
                 message[HOOK_DATA_OFFSET:HOOK_DATA_OFFSET + HOOK_DATA_LEN],
-                (address, address, uint256, address, address, uint256)
+                (address, address, uint256, address, address, uint256, uint256)
             );
         if (beneficiary == address(0) || token == address(0)) revert BadMessage();
         // Frontend-chosen V2-style venue (best route); fall back to the default.
@@ -240,6 +254,26 @@ contract ArcadeCctpBuyReceiver is ReentrancyGuard {
         // and every refund path below operate on the net amount.
         minted -= _takeBridgeFee(message, minted);
         if (minted == 0) revert NothingMinted();
+
+        // STALE QUOTE GUARD. minTokensOut is fixed at BURN time, this message
+        // stays claimable forever, and claiming is permissionless -- so without
+        // a deadline the slippage band is stale by construction and a bot can
+        // claim at a moment of its choosing and extract the whole band. A
+        // deadline bounds that window: past it we refund USDC rather than
+        // execute a buy at a price the user quoted in another market.
+        //
+        // Deliberately AFTER _takeBridgeFee: Circle already performed the
+        // transfer and charged for it, so the fee is owed whether or not we
+        // buy. Skipping it here would make expiry a fee dodge.
+        //
+        // buyDeadline == 0 means "no deadline" (explicit opt-out for a
+        // hand-crafted hookData). The frontend always sets one. Refunding on 0
+        // instead would brick every in-flight message burned before this build.
+        if (buyDeadline != 0 && block.timestamp > buyDeadline) {
+            usdc.safeTransfer(beneficiary, minted);
+            emit BridgeBuyExpired(beneficiary, token, minted, buyDeadline);
+            return;
+        }
 
         // Route 1: the bonding-curve launchpad (works only for a live,
         // non-migrated curve token).
@@ -376,12 +410,13 @@ contract ArcadeCctpBuyReceiver is ReentrancyGuard {
         external
         nonReentrant
     {
-        // EXACT length (audit 2026-07-11 F-2): a `>=` here also accepts a
-        // 568-byte BUY message, whose first hookData word decodes as the
-        // beneficiary, so funds are not misrouted but the committed buy is
-        // silently skipped. Anyone could front-run receiveAndBuy with this and
-        // cancel the user's buy (nonce burned, plain USDC delivered instead).
-        // Exact lengths make the two entrypoints mutually exclusive.
+        // EXACT length (audit 2026-07-11 F-2): a `>=` here also accepts a BUY
+        // message (600 bytes on this build), whose first hookData word decodes
+        // as the beneficiary, so funds are not misrouted but the committed buy
+        // is silently skipped. Anyone could front-run receiveAndBuy with this
+        // and cancel the user's buy (nonce burned, plain USDC delivered
+        // instead). Exact lengths make the two entrypoints mutually exclusive,
+        // and they stay so as hookData grows.
         if (message.length != HOOK_DATA_OFFSET + 32) revert BadMessage();
 
         address mintRecipient = address(

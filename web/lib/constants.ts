@@ -78,9 +78,17 @@ export const ADDRESSES = {
    *  cost to 0.05% of the burned amount by reading Circle's own `feeExecuted`
    *  and `finalityThresholdExecuted` off the ATTESTED message, so standard
    *  transfers stay free and we never exceed the advertised 0.05%.
-   *  Redeployed 2026-07-11 with the bridge fee; env-overridable. */
+   *  Redeployed 2026-07-15: the previous build (0x9E87B0) was the PRE-fix
+   *  bytecode -- it still hard-transferred the fee to the immutable treasury
+   *  (a blacklist there would have made every in-flight transfer permanently
+   *  unmintable, since destinationCaller is pinned and there is no rescue) and
+   *  still used `<` length checks (so receiveAndForward accepted a BUY message
+   *  and anyone could front-run a user's buy to cancel it for the price of
+   *  gas). pendingFees/claimFees/pfBefore/exact-lengths existed only in source
+   *  for four commits. This build also adds the attested buyDeadline.
+   *  Env-overridable. */
   cctpBuyReceiver: (process.env.NEXT_PUBLIC_CCTP_BUY_RECEIVER ??
-    "0x9E87B0732BAA1aB0e001A220b505720971ED3621") as Address,
+    "0x939440Dd711499f26e101261cB956AA80E6B6fA2") as Address,
   /** ArcadeIncentiveDistributor: escrow-backed liquidity-incentive campaigns
    *  (Merkl-style) — the on-chain backend for /swap/incentivize. Deployed
    *  2026-07-11; env-overridable. When zeroAddress the incentivize form falls
@@ -118,6 +126,8 @@ export const ADDRESSES = {
     //   968ebb9 -> 0xad17aa, LEN 128 -> 504
     //   95cda63 -> 0x6654C0, LEN 192 -> 568
     //   597c90c -> 0x9E87B0, LEN 192 -> 568
+    //   (r4)    -> 0x939440, LEN 224 -> 600  (+buyDeadline)
+    { address: "0x939440Dd711499f26e101261cB956AA80E6B6fA2", buyBytes: 600, forwardBytes: 408 },
     { address: "0x9E87B0732BAA1aB0e001A220b505720971ED3621", buyBytes: 568, forwardBytes: 408 },
     { address: "0x6654C0763DBC49f3943c18478e3d32c209B2D427", buyBytes: 568, forwardBytes: 0 },
     { address: "0xad17aadea14248c25d405f5e85aee45a729e9f76", buyBytes: 504, forwardBytes: 0 },

@@ -592,8 +592,28 @@ export function BridgeCard() {
   }, [arcadeQuoteQ.data, xyloQuoteQ.data, v3QuoteQ.data, buyV3Fee]);
   const buyQuoteLoading =
     arcadeQuoteQ.isLoading || xyloQuoteQ.isLoading || v3QuoteQ.isLoading;
-  // 15% tolerance for cross-chain price drift during the ~30-60s bridge.
-  const buyMinOut = buyQuoteOut > 0n ? (buyQuoteOut * 85n) / 100n : 0n;
+  // Tolerance for price drift during the bridge. This was 15% for a bridge the
+  // very same comment described as "~30-60s" -- 15% is not drift over a minute,
+  // it is the band the claim needed because the claim was UNBOUNDED: the
+  // message stayed valid forever and anyone could redeem it, so a sandwicher
+  // could wait for a favourable setup and extract the full 15% (it lands on the
+  // beneficiary, who receives exactly minOut while the bot pockets the rest).
+  // The band is what caps that extraction, so bounding the window with
+  // BRIDGE_BUY_DEADLINE_SECONDS is what lets it shrink. 5% over 30 minutes is
+  // still generous for the intended minute-long hop.
+  //
+  // Failing this check is SAFE, not a loss: the receiver's routes are in
+  // try/catch, so a buy that can no longer clear 5% falls through to a plain
+  // USDC refund on Arc, where USDC is the native gas token and fully usable.
+  // "We did not fill you 10% worse than quoted, here is your USDC" is the
+  // correct outcome.
+  const buyMinOut = buyQuoteOut > 0n ? (buyQuoteOut * 95n) / 100n : 0n;
+  // 30x the intended bridge time: generous slack for a slow attestation or a
+  // distracted user, while bounding a bot's window to one where a 5% adverse
+  // move is rare. Past it the receiver refunds instead of buying at a price
+  // quoted in another market. Signed into the burn, so it is attested and the
+  // claimer cannot alter it.
+  const BRIDGE_BUY_DEADLINE_SECONDS = 30 * 60;
 
   // Fees only apply to Fast Transfer; Standard is free on both sides.
   // The on-chain receiver PINS the all-in cost to ARCADE_BRIDGE_FEE_BPS of the
@@ -805,9 +825,16 @@ export function BridgeCard() {
         ? (amountRaw * CCTP_FAST_MAX_FEE_BPS) / BPS_DENOMINATOR
         : 0n;
       const minFinality = fastTransfer ? 1000 : 2000;
+      // Stamped HERE, at burn time, not at render: a deadline computed when the
+      // quote rendered would already be part-spent (or expired) by the time the
+      // user finishes reading and signs, silently turning a valid buy into a
+      // refund.
+      const buyDeadline = BigInt(
+        Math.floor(Date.now() / 1000) + BRIDGE_BUY_DEADLINE_SECONDS,
+      );
       // hookData = abi.encode(beneficiary, token, minTokensOut, ammRouter,
-      // v3Router, v3Fee). minOut is the best-venue quote minus 15% (cross-chain
-      // drift); 0 for a pure curve token. When v3Router+v3Fee are set the
+      // v3Router, v3Fee, buyDeadline). minOut is the best-venue quote minus 5%;
+      // 0 for a pure curve token. When v3Router+v3Fee are set the
       // receiver routes the buy through the V3 pool (ETH); otherwise via the
       // chosen V2-style ammRouter. If arrival slips below minOut, the receiver
       // refunds the USDC to the beneficiary.
@@ -824,6 +851,14 @@ export function BridgeCard() {
               destinationCaller,
               maxFee,
               minFinality,
+              // MUST stay byte-identical to the receiver's abi.decode. The
+              // 7th word (buyDeadline) is the stale-quote guard: buyMinOut is
+              // fixed HERE, at burn time, but the message stays claimable
+              // forever and claiming is permissionless, so without it a bot
+              // could sit on the message and claim at a moment of its choosing,
+              // extracting the whole slippage band. Past the deadline the
+              // receiver refunds USDC instead of buying at a price quoted in
+              // another market.
               encodeAbiParameters(
                 [
                   { type: "address" },
@@ -831,6 +866,7 @@ export function BridgeCard() {
                   { type: "uint256" },
                   { type: "address" },
                   { type: "address" },
+                  { type: "uint256" },
                   { type: "uint256" },
                 ],
                 [
@@ -840,6 +876,7 @@ export function BridgeCard() {
                   buyRouter,
                   buyV3Router,
                   buyV3FeeOut,
+                  buyDeadline,
                 ],
               ),
             ],
@@ -849,8 +886,9 @@ export function BridgeCard() {
           ? // Plain FAST bridge: mint to the receiver with a 32-byte hook
             // carrying only the beneficiary. On arrival receiveAndForward
             // skims the fee and forwards the rest. The 32-byte hookData also
-            // makes the message shorter than the buy path's 192, which is how
-            // the claim below tells the two apart.
+            // makes the message shorter than the buy path's, which is how the
+            // claim below tells the two apart (and why the contract's two
+            // entrypoints use EXACT lengths).
             await writeContractAsync({
               address: CCTP_V2_TOKEN_MESSENGER,
               abi: TOKEN_MESSENGER_V2_ABI,
@@ -1242,14 +1280,16 @@ export function BridgeCard() {
         !!claimMintRecipient &&
         !!selfRecipient &&
         claimMintRecipient.toLowerCase() === selfRecipient.toLowerCase();
-      // Exact lengths, mirroring the contract: buy commits a 192-byte hookData
-      // (376 + 192 = 568), fee-forward a 32-byte one (408). `>=` would send a
-      // 569-byte message to receiveAndBuy, which exact-length-reverts.
+      // Exact lengths, mirroring the contract: a buy commits a 224-byte
+      // hookData on the current build (376 + 224 = 600), a fee-forward a
+      // 32-byte one (408). `>=` would send an over-long message to
+      // receiveAndBuy, which exact-length-reverts.
       const msgBytes = (step.message.length - 2) / 2;
       // Match against the sizes of the generation the MESSAGE names, not the
-      // current receiver's: an in-flight buy from before a redeploy is 472 or
-      // 504 bytes, and hardcoding 568 would refuse exactly the transfers the
-      // historical allowlist exists to rescue.
+      // current receiver's: an in-flight buy from before a redeploy is 472,
+      // 504 or 568 bytes, and hardcoding the current size would refuse exactly
+      // the transfers the historical allowlist exists to rescue. Never
+      // hardcode a length here -- read it from the generation.
       const gen = claimMintRecipient ? receiverFor32(addressToBytes32(claimMintRecipient)) : undefined;
       const isBridgeBuy = !mintsToSelf && !!gen && msgBytes === gen.buyBytes;
       const isFeeForward =
