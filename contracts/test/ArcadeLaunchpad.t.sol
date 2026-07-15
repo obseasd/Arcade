@@ -214,6 +214,41 @@ contract ArcadeLaunchpadTest is Test {
         assertGt(usdc.balanceOf(creator), c0, "creator got fees");
     }
 
+    /// Pins the migration seed and the mcap denominator. No test pinned
+    /// `tokensForLP` before, which is exactly why the header comment drifted to
+    /// claiming 200M for years while the code seeded 140M, and why marketCap()
+    /// silently overstated by ~6.4%.
+    function test_migration_seedsClearingPriceAndBurnsExcess() public {
+        address token = _createToken();
+        vm.startPrank(alice);
+        usdc.approve(address(launchpad), type(uint256).max);
+        launchpad.buy(token, 100_000 * 10 ** 6, 0);
+        vm.stopPrank();
+
+        // raised ~20,000; usdcForLP = ~17,500 after the 2,500 migration fee.
+        // tokensForLP = usdcForLP * 200M / currentUsdc ~= 140M, so ~60M burns.
+        // (Not exact: the buy overshoots the cap and is refunded.)
+        address pair = launchpad.getTokenState(token).v2Pair;
+        uint256 burned = IERC20(token).balanceOf(launchpad.DEAD());
+        uint256 pairTokens = IERC20(token).balanceOf(pair);
+        uint256 pairUsdc = usdc.balanceOf(pair);
+
+        assertApproxEqRel(burned, 60_000_000 ether, 0.001e18, "~60M burned, NOT 0");
+        assertApproxEqRel(pairTokens, 140_000_000 ether, 0.001e18, "pair seeded ~140M, not 200M");
+        assertApproxEqRel(pairUsdc, 17_500 * 10 ** 6, 0.001e18, "pair seeded ~17,500 USDC");
+        assertEq(burned + pairTokens, 200_000_000 ether, "burn + seed == MIGRATION_LP_TOKENS");
+
+        // mcap must price the CIRCULATING supply, not the 1B minted.
+        uint256 mcap = launchpad.marketCap(token);
+        uint256 circulating = 1_000_000_000 ether - burned;
+        assertEq(mcap, (pairUsdc * circulating) / pairTokens, "mcap prices circulating supply");
+
+        // The old TOTAL_SUPPLY denominator overstated by ~6.4%.
+        uint256 overstated = (pairUsdc * 1_000_000_000 ether) / pairTokens;
+        assertGt(overstated, mcap, "old denominator was higher");
+        assertApproxEqRel(overstated, (mcap * 1064) / 1000, 0.002e18, "overstatement was ~6.4%");
+    }
+
     function test_postMigration_swapWorksViaRouter() public {
         address token = _createToken();
 

@@ -1236,7 +1236,17 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
                 (uint256 usdcReserve, uint256 tokenReserve) =
                     t0 == address(USDC) ? (uint256(r0), uint256(r1)) : (uint256(r1), uint256(r0));
                 if (tokenReserve == 0) return 0;
-                return (usdcReserve * TOTAL_SUPPLY) / tokenReserve;
+                // Price the CIRCULATING supply, not TOTAL_SUPPLY. _migrate
+                // sends `burnExcess` to DEAD (60M of the 1B on standard params,
+                // since tokensForLP scales to the clearing price), and burned
+                // tokens are not circulating. Dividing by TOTAL_SUPPLY
+                // overstated every migrated token's mcap by ~6.4%.
+                // Read DEAD's balance rather than a constant: burnExcess is
+                // computed from the migration math, not fixed, and holders may
+                // burn tokens too -- which should also leave the mcap.
+                uint256 circulating = TOTAL_SUPPLY - IERC20(tokenAddr).balanceOf(DEAD);
+                if (circulating == 0) return 0;
+                return (usdcReserve * circulating) / tokenReserve;
             }
             uint256 currentUsdc = VIRTUAL_USDC_RESERVE + s.realUsdcReserve;
             uint256 currentTokens = VIRTUAL_TOKEN_RESERVE - s.tokensSold;
