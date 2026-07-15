@@ -1,6 +1,7 @@
 import { verifyTypedData, type Address } from "viem";
 import { getSql, isDbConfigured } from "@/lib/db";
 import { arcTestnet } from "@/lib/chains";
+import { scanReferralAttribution } from "@/lib/referralOnchain";
 
 /**
  * Referral PAYOUT layer (Phase 2). Disabled by default and built so the two
@@ -25,26 +26,61 @@ export function isReferralPayoutEnabled(): boolean {
 }
 
 /**
- * ⛔ STUB — REPLACE WITH THE INDEXER.
+ * The wallets this referrer PROVABLY referred, read ONLY from on-chain Memo
+ * events (`scanReferralAttribution`). This is the attribution half of the
+ * payout invariant, and it is deliberately a separate, exported function so
+ * the earnings half below is STRUCTURALLY forced to start from on-chain data.
  *
- * Must return the referrer's TOTAL lifetime VERIFIED earnings in USD micros,
- * computed ONLY from on-chain data:
- *   for each wallet this referrer referred (attribution proven on-chain),
- *   sum 10% of the protocol fees that wallet ACTUALLY PAID on-chain,
- *   capped at fees actually collected, with sybil/circular netting
- *   (exclude wallets funded by / trading only against the referrer).
+ * Why this exists (audit 2026-07-11 B-2): `/api/referral/register` is
+ * unauthenticated and the caller picks BOTH addresses, while attribution is
+ * first-touch-wins and permanent. So anyone can POST {referred: <every wallet
+ * on the chain>, referrer: <self>} ahead of organic registration and
+ * permanently own the entire user base's attribution in `referral_activity`.
+ * That table is therefore a DISPLAY/funnel cache and MUST NEVER decide money.
  *
- * Returning anything derived from referral_activity.earned_usd_micros here
- * reintroduces audit C-1 (unbounded forged accrual) and H-1 (self/circular
- * wash farming). Hence the hard 0 default: no verified earnings until the
- * indexer fills this in.
+ * A Memo tag cannot be forged: `registerReferrerCall` makes the REFERRED
+ * wallet itself send the tx (a no-op self-call whose only effect is emitting
+ * the tag), and the Memo event records `sender` = that signer. A third party
+ * cannot emit it on someone else's behalf.
+ */
+export async function getVerifiedReferredWallets(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    publicClient: any,
+    referrer: string,
+): Promise<string[]> {
+    if (!isAddr(referrer)) return [];
+    const tags = await scanReferralAttribution(publicClient, {
+        referrer: referrer as Address,
+    });
+    // scanReferralAttribution already does first-touch + drops self-referral.
+    return tags
+        .map((t) => norm(t.referred))
+        .filter((w) => w !== norm(referrer));
+}
+
+/**
+ * ⛔ STUB — the EARNINGS half. REPLACE WITH THE INDEXER.
+ *
+ * Attribution is already solved above and is NOT what is missing. What is
+ * missing is, for each on-chain-verified referred wallet, the protocol fees it
+ * ACTUALLY PAID on-chain, so we can pay 10% of that, capped at fees actually
+ * collected, with sybil/circular netting (exclude wallets funded by / trading
+ * only against the referrer).
+ *
+ * Reading `referral_activity.earned_usd_micros` here reintroduces audit C-1
+ * (unbounded forged accrual: that table is fed by an unauthenticated,
+ * replayable endpoint) and H-1 (self/circular wash farming). Hence the hard 0:
+ * no verified earnings until the indexer fills this in. Note the table is also
+ * numerically wrong regardless (it accrues a flat 5bp of volume, which is 10x
+ * to 14x under the launchpad's real take and phantom on V3).
  */
 export async function getVerifiedEarningsUsdMicros(
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     referrer: string,
 ): Promise<bigint> {
-    // TODO(indexer): query on-chain Swap / fee events, attribute to referrer,
-    // cap at collected fees, sybil-net, return the verified total.
+    // TODO(indexer): start from getVerifiedReferredWallets(publicClient,
+    // referrer), then sum each wallet's on-chain paid protocol fees, cap at
+    // fees actually collected, sybil-net, return the verified total.
     return 0n;
 }
 
