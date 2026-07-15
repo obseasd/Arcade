@@ -343,6 +343,100 @@ contract ArcadeV2PairLaunchFeeTest is Test {
         assertGt(u2.balanceOf(feeTo), 0, "protocol still paid directly");
     }
 
+    /// CRITICAL, and the single step every other test in this file was missing:
+    /// a SECOND swap after a deferral.
+    ///
+    /// swap() derives amount0In from balanceOf, and that read was the one place
+    /// the netting was not applied -- so the owed fee was credited as fresh
+    /// trader input. A passer-by sending ZERO tokens gets paid out against the
+    /// creator's money. Every test here did exactly one swap, which is why 11
+    /// green tests sat on top of this.
+    function test_launchFee_deferredFee_isNotCreditedAsInputOnTheNextSwap() public {
+        usdc.setBlacklisted(creator, true);
+        _buy(1_000e6); // defers the creator's leg
+        assertGt(pair.pendingLaunchFees(address(usdc), creator), 0, "something is deferred");
+
+        // A thief sends NOTHING and asks for tokens.
+        (uint112 r0, uint112 r1,) = pair.getReserves();
+        bool usdcIs0 = pair.token0() == address(usdc);
+        (uint256 rIn, uint256 rOut) = usdcIs0 ? (uint256(r0), uint256(r1)) : (uint256(r1), uint256(r0));
+        // Whatever the owed fee would buy if it were counted as input.
+        uint256 owed = pair.pendingLaunchFees(address(usdc), creator);
+        uint256 inWithFee = owed * 997;
+        uint256 stealable = (inWithFee * rOut) / (rIn * 1000 + inWithFee);
+        assertGt(stealable, 0, "the owed fee would buy something if miscounted");
+
+        address thief = address(0xBAD);
+        (uint256 a0, uint256 a1) = usdcIs0 ? (uint256(0), stealable) : (stealable, uint256(0));
+        vm.expectRevert(); // InsufficientInputAmount: nothing was sent
+        pair.swap(a0, a1, thief, "");
+        assertEq(tkn.balanceOf(thief), 0, "a zero-input swap must pay nobody");
+    }
+
+    /// The invariant must survive an ORDINARY second swap -- no attacker, no
+    /// donation. This broke on a plain honest sell, which then underflow-bricked
+    /// skim() and let claimLaunchFees drop the balance below the reserve.
+    function test_launchFee_invariantSurvivesASecondSwap() public {
+        usdc.setBlacklisted(creator, true);
+        _buy(1_000e6);
+        _buy(1_000e6); // the second swap: this is the step that was untested
+
+        uint256 pending = pair.pendingLaunchFeeTotal(address(usdc));
+        (uint112 r0, uint112 r1,) = pair.getReserves();
+        uint256 reserveUsdc = pair.token0() == address(usdc) ? r0 : r1;
+        uint256 held = usdc.balanceOf(address(pair));
+        assertGe(held - reserveUsdc, pending, "pending must stay backed by balanceOf - reserve");
+
+        // skim() must not be bricked, and the creator must still be made whole
+        // without the balance ever dropping below the reserve.
+        pair.skim(address(0xBAD));
+        usdc.setBlacklisted(creator, false);
+        vm.prank(creator);
+        uint256 got = pair.claimLaunchFees(address(usdc));
+        assertEq(got, pending, "creator claimed exactly what was owed");
+        (uint112 n0, uint112 n1,) = pair.getReserves();
+        uint256 reserveAfter = pair.token0() == address(usdc) ? n0 : n1;
+        assertGe(usdc.balanceOf(address(pair)), reserveAfter, "balance never drops below the reserve");
+    }
+
+    /// F-3 REGRESSION, the one I abandoned with a TODO claiming "my first
+    /// attempt reverted on the EXACT router quote, which the algebra says is
+    /// impossible -- so the harness is wrong". An audit proved the test is
+    /// perfectly writable; the harness was wrong, and giving up on it left a
+    /// HIGH (a 15bps pool quoting 30bps, i.e. anyone calling swap() directly
+    /// pocketed the difference) with no regression cover.
+    ///
+    /// The property: with feeTo UNSET the pair must STILL be a 30bps pool. The
+    /// old code derived the K coefficient from a hardcoded constant, so an unset
+    /// feeTo silently made it 15bps. Prove the stock 997/1000 quote is exactly
+    /// deliverable and one wei more is not.
+    function test_launchFee_feeToUnset_isStill30Bps() public {
+        factory.setFeeTo(address(0)); // the trigger: no protocol leg
+        (uint112 r0, uint112 r1,) = pair.getReserves();
+        bool usdcIs0 = pair.token0() == address(usdc);
+        (uint256 rIn, uint256 rOut) = usdcIs0 ? (uint256(r0), uint256(r1)) : (uint256(r1), uint256(r0));
+
+        uint256 usdcIn = 1_000e6;
+        // The STOCK library figure, verbatim.
+        uint256 inWithFee = usdcIn * 997;
+        uint256 exact = (inWithFee * rOut) / (rIn * 1000 + inWithFee);
+
+        // One wei MORE than stock must revert on K. If the pair had silently
+        // become a 15bps pool it would happily deliver it.
+        vm.prank(trader);
+        usdc.transfer(address(pair), usdcIn);
+        (uint256 b0, uint256 b1) = usdcIs0 ? (uint256(0), exact + 1) : (exact + 1, uint256(0));
+        vm.expectRevert(); // KInvariant
+        pair.swap(b0, b1, trader, "");
+
+        // And the exact stock quote must clear.
+        (uint256 a0, uint256 a1) = usdcIs0 ? (uint256(0), exact) : (exact, uint256(0));
+        pair.swap(a0, a1, trader, "");
+        assertEq(tkn.balanceOf(trader), exact, "the stock quote is exactly deliverable");
+        // The creator leg was still charged; only the protocol leg vanished.
+        assertGt(usdc.balanceOf(creator), 0, "creator still paid with feeTo unset");
+    }
+
     /// Nobody may claim a leg they are not owed.
     function test_launchFee_cannotClaimSomeoneElsesLeg() public {
         usdc.setBlacklisted(creator, true);

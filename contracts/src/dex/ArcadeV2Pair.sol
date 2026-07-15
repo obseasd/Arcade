@@ -298,8 +298,23 @@ contract ArcadeV2Pair is ArcadeV2ERC20 {
             if (amount0Out > 0) _safeTransfer(_t0, to, amount0Out);
             if (amount1Out > 0) _safeTransfer(_t1, to, amount1Out);
             if (data.length > 0) IArcadeV2Callee(to).arcadeV2Call(msg.sender, amount0Out, amount1Out, data);
-            balance0 = IERC20Minimal(_t0).balanceOf(address(this));
-            balance1 = IERC20Minimal(_t1).balanceOf(address(this));
+            // Net out the deferred launch fees, like EVERY other balance read in
+            // this contract (mint, burn, skim, sync). Missing it here was the
+            // worst instance of the four: `amount0In` is derived from this
+            // balance, so on the swap AFTER a deferral the pair credits the
+            // creator's OWED fee as fresh trader input. A passer-by could then
+            // call swap() sending ZERO tokens and be paid out against it -- the
+            // exact theft skim() was hardened against, walking back in through
+            // the one function nothing gates. It also broke the
+            // `pending <= balanceOf - reserve` invariant on an ordinary honest
+            // sell, underflow-bricking skim()/mint() and letting claimLaunchFees
+            // drop the balance below the recorded reserve.
+            //
+            // The read is taken BEFORE the fee block below, so the totals it
+            // subtracts are the ones outstanding on entry; this swap's own
+            // deferrals are added afterwards and correctly excluded here.
+            balance0 = IERC20Minimal(_t0).balanceOf(address(this)) - pendingLaunchFeeTotal[_t0];
+            balance1 = IERC20Minimal(_t1).balanceOf(address(this)) - pendingLaunchFeeTotal[_t1];
         }
 
         uint256 amount0In = balance0 > _r0 - amount0Out ? balance0 - (_r0 - amount0Out) : 0;

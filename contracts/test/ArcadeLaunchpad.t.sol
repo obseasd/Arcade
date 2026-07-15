@@ -282,14 +282,19 @@ contract ArcadeLaunchpadTest is Test {
         assertEq(launchpad.getTokenState(token).creator2, address(0), "creator2 normalised away");
     }
 
-    // TODO(F-3 regression test): assert directly that with feeTo unset the pair
-    // is still a 30bps pool, by proving the stock library quote is exactly
-    // deliverable and one wei more is not. My first attempt reverted on the
-    // EXACT router quote, which the algebra says is impossible -- so the test
-    // harness is wrong, not the fix, and I am not committing a test I cannot
-    // explain. The fix itself is covered by the 158 existing tests plus the
-    // audit's own PoC suite (scratchpad/ZZAudit.t.sol), which fuzzed 256 runs
-    // of "never stricter than stock".
+    // F-3's regression test lives in ArcadeV2PairLaunchFee.t.sol
+    // (test_launchFee_feeToUnset_isStill30Bps): with feeTo unset the pair must
+    // still be a 30bps pool, proven by the stock quote clearing exactly and one
+    // wei more reverting on K.
+    //
+    // A TODO here used to say the test was unwritable -- "my first attempt
+    // reverted on the EXACT router quote, which the algebra says is impossible,
+    // so the harness is wrong". The harness WAS wrong (routing through the
+    // router adds its own accounting); the property is trivially testable
+    // against the pair directly. An audit called that out, and it was right:
+    // abandoning it left a HIGH (a 15bps pool quoting 30bps, so anyone calling
+    // swap() directly pocketed the difference) with no regression cover, behind
+    // a note that told the next reader not to try.
 
     function test_postMigration_swapWorksViaRouter() public {
         address token = _createToken();
@@ -444,6 +449,13 @@ contract ArcadeLaunchpadTest is Test {
         vm.stopPrank();
 
         assertGt(receivedB, 0, "multi-hop delivered");
+        // QUOTE == EXECUTION, to the wei. This assertion was deleted when the
+        // quoter's second return changed meaning, and it is the single most
+        // load-bearing one here: the whole input-side design rests on the pair
+        // delivering EXACTLY the stock library figure, and an output-side skim
+        // (the reverted fund-loss bug) would show up right here as
+        // execution < quote while every other test stayed green.
+        assertEq(receivedB, quotedOut, "execution matches the quote exactly");
 
         // Leg 1 sells tokenA -> its fee is paid in tokenA (input side).
         // Leg 2 buys tokenB with USDC -> its fee is paid in USDC.
