@@ -135,11 +135,16 @@ contract ArcadeMultiSwapTest is Test {
         vm.stopPrank();
 
         assertGt(totalOut, 0);
-        // Each leg now routes through launchpad.sellMigrated, so the 0.30%
-        // royalty (0.20% platform / 0.10% creator) is skimmed on every leg.
-        assertGt(usdc.balanceOf(treasury), t0, "treasury paid royalty");
-        assertGt(usdc.balanceOf(creatorA), ca0, "creatorA paid royalty");
-        assertGt(usdc.balanceOf(creatorB), cb0, "creatorB paid royalty");
+        // The pair charges the fee on the INPUT. Both legs SELL a migrated
+        // token, so both fees are denominated in those TOKENS, not USDC.
+        // (Input-side is what keeps `to` receiving exactly amountOut, which
+        // keeps UniswapV2Library bit-exact and amountOutMin honest.)
+        assertEq(usdc.balanceOf(treasury), t0, "no USDC fee: both legs are sells");
+        assertEq(usdc.balanceOf(creatorA), ca0, "no USDC fee: leg is a sell");
+        assertEq(usdc.balanceOf(creatorB), cb0, "no USDC fee: leg is a sell");
+        assertGt(IERC20(tokenA).balanceOf(creatorA), 0, "creatorA paid in tokenA");
+        assertGt(IERC20(tokenB).balanceOf(creatorB), 0, "creatorB paid in tokenB");
+        assertGt(IERC20(tokenA).balanceOf(treasury), 0, "protocol paid in tokenA");
     }
 
     // HIGH-1: buying a migrated token with USDC through MultiSwap must also
@@ -181,9 +186,13 @@ contract ArcadeMultiSwapTest is Test {
         vm.stopPrank();
 
         assertEq(totalOut, quoted, "delivered == quoted");
-        assertGt(usdc.balanceOf(creatorA), ca0, "creatorA paid");
-        assertGt(usdc.balanceOf(creatorB), cb0, "creatorB paid");
-        assertGt(usdc.balanceOf(treasury), t0, "treasury paid");
+        // tokenA -> USDC -> tokenB. Leg 1 SELLS tokenA, so its fee is in
+        // tokenA. Leg 2 BUYS tokenB with USDC, so its fee is in USDC. The fee
+        // always lands in whatever token came IN.
+        assertEq(usdc.balanceOf(creatorA), ca0, "creatorA's leg is a sell: paid in tokenA");
+        assertGt(IERC20(tokenA).balanceOf(creatorA), 0, "creatorA paid in tokenA");
+        assertGt(usdc.balanceOf(creatorB), cb0, "creatorB's leg is a buy: paid in USDC");
+        assertGt(usdc.balanceOf(treasury), t0, "treasury paid in USDC on the buy leg");
     }
 
     function test_swapToSingle_sameInOut_passthrough() public {
