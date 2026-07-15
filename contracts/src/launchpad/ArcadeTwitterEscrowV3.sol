@@ -19,6 +19,8 @@ interface IArcadeV3Locker {
         address newAdmin
     ) external;
     function withdrawPending(address token) external returns (uint256 amount);
+    /// Immutable on the locker; read by setLocker to prove the wiring closes.
+    function twitterEscrow() external view returns (address);
 }
 
 /**
@@ -272,9 +274,23 @@ contract ArcadeTwitterEscrowV3 is Ownable2Step, Pausable, ReentrancyGuard {
     /// @notice One-shot setter the deployer calls after deploying the locker
     ///         at its predicted (CREATE-derived) address. Reverts on second
     ///         call so the wiring is effectively immutable post-bootstrap.
+    /// @dev Verifies the wiring CLOSES both ways before accepting it. The
+    ///      locker's `twitterEscrow` is public and immutable, so if it does not
+    ///      already point back at us, this pairing is wrong and no later call
+    ///      can fix it: setLocker is one-shot and twitterEscrow is immutable.
+    ///
+    ///      Left unchecked, a mis-wired pair was TERMINAL, not merely broken:
+    ///      the locker would call OUR creditSlot from an address that is not
+    ///      LOCKER, so every credit reverts NotLocker, balances stay 0,
+    ///      `authorize` reverts NothingToClaim, no claim can ever land, and
+    ///      `claimed` stays false forever -- which also locks out
+    ///      rotateLockerSlot's recovery path. Every fee routed to those slots
+    ///      strands in the locker's pendingSlotCredits with no consumer. Failing
+    ///      the bootstrap tx is infinitely cheaper than discovering that later.
     function setLocker(address locker_) external onlyOwner {
         if (locker_ == address(0)) revert ZeroAddress();
         if (LOCKER != address(0)) revert LockerAlreadySet();
+        if (IArcadeV3Locker(locker_).twitterEscrow() != address(this)) revert ZeroAddress();
         LOCKER = locker_;
         emit LockerSet(locker_);
     }
@@ -712,6 +728,14 @@ contract ArcadeTwitterEscrowV3 is Ownable2Step, Pausable, ReentrancyGuard {
         address to
     ) external onlyOwner {
         if (to == address(0)) revert ZeroAddress();
+        // Forfeiting TO this escrow is meaningless (it already holds the funds)
+        // and actively harmful: it sets claimed = true and then rotates the slot
+        // to (this, this), which SATISFIES the locker's ESCROW_PAIR invariant
+        // and so silently succeeds as a no-op. The slot is then frozen pointing
+        // here with claimed == true, so every later collectFees hits
+        // SlotAlreadyClaimed and strands the share. Only rotateLockerSlot can
+        // then unstick it -- a repair for a state that never needed to exist.
+        if (to == address(this)) revert ZeroAddress();
         if (claimed[positionId][slotIndex]) revert AlreadyClaimed();
         if (hasPending[positionId][slotIndex]) revert SlotPending();
 

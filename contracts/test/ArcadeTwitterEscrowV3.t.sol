@@ -13,6 +13,15 @@ import {ArcadeTwitterEscrowV3} from "../src/launchpad/ArcadeTwitterEscrowV3.sol"
 /// @notice Records rotation calls and supports configurable revert behavior so
 ///         we can exercise the try/catch path in claimByTwitter.
 contract MockLocker {
+    /// setLocker now verifies the wiring CLOSES: the real locker's
+    /// `twitterEscrow` is public + immutable, and a pair that does not point
+    /// back at each other is terminally broken (every creditSlot reverts
+    /// NotLocker -> balances stay 0 -> no claim can ever land). The mock must
+    /// model that back-reference or it is not modelling the locker.
+    address public twitterEscrow;
+
+    function setTwitterEscrow(address e) external { twitterEscrow = e; }
+
     bool public shouldRevertRecipient;
     bool public shouldRevertAdmin;
     bool public shouldRevertRotate;
@@ -102,7 +111,10 @@ contract ArcadeTwitterEscrowV3Test is Test {
 
         // V3 escrow's LOCKER is settable-once. Production flow: deploy
         // escrow, deploy locker pointing to escrow address, then setLocker.
+        // The locker's twitterEscrow is immutable and set at ITS construction,
+        // which is why setLocker can check it and why the mock sets it here.
         escrow = new ArcadeTwitterEscrowV3(signer, OWNER);
+        locker.setTwitterEscrow(address(escrow));
         vm.prank(OWNER);
         escrow.setLocker(address(locker));
     }
@@ -659,8 +671,10 @@ contract ArcadeTwitterEscrowV3Test is Test {
         usdc.mint(address(lockerWP), 500);
         lockerWP.setPending(address(usdc), address(0), 500);
 
-        // Build a fresh escrow wired to lockerWP.
+        // Build a fresh escrow wired to lockerWP. The back-reference must be in
+        // place first: setLocker refuses a locker that does not point at us.
         ArcadeTwitterEscrowV3 e2 = new ArcadeTwitterEscrowV3(signer, OWNER);
+        lockerWP.setTwitterEscrow(address(e2));
         vm.prank(OWNER);
         e2.setLocker(address(lockerWP));
 
@@ -802,6 +816,39 @@ contract ArcadeTwitterEscrowV3Test is Test {
         escrow.rotateLockerSlot(1, 0, address(0xBEEF), address(0xBEEF));
     }
 
+    /// A locker that does not point back at this escrow is TERMINALLY broken,
+    /// not merely wrong: it would call creditSlot from an address that is not
+    /// LOCKER, so every credit reverts NotLocker, balances stay 0, authorize
+    /// reverts NothingToClaim, no claim ever lands, `claimed` stays false
+    /// forever -- which also locks out rotateLockerSlot. setLocker is one-shot
+    /// and twitterEscrow is immutable, so nothing can repair it afterwards.
+    /// Fail the bootstrap tx instead.
+    function test_setLocker_rejectsALockerThatDoesNotPointBack() public {
+        ArcadeTwitterEscrowV3 fresh = new ArcadeTwitterEscrowV3(signer, OWNER);
+        MockLocker wrong = new MockLocker();
+        wrong.setTwitterEscrow(address(0xDEAD)); // points at someone else
+        vm.prank(OWNER);
+        vm.expectRevert(); // ZeroAddress
+        fresh.setLocker(address(wrong));
+
+        // The correct pairing is accepted.
+        wrong.setTwitterEscrow(address(fresh));
+        vm.prank(OWNER);
+        fresh.setLocker(address(wrong));
+    }
+
+    /// Forfeiting TO this escrow is meaningless and used to freeze the slot:
+    /// it set claimed = true and then rotated to (this, this), which SATISFIES
+    /// ESCROW_PAIR and so silently succeeded as a no-op, leaving the slot
+    /// pointing here with claimed == true -- every later collectFees strands.
+    function test_forfeitStaleClaim_refusesToForfeitToTheEscrowItself() public {
+        _credit(1, 0, address(usdc), 100);
+        vm.warp(block.timestamp + escrow.FORFEIT_DELAY() + 1);
+        vm.prank(OWNER);
+        vm.expectRevert(); // ZeroAddress
+        escrow.forfeitStaleClaim(1, 0, address(usdc), address(0), address(escrow));
+    }
+
     function test_rotateLockerSlot_onlyOwner() public {
         vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, address(this)));
         escrow.rotateLockerSlot(1, 0, address(0xBEEF), address(0xBEEF));
@@ -941,6 +988,10 @@ contract ArcadeTwitterEscrowV3Test is Test {
 ///         by the escrow's pullFromLocker path (H-08).
 contract MockLockerWithWithdraw {
     mapping(address => mapping(address => uint256)) public pending;
+    /// setLocker verifies the wiring closes both ways -- see MockLocker.
+    address public twitterEscrow;
+
+    function setTwitterEscrow(address e) external { twitterEscrow = e; }
 
     function setPending(address token, address to, uint256 amount) external {
         pending[token][to] = amount;
