@@ -266,9 +266,21 @@ contract ArcadeCctpBuyReceiver is ReentrancyGuard {
         // transfer and charged for it, so the fee is owed whether or not we
         // buy. Skipping it here would make expiry a fee dodge.
         //
-        // buyDeadline == 0 means "no deadline" (explicit opt-out for a
-        // hand-crafted hookData). The frontend always sets one. Refunding on 0
-        // instead would brick every in-flight message burned before this build.
+        // buyDeadline == 0 means "no deadline": an explicit opt-out for a
+        // hand-crafted hookData. Only the BURNER can set it, spending their own
+        // USDC, so opting out is self-harm at worst and never a lever on anyone
+        // else. The frontend always sets one.
+        //
+        // An earlier version of this comment justified the branch as protecting
+        // "every in-flight message burned before this build". That was FALSE:
+        // pre-build encoders emitted 6 hookData words (568-byte messages) naming
+        // an OLDER receiver, and this build requires exactly 600 bytes AND
+        // mintRecipient == address(this), so no legacy message can reach this
+        // line -- the set it claimed to protect is empty. The behaviour is right
+        // for the reason above; the old reason was invented. This repo keeps
+        // getting bitten by exactly this (see the locker's "cannot happen" note
+        // fixed in f64c384): a false rationale is worse than none, because it
+        // tells the next reader not to re-derive the branch.
         if (buyDeadline != 0 && block.timestamp > buyDeadline) {
             usdc.safeTransfer(beneficiary, minted);
             emit BridgeBuyExpired(beneficiary, token, minted, buyDeadline);

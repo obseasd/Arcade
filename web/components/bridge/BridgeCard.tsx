@@ -608,12 +608,12 @@ export function BridgeCard() {
   // "We did not fill you 10% worse than quoted, here is your USDC" is the
   // correct outcome.
   const buyMinOut = buyQuoteOut > 0n ? (buyQuoteOut * 95n) / 100n : 0n;
-  // 30x the intended bridge time: generous slack for a slow attestation or a
-  // distracted user, while bounding a bot's window to one where a 5% adverse
-  // move is rare. Past it the receiver refunds instead of buying at a price
-  // quoted in another market. Signed into the burn, so it is attested and the
-  // claimer cannot alter it.
-  const BRIDGE_BUY_DEADLINE_SECONDS = 30 * 60;
+  // How long AFTER the attestation is expected to land the quote stays good.
+  // This, not the total, is the number that matters: it is simultaneously the
+  // user's window to come back and sign, and a bot's window to wait for a
+  // favourable setup. Keeping it constant keeps the sandwich exposure constant
+  // across transfer modes.
+  const BRIDGE_BUY_CLAIM_SLACK_SECONDS = 30 * 60;
 
   // Fees only apply to Fast Transfer; Standard is free on both sides.
   // The on-chain receiver PINS the all-in cost to ARCADE_BRIDGE_FEE_BPS of the
@@ -829,8 +829,20 @@ export function BridgeCard() {
       // quote rendered would already be part-spent (or expired) by the time the
       // user finishes reading and signs, silently turning a valid buy into a
       // refund.
+      //
+      // Derived from the SAME attestation table the UI shows the user, never a
+      // flat constant. A flat 30 min was calibrated to Fast (~10-30s) while
+      // bridge-and-buy is NOT gated on fastTransfer and the form defaults to
+      // Eth Sepolia + STANDARD, whose attestation this app itself budgets at up
+      // to 25 min -- so the default buy shipped with ~5 minutes of margin, and a
+      // user who took longer than that to return to the tab silently got a USDC
+      // refund instead of the token they committed to. Two paths whose latency
+      // differs by ~50x cannot share one deadline. Adding the slack ON TOP of
+      // the expected attestation keeps the exposure window identical for both.
       const buyDeadline = BigInt(
-        Math.floor(Date.now() / 1000) + BRIDGE_BUY_DEADLINE_SECONDS,
+        Math.floor(Date.now() / 1000) +
+          expectedAttestUpperSec(srcChain.id, fastTransfer) +
+          BRIDGE_BUY_CLAIM_SLACK_SECONDS,
       );
       // hookData = abi.encode(beneficiary, token, minTokensOut, ammRouter,
       // v3Router, v3Fee, buyDeadline). minOut is the best-venue quote minus 5%;
