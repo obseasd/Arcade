@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { registerReferral } from "@/lib/referralPersistence";
 import { verifyRegisterSignature } from "@/lib/referralPayout";
+import { rateLimit, rateLimitGlobal, rejectCrossOrigin } from "@/lib/apiGuard";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -31,6 +32,21 @@ export const dynamic = "force-dynamic";
  * is therefore not the entry ticket.
  */
 export async function POST(req: NextRequest) {
+    // Defence in depth, NOT the fix. A determined land-grabber rotates IPs for
+    // pennies and has no deadline (being "first" for an unregistered wallet can
+    // happen any time), so per-IP limits do not close the hole -- the signature
+    // tier does. What these DO buy: the global cap bounds a distributed burst
+    // regardless of IP rotation, and both protect the Vercel bill, which is not
+    // theoretical here (this account has already been paused for Edge-request
+    // overuse, and an unauthenticated POST is exactly the shape that gets
+    // abused). A real user registers ONCE, ever, so 10/min per IP is generous.
+    const xo = rejectCrossOrigin(req);
+    if (xo) return xo;
+    const rl = rateLimit(req, "referral-register", 10, 60_000);
+    if (rl) return rl;
+    const rlg = rateLimitGlobal("referral-register", 200, 60_000);
+    if (rlg) return rlg;
+
     let body: {
         referred?: string;
         referrer?: string;

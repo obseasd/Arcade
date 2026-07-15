@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { rateLimit, rateLimitGlobal, rejectCrossOrigin } from "@/lib/apiGuard";
 import { trackReferralTrade } from "@/lib/referralPersistence";
 
 export const runtime = "nodejs";
@@ -28,6 +29,19 @@ const REFERRAL_SHARE_BPS = 1000n; // referrer gets 10% of the protocol cut
  * must NEVER pay out `earned_usd_micros` / `pending` read from this table.
  */
 export async function POST(req: NextRequest) {
+    // See /register: defence in depth for the bill and for bursts, not a fix
+    // for forgeability. This endpoint lets the caller name BOTH the trader and
+    // the volume with no tx-hash dedup, so it is replayable by design -- which
+    // is precisely why the payout path reads on-chain Memo tags instead of the
+    // table this feeds. Limits are looser than /register because a real trader
+    // legitimately hits this on every swap.
+    const xo = rejectCrossOrigin(req);
+    if (xo) return xo;
+    const rl = rateLimit(req, "referral-track", 30, 60_000);
+    if (rl) return rl;
+    const rlg = rateLimitGlobal("referral-track", 600, 60_000);
+    if (rlg) return rlg;
+
     let body: { trader?: string; volumeUsdMicros?: string | number };
     try {
         body = await req.json();
