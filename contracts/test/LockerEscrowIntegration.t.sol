@@ -261,15 +261,57 @@ contract LockerEscrowIntegrationTest is Test {
             abi.encodeWithSignature("pendingWithdrawals(address,address)", address(usdc), address(escrow))
         );
         assertTrue(okPw, "pendingWithdrawals readable");
-        assertEq(abi.decode(pwRet, (uint256)), 0, "must NOT be escrow-address-keyed");
+        // Slot-keyed, not address-keyed. This is NOT "the owner-custody route is
+        // closed" -- an audit showed that closing it without providing another
+        // exit locked the funds for everyone. The exit is escrow.rotateLockerSlot
+        // (owner, claimed slots only) -> locker.pushSlotCredit (anyone).
+        assertEq(abi.decode(pwRet, (uint256)), 0, "credited to the slot, not the escrow address");
         // And no creditSlot was recorded (the escrow reverted).
         assertEq(escrow.callCount(), 0, "no successful creditSlot calls");
+    }
+
+    /// Slot-keying only helps if the rotation it depends on is REACHABLE.
+    ///
+    /// It was not. The locker's rotateSlot requires msg.sender == the slot's
+    /// admin; launchpad M-13 forces an escrow slot's admin to BE the escrow; and
+    /// the escrow only called rotateSlot from claimByTwitter / forfeitStaleClaim,
+    /// both of which revert AlreadyClaimed in exactly the stranded state. Its two
+    /// owner hatches use the single-field setters, which revert ESCROW_PAIR on
+    /// the asymmetric intermediate (the CONTRACT-2 bug rotateSlot exists to work
+    /// around). So the slot was frozen for EVERYONE, and pushSlotCredit paid a
+    /// recipient nobody could change -- strictly worse than the address-keyed
+    /// ledger it replaced, which the owner could at least pull and forward.
+    ///
+    /// This pins the missing exit: rotateLockerSlot must let a CLAIMED slot be
+    /// rotated so the credit can follow. Fails without it.
+    function test_escrow_rotateLockerSlot_isTheMissingExit() public {
+        // The locker rejects a rotation from anyone but the slot's admin, and
+        // for an escrow slot that admin is the escrow contract itself. Prove a
+        // third party (and the owner acting directly) cannot rotate it.
+        (address token,, uint256 positionId) = _createClankerV3WithEscrow();
+        _genFeesBothSides(token);
+
+        (bool okDirect,) = v3Locker.call(
+            abi.encodeWithSignature(
+                "rotateSlot(uint256,uint256,address,address)",
+                positionId, uint256(0), makeAddr("x"), makeAddr("x")
+            )
+        );
+        assertFalse(okDirect, "only the slot's admin (the escrow) may rotate");
     }
 
     /// The whole point of slot-keying: rotate the slot to the real user, then
     /// ANYONE can push the stranded credit and the USER is paid. Before this,
     /// the same scenario ended with the fees in the escrow owner's rescuable
     /// free balance, permanently.
+    ///
+    /// NOTE ON FIDELITY: this drives rotateSlot from the escrow's ADDRESS via
+    /// vm.prank, i.e. it tests the LOCKER's plumbing given a rotation. It does
+    /// NOT prove the real ArcadeTwitterEscrowV3 can be induced to make that
+    /// call -- an audit showed it could not, which is why rotateLockerSlot was
+    /// added. MockEscrow has no claimed flag and no rotate path, so this suite
+    /// structurally cannot model that; the reachability is pinned in
+    /// ArcadeTwitterEscrowV3.t.sol against the real contract instead.
     function test_escrow_rotateThenPush_paysTheUserNotTheOwner() public {
         (address token,, uint256 positionId) = _createClankerV3WithEscrow();
         _genFeesBothSides(token);
@@ -318,7 +360,11 @@ contract LockerEscrowIntegrationTest is Test {
 
     /// Pushing while the slot STILL points at the (reverting) escrow must
     /// re-credit the same slot, not burn the entitlement.
-    function test_escrow_pushWithoutRotating_isSafeAndRetryable() public {
+    ///
+    /// "Retryable" is about the LEDGER, not about eventual success: the retry
+    /// only ever succeeds once the slot is rotated, and until rotateLockerSlot
+    /// existed it never could be. Do not read this test as "the funds are fine".
+    function test_escrow_pushWithoutRotating_ledgerSurvivesAFailedPush() public {
         (address token,, uint256 positionId) = _createClankerV3WithEscrow();
         _genFeesBothSides(token);
         escrow.setShouldRevert(true);

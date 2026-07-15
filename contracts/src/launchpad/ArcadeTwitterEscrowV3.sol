@@ -857,6 +857,49 @@ contract ArcadeTwitterEscrowV3 is Ownable2Step, Pausable, ReentrancyGuard {
         IArcadeV3Locker(LOCKER).updateRecipient(positionId, slotIndex, newRecipient);
     }
 
+    /// @notice ATOMIC rotation of a CLAIMED slot's (recipient, admin) pair.
+    ///
+    /// This is the exit that did not exist, and its absence made an escrow slot
+    /// unrotatable once claimed -- by anyone, including this owner:
+    ///
+    ///  * the locker's `rotateSlot` requires msg.sender == the slot's admin;
+    ///  * ArcadeLaunchpad M-13 forces `recipient == escrow` IFF `admin ==
+    ///    escrow`, so an escrow slot's admin is ALWAYS this contract;
+    ///  * this contract only called `rotateSlot` from claimByTwitter and
+    ///    forfeitStaleClaim, and BOTH revert AlreadyClaimed once claimed;
+    ///  * the two hatches above call the SINGLE-FIELD setters, which apply the
+    ///    ESCROW_PAIR invariant to the asymmetric intermediate state and both
+    ///    revert -- exactly the CONTRACT-2 bug `rotateSlot` was written to work
+    ///    around. The passthrough was simply never added.
+    ///
+    /// So when claimByTwitter's best-effort rotation fails, the slot is frozen
+    /// pointing at this escrow with claimed == true: every later collectFees
+    /// hits SlotAlreadyClaimed and the locker strands the share in
+    /// pendingSlotCredits, whose only consumer (pushSlotCredit) pays the slot's
+    /// CURRENT recipient. Without this function that recipient can never change,
+    /// so the user's fees are locked forever.
+    ///
+    /// Gated on `claimed == true` ON PURPOSE. An ungated rotation would let the
+    /// owner redirect a LIVE slot and take every FUTURE fee out of the escrow's
+    /// custody, which is strictly more power than the owner has ever had.
+    /// Restricting it to slots whose claim already succeeded means the slot was
+    /// already meant to point at the claimant: this only finishes a rotation the
+    /// contract itself had decided on and failed to land.
+    ///
+    /// Call it, then anyone may call locker.pushSlotCredit to deliver.
+    function rotateLockerSlot(
+        uint256 positionId,
+        uint256 slotIndex,
+        address newRecipient,
+        address newAdmin
+    ) external onlyOwner {
+        if (LOCKER == address(0)) revert LockerNotSet();
+        if (newRecipient == address(0) || newAdmin == address(0)) revert ZeroAddress();
+        // Only a slot whose claim has already landed. See the gating rationale.
+        if (!claimed[positionId][slotIndex]) revert NothingToClaim();
+        IArcadeV3Locker(LOCKER).rotateSlot(positionId, slotIndex, newRecipient, newAdmin);
+    }
+
     // ====================== EIP-712 helpers ======================
 
     function _recover(

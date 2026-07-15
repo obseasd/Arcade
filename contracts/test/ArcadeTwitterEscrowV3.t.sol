@@ -726,6 +726,87 @@ contract ArcadeTwitterEscrowV3Test is Test {
         assertEq(locker.lastSlotIndex(), 0);
     }
 
+    /// THE DEAD END, pinned against the REAL escrow.
+    ///
+    /// claimByTwitter rotates the slot best-effort in a try/catch. When that
+    /// rotation fails, the slot stays pointing at this escrow while claimed ==
+    /// true, so every later locker.collectFees hits SlotAlreadyClaimed and the
+    /// locker strands the user's share in pendingSlotCredits -- whose only
+    /// consumer pays the slot's CURRENT recipient. Rotating is therefore the
+    /// whole recovery, and it was impossible: the locker only lets the slot's
+    /// ADMIN rotate, launchpad M-13 makes that admin the escrow itself, and the
+    /// escrow's only two rotateSlot call sites both revert AlreadyClaimed in
+    /// exactly this state.
+    function test_strandedSlot_bothClaimPathsAreDeadOnceClaimed() public {
+        _credit(1, 0, address(usdc), 100);
+        bytes32 nonce = bytes32("stranded");
+        uint256 deadline = block.timestamp + 1 days;
+        bytes memory sig = _signClaim(1, 0, recipient, address(usdc), 100, address(0), 0, deadline, nonce);
+        vm.prank(recipient);
+        escrow.authorize(1, 0, recipient, address(usdc), 100, address(0), 0, deadline, nonce, sig);
+        vm.warp(block.timestamp + escrow.claimTimelock() + 1);
+
+        // The rotation inside claimByTwitter fails; the claim still lands.
+        locker.setRevertRotate(true);
+        escrow.claimByTwitter(nonce);
+        assertTrue(escrow.claimed(1, 0), "claimed despite the failed rotation");
+
+        // The locker can now rotate again, but the escrow can no longer ask it
+        // to: both of its call sites are gated on claimed == false.
+        locker.setRevertRotate(false);
+        uint256 rotationsBefore = locker.rotateSlotCallCount();
+
+        vm.expectRevert(); // AlreadyClaimed
+        escrow.claimByTwitter(nonce);
+        vm.prank(OWNER);
+        vm.expectRevert(); // AlreadyClaimed
+        escrow.forfeitStaleClaim(1, 0, address(usdc), address(0), recipient);
+        assertEq(locker.rotateSlotCallCount(), rotationsBefore, "no rotation is reachable");
+    }
+
+    /// THE EXIT. rotateLockerSlot is the atomic passthrough the escrow never
+    /// had: the two hatches below it call the SINGLE-FIELD setters, which the
+    /// production locker rejects with ESCROW_PAIR on the asymmetric intermediate
+    /// state (the CONTRACT-2 bug rotateSlot exists to work around). Without this,
+    /// a stranded slot is unrotatable by everyone -- the user, ops, and the owner
+    /// alike -- and the fees are locked forever.
+    function test_rotateLockerSlot_recoversAStrandedSlot() public {
+        _credit(1, 0, address(usdc), 100);
+        bytes32 nonce = bytes32("recover");
+        uint256 deadline = block.timestamp + 1 days;
+        bytes memory sig = _signClaim(1, 0, recipient, address(usdc), 100, address(0), 0, deadline, nonce);
+        vm.prank(recipient);
+        escrow.authorize(1, 0, recipient, address(usdc), 100, address(0), 0, deadline, nonce, sig);
+        vm.warp(block.timestamp + escrow.claimTimelock() + 1);
+        locker.setRevertRotate(true);
+        escrow.claimByTwitter(nonce);
+        locker.setRevertRotate(false);
+
+        // ATOMIC, so the production locker's ESCROW_PAIR invariant sees only the
+        // final state and accepts it.
+        vm.prank(OWNER);
+        escrow.rotateLockerSlot(1, 0, recipient, recipient);
+        assertEq(locker.lastRecipient(), recipient, "slot now points at the user");
+        assertEq(locker.lastAdmin(), recipient, "and they own it");
+        // locker.pushSlotCredit then delivers the stranded credit to them.
+    }
+
+    /// Gated on claimed ON PURPOSE: an ungated rotation would let the owner
+    /// redirect a LIVE slot and take every FUTURE fee out of the escrow's
+    /// custody -- strictly more power than the owner has ever had. Restricting it
+    /// to already-claimed slots means it can only finish a rotation the contract
+    /// itself already decided on.
+    function test_rotateLockerSlot_refusesALiveSlot() public {
+        vm.prank(OWNER);
+        vm.expectRevert(); // NothingToClaim
+        escrow.rotateLockerSlot(1, 0, address(0xBEEF), address(0xBEEF));
+    }
+
+    function test_rotateLockerSlot_onlyOwner() public {
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, address(this)));
+        escrow.rotateLockerSlot(1, 0, address(0xBEEF), address(0xBEEF));
+    }
+
     function test_M12_rotateLockerRecipient_forwardsToLocker() public {
         vm.prank(OWNER);
         escrow.rotateLockerRecipient(2, 1, address(0xCAFE));
