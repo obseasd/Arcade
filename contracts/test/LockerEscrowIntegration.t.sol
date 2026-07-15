@@ -308,10 +308,15 @@ contract LockerEscrowIntegrationTest is Test {
     /// NOTE ON FIDELITY: this drives rotateSlot from the escrow's ADDRESS via
     /// vm.prank, i.e. it tests the LOCKER's plumbing given a rotation. It does
     /// NOT prove the real ArcadeTwitterEscrowV3 can be induced to make that
-    /// call -- an audit showed it could not, which is why rotateLockerSlot was
-    /// added. MockEscrow has no claimed flag and no rotate path, so this suite
-    /// structurally cannot model that; the reachability is pinned in
-    /// ArcadeTwitterEscrowV3.t.sol against the real contract instead.
+    /// call -- MockEscrow has no claimed flag and no rotate path.
+    ///
+    /// An earlier version of this note said reachability was "pinned in
+    /// ArcadeTwitterEscrowV3.t.sol against the real contract instead". That was
+    /// FALSE and an audit caught it: that suite uses a MockLocker whose
+    /// rotateSlot is an unconditional setter with no ONLY_ADMIN and no
+    /// ESCROW_PAIR, so it proves only that the escrow forwarded its arguments.
+    /// The two suites pointed at each other across a gap neither covered.
+    /// It is pinned in LockerEscrowRealPair.t.sol, real escrow + real locker.
     function test_escrow_rotateThenPush_paysTheUserNotTheOwner() public {
         (address token,, uint256 positionId) = _createClankerV3WithEscrow();
         _genFeesBothSides(token);

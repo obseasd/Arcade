@@ -68,8 +68,16 @@ import { pushToast } from "@/lib/toast";
 const ARC_CHAIN_ID = 5_042_002;
 const ETH_SEPOLIA_ID = 11_155_111;
 
-/** Arcade fee on bridges. Currently shown as preview only; will be charged
- * on-chain once we deploy the fee router on all source chains for mainnet. */
+/** Arcade's ALL-IN fee on FAST bridges (Standard is free). REALLY CHARGED, on
+ * chain, by ArcadeCctpBuyReceiver, which every fast bridge to Arc routes
+ * through -- see useFeeHook. "All-in" = Circle's own feeExecuted counts toward
+ * it and the receiver only tops up the difference, so the user's total is 5bp
+ * and never more.
+ *
+ * This said "shown as preview only; will be charged once we deploy the fee
+ * router" long after the receiver started charging it, and public/economics.md
+ * repeated it. A comment claiming we do NOT take money we DO take is the worst
+ * kind to leave lying around. */
 const ARCADE_BRIDGE_FEE_BPS = 5n; // 0.05%
 // Upper bound we authorise Circle to charge for a Fast Transfer. This is a
 // CEILING, not the price: Circle only ever takes its published `minimumFee`.
@@ -1268,14 +1276,19 @@ export function BridgeCard() {
       // chain and permanently unmintable. So: the message decides everything,
       // and we call the mintRecipient the message itself names.
       //
-      // NOT redeploy-proof, contrary to what this comment first claimed. The
-      // Iris poll gates (:964, :1100) still require mintRecipient to equal the
-      // CURRENT ADDRESSES.cctpBuyReceiver, so an in-flight message naming an
-      // OLD receiver is rejected there and never reaches this code. Making that
-      // true needs an allowlist of historical receiver addresses at those gates.
-      // Those same checks are also what keeps calling `claimMintRecipient`
-      // safe (it can only ever be our canonical receiver or the user's own
-      // recipient), so the two properties trade off and must be fixed together.
+      // This IS redeploy-proof now, and an earlier version of this comment said
+      // the opposite -- that the Iris gates "still require mintRecipient to
+      // equal the CURRENT ADDRESSES.cctpBuyReceiver, so an in-flight message
+      // naming an OLD receiver is rejected", and prescribed "an allowlist of
+      // historical receiver addresses" as the fix. That allowlist was built:
+      // both gates use isKnownReceiver32, and the router below reads
+      // buyBytes/forwardBytes from the generation the MESSAGE names, so a
+      // transfer in flight across a redeploy stays claimable. The comment
+      // outlived its truth and would have sent the next reader either to
+      // "fix" a non-bug or to strip the working gates as absent.
+      //
+      // Calling `claimMintRecipient` stays safe because those gates bound it to
+      // a KNOWN receiver (any generation) or the user's own persisted recipient.
       // Ground truth is the PERSISTED recipient, same as the two gates above
       // (:950, :1090) already use. `recipientOverride` alone is wrong: the
       // resume-from-localStorage effect restores step/chains/amount but NOT the

@@ -615,6 +615,45 @@ contract ArcadeCctpBuyReceiverTest is Test {
         assertEq(usdc.balanceOf(beneficiary), AMT - target, "refund is net of the fee");
     }
 
+    /// THE INTERSECTION THIS BUILD INTRODUCES, and the one nothing covered:
+    /// an EXPIRED deadline AND a dead treasury. The expiry branch returns early
+    /// and so SKIPS the leftover sweep, while pendingFees is non-zero -- the one
+    /// combination where the `balance >= pendingFees` invariant could break.
+    /// The refund must be net of the still-owed fee, and the fee must stay
+    /// backed and claimable.
+    function test_deadline_expiredWithDeadTreasury_defersAndRefundsCorrectly() public {
+        usdc.setBlacklisted(treasury, true);
+        uint256 target = (AMT * 5) / 10_000;
+        bytes memory m = _msgDeadline(
+            address(receiver), AMT, beneficiary, address(token), 0,
+            address(0), address(0), 0, FAST, 0, block.timestamp + 100
+        );
+        vm.warp(block.timestamp + 101);
+        receiver.receiveAndBuy(m, "");
+
+        assertEq(usdc.balanceOf(beneficiary), AMT - target, "refund is net of the owed fee");
+        assertEq(token.balanceOf(beneficiary), 0, "no stale buy");
+        assertEq(receiver.pendingFees(), target, "fee still owed");
+        // The invariant: what we hold covers what we owe.
+        assertEq(usdc.balanceOf(address(receiver)), target, "held == owed, nothing stranded or swept");
+
+        usdc.setBlacklisted(treasury, false);
+        receiver.claimFees();
+        assertEq(usdc.balanceOf(treasury), target, "claimable after an expired buy");
+    }
+
+    /// receiveAndForward shares _takeBridgeFee, but its deferral was untested.
+    function test_receiveAndForward_deadTreasury_defersAndStillForwards() public {
+        usdc.setBlacklisted(treasury, true);
+        uint256 target = (AMT * 5) / 10_000;
+        bytes memory m = _msgForward(address(receiver), AMT, beneficiary, FAST, 0);
+        receiver.receiveAndForward(m, "");
+
+        assertEq(usdc.balanceOf(beneficiary), AMT - target, "forwarded net of the fee");
+        assertEq(receiver.pendingFees(), target, "fee deferred, not lost");
+        assertEq(usdc.balanceOf(address(receiver)), target, "backed");
+    }
+
     /// If Circle's own fee already meets/exceeds the target, we skim zero
     /// rather than pushing the user above the advertised all-in.
     function test_bridgeFee_neverExceedsTarget() public {

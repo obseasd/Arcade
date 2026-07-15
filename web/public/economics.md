@@ -100,9 +100,13 @@ Cross-chain USDC via Circle's Cross-Chain Transfer Protocol (burn + mint).
 - **Fast Transfer:** ~10-30s. Fees:
   - **Circle:** ≤ 0.01% (`maxFee = amount / 10,000`, upper bound; Iris usually
     charges less).
-  - **Arcade:** 0.05% (`ARCADE_BRIDGE_FEE_BPS = 5`). ⚠️ **Preview-only today** —
-    shown in the UI but **not yet charged on-chain**; it will be collected once
-    the bridge fee router is deployed on every source chain (mainnet).
+  - **Arcade:** 0.05% **all-in**, on **Fast transfers only** — Standard is free.
+    All-in means Circle's own fee counts toward the 0.05%: the receiver reads
+    the attested `feeExecuted` and only tops up the difference, so the total you
+    pay is 0.05% and never more, whatever Circle charged.
+    Charged on-chain by `ArcadeCctpBuyReceiver`, which every Fast bridge to Arc
+    routes through. It is avoidable only by bridging without naming the receiver
+    (i.e. not using this UI).
 - Editable destination address; mid-bridge recovery on page refresh.
 
 **Inspiration:** Circle CCTP fast transfers. Our take: standard stays free as a

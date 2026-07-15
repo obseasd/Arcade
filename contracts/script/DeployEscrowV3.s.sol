@@ -4,6 +4,12 @@ pragma solidity ^0.8.24;
 import {Script, console2} from "forge-std/Script.sol";
 import {ArcadeTwitterEscrowV3} from "../src/launchpad/ArcadeTwitterEscrowV3.sol";
 
+/// @dev Just enough of the launchpad to prove it uses the locker we are about
+///      to wire in. See the cross-check in run().
+interface IArcadeLaunchpadV3Locker {
+    function v3Locker() external view returns (address);
+}
+
 /**
  * @title DeployEscrowV3
  * @notice Deploys the audit-fixed v3 escrow + upgraded V3 locker, wiring the
@@ -63,6 +69,35 @@ contract DeployEscrowV3 is Script {
         ArcadeTwitterEscrowV3 escrow = new ArcadeTwitterEscrowV3(signer, owner);
 
         if (knownLocker != address(0)) {
+            // CROSS-CHECK BEFORE WIRING. setLocker verifies locker -> escrow
+            // (`locker.twitterEscrow() == address(this)`), which is necessary
+            // but NOT sufficient: two lockers both constructed with this escrow
+            // both satisfy it, so setLocker cannot tell whether the LAUNCHPAD
+            // actually uses this one.
+            //
+            // Pick the wrong one and it is TERMINAL: the real locker's
+            // creditSlot calls arrive from an address that is not LOCKER, so
+            // every credit reverts NotLocker, balances stay 0, authorize
+            // reverts NothingToClaim, no claim ever lands, and `claimed` stays
+            // false forever -- which also gates out rotateLockerSlot, the only
+            // recovery. And rotateLockerSlot targets LOCKER anyway, so the real
+            // locker's slots can never be rotated by anyone. setLocker is
+            // one-shot and twitterEscrow is immutable: no second chance.
+            //
+            // DeploySecurityV3 already asserts both directions. This script
+            // takes an operator-supplied address and asserted neither, which is
+            // exactly where the mistake gets made. One read, at deploy time.
+            address lp = vm.envOr("LAUNCHPAD_ADDRESS", address(0));
+            if (lp != address(0)) {
+                require(
+                    IArcadeLaunchpadV3Locker(lp).v3Locker() == knownLocker,
+                    "V3_LOCKER_ADDRESS is not the locker the launchpad uses"
+                );
+            } else {
+                console2.log("WARNING: LAUNCHPAD_ADDRESS unset - could NOT verify");
+                console2.log("  that the launchpad uses this locker. Wiring the wrong");
+                console2.log("  one is unrecoverable. Check launchpad.v3Locker() by hand.");
+            }
             // Only the owner can call setLocker. If the deployer == owner
             // we wire in the same broadcast; otherwise log a reminder.
             if (owner == deployer) {

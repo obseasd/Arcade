@@ -770,10 +770,10 @@ contract ArcadeTwitterEscrowV3Test is Test {
         locker.setRevertRotate(false);
         uint256 rotationsBefore = locker.rotateSlotCallCount();
 
-        vm.expectRevert(); // AlreadyClaimed
+        vm.expectRevert(ArcadeTwitterEscrowV3.AlreadyClaimed.selector);
         escrow.claimByTwitter(nonce);
         vm.prank(OWNER);
-        vm.expectRevert(); // AlreadyClaimed
+        vm.expectRevert(ArcadeTwitterEscrowV3.AlreadyClaimed.selector);
         escrow.forfeitStaleClaim(1, 0, address(usdc), address(0), recipient);
         assertEq(locker.rotateSlotCallCount(), rotationsBefore, "no rotation is reachable");
     }
@@ -812,7 +812,7 @@ contract ArcadeTwitterEscrowV3Test is Test {
     /// itself already decided on.
     function test_rotateLockerSlot_refusesALiveSlot() public {
         vm.prank(OWNER);
-        vm.expectRevert(); // NothingToClaim
+        vm.expectRevert(ArcadeTwitterEscrowV3.NothingToClaim.selector);
         escrow.rotateLockerSlot(1, 0, address(0xBEEF), address(0xBEEF));
     }
 
@@ -828,7 +828,7 @@ contract ArcadeTwitterEscrowV3Test is Test {
         MockLocker wrong = new MockLocker();
         wrong.setTwitterEscrow(address(0xDEAD)); // points at someone else
         vm.prank(OWNER);
-        vm.expectRevert(); // ZeroAddress
+        vm.expectRevert(ArcadeTwitterEscrowV3.ZeroAddress.selector);
         fresh.setLocker(address(wrong));
 
         // The correct pairing is accepted.
@@ -845,7 +845,7 @@ contract ArcadeTwitterEscrowV3Test is Test {
         _credit(1, 0, address(usdc), 100);
         vm.warp(block.timestamp + escrow.FORFEIT_DELAY() + 1);
         vm.prank(OWNER);
-        vm.expectRevert(); // ZeroAddress
+        vm.expectRevert(ArcadeTwitterEscrowV3.ZeroAddress.selector);
         escrow.forfeitStaleClaim(1, 0, address(usdc), address(0), address(escrow));
     }
 
