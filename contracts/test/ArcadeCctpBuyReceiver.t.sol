@@ -8,9 +8,25 @@ import {ArcadeCctpBuyReceiver} from "../src/cctp/ArcadeCctpBuyReceiver.sol";
 /* ------------------------------- mocks -------------------------------- */
 
 contract MintableERC20 is ERC20 {
+    /// Mirrors Circle USDC: a transfer to (or from) a blacklisted address
+    /// REVERTS, it does not return false. Without this the mock could not model
+    /// a dead treasury at all, which is why pendingFees/claimFees -- the entire
+    /// reason receiveAndBuy does not brick -- shipped with ZERO tests.
+    mapping(address => bool) public blacklisted;
+
     constructor(string memory n, string memory s) ERC20(n, s) {}
+
     function mint(address to, uint256 amt) external {
         _mint(to, amt);
+    }
+
+    function setBlacklisted(address a, bool b) external {
+        blacklisted[a] = b;
+    }
+
+    function _update(address from, address to, uint256 value) internal override {
+        require(!blacklisted[from] && !blacklisted[to], "BLACKLISTED");
+        super._update(from, to, value);
     }
 }
 
@@ -434,6 +450,112 @@ contract ArcadeCctpBuyReceiverTest is Test {
         receiver.receiveAndBuy(m, "");
         assertEq(usdc.balanceOf(treasury), 0, "no fee on standard transfer");
         assertEq(token.balanceOf(beneficiary), AMT * 2, "full amount bought");
+    }
+
+    // --- the deferred-fee path ---------------------------------------------
+    //
+    // This whole section had ZERO coverage. `pendingFees` + `claimFees` exist
+    // because the fee used to be hard-transferred to the IMMUTABLE treasury:
+    // a blacklist there reverted the entire receiveAndBuy, and since
+    // destinationCaller is pinned to this receiver and there is no rescue path,
+    // every in-flight transfer would have become PERMANENTLY unmintable. The
+    // fix that prevents total loss was never tested.
+
+    /// A dead treasury must not stop the bridge. The user still gets bought;
+    /// the fee is held here and claimable later.
+    function test_bridgeFee_blacklistedTreasury_defersInsteadOfBricking() public {
+        usdc.setBlacklisted(treasury, true);
+        uint256 target = (AMT * 5) / 10_000;
+        bytes memory m = _msgFee(
+            address(receiver), AMT, beneficiary, address(token), 0,
+            address(0), address(0), 0, FAST, 0
+        );
+        receiver.receiveAndBuy(m, "");
+
+        assertEq(usdc.balanceOf(treasury), 0, "treasury got nothing");
+        assertEq(receiver.pendingFees(), target, "fee held in the receiver");
+        assertEq(usdc.balanceOf(address(receiver)), target, "backed by real tokens");
+        // The user is bought regardless: a dead treasury must never cost the
+        // user their principal.
+        assertEq(token.balanceOf(beneficiary), (AMT - target) * 2, "bought on the net amount");
+
+        // Recovered once the treasury can receive again. Permissionless.
+        usdc.setBlacklisted(treasury, false);
+        vm.prank(address(0xDEADBEEF));
+        receiver.claimFees();
+        assertEq(usdc.balanceOf(treasury), target, "pushed");
+        assertEq(receiver.pendingFees(), 0, "cleared");
+    }
+
+    /// THE pfBefore FIX. The `leftover` sweep pays the beneficiary
+    /// `balanceOf - balBefore`, which is EXACTLY the shape a deferred fee has --
+    /// so un-netted it shipped the fee to the beneficiary while pendingFees kept
+    /// the credit, permanently bricking claimFees() for everyone. The curve
+    /// refund path is where leftover runs, so drive it.
+    function test_bridgeFee_deferredFee_survivesTheLeftoverSweep() public {
+        usdc.setBlacklisted(treasury, true);
+        uint256 target = (AMT * 5) / 10_000;
+        // A curve refund makes the launchpad hand USDC back, which is the only
+        // path where `leftover` actually runs.
+        launchpad.setRefundBps(1_000); // 10% refunded
+        bytes memory m = _msgFee(
+            address(receiver), AMT, beneficiary, address(token), 0,
+            address(0), address(0), 0, FAST, 0
+        );
+        receiver.receiveAndBuy(m, "");
+
+        assertEq(receiver.pendingFees(), target, "credit intact after the sweep");
+        assertEq(
+            usdc.balanceOf(address(receiver)), target,
+            "the deferred fee is STILL HERE, not swept to the beneficiary"
+        );
+        usdc.setBlacklisted(treasury, false);
+        receiver.claimFees();
+        assertEq(usdc.balanceOf(treasury), target, "claimable, not bricked");
+    }
+
+    /// Deferred fees ACCUMULATE across bridges and claim in one go. If the
+    /// second receive overwrote rather than added, the first fee would be lost.
+    function test_bridgeFee_deferredFeesAccumulate() public {
+        usdc.setBlacklisted(treasury, true);
+        uint256 target = (AMT * 5) / 10_000;
+        bytes memory m1 = _msgFee(
+            address(receiver), AMT, beneficiary, address(token), 0,
+            address(0), address(0), 0, FAST, 0
+        );
+        receiver.receiveAndBuy(m1, "");
+        bytes memory m2 = _msgFee(
+            address(receiver), AMT, address(0xB0B2), address(token), 0,
+            address(0), address(0), 1, FAST, 0
+        );
+        receiver.receiveAndBuy(m2, "");
+        assertEq(receiver.pendingFees(), target * 2, "both fees held");
+        assertEq(usdc.balanceOf(address(receiver)), target * 2, "both backed");
+    }
+
+    /// A failed claim must not burn the ledger: the revert rolls the zeroing
+    /// back so the fee stays claimable.
+    function test_claimFees_stillBlacklisted_revertsAtomically() public {
+        usdc.setBlacklisted(treasury, true);
+        uint256 target = (AMT * 5) / 10_000;
+        bytes memory m = _msgFee(
+            address(receiver), AMT, beneficiary, address(token), 0,
+            address(0), address(0), 0, FAST, 0
+        );
+        receiver.receiveAndBuy(m, "");
+
+        vm.expectRevert();
+        receiver.claimFees();
+        assertEq(receiver.pendingFees(), target, "ledger intact after the revert");
+
+        usdc.setBlacklisted(treasury, false);
+        receiver.claimFees();
+        assertEq(usdc.balanceOf(treasury), target, "recoverable");
+    }
+
+    function test_claimFees_nothingPending_reverts() public {
+        vm.expectRevert();
+        receiver.claimFees();
     }
 
     // --- stale-quote guard -------------------------------------------------
