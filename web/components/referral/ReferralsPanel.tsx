@@ -163,6 +163,11 @@ export function ReferralsPanel({ account }: { account: Address | undefined }) {
     const activeReferred = (stats?.referred ?? []).filter(
         (r) => BigInt(r.volumeUsdMicros) >= MIN_VOLUME_MICROS,
     );
+    // referredCount counts PROVEN rows only, so a referrer whose downline never
+    // signed would otherwise see a bare "0" with no way to tell "nobody joined"
+    // apart from "they joined but haven't proven it". The reveal gate and the
+    // empty state key off the total; the money numbers never do.
+    const knownCount = (stats?.referredCount ?? 0) + (stats?.unverifiedCount ?? 0);
     const link = account ? buildReferralLink(account) : "";
     const onCopy = useCallback(() => {
         if (!link) return;
@@ -263,12 +268,21 @@ export function ReferralsPanel({ account }: { account: Address | undefined }) {
                 </div>
             )}
 
-            {/* Totals */}
+            {/* Totals. Proven attribution only — see getReferralStats. */}
             <div className="grid grid-cols-3 gap-3">
                 <Stat label="Claimed" value={fmtUsd(stats?.totalClaimedUsdMicros ?? "0")} className="text-arc-success" />
                 <Stat label="Pending" value={fmtUsd(stats?.totalPendingUsdMicros ?? "0")} className="text-arc-warn" />
                 <Stat label="Referred volume" value={fmtUsd(stats?.totalVolumeUsdMicros ?? "0")} />
             </div>
+            {(stats?.unverifiedCount ?? 0) > 0 && (
+                <div className="rounded-2xl border border-arc-border bg-white/[0.015] px-5 py-3 text-xs text-arc-text-muted">
+                    {stats!.unverifiedCount} referred wallet
+                    {stats!.unverifiedCount > 1 ? "s have" : " has"} not confirmed the referral
+                    yet, so {fmtUsd(stats!.unverifiedPendingUsdMicros)} is not counted above.
+                    Confirming is free and takes one signature at connect — anyone can claim a
+                    referral they didn&apos;t make, so only a confirmed one earns.
+                </div>
+            )}
 
             {/* Claim (Phase 2 — disabled until on-chain verification is wired) */}
             <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-arc-border bg-white/[0.015] px-5 py-4">
@@ -291,7 +305,7 @@ export function ReferralsPanel({ account }: { account: Address | undefined }) {
                     <div className="text-sm font-semibold text-arc-text">
                         Referred wallets{" "}
                         {stats
-                            ? `(${stats.detailWithheld && !revealed ? stats.referredCount : activeReferred.length})`
+                            ? `(${stats.detailWithheld && !revealed ? knownCount : activeReferred.length})`
                             : ""}
                     </div>
                 </div>
@@ -299,11 +313,11 @@ export function ReferralsPanel({ account }: { account: Address | undefined }) {
                     <div className="py-6 text-center text-sm text-arc-text-muted">Loading…</div>
                 ) : stats?.detailWithheld && !revealed ? (
                     <div className="py-6 text-center text-sm text-arc-text-muted">
-                        {stats.referredCount > 0 ? (
+                        {knownCount > 0 ? (
                             <>
                                 <div>
-                                    You have {stats.referredCount} referred wallet
-                                    {stats.referredCount > 1 ? "s" : ""}. Sign to reveal the
+                                    You have {knownCount} referred wallet
+                                    {knownCount > 1 ? "s" : ""}. Sign to reveal the
                                     details — only you can view your own downline.
                                 </div>
                                 <button
@@ -337,7 +351,17 @@ export function ReferralsPanel({ account }: { account: Address | undefined }) {
                             <tbody>
                                 {activeReferred.map((r) => (
                                     <tr key={r.address} className="border-t border-arc-border/60">
-                                        <td className="py-2 pr-3 text-arc-text">{formatAddress(r.address)}</td>
+                                        <td className="py-2 pr-3 text-arc-text">
+                                            {formatAddress(r.address)}
+                                            {!r.verified && (
+                                                <span
+                                                    title="Unconfirmed: this wallet has not signed the referral, so it earns nothing."
+                                                    className="ml-2 rounded-full border border-arc-border px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-arc-text-muted"
+                                                >
+                                                    unconfirmed
+                                                </span>
+                                            )}
+                                        </td>
                                         <td className="py-2 pr-3 text-right text-arc-text-muted">
                                             {fmtUsd(r.volumeUsdMicros)}
                                         </td>

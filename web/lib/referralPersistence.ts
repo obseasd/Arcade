@@ -14,12 +14,21 @@ export interface ReferredStat {
     volumeUsdMicros: string;
     txCount: number;
     earnedUsdMicros: string;
+    /** True only when the REFERRED wallet itself signed the attribution. */
+    verified: boolean;
 }
 export interface ReferralStats {
+    /** VERIFIED rows only. This is the number a user reads as "what I am owed". */
     totalPendingUsdMicros: string;
     totalClaimedUsdMicros: string;
+    /** VERIFIED rows only, to stay consistent with totalPendingUsdMicros. */
     totalVolumeUsdMicros: string;
+    /** Accrual on UNPROVEN attribution. Displayed apart, never owed. */
+    unverifiedPendingUsdMicros: string;
+    unverifiedCount: number;
+    /** VERIFIED rows only. */
     referredCount: number;
+    /** Both tiers, each flagged. */
     referred: ReferredStat[];
 }
 
@@ -52,15 +61,45 @@ export async function registerReferral(
     // A verified row is NEVER overwritten (`WHERE NOT referrals.verified`):
     // first PROOF wins, permanently. Unverified rows stay first-touch-wins
     // among themselves, which is fine because they never decide money.
+    //
+    // The override forces a matching WIPE of referral_activity. Without it the
+    // override RE-ATTRIBUTES HISTORY: activity is keyed on referred_address
+    // alone, so the totals sitting there were accrued under the OLD referrer and
+    // would silently become the NEW referrer's the instant the row flips. Nobody
+    // is entitled to them -- the old referrer was never proven, and the new one
+    // demonstrably did not refer those trades (they predate the proof) -- so both
+    // get zero and the proven referrer accrues from now on. This was impossible
+    // before the override existed (attribution was permanent), so the wipe is
+    // part of the same change, not a pre-existing bug.
+    //
+    // Single statement on purpose: the neon HTTP driver gives no multi-statement
+    // transaction here, and an upsert that lands without its wipe is exactly the
+    // re-attribution being prevented. CTEs share one snapshot, so `prev` reads
+    // the pre-upsert referrer, and `wipe` is ordered after `upsert` by reading
+    // its RETURNING output.
     const rows = (await sql`
-        INSERT INTO referrals (referred_address, referrer_address, verified, verified_at)
-        VALUES (${r}, ${ref}, ${verified}, ${verified ? new Date().toISOString() : null})
-        ON CONFLICT (referred_address) DO UPDATE
-            SET referrer_address = EXCLUDED.referrer_address,
-                verified = EXCLUDED.verified,
-                verified_at = EXCLUDED.verified_at
-            WHERE ${verified} AND NOT referrals.verified
-        RETURNING referred_address
+        WITH prev AS (
+            SELECT referrer_address FROM referrals WHERE referred_address = ${r}
+        ),
+        upsert AS (
+            INSERT INTO referrals (referred_address, referrer_address, verified, verified_at)
+            VALUES (${r}, ${ref}, ${verified}::boolean, ${verified ? new Date().toISOString() : null})
+            ON CONFLICT (referred_address) DO UPDATE
+                SET referrer_address = EXCLUDED.referrer_address,
+                    verified = EXCLUDED.verified,
+                    verified_at = EXCLUDED.verified_at
+                WHERE ${verified}::boolean AND NOT referrals.verified
+            RETURNING referred_address
+        ),
+        wipe AS (
+            DELETE FROM referral_activity
+            WHERE referred_address = ${r}
+              AND EXISTS (SELECT 1 FROM upsert)
+              AND EXISTS (SELECT 1 FROM prev)
+              AND (SELECT referrer_address FROM prev) <> ${ref}
+            RETURNING referred_address
+        )
+        SELECT referred_address FROM upsert
     `) as { referred_address: string }[];
     return rows.length > 0;
 }
@@ -95,12 +134,23 @@ export async function trackReferralTrade(
     return rows.length > 0;
 }
 
-/** Dashboard data for a referrer: per-referred stats + rolled-up totals. */
+/**
+ * Dashboard data for a referrer: per-referred stats + rolled-up totals.
+ *
+ * Splits on `verified`. An UNVERIFIED row is a CLAIM, not a fact: /register is
+ * unauthenticated and the caller names both addresses, so a land-grabber can
+ * assert "I referred this wallet" about wallets they have never met. Rolling
+ * those into `totalPendingUsdMicros` renders a forged downline as real money in
+ * the squatter's dashboard, which is the entire point of the attack. They are
+ * returned, but apart, and never as "pending".
+ */
 export async function getReferralStats(referrer: string): Promise<ReferralStats> {
     const empty: ReferralStats = {
         totalPendingUsdMicros: "0",
         totalClaimedUsdMicros: "0",
         totalVolumeUsdMicros: "0",
+        unverifiedPendingUsdMicros: "0",
+        unverifiedCount: 0,
         referredCount: 0,
         referred: [],
     };
@@ -109,15 +159,17 @@ export async function getReferralStats(referrer: string): Promise<ReferralStats>
     const sql = getSql();
     const rows = (await sql`
         SELECT r.referred_address AS address,
+               r.verified                        AS verified,
                COALESCE(a.volume_usd_micros, 0)  AS volume_usd_micros,
                COALESCE(a.tx_count, 0)           AS tx_count,
                COALESCE(a.earned_usd_micros, 0)  AS earned_usd_micros
         FROM referrals r
         LEFT JOIN referral_activity a ON a.referred_address = r.referred_address
         WHERE r.referrer_address = ${ref}
-        ORDER BY COALESCE(a.earned_usd_micros, 0) DESC
+        ORDER BY r.verified DESC, COALESCE(a.earned_usd_micros, 0) DESC
     `) as {
         address: string;
+        verified: boolean;
         volume_usd_micros: string | number;
         tx_count: number;
         earned_usd_micros: string | number;
@@ -125,16 +177,28 @@ export async function getReferralStats(referrer: string): Promise<ReferralStats>
 
     let totalPending = 0n;
     let totalVolume = 0n;
+    let unverifiedPending = 0n;
+    let unverifiedCount = 0;
     const referred: ReferredStat[] = rows.map((row) => {
         const earned = BigInt(row.earned_usd_micros);
         const volume = BigInt(row.volume_usd_micros);
-        totalPending += earned;
-        totalVolume += volume;
+        // `verified` arrives as a real boolean from pg; the === guards against a
+        // driver handing back the string "f", which is truthy and would quietly
+        // promote every unproven row back into the payable bucket.
+        const isVerified = row.verified === true;
+        if (isVerified) {
+            totalPending += earned;
+            totalVolume += volume;
+        } else {
+            unverifiedPending += earned;
+            unverifiedCount += 1;
+        }
         return {
             address: row.address,
             volumeUsdMicros: volume.toString(),
             txCount: Number(row.tx_count),
             earnedUsdMicros: earned.toString(),
+            verified: isVerified,
         };
     });
     // Sum of settled claims (Phase 2). Wrapped so the dashboard still loads if
@@ -152,11 +216,14 @@ export async function getReferralStats(referrer: string): Promise<ReferralStats>
     }
 
     return {
-        // Pending = the display-only accrual; Claimed = actually-settled payouts.
+        // Pending = the display-only accrual on PROVEN attribution; Claimed =
+        // actually-settled payouts.
         totalPendingUsdMicros: totalPending.toString(),
         totalClaimedUsdMicros: totalClaimed.toString(),
         totalVolumeUsdMicros: totalVolume.toString(),
-        referredCount: referred.length,
+        unverifiedPendingUsdMicros: unverifiedPending.toString(),
+        unverifiedCount,
+        referredCount: referred.length - unverifiedCount,
         referred,
     };
 }

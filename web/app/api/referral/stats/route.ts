@@ -28,6 +28,8 @@ function coarse(stats: Awaited<ReturnType<typeof getReferralStats>>) {
         totalPendingUsdMicros: stats.totalPendingUsdMicros,
         totalClaimedUsdMicros: stats.totalClaimedUsdMicros,
         totalVolumeUsdMicros: stats.totalVolumeUsdMicros,
+        unverifiedPendingUsdMicros: stats.unverifiedPendingUsdMicros,
+        unverifiedCount: stats.unverifiedCount,
         referredCount: stats.referredCount,
         referred: [] as never[],
         detailWithheld: true as const,
