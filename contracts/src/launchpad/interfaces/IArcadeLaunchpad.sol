@@ -86,5 +86,8 @@ interface IArcadeLaunchpad {
     function quoteSwapMigratedRoute(address tokenIn, address tokenOut, uint256 tokensIn)
         external
         view
-        returns (uint256 tokensOut, uint256 totalRoyaltyUsdc);
+        // Second return is the mid-leg USDC (the input to leg 2), NOT a royalty:
+        // the wrapper royalty is gone, each pair charges the fee in its own K.
+        // Callers derive usdcMidMin from this.
+        returns (uint256 tokensOut, uint256 usdcMid);
 }

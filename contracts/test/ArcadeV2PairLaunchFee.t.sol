@@ -49,9 +49,23 @@ contract BlacklistUSDC is ERC20 {
     }
 }
 
+/// Blacklistable too: without this the SELL side (fee1Paid, the leg that
+/// accrues in the LAUNCH TOKEN) could never be deferred in a test, so half the
+/// deferral logic was unreachable from the suite.
 contract MockLaunchToken is ERC20 {
+    mapping(address => bool) public blacklisted;
+
     constructor() ERC20("Launch", "LNCH") {
         _mint(msg.sender, 1_000_000_000e18);
+    }
+
+    function setBlacklisted(address a, bool b) external {
+        blacklisted[a] = b;
+    }
+
+    function _update(address from, address to, uint256 value) internal override {
+        require(!blacklisted[from] && !blacklisted[to], "BLACKLISTED");
+        super._update(from, to, value);
     }
 }
 
@@ -267,6 +281,66 @@ contract ArcadeV2PairLaunchFeeTest is Test {
         vm.prank(creator);
         pair.claimLaunchFees(address(usdc));
         assertEq(usdc.balanceOf(creator), owed, "creator still paid in full after a burn");
+    }
+
+    /// Sell a launch token: the fee accrues in the LAUNCH TOKEN (fee1Paid), the
+    /// leg no test reached because the mock could not blacklist. A blacklisted
+    /// creator must not brick SELLS either.
+    function test_launchFee_sellSide_blacklistedCreator_defers() public {
+        tkn.setBlacklisted(creator, true);
+        // Sell 1000 launch tokens back into the pair.
+        (uint112 r0, uint112 r1,) = pair.getReserves();
+        bool usdcIs0 = pair.token0() == address(usdc);
+        (uint256 rIn, uint256 rOut) = usdcIs0 ? (uint256(r1), uint256(r0)) : (uint256(r0), uint256(r1));
+        uint256 amtIn = 1_000e18;
+        uint256 inWithFee = amtIn * 997;
+        uint256 out = (inWithFee * rOut) / (rIn * 1000 + inWithFee);
+
+        tkn.transfer(address(pair), amtIn);
+        (uint256 a0, uint256 a1) = usdcIs0 ? (out, uint256(0)) : (uint256(0), out);
+        pair.swap(a0, a1, trader, "");
+
+        assertGt(pair.pendingLaunchFees(address(tkn), creator), 0, "sell-side leg deferred");
+        assertGt(usdc.balanceOf(trader), 0, "the sell still cleared");
+
+        tkn.setBlacklisted(creator, false);
+        uint256 owed = pair.pendingLaunchFees(address(tkn), creator);
+        vm.prank(creator);
+        pair.claimLaunchFees(address(tkn));
+        assertEq(tkn.balanceOf(creator), owed, "creator claimed the launch-token leg");
+    }
+
+    /// The creator2 split was restored post-migration but never exercised under
+    /// deferral: every other test uses setLaunchCreator(creator, 0, 0). A
+    /// blacklisted creator2 must defer ONLY its own share.
+    function test_launchFee_creator2_blacklisted_defersOnlyItsShare() public {
+        // Fresh pair with a 50/50 creator split.
+        BlacklistUSDC u2 = new BlacklistUSDC();
+        MockLaunchToken t2 = new MockLaunchToken();
+        IPairLaunchFee p2 = IPairLaunchFee(factory.createPairGated(address(u2), address(t2)));
+        address creator2 = address(0xC2);
+        p2.setLaunchCreator(creator, creator2, 5_000);
+        u2.mint(address(p2), 100_000e6);
+        t2.transfer(address(p2), 100_000_000e18);
+        p2.mint(address(this));
+        u2.mint(trader, 10_000e6);
+
+        u2.setBlacklisted(creator2, true);
+
+        (uint112 r0, uint112 r1,) = p2.getReserves();
+        bool usdcIs0 = p2.token0() == address(u2);
+        (uint256 rIn, uint256 rOut) = usdcIs0 ? (uint256(r0), uint256(r1)) : (uint256(r1), uint256(r0));
+        uint256 usdcIn = 1_000e6;
+        uint256 inWithFee = usdcIn * 997;
+        uint256 out = (inWithFee * rOut) / (rIn * 1000 + inWithFee);
+        vm.prank(trader);
+        u2.transfer(address(p2), usdcIn);
+        (uint256 a0, uint256 a1) = usdcIs0 ? (uint256(0), out) : (out, uint256(0));
+        p2.swap(a0, a1, trader, "");
+
+        assertGt(p2.pendingLaunchFees(address(u2), creator2), 0, "creator2's share deferred");
+        assertGt(u2.balanceOf(creator), 0, "creator1 still paid directly");
+        assertGt(u2.balanceOf(feeTo), 0, "protocol still paid directly");
     }
 
     /// Nobody may claim a leg they are not owed.

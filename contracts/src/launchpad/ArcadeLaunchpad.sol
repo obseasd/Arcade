@@ -768,12 +768,18 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         IERC20(tokenAddr).forceApprove(v2Router, tokensIn);
 
         // MEASURE the USDC actually received rather than trusting the router's
-        // returned `amounts[1]`. On a graduated pair the sell leg's fee is
-        // skimmed off the USDC OUTPUT inside the pair, so the pair delivers
-        // less than the library's getAmountsOut predicts. Trusting the quoted
-        // figure here would make us try to forward USDC we never received and
-        // revert on our own balance. Any integrator of these pairs must use a
-        // balance delta for the same reason.
+        // returned `amounts[1]`. Cheap, and correct for any pair.
+        //
+        // This comment used to claim the pair "skims the fee off the USDC
+        // OUTPUT ... so the pair delivers less than getAmountsOut predicts".
+        // That describes the REVERTED output-side design and is exactly
+        // backwards: the fee is INPUT-side, `to` always receives precisely the
+        // stock library amount, and the total is pinned at 0.30% so the quote is
+        // bit-exact. An output-side skim silently defeats amountOutMin (the
+        // router checks the LIBRARY-computed figure before swapping and never
+        // re-reads balances) -- it is a fund-loss bug, which is why it was
+        // reverted. Leaving the claim here is how someone re-derives the fatal
+        // design from a comment and "restores" it.
         uint256 balBefore = USDC.balanceOf(address(this));
         IArcadeV2Router(v2Router).swapExactTokensForTokens(
             tokensIn, 0, _path2(tokenAddr, address(USDC)), address(this), deadline
@@ -850,9 +856,11 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         IERC20(tokenIn).safeTransferFrom(msg.sender, address(this), tokensIn);
         IERC20(tokenIn).forceApprove(v2Router, tokensIn);
 
-        // Measure the real delta, not the router's quoted amounts[1]: if
-        // tokenIn is a graduated launch token, its pair skims this leg's fee
-        // off the USDC output, so we receive less than the library predicts.
+        // Measure the real delta, not the router's quoted amounts[1]. Cheap and
+        // correct for any pair. NOT because a graduated pair "skims this leg's
+        // fee off the USDC output" -- that was the reverted output-side design
+        // and it is backwards: the fee is INPUT-side and the delta equals the
+        // library's figure exactly. See the note on _sellMigrated.
         uint256 balBeforeMid = USDC.balanceOf(address(this));
         IArcadeV2Router(v2Router).swapExactTokensForTokens(
             tokensIn, 0, _path2(tokenIn, address(USDC)), address(this), deadline

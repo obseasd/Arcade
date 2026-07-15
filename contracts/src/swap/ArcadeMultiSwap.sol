@@ -597,14 +597,15 @@ contract ArcadeMultiSwap is ReentrancyGuard {
         }
     }
 
-    // Mirror of the launchpad's post-migration royalty so quotes match
-    // execution for the single-hop buyMigrated / sellMigrated legs (the
-    // launchpad exposes quoteSwapMigratedRoute only for the token<->token
-    // pivot). MUST stay in sync with ArcadeLaunchpad.MIGRATED_ROYALTY_BPS
-    // (0.30%). Quote-only: even if it drifts, execution routes through the
-    // launchpad and charges the real royalty, so a drift only skews a
-    // display number, never funds.
-    uint256 private constant QUOTE_MIGRATED_ROYALTY_BPS = 30;
+    // QUOTE_MIGRATED_ROYALTY_BPS is DELETED. It mirrored
+    // ArcadeLaunchpad.MIGRATED_ROYALTY_BPS so quotes matched the wrapper
+    // royalty on buyMigrated / sellMigrated -- both of which this redesign
+    // removed. The pair now charges the fee inside its own K, and
+    // getAmountsOut already prices the 997/1000 the pair enforces, so a quote
+    // needs no extra deduction. A dead constant instructing the reader to
+    // "stay in sync with MIGRATED_ROYALTY_BPS" is worse than none: it names a
+    // constant that no longer exists and implies a deduction that would now
+    // DOUBLE-count the fee.
     uint256 private constant QUOTE_FEE_DENOM = 10_000;
 
     /// @dev Two-hop V2 getAmountsOut, returning 0 on any router revert.

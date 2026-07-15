@@ -445,9 +445,25 @@ contract ArcadeV2Pair is ArcadeV2ERC20 {
     ///      identical whether the leg was delivered or deferred. What changes is
     ///      only WHERE the tokens sit.
     function _payOrCreditFee(address token, address to, uint256 amount) private {
+        uint256 heldBefore = IERC20Minimal(token).balanceOf(address(this));
         (bool ok, bytes memory data) =
             token.call(abi.encodeWithSelector(IERC20Minimal.transfer.selector, to, amount));
         if (ok && (data.length == 0 || (data.length >= 32 && abi.decode(data, (bool))))) return;
+        // The call did not cleanly report success -- but it may still have MOVED
+        // the tokens. This gate is `data.length >= 32`, while _safeTransfer's is
+        // `data.length != 0`, so the two disagree on a 1-31 byte return: that is
+        // a transfer which may well have succeeded and reports nothing usable.
+        //
+        // Booking a pending for money that already left is the WORSE failure of
+        // the two. It pushes pendingLaunchFeeTotal above `balanceOf - reserve`,
+        // and skim/sync/mint/burn ALL subtract it -- so a phantom credit
+        // underflow-bricks all four, permanently and silently, on an otherwise
+        // healthy pair. Reverting here would at least be loud.
+        //
+        // So do not infer from the return value: measure. Defer only what we can
+        // prove we still hold. One extra balanceOf, on the rare failure path
+        // only, against an already-warm token.
+        if (IERC20Minimal(token).balanceOf(address(this)) < heldBefore) return; // it left anyway
         pendingLaunchFees[token][to] += amount;
         // Tracked in aggregate too, because skim() pays out
         // `balanceOf - reserve` and a deferred fee is EXACTLY that difference:
