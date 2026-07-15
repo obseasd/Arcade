@@ -225,11 +225,31 @@ contract LockerEscrowIntegrationTest is Test {
         (uint256 pairedFees,) = IArcadeV3Locker(v3Locker).collectFees(positionId);
         assertGt(pairedFees, 0);
 
-        // Treasury still received its 20% share.
+        // Treasury still received its 20% share: one failing recipient must
+        // never block distribution to the others (M-14).
         assertGt(usdc.balanceOf(treasury) - treasuryUsdcBefore, 0, "treasury still paid");
-        // Escrow still received its USDC even though creditSlot failed.
-        assertGt(usdc.balanceOf(address(escrow)) - escrowUsdcBefore, 0, "escrow received tokens");
-        // But no creditSlot was recorded (escrow reverted).
+
+        // The escrow must NOT receive the tokens when it cannot attribute them.
+        // This assertion used to be `assertGt(...)`, i.e. it PINNED the bug: the
+        // locker transferred first and only then tried creditSlot, so a revert
+        // left the tokens sitting in the escrow with balances == 0 and
+        // creditedTotal == 0. That is unattributed "free balance" which ONLY
+        // the owner's rescue() can move, so the user's fees silently became
+        // treasury-rescuable. The locker now credits FIRST and only sends what
+        // the escrow accepted (audit 2026-07-11 MEDIUM-1).
+        assertEq(
+            usdc.balanceOf(address(escrow)) - escrowUsdcBefore,
+            0,
+            "escrow must NOT hold tokens it could not attribute"
+        );
+        // The value is not lost: it is retrievable from the locker, which is
+        // exactly what the old code's comment already (wrongly) claimed.
+        (bool okPw, bytes memory pwRet) = v3Locker.staticcall(
+            abi.encodeWithSignature("pendingWithdrawals(address,address)", address(usdc), address(escrow))
+        );
+        assertTrue(okPw, "pendingWithdrawals readable");
+        assertGt(abi.decode(pwRet, (uint256)), 0, "recoverable via pullFromLocker");
+        // And no creditSlot was recorded (the escrow reverted).
         assertEq(escrow.callCount(), 0, "no successful creditSlot calls");
     }
 

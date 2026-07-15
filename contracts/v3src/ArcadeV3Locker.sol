@@ -680,6 +680,39 @@ contract ArcadeV3Locker is IUniswapV3MintCallback {
     /// fee distribution.
     function _payOrCredit(uint256 positionId, uint256 slotIndex, address token, address to, uint256 amount) internal {
         if (amount == 0) return;
+
+        // CREDIT BEFORE TRANSFER (audit 2026-07-11 MEDIUM-1).
+        //
+        // This used to transfer first and then try/catch creditSlot, with the
+        // catch merely emitting an event. But by then the tokens were already
+        // in the escrow, so `pendingWithdrawals` below was UNREACHABLE for this
+        // path and `pullFromLocker` had nothing to pull. The escrow held them
+        // with balances[posId][slot][token] == 0 and creditedTotal[token] == 0,
+        // i.e. as unattributed "free balance" that ONLY the owner's rescue()
+        // could move. The user's fees silently became treasury-rescuable.
+        //
+        // Not theoretical: claimByTwitter sets claimed[posId][slot] = true and
+        // then calls rotateSlot best-effort in a try/catch. If that rotation
+        // reverts, the slot still points at the escrow while claimed == true,
+        // so EVERY later (permissionless) collectFees hits SlotAlreadyClaimed
+        // here. A live 8000bps slot would funnel its whole share into the
+        // treasury's rescuable balance, indefinitely.
+        //
+        // So: attribute first, and only send what the escrow accepted. On
+        // failure the tokens stay HERE, where pullFromLocker can recover them,
+        // which is what the old comment already (wrongly) claimed happened.
+        if (to == twitterEscrow && twitterEscrow != address(0)) {
+            try IArcadeTwitterEscrowMin(twitterEscrow).creditSlot(positionId, slotIndex, token, amount) {
+                // Attributed. Fall through and deliver the tokens it represents.
+            } catch (bytes memory reason) {
+                pendingWithdrawals[token][to] += amount;
+                emit EscrowCreditFailed(positionId, slotIndex, token, amount, reason);
+                emit EscrowSlotPendingCredit(positionId, slotIndex, token, amount);
+                emit RecipientCredited(positionId, slotIndex, token, to, amount);
+                return;
+            }
+        }
+
         (bool ok, bytes memory ret) = token.call(abi.encodeWithSelector(IERC20Min.transfer.selector, to, amount));
         // M-14: defensive decode. abi.decode reverts on a return shorter than
         // 32 bytes (a malicious or non-standard token could return 1 byte and
@@ -687,21 +720,18 @@ contract ArcadeV3Locker is IUniswapV3MintCallback {
         // a failure rather than letting it bubble up and revert collectFees.
         bool decoded = ret.length == 0 || (ret.length >= 32 && abi.decode(ret, (bool)));
         if (ok && decoded) {
-            // Mirror the deposit into the Twitter escrow's on-chain accounting
-            // when (and only when) we routed to it. Wrapped in try/catch so a
-            // misbehaving / paused escrow never blocks legitimate fee
-            // distribution to OTHER slots in the same collectFees call. The
-            // backend can manually credit later via an operator role if it
-            // ever fails (event provides the {positionId, slot, token, amount}).
-            if (to == twitterEscrow && twitterEscrow != address(0)) {
-                try IArcadeTwitterEscrowMin(twitterEscrow).creditSlot(positionId, slotIndex, token, amount) {
-                    // ok
-                } catch (bytes memory reason) {
-                    emit EscrowCreditFailed(positionId, slotIndex, token, amount, reason);
-                }
-            }
             emit RecipientPaid(positionId, slotIndex, token, to, amount);
             return;
+        }
+        // RESIDUAL, documented: if `to` is the escrow, the credit above already
+        // landed, so crediting pendingWithdrawals here double-counts against an
+        // escrow balance it never received. That needs the token itself to
+        // fail a transfer to our own escrow, which the launch token and USDC do
+        // not do; the distinct event lets ops reconcile if it ever happens. We
+        // still do NOT revert, keeping M-14's property that one bad token can
+        // never brick distribution to the OTHER slots in the same collectFees.
+        if (to == twitterEscrow && twitterEscrow != address(0)) {
+            emit EscrowCreditFailed(positionId, slotIndex, token, amount, bytes("TRANSFER_AFTER_CREDIT"));
         }
         pendingWithdrawals[token][to] += amount;
         emit RecipientCredited(positionId, slotIndex, token, to, amount);
