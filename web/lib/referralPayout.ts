@@ -18,6 +18,15 @@ import { scanReferralAttribution } from "@/lib/referralOnchain";
  */
 
 const norm = (a: string) => a.trim().toLowerCase();
+
+/** Max signature lifetime. Both verifiers promised "cannot be replayed
+ *  forever" while only checking `deadline >= now`, so a signature with
+ *  deadline = 2**256-1 replayed forever and the docblocks were false. */
+const MAX_DEADLINE_SECONDS = 900n;
+const deadlineOk = (d: bigint) => {
+    const now = BigInt(Math.floor(Date.now() / 1000));
+    return d >= now && d <= now + MAX_DEADLINE_SECONDS;
+};
 const isAddr = (a: string) => /^0x[0-9a-fA-F]{40}$/.test(a.trim());
 
 /** Master kill-switch. Payout code only runs when this is explicitly on. */
@@ -195,7 +204,7 @@ export async function verifyRegisterSignature(args: {
     if (!isAddr(args.referred) || !isAddr(args.referrer)) return false;
     if (norm(args.referred) === norm(args.referrer)) return false; // self-referral
     if (!/^0x[0-9a-fA-F]+$/.test(args.signature)) return false;
-    if (args.deadline < BigInt(Math.floor(Date.now() / 1000))) return false;
+    if (!deadlineOk(args.deadline)) return false;
     try {
         return await verifyTypedData({
             address: args.referred as Address,
@@ -242,7 +251,7 @@ export async function verifyClaimSignature(args: {
     // despite the docblock above promising it. Both current callers happen to
     // check independently; enforce it at the source so the next caller can't
     // inherit a signature that replays forever.
-    if (args.deadline < BigInt(Math.floor(Date.now() / 1000))) return false;
+    if (!deadlineOk(args.deadline)) return false;
     try {
         return await verifyTypedData({
             address: args.referrer as Address,

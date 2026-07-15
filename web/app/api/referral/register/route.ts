@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { registerReferral } from "@/lib/referralPersistence";
 import { verifyRegisterSignature } from "@/lib/referralPayout";
-import { rateLimit, rateLimitGlobal, rejectCrossOrigin } from "@/lib/apiGuard";
+import { rateLimit, rejectCrossOrigin } from "@/lib/apiGuard";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -44,8 +44,11 @@ export async function POST(req: NextRequest) {
     if (xo) return xo;
     const rl = rateLimit(req, "referral-register", 10, 60_000);
     if (rl) return rl;
-    const rlg = rateLimitGlobal("referral-register", 200, 60_000);
-    if (rlg) return rlg;
+    // NO global cap: rateLimit returns early, so a single IP only ever adds
+    // ~10 to a shared bucket -- ~20 proxy IPs would exhaust it and 429 every
+    // legitimate user on this instance. It bought nothing against the actual
+    // threat (a land-grabber rotates IPs and has no deadline) while adding an
+    // availability cliff to the program it was meant to protect.
 
     let body: {
         referred?: string;

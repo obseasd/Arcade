@@ -1187,19 +1187,43 @@ export function BridgeCard() {
       // message itself, so it works even after a page refresh with no extra
       // state — and if the receiver isn't wired, we fall back to receiveMessage.
       const claimMintRecipient = mintRecipientFromMessage(step.message);
-      const mintsToReceiver =
+      // Route ONLY from the ATTESTED message, never from env or the CURRENT
+      // ADDRESSES (audit 2026-07-11 HIGH). Both can change between burn and
+      // claim -- an operator flipping BRIDGE_BUY_ENABLED during the attestation
+      // window, or a receiver redeploy (this repo redeployed the receiver three
+      // times in one day) -- and a mis-route is TERMINAL: destinationCaller is
+      // pinned to the receiver, the entrypoints length-check exactly, and the
+      // receiver has no rescue function. The USDC would be burned on the source
+      // chain and permanently unmintable. So: the message decides everything,
+      // and we call the mintRecipient the message itself names, which makes the
+      // claim survive a redeploy of our own receiver.
+      const selfRecipient = (recipientOverride ?? account) as Address | undefined;
+      const mintsToSelf =
         !!claimMintRecipient &&
-        ADDRESSES.cctpBuyReceiver !== ("0x0000000000000000000000000000000000000000" as Address) &&
-        claimMintRecipient.toLowerCase() === ADDRESSES.cctpBuyReceiver.toLowerCase();
-      // Which receiver entrypoint: the buy path commits a 192-byte hookData
-      // (message = 376 + 192 = 568 bytes), the fee-only path a 32-byte one
-      // (408). Read it off the message so a refresh needs no extra state.
+        !!selfRecipient &&
+        claimMintRecipient.toLowerCase() === selfRecipient.toLowerCase();
+      // Exact lengths, mirroring the contract: buy commits a 192-byte hookData
+      // (376 + 192 = 568), fee-forward a 32-byte one (408). `>=` would send a
+      // 569-byte message to receiveAndBuy, which exact-length-reverts.
       const msgBytes = (step.message.length - 2) / 2;
-      const isBridgeBuy = BRIDGE_BUY_ENABLED && mintsToReceiver && msgBytes >= 568;
-      const isFeeForward = mintsToReceiver && !isBridgeBuy;
+      const isBridgeBuy = !mintsToSelf && msgBytes === 568;
+      const isFeeForward = !mintsToSelf && msgBytes === 408;
+      if (!mintsToSelf && !isBridgeBuy && !isFeeForward) {
+        // Refuse rather than broadcast a doomed tx: burning the nonce on a
+        // reverting call is how a recoverable state becomes a permanent loss.
+        pushToast({
+          kind: "error",
+          title: "Unrecognised transfer",
+          message:
+            "This bridge does not match any known claim path. Do not retry; contact support with the burn tx.",
+        });
+        setStep({ kind: "idle" });
+        return;
+      }
       const hash = isFeeForward
         ? await writeContractAsync({
-            address: ADDRESSES.cctpBuyReceiver,
+            // The message's OWN mintRecipient: survives a receiver redeploy.
+            address: claimMintRecipient as Address,
             abi: CCTP_BUY_RECEIVER_ABI,
             functionName: "receiveAndForward",
             args: [step.message, step.attestation],
@@ -1207,7 +1231,7 @@ export function BridgeCard() {
           })
         : isBridgeBuy
         ? await writeContractAsync({
-            address: ADDRESSES.cctpBuyReceiver,
+            address: claimMintRecipient as Address,
             abi: CCTP_BUY_RECEIVER_ABI,
             functionName: "receiveAndBuy",
             args: [step.message, step.attestation],

@@ -93,6 +93,12 @@ contract ArcadeCctpBuyReceiver is ReentrancyGuard {
     ///         and if Circle ever raises its fee past the target we skim zero
     ///         rather than exceeding it. STANDARD transfers are never charged.
     uint256 private constant TARGET_BRIDGE_FEE_BPS = 5;
+
+    /// @notice Fees we skimmed but could NOT deliver to `treasury` (blacklisted
+    ///         or frozen). Held here rather than reverting the user's bridge,
+    ///         and pushed out later by anyone via claimFees(). A dead treasury
+    ///         must cost us the fee, never the user's principal.
+    uint256 public pendingFees;
     /// CCTP's fast/standard boundary: minFinalityThreshold <= 1000 is Fast.
     uint32 private constant FAST_FINALITY_MAX = 1000;
 
@@ -122,6 +128,10 @@ contract ArcadeCctpBuyReceiver is ReentrancyGuard {
     );
     /// Fast-transfer bridge fee skimmed to the treasury.
     event BridgeFeeTaken(uint256 fee);
+    /// The treasury could not be paid (blacklisted/frozen); fee held for pull.
+    event BridgeFeeDeferred(uint256 fee);
+    /// Deferred fees pulled to the treasury.
+    event BridgeFeesClaimed(uint256 amount);
     /// Plain bridge (no buy) forwarded to the beneficiary, net of the fee.
     event BridgeForward(address indexed beneficiary, uint256 usdcOut);
 
@@ -315,8 +325,28 @@ contract ArcadeCctpBuyReceiver is ReentrancyGuard {
     {
         fee = _bridgeFee(message, minted);
         if (fee > 0) {
-            usdc.safeTransfer(treasury, fee);
-            emit BridgeFeeTaken(fee);
+            // NEVER let paying ourselves brick the user's transfer (audit
+            // 2026-07-11). `treasury` is immutable with no setter; if it is
+            // ever USDC-blacklisted or frozen, a hard transfer here would
+            // revert the whole receiveAndBuy/receiveAndForward. And because
+            // destinationCaller is pinned to this contract and there is no
+            // rescue path, that does not merely delay the bridge -- it makes
+            // every in-flight transfer PERMANENTLY unmintable.
+            //
+            // This is the exact failure mode ArcadeLaunchpad fixed hours before
+            // this contract shipped ("a USDC-blacklisted or frozen treasury
+            // would have reverted EVERY createToken permanently"), via
+            // _safePayUsdc + a pull. The receiver never got the same treatment.
+            // So: a dead treasury costs us the FEE, never the user's principal.
+            (bool ok, bytes memory ret) = address(usdc).call(
+                abi.encodeWithSelector(IERC20.transfer.selector, treasury, fee)
+            );
+            if (ok && (ret.length == 0 || abi.decode(ret, (bool)))) {
+                emit BridgeFeeTaken(fee);
+            } else {
+                pendingFees += fee;
+                emit BridgeFeeDeferred(fee);
+            }
         }
     }
 
@@ -358,6 +388,19 @@ contract ArcadeCctpBuyReceiver is ReentrancyGuard {
         minted -= _takeBridgeFee(message, minted);
         if (minted > 0) usdc.safeTransfer(beneficiary, minted);
         emit BridgeForward(beneficiary, minted);
+    }
+
+    /// @notice Push any deferred fees to the treasury. Permissionless: the
+    ///         destination is immutable, so there is nobody to trust and
+    ///         nothing to gate. Reverts if the treasury still cannot receive,
+    ///         which is fine -- unlike inside a bridge, failing here costs
+    ///         nothing but the caller's gas.
+    function claimFees() external nonReentrant {
+        uint256 amount = pendingFees;
+        if (amount == 0) revert NothingMinted();
+        pendingFees = 0;
+        usdc.safeTransfer(treasury, amount);
+        emit BridgeFeesClaimed(amount);
     }
 
     /// @dev Read a 32-byte word at `offset` inside the `message` calldata bytes.

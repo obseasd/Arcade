@@ -1217,6 +1217,20 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         return (uint256(c.startBps) * (c.decaySeconds - elapsed)) / c.decaySeconds;
     }
 
+    /// @notice Circulating supply of `tokenAddr`: TOTAL_SUPPLY minus whatever
+    ///         sits at DEAD. Exposed because marketCap() prices THIS, not
+    ///         TOTAL_SUPPLY, and every off-chain consumer that derives a price
+    ///         from mcap needs the same denominator or it silently reads ~6.4%
+    ///         low on migrated tokens (which is exactly what happened when
+    ///         marketCap was corrected without giving callers this primitive).
+    ///         Cannot underflow: tokens[] is only ever written right after
+    ///         minting a fixed-supply ArcadeLaunchToken, which has no mint path,
+    ///         so balanceOf(DEAD) <= TOTAL_SUPPLY always.
+    function circulatingSupply(address tokenAddr) public view returns (uint256) {
+        if (tokens[tokenAddr].token == address(0)) return 0;
+        return TOTAL_SUPPLY - IERC20(tokenAddr).balanceOf(DEAD);
+    }
+
     /// @notice Returns the implied market cap of `tokenAddr` in USDC raw units (6 dp).
     /// Branches on launch mode:
     ///   - PUMP / Arcade pre-migration: curve virtual+real reserves.
