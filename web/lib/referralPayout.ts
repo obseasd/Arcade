@@ -167,6 +167,64 @@ export async function releaseClaim(id: number): Promise<void> {
 }
 
 /**
+ * Verify an EIP-712 signature proving the signer controls `referred`, i.e.
+ * that the REFERRED wallet itself declares who referred it.
+ *
+ * This is the cheap half of the audit-2026-07-11 B-2 fix. Registration is
+ * unauthenticated and first-touch-wins is permanent, so without a proof anyone
+ * can POST {referred: <every wallet that ever touched Arcade>, referrer: self}
+ * and permanently own the attribution -- and a rate limit does NOT stop it: the
+ * attacker only has to match your SIGNUP RATE (not the chain's size), has no
+ * deadline so a slow drip works, and rotates IPs for pennies.
+ *
+ * A signature costs the user NOTHING: no gas, no transaction, no chain
+ * interaction -- one wallet popup. That is the whole point of using it rather
+ * than the on-chain Memo tag ([[registerReferrerCall]]), which needs a real tx.
+ * Since WE pay from OUR treasury, a signature our backend verified is enough;
+ * we don't need public verifiability, only to not be defrauded. The Memo stays
+ * available as the stronger, publicly auditable tier.
+ *
+ * `deadline` keeps a captured signature from being replayed forever.
+ */
+export async function verifyRegisterSignature(args: {
+    referred: string;
+    referrer: string;
+    deadline: bigint;
+    signature: string;
+}): Promise<boolean> {
+    if (!isAddr(args.referred) || !isAddr(args.referrer)) return false;
+    if (norm(args.referred) === norm(args.referrer)) return false; // self-referral
+    if (!/^0x[0-9a-fA-F]+$/.test(args.signature)) return false;
+    if (args.deadline < BigInt(Math.floor(Date.now() / 1000))) return false;
+    try {
+        return await verifyTypedData({
+            address: args.referred as Address,
+            domain: {
+                name: "ArcadeReferral",
+                version: "1",
+                chainId: arcTestnet.id,
+            },
+            types: {
+                Register: [
+                    { name: "referred", type: "address" },
+                    { name: "referrer", type: "address" },
+                    { name: "deadline", type: "uint256" },
+                ],
+            },
+            primaryType: "Register",
+            message: {
+                referred: args.referred as Address,
+                referrer: args.referrer as Address,
+                deadline: args.deadline,
+            },
+            signature: args.signature as `0x${string}`,
+        });
+    } catch {
+        return false;
+    }
+}
+
+/**
  * Verify an EIP-712 signature proving the caller controls `referrer`. The
  * claim recipient is always `referrer` itself, so funds can't be redirected;
  * this gate stops a third party from triggering / griefing someone else's
