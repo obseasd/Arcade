@@ -1195,9 +1195,28 @@ export function BridgeCard() {
       // pinned to the receiver, the entrypoints length-check exactly, and the
       // receiver has no rescue function. The USDC would be burned on the source
       // chain and permanently unmintable. So: the message decides everything,
-      // and we call the mintRecipient the message itself names, which makes the
-      // claim survive a redeploy of our own receiver.
-      const selfRecipient = (recipientOverride ?? account) as Address | undefined;
+      // and we call the mintRecipient the message itself names.
+      //
+      // NOT redeploy-proof, contrary to what this comment first claimed. The
+      // Iris poll gates (:964, :1100) still require mintRecipient to equal the
+      // CURRENT ADDRESSES.cctpBuyReceiver, so an in-flight message naming an
+      // OLD receiver is rejected there and never reaches this code. Making that
+      // true needs an allowlist of historical receiver addresses at those gates.
+      // Those same checks are also what keeps calling `claimMintRecipient`
+      // safe (it can only ever be our canonical receiver or the user's own
+      // recipient), so the two properties trade off and must be fixed together.
+      // Ground truth is the PERSISTED recipient, same as the two gates above
+      // (:950, :1090) already use. `recipientOverride` alone is wrong: the
+      // resume-from-localStorage effect restores step/chains/amount but NOT the
+      // override (the retry path at :292 does, and its comment says dropping it
+      // was a bug). So after a refresh, a healthy plain bridge to a custom
+      // recipient had mintsToSelf go false, matched neither 568 nor 408, and hit
+      // the "contact support" refusal -- on a transfer anyone could have claimed
+      // (destinationCaller is zero on that path). Two places in one file must
+      // not answer the same question differently. (Audit round 3.)
+      const selfRecipient = (loadPendingBridge(account)?.recipient ??
+        recipientOverride ??
+        account) as Address | undefined;
       const mintsToSelf =
         !!claimMintRecipient &&
         !!selfRecipient &&

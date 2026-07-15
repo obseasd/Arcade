@@ -65,6 +65,16 @@ export const LAUNCHPAD_ABI = [
     outputs: [{ type: "uint256" }],
   },
   {
+    // marketCap() prices CIRCULATING supply, not TOTAL_SUPPLY (migrated tokens
+    // burn ~60M to DEAD). Any consumer deriving a price from mcap MUST divide
+    // by this, or it reads ~6.4% low on every migrated token.
+    type: "function",
+    name: "circulatingSupply",
+    stateMutability: "view",
+    inputs: [{ type: "address" }],
+    outputs: [{ type: "uint256" }],
+  },
+  {
     type: "function",
     name: "quoteBuy",
     stateMutability: "view",

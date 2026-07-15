@@ -3,7 +3,8 @@
 import { useMemo } from "react";
 import { Address, erc20Abi } from "viem";
 import { useAccount, useReadContracts } from "wagmi";
-import { LAUNCHPAD_TOTAL_SUPPLY, LAUNCHPAD_TOKEN_DECIMALS } from "@/lib/constants";
+import { ADDRESSES } from "@/lib/constants";
+import { LAUNCHPAD_ABI } from "@/lib/abis/launchpad";
 import { useLaunchpadTokens, type LaunchpadTokenInfo } from "./useLaunchpadTokens";
 
 export interface HoldingInfo {
@@ -52,6 +53,21 @@ export function useMyHoldings(): { holdings: HoldingInfo[]; isLoading: boolean }
         query: { enabled: !!account && candidates.length > 0, refetchInterval: 30_000 },
     });
 
+    // marketCap() prices CIRCULATING supply, so the value denominator must be
+    // circulating too. Dividing by a hardcoded TOTAL_SUPPLY read every migrated
+    // holding ~6.4% low (they burn ~60M to DEAD at graduation), and drifted
+    // further with any holder burn. Read from the launchpad so the two can
+    // never disagree about the denominator.
+    const supplyCalls = useReadContracts({
+        contracts: candidates.map((t) => ({
+            address: ADDRESSES.launchpad,
+            abi: LAUNCHPAD_ABI,
+            functionName: "circulatingSupply" as const,
+            args: [t.address] as const,
+        })),
+        query: { enabled: !!account && candidates.length > 0, refetchInterval: 30_000 },
+    });
+
     const holdings = useMemo<HoldingInfo[]>(() => {
         if (!balanceCalls.data) return [];
         const out: HoldingInfo[] = [];
@@ -61,14 +77,14 @@ export function useMyHoldings(): { holdings: HoldingInfo[]; isLoading: boolean }
             const balance = r.result as bigint;
             if (balance === 0n) continue;
             const token = candidates[i];
-            // value = marketCap * (balance / TOTAL_SUPPLY)
-            // marketCap is in USDC raw units (6 dp), balance is 18 dp,
-            // TOTAL_SUPPLY is 1e9 (whole tokens).
+            // value = marketCap * (balance / circulatingSupply).
+            // marketCap is in USDC raw units (6 dp), balance and supply are 18 dp.
             let valueUsdcRaw: bigint | undefined;
-            if (token.marketCap !== undefined && token.marketCap > 0n) {
-                const totalSupplyRaw =
-                    LAUNCHPAD_TOTAL_SUPPLY * 10n ** BigInt(LAUNCHPAD_TOKEN_DECIMALS);
-                valueUsdcRaw = (token.marketCap * balance) / totalSupplyRaw;
+            const supplyRes = supplyCalls.data?.[i];
+            const circulating =
+                supplyRes?.status === "success" ? (supplyRes.result as bigint) : 0n;
+            if (token.marketCap !== undefined && token.marketCap > 0n && circulating > 0n) {
+                valueUsdcRaw = (token.marketCap * balance) / circulating;
             }
             out.push({ token, balance, valueUsdcRaw });
         }

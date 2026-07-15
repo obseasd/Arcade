@@ -225,6 +225,12 @@ contract ArcadeCctpBuyReceiver is ReentrancyGuard {
         bool useV3 = v3Router != address(0) && v3Fee != 0;
 
         uint256 balBefore = usdc.balanceOf(address(this));
+        // Snapshot deferred fees too: a fee we could NOT hand to the treasury
+        // stays in this contract, so it inflates our balance exactly like a
+        // curve refund does. Without netting it out, `leftover` below would
+        // ship it to the beneficiary while `pendingFees` kept the credit --
+        // permanently bricking claimFees() for everyone (audit round 3).
+        uint256 pfBefore = pendingFees;
         // Mints USDC to this contract (mintRecipient). Reverts if already used.
         messageTransmitter.receiveMessage(message, attestation);
         uint256 minted = usdc.balanceOf(address(this)) - balBefore;
@@ -249,7 +255,10 @@ contract ArcadeCctpBuyReceiver is ReentrancyGuard {
             // Any USDC this flow left behind (curve refund near migration) goes
             // to the beneficiary. Uses balBefore as the baseline so a pre-
             // existing stuck balance is never swept into this transfer.
-            uint256 leftover = usdc.balanceOf(address(this)) - balBefore;
+            // Net out both a pre-existing stuck balance AND anything we just
+            // deferred: only the curve's own refund belongs to the beneficiary.
+            uint256 leftover =
+                usdc.balanceOf(address(this)) - balBefore - (pendingFees - pfBefore);
             if (leftover > 0) usdc.safeTransfer(beneficiary, leftover);
             usdc.forceApprove(launchpad, 0);
             emit BridgeBuy(beneficiary, token, minted, tokensOut, true);
@@ -341,7 +350,12 @@ contract ArcadeCctpBuyReceiver is ReentrancyGuard {
             (bool ok, bytes memory ret) = address(usdc).call(
                 abi.encodeWithSelector(IERC20.transfer.selector, treasury, fee)
             );
-            if (ok && (ret.length == 0 || abi.decode(ret, (bool)))) {
+            // `ret.length >= 32` before decoding: abi.decode reverts on a
+            // short return, which would revert INSIDE the guard whose whole
+            // job is to prevent a revert. ArcadeV3SwapRouter._pay and
+            // ArcadeV3Locker._payOrCredit both carry this gate (M-14); this
+            // contract was the one sibling that never got it.
+            if (ok && (ret.length == 0 || (ret.length >= 32 && abi.decode(ret, (bool))))) {
                 emit BridgeFeeTaken(fee);
             } else {
                 pendingFees += fee;
