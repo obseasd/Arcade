@@ -200,8 +200,17 @@ contract ArcadeV2Pair is ArcadeV2ERC20 {
 
     function mint(address to) external lock returns (uint256 liquidity) {
         (uint112 _r0, uint112 _r1,) = getReserves();
-        uint256 balance0 = IERC20Minimal(token0).balanceOf(address(this));
-        uint256 balance1 = IERC20Minimal(token1).balanceOf(address(this));
+        // Net out the deferred launch fees, exactly as skim() and sync() do.
+        // Raw balanceOf INCLUDES fees this pair owes but could not deliver, and
+        // booking those as reserves is not cosmetic: `balanceOf - reserve` would
+        // collapse to 0 while pendingLaunchFeeTotal stayed positive, so skim()
+        // would underflow-revert FOREVER, and the creator's later
+        // claimLaunchFees would drop the balance BELOW the recorded reserve,
+        // leaving the pair quoting against depth it does not hold. mint() is
+        // permissionless once seeded, and this contract's own docs describe
+        // dust-poking as expected, so one poke was enough to trigger it.
+        uint256 balance0 = IERC20Minimal(token0).balanceOf(address(this)) - pendingLaunchFeeTotal[token0];
+        uint256 balance1 = IERC20Minimal(token1).balanceOf(address(this)) - pendingLaunchFeeTotal[token1];
         uint256 amount0 = balance0 - _r0;
         uint256 amount1 = balance1 - _r1;
 
@@ -232,8 +241,14 @@ contract ArcadeV2Pair is ArcadeV2ERC20 {
         (uint112 _r0, uint112 _r1,) = getReserves();
         address _t0 = token0;
         address _t1 = token1;
-        uint256 balance0 = IERC20Minimal(_t0).balanceOf(address(this));
-        uint256 balance1 = IERC20Minimal(_t1).balanceOf(address(this));
+        // Net out the deferred launch fees. On raw balances an LP's pro-rata
+        // slice INCLUDES money the pair owes the creator, so burning paid out a
+        // share of it -- mint-then-burn in one block extracted it for the cost of
+        // gas, and pendingLaunchFeeTotal still promised the creator an amount the
+        // pair no longer held, so the residue came out of the remaining LPs.
+        // Same netting as skim()/sync()/mint(): what is owed is not liquidity.
+        uint256 balance0 = IERC20Minimal(_t0).balanceOf(address(this)) - pendingLaunchFeeTotal[_t0];
+        uint256 balance1 = IERC20Minimal(_t1).balanceOf(address(this)) - pendingLaunchFeeTotal[_t1];
         uint256 liquidity = balanceOf[address(this)];
 
         bool feeOn = _mintFee(_r0, _r1);
@@ -244,8 +259,8 @@ contract ArcadeV2Pair is ArcadeV2ERC20 {
         _burn(address(this), liquidity);
         _safeTransfer(_t0, to, amount0);
         _safeTransfer(_t1, to, amount1);
-        balance0 = IERC20Minimal(_t0).balanceOf(address(this));
-        balance1 = IERC20Minimal(_t1).balanceOf(address(this));
+        balance0 = IERC20Minimal(_t0).balanceOf(address(this)) - pendingLaunchFeeTotal[_t0];
+        balance1 = IERC20Minimal(_t1).balanceOf(address(this)) - pendingLaunchFeeTotal[_t1];
 
         _update(balance0, balance1, _r0, _r1);
         if (feeOn) kLast = uint256(reserve0) * uint256(reserve1);

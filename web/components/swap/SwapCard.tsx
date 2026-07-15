@@ -647,8 +647,12 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
   }, [lastEdited, amountOutRawTyped, tokenIn.address, tokenOut?.address, ratioVersion]);
 
   const computedAmountIn = amountsIn?.[0] ?? derivedAmountIn;
-  /** USDC amount taken as royalty across both legs (0 when not via launchpad). */
-  const totalRoyaltyUsdc: bigint = migratedQuote?.[1] ?? 0n;
+  // The wrapper royalty is GONE: each graduated pair charges the fee inside its
+  // own K, and getAmountsOut already prices it, so there is no extra deduction
+  // left to display. migratedQuote[1] is now `usdcMid`, NOT a royalty -- the
+  // badge that read it was rendering the entire mid-leg as "royalty" (a 1000
+  // USDC mid rendered "+1000.00 USDC royalty" for a royalty of zero). It was
+  // only invisible before because that slot returned a hardcoded 0.
 
   useEffect(() => {
     if (lastEdited === "in") {
@@ -1676,14 +1680,6 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
             {!isV3Swap && route.viaUsdc && (
               <span className="ml-1 rounded-full border border-arc-cta-hover/40 bg-arc-cta-hover/10 px-1.5 py-0.5 text-[10px] font-medium text-arc-cta-hover">
                 {symIn} → USDC → {symOut}
-              </span>
-            )}
-            {route.useLaunchpadRouter && totalRoyaltyUsdc > 0n && (
-              <span
-                className="ml-1 rounded-full border border-arc-warn/30 bg-arc-warn/10 px-1.5 py-0.5 text-[10px] font-medium tabular-nums text-arc-warn"
-                title="Post-migration creator royalty charged on each launchpad-migrated leg"
-              >
-                +{formatUSDC(totalRoyaltyUsdc, USDC_DECIMALS, 2)} USDC royalty
               </span>
             )}
           </div>

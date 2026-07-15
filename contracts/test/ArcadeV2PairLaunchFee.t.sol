@@ -10,6 +10,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 interface IPairLaunchFee {
     function setLaunchCreator(address creator, address creator2, uint16 creator2Bps) external;
     function mint(address to) external returns (uint256);
+    function burn(address to) external returns (uint256, uint256);
     function swap(uint256 amount0Out, uint256 amount1Out, address to, bytes calldata data) external;
     function skim(address to) external;
     function sync() external;
@@ -201,6 +202,71 @@ contract ArcadeV2PairLaunchFeeTest is Test {
         vm.prank(creator);
         pair.claimLaunchFees(address(usdc));
         assertEq(usdc.balanceOf(creator), owed, "claim survives a sync");
+    }
+
+    /// CRITICAL, and the exact gap this file had: the deferral's theft vector
+    /// was closed on skim()/sync() and left open on mint()/burn(), the two
+    /// functions no test here touched.
+    ///
+    /// mint() read raw balanceOf and passed it to _update, booking the OWED fee
+    /// as reserves. `balanceOf - reserve` then collapses to 0 while
+    /// pendingLaunchFeeTotal stays positive, so skim() underflow-reverts
+    /// forever, and the creator's later claim drops the balance BELOW the
+    /// recorded reserve. mint() is permissionless once seeded and this pair's
+    /// own docs call dust-poking expected, so one poke did it.
+    function test_launchFee_mintDoesNotAbsorbTheDeferredFee() public {
+        usdc.setBlacklisted(creator, true);
+        _buy(1_000e6);
+        uint256 owed = pair.pendingLaunchFees(address(usdc), creator);
+        assertGt(owed, 0, "something is deferred");
+
+        // A dust poke.
+        usdc.mint(address(pair), 1_000e6);
+        tkn.transfer(address(pair), 1_000_000e18);
+        pair.mint(address(this));
+
+        // skim() must still work -- it underflow-reverted before this fix.
+        pair.skim(address(0xBAD));
+
+        // And the creator is still made whole.
+        usdc.setBlacklisted(creator, false);
+        vm.prank(creator);
+        pair.claimLaunchFees(address(usdc));
+        assertEq(usdc.balanceOf(creator), owed, "creator still paid in full after a mint");
+    }
+
+    /// CRITICAL: burn() computed the LP's pro-rata slice from raw balanceOf, so
+    /// it paid out a share of the creator's owed fee. Mint-then-burn in one
+    /// block extracted it for the cost of gas, and the ledger still promised the
+    /// creator an amount the pair no longer held -- so the residue came out of
+    /// the remaining LPs.
+    function test_launchFee_burnCannotStealTheDeferredFee() public {
+        usdc.setBlacklisted(creator, true);
+        _buy(1_000e6);
+        uint256 owed = pair.pendingLaunchFees(address(usdc), creator);
+        assertGt(owed, 0, "something is deferred");
+
+        // Attacker mints a large LP position, then immediately burns it.
+        address attacker = address(0xBAD);
+        usdc.mint(attacker, 100_000e6);
+        vm.prank(attacker);
+        usdc.transfer(address(pair), 100_000e6);
+        tkn.transfer(address(pair), 100_000_000e18);
+        uint256 lp = pair.mint(attacker);
+
+        uint256 usdcIn = 100_000e6;
+        vm.prank(attacker);
+        IERC20(address(pair)).transfer(address(pair), lp);
+        pair.burn(attacker);
+
+        // Out must never exceed in: the creator's fee is not theirs to take.
+        assertLe(usdc.balanceOf(attacker), usdcIn, "mint+burn must not profit from the owed fee");
+
+        // And the creator is still fully backed.
+        usdc.setBlacklisted(creator, false);
+        vm.prank(creator);
+        pair.claimLaunchFees(address(usdc));
+        assertEq(usdc.balanceOf(creator), owed, "creator still paid in full after a burn");
     }
 
     /// Nobody may claim a leg they are not owed.
