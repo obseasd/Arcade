@@ -67,6 +67,31 @@ export function loadPendingBridge(forAccount: string | undefined): PendingBridge
   }
 }
 
+/**
+ * The recipient the burn `burnTxHash` was actually signed for, or null.
+ *
+ * The wallet-scoped entry holds ONE burn at a time, but callers were reading it
+ * for whatever burn they happened to be resolving, so a stale entry answered for
+ * a different burn. Concretely: claim burn B (to self) -> the entry is cleared
+ * on broadcast -> the mint reverts -> start burn A (to Alice) -> now the entry
+ * says Alice -> hit Retry on B in the history. B's persisted recipient resolved
+ * to ALICE, so B's real mintRecipient (self) failed the recipient gate, the
+ * attestation was silently dropped, and B could never be claimed in the UI
+ * again. The entry has always carried burnTxHash; nothing compared it.
+ *
+ * Binding to the burn makes a stale entry return null instead of a confident
+ * wrong answer, and callers then fall back exactly as they do with no entry.
+ */
+export function recipientForBurn(
+  forAccount: string | undefined,
+  burnTxHash: string | undefined,
+): string | null {
+  if (!burnTxHash) return null;
+  const entry = loadPendingBridge(forAccount);
+  if (!entry) return null;
+  return entry.burnTxHash.toLowerCase() === burnTxHash.toLowerCase() ? entry.recipient : null;
+}
+
 export function savePendingBridge(p: PendingBridge): void {
   if (!isBrowser() || !p.account) return;
   try {

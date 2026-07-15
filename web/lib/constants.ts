@@ -108,9 +108,20 @@ export const ADDRESSES = {
    *  current receiver anyway.
    *  APPEND on every redeploy; never remove an entry. */
   cctpBuyReceivers: [
+    // Each entry's buyBytes is HOOK_DATA_OFFSET(376) + that build's
+    // HOOK_DATA_LEN, read from the commit that deployed it. Audit 2026-07-15:
+    // the first version of this table was SHIFTED BY ONE GENERATION (0x6654 got
+    // 0xad17's 504, 0xad17 got 0xca001f's 472) and omitted 0xca001f entirely --
+    // real sizes bound to the wrong addresses, which is worse than a wrong
+    // guess because each value looks defensible. Verified pairing:
+    //   8ee2776 -> 0xca001f, LEN  96 -> 472
+    //   968ebb9 -> 0xad17aa, LEN 128 -> 504
+    //   95cda63 -> 0x6654C0, LEN 192 -> 568
+    //   597c90c -> 0x9E87B0, LEN 192 -> 568
     { address: "0x9E87B0732BAA1aB0e001A220b505720971ED3621", buyBytes: 568, forwardBytes: 408 },
-    { address: "0x6654C0763DBC49f3943c18478e3d32c209B2D427", buyBytes: 504, forwardBytes: 0 },
-    { address: "0xad17aadea14248c25d405f5e85aee45a729e9f76", buyBytes: 472, forwardBytes: 0 },
+    { address: "0x6654C0763DBC49f3943c18478e3d32c209B2D427", buyBytes: 568, forwardBytes: 0 },
+    { address: "0xad17aadea14248c25d405f5e85aee45a729e9f76", buyBytes: 504, forwardBytes: 0 },
+    { address: "0xca001f73e117494711386e0e6e77ef7b984eae15", buyBytes: 472, forwardBytes: 0 },
   ] as readonly { address: Address; buyBytes: number; forwardBytes: number }[],
   // --- ArcadeHook production stack (V4 Phase 2, behind NEXT_PUBLIC_V4_HOOK_ENABLED) ---
   // Unified hook subsuming launchpad + V2 stack + V3 locker. Uses atomic

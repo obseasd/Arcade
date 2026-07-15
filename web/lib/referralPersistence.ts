@@ -21,7 +21,7 @@ export interface ReferralStats {
     /** VERIFIED rows only. This is the number a user reads as "what I am owed". */
     totalPendingUsdMicros: string;
     totalClaimedUsdMicros: string;
-    /** VERIFIED rows only, to stay consistent with totalPendingUsdMicros. */
+    /** ALL rows: volume is what the downline traded, not money owed. */
     totalVolumeUsdMicros: string;
     /** Accrual on UNPROVEN attribution. Displayed apart, never owed. */
     unverifiedPendingUsdMicros: string;
@@ -33,12 +33,19 @@ export interface ReferralStats {
 }
 
 /**
- * Record a first-touch referral. No-op when:
+ * Record a referral. No-op when:
  *  - the DB is off,
  *  - either address is malformed,
  *  - referrer === referred (self-referral),
- *  - the referred wallet already has a referrer (first-touch wins).
- * Returns true only when a NEW row was inserted.
+ *  - the referred wallet already has a referrer AND this call cannot beat it.
+ *
+ * First-touch wins AMONG UNVERIFIED rows. A VERIFIED call overrides an
+ * unverified row (proof beats a claim); a verified row is never overridden by
+ * anything (first PROOF wins, permanently).
+ *
+ * Returns true when the row was WRITTEN (inserted OR upgraded), false when the
+ * call changed nothing. Note this is not "inserted": a verified override
+ * returns true while inserting no row.
  */
 export async function registerReferral(
     referred: string,
@@ -186,9 +193,14 @@ export async function getReferralStats(referrer: string): Promise<ReferralStats>
         // driver handing back the string "f", which is truthy and would quietly
         // promote every unproven row back into the payable bucket.
         const isVerified = row.verified === true;
+        // Volume is NOT money owed -- it is what the downline traded, and it is
+        // true whoever gets credit for it. Gating it on `verified` made the
+        // headline read $0 while the table right below listed per-wallet volumes
+        // above zero, a contradiction the unverified note never explained
+        // (it speaks only to the pending number). Only `pending` is gated.
+        totalVolume += volume;
         if (isVerified) {
             totalPending += earned;
-            totalVolume += volume;
         } else {
             unverifiedPending += earned;
             unverifiedCount += 1;

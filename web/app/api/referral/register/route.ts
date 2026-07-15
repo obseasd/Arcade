@@ -89,8 +89,12 @@ export async function POST(req: NextRequest) {
     }
 
     try {
-        const inserted = await registerReferral(referred, referrer, verified);
-        return NextResponse.json({ ok: true, inserted, verified });
+        // `recorded`, not `inserted`: a verified call that OVERRIDES an
+        // unverified squat writes the row without inserting one, and reporting
+        // that as `inserted: true` misdescribes what happened to any caller that
+        // reads it.
+        const recorded = await registerReferral(referred, referrer, verified);
+        return NextResponse.json({ ok: true, recorded, verified });
     } catch (e) {
         return NextResponse.json(
             { error: e instanceof Error ? e.message : "register failed" },

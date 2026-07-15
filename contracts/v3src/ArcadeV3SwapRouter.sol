@@ -70,10 +70,30 @@ contract ArcadeV3SwapRouter is IUniswapV3SwapCallback {
     ///   - Sell (launchToken→USDC): skim X% of launchToken input. Treasury
     ///     receives launchToken; can be burned or rolled into LP later.
     /// No-op outside the launch window (bps == 0) or when the launchpad
-    /// isn't wired. Cross-token (non-USDC ↔ non-USDC) routes never enter
-    /// _snipeSkim because the swap router never sees them at the single-
-    /// hop entry; exactInputThroughUsdc explicitly applies the skim on
-    /// the USDC mid for those cases.
+    /// isn't wired.
+    ///
+    /// The skim is always taken in `tokenIn` units, whatever `tokenIn` is, so
+    /// the swap proceeds on the remainder and the treasury holds the input
+    /// currency (USDC on a USDC buy, launchToken on a sell, WETH on a WETH buy).
+    ///
+    /// Audit 2026-07-15: this used to branch `if (tokenIn == USDC)` for buys and
+    /// fall through to `currentSnipeBps(tokenIn)` otherwise, and the old comment
+    /// here claimed "cross-token routes never enter _snipeSkim because the swap
+    /// router never sees them at the single-hop entry". That was false --
+    /// exactInputSingle is external and takes arbitrary tokenIn/tokenOut -- and
+    /// it INVERTED the tax on POOL_WETH launches, whose only pool is
+    /// (launchToken, WETH): a buy via exactInputSingle(WETH, launchToken) hit the
+    /// sell branch, read currentSnipeBps(WETH) == 0 and paid NOTHING, while sells
+    /// were still taxed. Snipers entered free and holders paid to leave. The
+    /// taxed alternative did not exist either: exactInputThroughUsdc needs a
+    /// USDC/launchToken pool for leg 2, which a POOL_WETH launch never creates,
+    /// so the untaxed single hop was the ONLY route in. The launchpad arms these
+    /// configs (snipeStartBps is validated independently of poolType), so this
+    /// was reachable, not theoretical.
+    ///
+    /// Now: an input token under snipe taxes the exit, and an output token under
+    /// snipe taxes the entry REGARDLESS of the input currency. Both entrypoints
+    /// keep their exact previous behaviour on USDC-paired routes.
     /// @notice Anti-sniper skim we collected but could NOT hand to the
     ///         launchpad's treasury. `treasury` is immutable on the launchpad
     ///         with no setter, so a USDC blacklist/freeze there would otherwise
@@ -140,20 +160,20 @@ contract ArcadeV3SwapRouter is IUniswapV3SwapCallback {
         returns (uint256 skim)
     {
         if (launchpad == address(0)) return 0;
-        if (tokenIn == USDC) {
-            uint256 bps = ILaunchpadSnipe(launchpad).currentSnipeBps(tokenOut);
-            if (bps == 0) return 0;
-            skim = (amountIn * bps) / 10000;
-            if (skim > 0) _paySkim(USDC, payer, skim);
-            return skim;
+        // Sell-side: an input token under snipe taxes the exit. Checked first so
+        // a launchToken -> launchToken route is taxed at the SELLING token's
+        // rate rather than being counted twice.
+        uint256 bps;
+        if (tokenIn != USDC) bps = ILaunchpadSnipe(launchpad).currentSnipeBps(tokenIn);
+        // Buy-side: an output token under snipe taxes the entry, whatever the
+        // input currency is. The `!= USDC` guards skip a call that can only ever
+        // return 0 (USDC has no snipe config), which keeps leg 1 of
+        // exactInputThroughUsdc (tokenOut == USDC) at its previous gas.
+        if (bps == 0 && tokenOut != USDC) {
+            bps = ILaunchpadSnipe(launchpad).currentSnipeBps(tokenOut);
         }
-        // Sell-side: tokenIn might be a launchpad token under snipe. The
-        // launchpad keys snipe by token address; we look it up directly.
-        // Skim is in tokenIn units so the swap proceeds with the
-        // remainder; treasury holds the launchToken.
-        uint256 sellBps = ILaunchpadSnipe(launchpad).currentSnipeBps(tokenIn);
-        if (sellBps == 0) return 0;
-        skim = (amountIn * sellBps) / 10000;
+        if (bps == 0) return 0;
+        skim = (amountIn * bps) / 10000;
         if (skim > 0) _paySkim(tokenIn, payer, skim);
     }
 

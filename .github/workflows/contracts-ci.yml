@@ -52,6 +52,16 @@ jobs:
         env:
           FOUNDRY_FUZZ_RUNS: 256
 
+      # The default profile compiles src/ ONLY, so the step above says NOTHING
+      # about v3src/ -- the 0.7.6 layer was BUILT above but never TESTED, and
+      # v3test/ never ran in CI at all. That gap is exactly how a real bug
+      # (_paySkim ignoring payer == address(this)) shipped green and was caught
+      # by reading instead: a suite nobody runs is not coverage. Audit 2026-07-15.
+      - name: forge test (V3 0.7.6 profile)
+        run: FOUNDRY_PROFILE=v3 forge test -vv
+        env:
+          FOUNDRY_FUZZ_RUNS: 256
+
       # Format check is non-blocking on green; it gates the merge only when the
       # code actually deviates from the project style.
       - name: forge fmt --check

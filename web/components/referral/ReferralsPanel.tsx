@@ -147,7 +147,13 @@ export function ReferralsPanel({ account }: { account: Address | undefined }) {
                 const res = await fetch(`/api/referral/stats?referrer=${account}`);
                 const data = (await res.json()) as ReferralStats & {
                     detailWithheld?: boolean;
+                    error?: string;
                 };
+                // A 500 returns { error }, which has none of the stats fields.
+                // Storing it anyway rendered "No active referrals yet" with all
+                // zeros -- an outage that reads as an empty downline, which is
+                // exactly how a broken referral program stays unreported.
+                if (!res.ok || data.error) throw new Error(data.error ?? "stats failed");
                 if (!cancelled) setStats(data);
             } catch {
                 /* soft-fail */

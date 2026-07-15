@@ -52,6 +52,7 @@ const BRIDGE_BUY_ENABLED = process.env.NEXT_PUBLIC_BRIDGE_BUY_ENABLED !== "false
 import {
   clearPendingBridge,
   loadPendingBridge,
+  recipientForBurn,
   savePendingBridge,
 } from "@/lib/pendingBridge";
 import {
@@ -964,9 +965,11 @@ export function BridgeCard() {
         // only safe ground truth. Fail closed if neither persisted nor
         // live account is available.
         const dstChainCfg = getCctpChain(step.dstId);
-        const persistedRecipient = account
-          ? loadPendingBridge(account)?.recipient
-          : null;
+        // Bound to THIS burn: the wallet-scoped entry holds one burn at a time,
+        // so reading it unbound let a newer burn's recipient answer for an older
+        // one and permanently un-claim it. A stale entry now yields null and we
+        // fall back as if there were none.
+        const persistedRecipient = recipientForBurn(account, step.burnTxHash);
         const expectedRecipient = persistedRecipient ?? recipientOverride ?? account;
         const parsed = parseCctpV2Message(att.message);
         if (
@@ -1104,7 +1107,9 @@ export function BridgeCard() {
         return;
       }
       const dstChainCfg = getCctpChain(step.dstId);
-      const persistedRecipient = loadPendingBridge(account)?.recipient;
+      // Bound to THIS burn -- see recipientForBurn. This is the Retry path,
+      // which is exactly where a stale entry bites.
+      const persistedRecipient = recipientForBurn(account, step.burnTxHash);
       const expectedRecipient = persistedRecipient ?? recipientOverride ?? account;
       const parsed = parseCctpV2Message(entry.attestationMessage);
       if (
@@ -1230,7 +1235,7 @@ export function BridgeCard() {
       // the "contact support" refusal -- on a transfer anyone could have claimed
       // (destinationCaller is zero on that path). Two places in one file must
       // not answer the same question differently. (Audit round 3.)
-      const selfRecipient = (loadPendingBridge(account)?.recipient ??
+      const selfRecipient = (recipientForBurn(account, step.burnTxHash) ??
         recipientOverride ??
         account) as Address | undefined;
       const mintsToSelf =
