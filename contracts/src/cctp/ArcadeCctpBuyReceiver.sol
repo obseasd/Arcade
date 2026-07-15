@@ -187,7 +187,8 @@ contract ArcadeCctpBuyReceiver is ReentrancyGuard {
         external
         nonReentrant
     {
-        if (message.length < HOOK_DATA_OFFSET + HOOK_DATA_LEN) revert BadMessage();
+        // EXACT length, mirroring receiveAndForward (audit 2026-07-11 F-2).
+        if (message.length != HOOK_DATA_OFFSET + HOOK_DATA_LEN) revert BadMessage();
 
         // This message must mint to us, else `minted` below would be 0 anyway,
         // but check explicitly so a mis-addressed message fails loudly.
@@ -331,7 +332,13 @@ contract ArcadeCctpBuyReceiver is ReentrancyGuard {
         external
         nonReentrant
     {
-        if (message.length < HOOK_DATA_OFFSET + 32) revert BadMessage();
+        // EXACT length (audit 2026-07-11 F-2): a `>=` here also accepts a
+        // 568-byte BUY message, whose first hookData word decodes as the
+        // beneficiary, so funds are not misrouted but the committed buy is
+        // silently skipped. Anyone could front-run receiveAndBuy with this and
+        // cancel the user's buy (nonce burned, plain USDC delivered instead).
+        // Exact lengths make the two entrypoints mutually exclusive.
+        if (message.length != HOOK_DATA_OFFSET + 32) revert BadMessage();
 
         address mintRecipient = address(
             uint160(uint256(_loadWord(message, MINT_RECIPIENT_OFFSET)))

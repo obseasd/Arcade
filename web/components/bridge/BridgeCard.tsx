@@ -391,9 +391,16 @@ export function BridgeCard() {
   // Plain bridge (no buy) that still owes the fast-transfer fee: route it
   // through the receiver so the fee is skimmed on arrival and the remainder
   // forwarded. Standard transfers are free, so they keep the cheaper direct
-  // mint (no extra contract in the path). The receiver re-checks the finality
-  // threshold on the ATTESTED message, so this flag cannot be used to dodge
-  // or fake the fee.
+  // mint (no extra contract in the path).
+  //
+  // The receiver re-checks the finality threshold on the ATTESTED message, so
+  // the fee cannot be FAKED (understated) once the mint lands here. It can
+  // still be DODGED: mintRecipient is chosen at burn time on the source chain,
+  // so anyone calling depositForBurn directly with mintRecipient = their own
+  // wallet never puts the receiver in the path and pays us nothing (audit
+  // 2026-07-11 F-3). Treat this fee as voluntary/UI-only. Making it
+  // unavoidable needs the skim on the SOURCE chain, per the fee-router note on
+  // ARCADE_BRIDGE_FEE_BPS above.
   const useFeeHook =
     !useBuyHook &&
     fastTransfer &&
@@ -754,7 +761,22 @@ export function BridgeCard() {
       const mintRecipient32 = addressToBytes32(
         useBuyHook || useFeeHook ? ADDRESSES.cctpBuyReceiver : beneficiary,
       );
-      const destinationCaller = ("0x" + "00".repeat(32)) as `0x${string}`;
+      // CRITICAL (audit 2026-07-11 F-1): when the mint lands on the receiver,
+      // destinationCaller MUST pin receiveMessage to the receiver itself.
+      // Otherwise anyone can take the PUBLIC message + attestation (both are
+      // readable: MessageSent on the source chain, Iris is unauthenticated) and
+      // call MessageTransmitterV2.receiveMessage DIRECTLY. That mints the USDC
+      // into the receiver and burns the nonce, so the user's receiveAndBuy /
+      // receiveAndForward then reverts forever on the used nonce and the funds
+      // are stranded -- the receiver has no rescue path. Cost to grief: gas.
+      // Loss: the whole transfer, for every user, by any observer.
+      // Pinning it costs nothing: our entrypoints stay permissionless (msg.sender
+      // inside receiveMessage is the RECEIVER, not the caller), so any relayer
+      // or the user can still claim. A direct EOA call now reverts.
+      const destinationCaller =
+        useBuyHook || useFeeHook
+          ? addressToBytes32(ADDRESSES.cctpBuyReceiver)
+          : (("0x" + "00".repeat(32)) as `0x${string}`);
       // Fast Transfer: short finality + non-zero maxFee (1 bp upper bound; Iris
       // typically charges much less). Standard Transfer: full finality, no fee.
       // Ceiling we allow Circle to charge; must cover the route's minimumFee

@@ -238,6 +238,11 @@ export async function verifyClaimSignature(args: {
 }): Promise<boolean> {
     if (!isAddr(args.referrer)) return false;
     if (!/^0x[0-9a-fA-F]+$/.test(args.signature)) return false;
+    // Audit 2026-07-11 F-6: the deadline was signed but never validated here,
+    // despite the docblock above promising it. Both current callers happen to
+    // check independently; enforce it at the source so the next caller can't
+    // inherit a signature that replays forever.
+    if (args.deadline < BigInt(Math.floor(Date.now() / 1000))) return false;
     try {
         return await verifyTypedData({
             address: args.referrer as Address,

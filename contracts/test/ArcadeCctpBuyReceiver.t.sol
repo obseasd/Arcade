@@ -263,6 +263,30 @@ contract ArcadeCctpBuyReceiverTest is Test {
         }
     }
 
+    /// A PLAIN-bridge message: 32-byte hookData (just the beneficiary), so the
+    /// total is exactly 376 + 32 = 408 bytes -- what receiveAndForward requires
+    /// and what receiveAndBuy must reject.
+    function _msgForward(
+        address mintRecipient,
+        uint256 amount,
+        address ben,
+        uint32 finalityExecuted,
+        uint256 feeExecuted
+    ) internal pure returns (bytes memory m) {
+        m = new bytes(408);
+        bytes32 mr = bytes32(uint256(uint160(mintRecipient)));
+        bytes32 fin = bytes32(uint256(finalityExecuted) << 224);
+        bytes32 b = bytes32(uint256(uint160(ben)));
+        assembly {
+            let p := add(m, 32)
+            mstore(add(p, 144), fin)
+            mstore(add(p, 184), mr)
+            mstore(add(p, 216), amount)
+            mstore(add(p, 312), feeExecuted)
+            mstore(add(p, 376), b)
+        }
+    }
+
     function test_happyPath_deliversTokensToBeneficiary() public {
         bytes memory m = _msg(address(receiver), AMT, beneficiary, address(token), 0);
         receiver.receiveAndBuy(m, "");
@@ -394,10 +418,7 @@ contract ArcadeCctpBuyReceiverTest is Test {
     /// Plain bridge (no buy): fee skimmed, remainder forwarded.
     function test_receiveAndForward_takesFeeAndForwards() public {
         uint256 circleFee = 130_000;
-        bytes memory m = _msgFee(
-            address(receiver), AMT, beneficiary, address(0xdead), 0,
-            address(0), address(0), 0, FAST, circleFee
-        );
+        bytes memory m = _msgForward(address(receiver), AMT, beneficiary, FAST, circleFee);
         receiver.receiveAndForward(m, "");
         uint256 arcadeFee = (AMT * 5) / 10_000 - circleFee;
         assertEq(usdc.balanceOf(treasury), arcadeFee, "fee to treasury");
@@ -409,11 +430,28 @@ contract ArcadeCctpBuyReceiverTest is Test {
         assertEq(usdc.balanceOf(address(receiver)), 0, "receiver drained");
     }
 
-    function test_receiveAndForward_trustless() public {
-        bytes memory m = _msgFee(
-            address(receiver), AMT, beneficiary, address(0xdead), 0,
-            address(0), address(0), 0, STANDARD, 0
+    /// F-2: a 568-byte BUY message must NOT be claimable through the forward
+    /// path, or anyone could front-run receiveAndBuy and cancel the user's
+    /// committed buy (nonce burned, plain USDC delivered instead).
+    function test_receiveAndForward_rejectsBuyMessage() public {
+        bytes memory m = _msgFull(
+            address(receiver), AMT, beneficiary, address(token), 0,
+            address(0), address(0), 0
         );
+        assertEq(m.length, 568, "buy message length");
+        vm.expectRevert(ArcadeCctpBuyReceiver.BadMessage.selector);
+        receiver.receiveAndForward(m, "");
+    }
+
+    /// And the mirror: a 408-byte forward message must not reach the buy path.
+    function test_receiveAndBuy_rejectsForwardMessage() public {
+        bytes memory m = new bytes(408);
+        vm.expectRevert(ArcadeCctpBuyReceiver.BadMessage.selector);
+        receiver.receiveAndBuy(m, "");
+    }
+
+    function test_receiveAndForward_trustless() public {
+        bytes memory m = _msgForward(address(receiver), AMT, beneficiary, STANDARD, 0);
         vm.prank(attacker);
         receiver.receiveAndForward(m, "");
         assertEq(usdc.balanceOf(beneficiary), AMT, "goes to attested beneficiary");
