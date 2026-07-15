@@ -51,9 +51,19 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
     uint256 public constant MIGRATION_LP_TOKENS = TOTAL_SUPPLY - CURVE_SUPPLY; // 200M
     /// @notice H-05: platform fee skimmed off the curve's raised USDC at
     /// migration. With realUsdcReserve = 20,000 USDC at the migration
-    /// threshold, the V2 pair is seeded with 17,500 USDC + 200M tokens (the
-    /// documented initial post-migration mcap), and 2,500 USDC goes to the
-    /// treasury. If you change this, also update SECURITY.md and project memory.
+    /// threshold, 2,500 USDC goes to the treasury and the V2 pair is seeded
+    /// with 17,500 USDC + `tokensForLP` tokens.
+    ///
+    /// CORRECTED (audit 2026-07-11 MEDIUM-2): this used to claim "200M tokens".
+    /// It is NOT 200M. `tokensForLP = usdcForLP * MIGRATION_LP_TOKENS /
+    /// currentUsdc` = 17,500e6 * 200M / 25,000e6 = **140M**, and the remaining
+    /// **60M** is sent to DEAD as `burnExcess`. So the pair opens at
+    /// 17,500 / 140M = 0.000125 USDC per token, i.e. an FDV of 125,000 USDC,
+    /// not the 87,500 the old "200M" figure implied. The 2026-07-01
+    /// clearing-price fix is what introduced the scaling; this comment was
+    /// simply never updated. SECURITY.md and project memory carry the same
+    /// stale figure and need the same correction.
+    /// NOTE: no test pins `tokensForLP`, which is why the drift went unnoticed.
     /// @dev Audit Launchpad M-2: CLANKER_V3 launches deliberately do NOT
     ///      pay this one-shot 2_500 USDC. V3 is structured to extract
     ///      the platform's cut perpetually via the V3 Locker's 20%
@@ -293,7 +303,16 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         if (creator2ShareBps > 10_000) revert InvalidShare();
 
         // Pull creation fee → treasury
-        USDC.safeTransferFrom(msg.sender, treasury, CREATION_FEE);
+        // Pull into the contract, then pay the treasury through the SAME
+        // fallback every other treasury payment uses (_distributeFee,
+        // _distributeMigratedFee, _migrate). Paying `treasury` directly here
+        // made token creation a hard availability dependency on the treasury
+        // being transferable: a USDC-blacklisted or frozen treasury would
+        // revert EVERY createToken forever, and `treasury` is immutable with no
+        // setter. That contradicted this contract's own stated design intent
+        // (see the blacklist note above). Audit 2026-07-11 LOW-2.
+        USDC.safeTransferFrom(msg.sender, address(this), CREATION_FEE);
+        _safePayUsdc(treasury, CREATION_FEE);
 
         // Deploy new token (mints TOTAL_SUPPLY to this contract)
         ArcadeLaunchToken token = new ArcadeLaunchToken(name_, symbol_, TOTAL_SUPPLY, address(this));
@@ -372,7 +391,16 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         if (opts.vaultPct > 0 && (opts.vaultPct > MAX_VAULT_BPS || tokenVault == address(0))) revert BadVault();
         if (opts.snipeStartBps > MAX_SNIPE_BPS) revert BadSnipe();
 
-        USDC.safeTransferFrom(msg.sender, treasury, CREATION_FEE);
+        // Pull into the contract, then pay the treasury through the SAME
+        // fallback every other treasury payment uses (_distributeFee,
+        // _distributeMigratedFee, _migrate). Paying `treasury` directly here
+        // made token creation a hard availability dependency on the treasury
+        // being transferable: a USDC-blacklisted or frozen treasury would
+        // revert EVERY createToken forever, and `treasury` is immutable with no
+        // setter. That contradicted this contract's own stated design intent
+        // (see the blacklist note above). Audit 2026-07-11 LOW-2.
+        USDC.safeTransferFrom(msg.sender, address(this), CREATION_FEE);
+        _safePayUsdc(treasury, CREATION_FEE);
 
         ArcadeLaunchToken token = new ArcadeLaunchToken(name_, symbol_, TOTAL_SUPPLY, address(this));
         tokenAddr = address(token);
