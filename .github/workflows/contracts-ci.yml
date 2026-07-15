@@ -47,6 +47,14 @@ jobs:
       - name: build default (0.8.24) profile
         run: FOUNDRY_PROFILE=default forge build --sizes
 
+      # ORDER IS LOAD-BEARING. The default-profile tests deploy the V3 layer via
+      # vm.getCode("out-v3/..."), i.e. from the ARTIFACT built by the v3 step
+      # above -- and `forge test` never rebuilds v3src. So a stale out-v3/ makes
+      # these tests silently assert against OLD bytecode: locally, editing
+      # v3src/ArcadeV3Locker.sol and running `forge test` tests the previous
+      # build and passes. Always `FOUNDRY_PROFILE=v3 forge build` before
+      # `forge test` when v3src changed. (Found 2026-07-15: a regression test
+      # "passed" on deliberately reverted code because of exactly this.)
       - name: forge test
         run: FOUNDRY_PROFILE=default forge test -vv
         env:

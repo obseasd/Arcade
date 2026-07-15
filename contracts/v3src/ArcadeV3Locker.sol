@@ -126,6 +126,18 @@ contract ArcadeV3Locker is IUniswapV3MintCallback {
     /// never DoS the rest of the pot. Recipients pull via `withdrawPending`.
     mapping(address => mapping(address => uint256)) public pendingWithdrawals;
 
+    /// @notice Fee shares this locker attributed to a SLOT but could not hand
+    ///         to the twitter escrow, keyed [positionId][slotIndex][token].
+    ///
+    /// Deliberately NOT pendingWithdrawals[token][escrow]: an address-keyed
+    /// credit is terminal for the twitter user, because only the escrow owner
+    /// can move it and it lands in a bucket rescue() can sweep. Keying by slot
+    /// lets the credit follow rotateSlot, so once the slot points at the real
+    /// user, pushSlotCredit pays THEM. The tokens sit here, in this contract,
+    /// until then.
+    mapping(uint256 => mapping(uint256 => mapping(address => uint256)))
+        public pendingSlotCredits;
+
     // transient guard for the mint callback
     address private _expectedPool;
     uint256 private _locked = 1;
@@ -705,7 +717,25 @@ contract ArcadeV3Locker is IUniswapV3MintCallback {
             try IArcadeTwitterEscrowMin(twitterEscrow).creditSlot(positionId, slotIndex, token, amount) {
                 // Attributed. Fall through and deliver the tokens it represents.
             } catch (bytes memory reason) {
-                pendingWithdrawals[token][to] += amount;
+                // Keyed by (positionId, slotIndex), NOT by the escrow ADDRESS.
+                //
+                // Crediting pendingWithdrawals[token][escrow] was terminal for
+                // the user: that ledger can only be moved by the escrow's
+                // pullFromLocker (onlyOwner), which lands the tokens in the
+                // escrow's FREE balance -- creditedTotal is never incremented,
+                // so rescue() (onlyOwner) sweeps them. Whoever owns the escrow
+                // ends up with the twitter user's fees, and rotateSlot cannot
+                // redirect an address-keyed credit.
+                //
+                // The reason this path is reached at all is that the slot's
+                // rotation FAILED (claimByTwitter rotates best-effort in a
+                // try/catch; when it reverts, the slot still points at the
+                // escrow while claimed == true, so creditSlot reverts
+                // SlotAlreadyClaimed forever). Slot-keying makes the credit
+                // FOLLOW the rotation: once an admin rotates the slot to the
+                // real user, anyone can call pushSlotCredit and the tokens go
+                // to them. Ops recovery becomes user recovery.
+                pendingSlotCredits[positionId][slotIndex][token] += amount;
                 emit EscrowCreditFailed(positionId, slotIndex, token, amount, reason);
                 emit EscrowSlotPendingCredit(positionId, slotIndex, token, amount);
                 emit RecipientCredited(positionId, slotIndex, token, to, amount);
@@ -756,6 +786,36 @@ contract ArcadeV3Locker is IUniswapV3MintCallback {
         if (to == twitterEscrow && twitterEscrow != address(0)) {
             emit EscrowSlotPendingCredit(positionId, slotIndex, token, amount);
         }
+    }
+
+    /// @notice Deliver a slot credit that the twitter escrow refused, to
+    ///         whoever the slot points at NOW.
+    ///
+    /// Permissionless, and it pays the slot's CURRENT recipient rather than a
+    /// caller-supplied address, so it is safe to leave open: anyone may push,
+    /// nobody may redirect. The recipient is read at PUSH time, not at failure
+    /// time -- that is the whole point. The credit only exists because the
+    /// slot's rotation failed while its claim went through, so the sequence
+    /// that recovers a user's fees is: rotateSlot (by the slot's admin) ->
+    /// pushSlotCredit (by anyone).
+    ///
+    /// Still routed through _payOrCredit, so a recipient that cannot receive
+    /// (blacklist) falls back to the pull ledger instead of reverting, and a
+    /// slot still pointing at the escrow re-credits itself here rather than
+    /// being lost.
+    function pushSlotCredit(uint256 positionId, uint256 slotIndex, address token)
+        external
+        nonReentrant
+        returns (uint256 amount)
+    {
+        amount = pendingSlotCredits[positionId][slotIndex][token];
+        require(amount > 0, "NOTHING");
+        // Zero BEFORE paying: a revert rolls back both, preserving the row for
+        // a retry, and a reentrant token reads 0. Same discipline as
+        // withdrawPending (V3 Locker H-4).
+        pendingSlotCredits[positionId][slotIndex][token] = 0;
+        address to = _recipients[positionId][slotIndex].recipient;
+        _payOrCredit(positionId, slotIndex, token, to, amount);
     }
 
     /// @notice Withdraw any pending payouts of `token` credited to `msg.sender`

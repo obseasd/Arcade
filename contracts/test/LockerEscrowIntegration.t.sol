@@ -242,15 +242,108 @@ contract LockerEscrowIntegrationTest is Test {
             0,
             "escrow must NOT hold tokens it could not attribute"
         );
-        // The value is not lost: it is retrievable from the locker, which is
-        // exactly what the old code's comment already (wrongly) claimed.
+        // The value is not lost, and it is keyed BY SLOT, not by the escrow's
+        // address. Address-keying was terminal for the user: only the escrow
+        // owner could move it (pullFromLocker), and it landed in the escrow's
+        // FREE balance where rescue() sweeps it -- so the fix "credit before
+        // transfer" changed WHO moved the fees but not who ENDED UP with them.
+        // Slot-keying lets the credit follow rotateSlot to the real user.
+        (bool okPsc, bytes memory pscRet) = v3Locker.staticcall(
+            abi.encodeWithSignature(
+                "pendingSlotCredits(uint256,uint256,address)", positionId, uint256(0), address(usdc)
+            )
+        );
+        assertTrue(okPsc, "pendingSlotCredits readable");
+        assertGt(abi.decode(pscRet, (uint256)), 0, "credited to the SLOT");
+        // The old address-keyed ledger must stay empty for this path, or the
+        // owner-custody route is still open.
         (bool okPw, bytes memory pwRet) = v3Locker.staticcall(
             abi.encodeWithSignature("pendingWithdrawals(address,address)", address(usdc), address(escrow))
         );
         assertTrue(okPw, "pendingWithdrawals readable");
-        assertGt(abi.decode(pwRet, (uint256)), 0, "recoverable via pullFromLocker");
+        assertEq(abi.decode(pwRet, (uint256)), 0, "must NOT be escrow-address-keyed");
         // And no creditSlot was recorded (the escrow reverted).
         assertEq(escrow.callCount(), 0, "no successful creditSlot calls");
+    }
+
+    /// The whole point of slot-keying: rotate the slot to the real user, then
+    /// ANYONE can push the stranded credit and the USER is paid. Before this,
+    /// the same scenario ended with the fees in the escrow owner's rescuable
+    /// free balance, permanently.
+    function test_escrow_rotateThenPush_paysTheUserNotTheOwner() public {
+        (address token,, uint256 positionId) = _createClankerV3WithEscrow();
+        _genFeesBothSides(token);
+        escrow.setShouldRevert(true);
+        IArcadeV3Locker(v3Locker).collectFees(positionId);
+
+        (bool okPsc, bytes memory pscRet) = v3Locker.staticcall(
+            abi.encodeWithSignature(
+                "pendingSlotCredits(uint256,uint256,address)", positionId, uint256(0), address(usdc)
+            )
+        );
+        assertTrue(okPsc, "readable");
+        uint256 stranded = abi.decode(pscRet, (uint256));
+        assertGt(stranded, 0, "something was stranded");
+
+        // The slot's admin rotates it to the real twitter user (this is the
+        // rotation that failed inside claimByTwitter's try/catch).
+        address user = makeAddr("twitterUser");
+        vm.prank(address(escrow));
+        (bool okRot,) = v3Locker.call(
+            abi.encodeWithSignature(
+                "rotateSlot(uint256,uint256,address,address)", positionId, uint256(0), user, user
+            )
+        );
+        assertTrue(okRot, "rotation succeeds once ops fixes it");
+
+        // Permissionless push, by a random address, pays the SLOT's recipient.
+        uint256 userBefore = usdc.balanceOf(user);
+        vm.prank(address(0xDEADBEEF));
+        (bool okPush,) = v3Locker.call(
+            abi.encodeWithSignature(
+                "pushSlotCredit(uint256,uint256,address)", positionId, uint256(0), address(usdc)
+            )
+        );
+        assertTrue(okPush, "anyone can push");
+        assertEq(usdc.balanceOf(user) - userBefore, stranded, "the USER got their fees");
+
+        // Ledger cleared, and not re-pushable.
+        (, bytes memory after_) = v3Locker.staticcall(
+            abi.encodeWithSignature(
+                "pendingSlotCredits(uint256,uint256,address)", positionId, uint256(0), address(usdc)
+            )
+        );
+        assertEq(abi.decode(after_, (uint256)), 0, "cleared");
+    }
+
+    /// Pushing while the slot STILL points at the (reverting) escrow must
+    /// re-credit the same slot, not burn the entitlement.
+    function test_escrow_pushWithoutRotating_isSafeAndRetryable() public {
+        (address token,, uint256 positionId) = _createClankerV3WithEscrow();
+        _genFeesBothSides(token);
+        escrow.setShouldRevert(true);
+        IArcadeV3Locker(v3Locker).collectFees(positionId);
+
+        (, bytes memory beforeRet) = v3Locker.staticcall(
+            abi.encodeWithSignature(
+                "pendingSlotCredits(uint256,uint256,address)", positionId, uint256(0), address(usdc)
+            )
+        );
+        uint256 before = abi.decode(beforeRet, (uint256));
+
+        (bool okPush,) = v3Locker.call(
+            abi.encodeWithSignature(
+                "pushSlotCredit(uint256,uint256,address)", positionId, uint256(0), address(usdc)
+            )
+        );
+        assertTrue(okPush, "push does not revert");
+
+        (, bytes memory afterRet) = v3Locker.staticcall(
+            abi.encodeWithSignature(
+                "pendingSlotCredits(uint256,uint256,address)", positionId, uint256(0), address(usdc)
+            )
+        );
+        assertEq(abi.decode(afterRet, (uint256)), before, "re-credited, nothing lost");
     }
 
     function test_escrow_nonEscrowRecipients_doNotTriggerCreditSlot() public {
