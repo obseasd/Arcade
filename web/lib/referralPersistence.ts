@@ -34,16 +34,32 @@ export interface ReferralStats {
 export async function registerReferral(
     referred: string,
     referrer: string,
+    verified = false,
 ): Promise<boolean> {
     if (!isDbConfigured() || !isAddr(referred) || !isAddr(referrer)) return false;
     const r = norm(referred);
     const ref = norm(referrer);
     if (r === ref) return false; // self-referral guard (defence in depth vs the CHECK)
     const sql = getSql();
+    // A VERIFIED registration must be able to OVERRIDE an unverified one, or
+    // the land-grab still wins: registration is unauthenticated and first-touch
+    // is permanent, so an attacker's unsigned squat would otherwise permanently
+    // beat the victim's later SIGNED registration. Only the referred wallet can
+    // produce that signature, so letting proof win over a claim is exactly
+    // right -- and it cannot be abused, since an attacker cannot sign for a
+    // wallet they do not control.
+    //
+    // A verified row is NEVER overwritten (`WHERE NOT referrals.verified`):
+    // first PROOF wins, permanently. Unverified rows stay first-touch-wins
+    // among themselves, which is fine because they never decide money.
     const rows = (await sql`
-        INSERT INTO referrals (referred_address, referrer_address)
-        VALUES (${r}, ${ref})
-        ON CONFLICT (referred_address) DO NOTHING
+        INSERT INTO referrals (referred_address, referrer_address, verified, verified_at)
+        VALUES (${r}, ${ref}, ${verified}, ${verified ? new Date().toISOString() : null})
+        ON CONFLICT (referred_address) DO UPDATE
+            SET referrer_address = EXCLUDED.referrer_address,
+                verified = EXCLUDED.verified,
+                verified_at = EXCLUDED.verified_at
+            WHERE ${verified} AND NOT referrals.verified
         RETURNING referred_address
     `) as { referred_address: string }[];
     return rows.length > 0;

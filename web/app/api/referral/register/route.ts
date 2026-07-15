@@ -89,7 +89,7 @@ export async function POST(req: NextRequest) {
     }
 
     try {
-        const inserted = await registerReferral(referred, referrer);
+        const inserted = await registerReferral(referred, referrer, verified);
         return NextResponse.json({ ok: true, inserted, verified });
     } catch (e) {
         return NextResponse.json(

@@ -87,6 +87,19 @@ export const ADDRESSES = {
    *  back to its "contact ops" placeholder. */
   incentiveDistributor: (process.env.NEXT_PUBLIC_INCENTIVE_DISTRIBUTOR ??
     "0xa8fA80926A9145160A7e6Cb811E5B538F1305698") as Address,
+  /** Receivers we have ever deployed, newest first. A bridge burn commits its
+   *  mintRecipient on the SOURCE chain, so a burn in flight when we redeploy
+   *  still names the OLD receiver. The Iris poll gates compare mintRecipient
+   *  against the current receiver, so without this an in-flight transfer would
+   *  be rejected as a "payload mismatch" forever -- and since destinationCaller
+   *  is pinned to that old receiver, nobody else could rescue it either. The
+   *  entrypoints are identical across versions, so claiming through the old
+   *  address is safe. APPEND here on every redeploy; never remove an entry. */
+  cctpBuyReceiverHistory: [
+    "0x9E87B0732BAA1aB0e001A220b505720971ED3621",
+    "0x6654C0763DBC49f3943c18478e3d32c209B2D427",
+    "0xad17aadea14248c25d405f5e85aee45a729e9f76",
+  ] as readonly Address[],
   // --- ArcadeHook production stack (V4 Phase 2, behind NEXT_PUBLIC_V4_HOOK_ENABLED) ---
   // Unified hook subsuming launchpad + V2 stack + V3 locker. Uses atomic
   // createLaunch + direct hook.buy/hook.sell during Curving phase.

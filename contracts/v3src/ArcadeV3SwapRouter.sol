@@ -74,6 +74,48 @@ contract ArcadeV3SwapRouter is IUniswapV3SwapCallback {
     /// _snipeSkim because the swap router never sees them at the single-
     /// hop entry; exactInputThroughUsdc explicitly applies the skim on
     /// the USDC mid for those cases.
+    /// @notice Anti-sniper skim we collected but could NOT hand to the
+    ///         launchpad's treasury. `treasury` is immutable on the launchpad
+    ///         with no setter, so a USDC blacklist/freeze there would otherwise
+    ///         make _pay revert PAY_FAIL and kill EVERY V3 buy of any token
+    ///         inside its launch window. Held here instead and pushed out later
+    ///         by anyone. (Audit round 3: this was the real F-2 -- the same
+    ///         hard-transfer-to-an-immutable-recipient pattern already fixed in
+    ///         ArcadeLaunchpad._safePayUsdc and ArcadeCctpBuyReceiver, which
+    ///         this router never got.)
+    mapping(address => uint256) public pendingSnipeFees;
+
+    event SnipeFeeDeferred(address indexed token, uint256 amount);
+    event SnipeFeesPushed(address indexed token, uint256 amount);
+
+    /// @notice Push deferred skims to the launchpad's treasury. Permissionless:
+    ///         the destination is immutable, so there is nobody to trust.
+    function pushSnipeFees(address token) external {
+        uint256 amount = pendingSnipeFees[token];
+        require(amount > 0, "NOTHING_PENDING");
+        pendingSnipeFees[token] = 0;
+        _pay(token, address(this), ILaunchpadSnipe(launchpad).treasury(), amount);
+        emit SnipeFeesPushed(token, amount);
+    }
+
+    /// @dev Pay the skim to the treasury, falling back to holding it HERE.
+    ///      Deliberately never skips the charge: the payer always pays, so a
+    ///      failing destination can never become a way to dodge the tax. Only
+    ///      the timing of OUR revenue is at risk, never the user's swap.
+    function _paySkim(address token, address payer, uint256 amount) internal {
+        address treasury_ = ILaunchpadSnipe(launchpad).treasury();
+        bytes memory payload =
+            abi.encodeWithSelector(IERC20Min.transferFrom.selector, payer, treasury_, amount);
+        (bool ok, bytes memory ret) = token.call(payload);
+        if (ok && (ret.length == 0 || (ret.length >= 32 && abi.decode(ret, (bool))))) return;
+        // Treasury cannot receive: take it into the router instead. This still
+        // reverts if the PAYER cannot pay, which is correct -- that is the
+        // trader's own problem, not a reason to waive the fee.
+        _pay(token, payer, address(this), amount);
+        pendingSnipeFees[token] += amount;
+        emit SnipeFeeDeferred(token, amount);
+    }
+
     function _snipeSkim(address tokenIn, address tokenOut, uint256 amountIn, address payer)
         internal
         returns (uint256 skim)
@@ -83,7 +125,7 @@ contract ArcadeV3SwapRouter is IUniswapV3SwapCallback {
             uint256 bps = ILaunchpadSnipe(launchpad).currentSnipeBps(tokenOut);
             if (bps == 0) return 0;
             skim = (amountIn * bps) / 10000;
-            if (skim > 0) _pay(USDC, payer, ILaunchpadSnipe(launchpad).treasury(), skim);
+            if (skim > 0) _paySkim(USDC, payer, skim);
             return skim;
         }
         // Sell-side: tokenIn might be a launchpad token under snipe. The
@@ -93,7 +135,7 @@ contract ArcadeV3SwapRouter is IUniswapV3SwapCallback {
         uint256 sellBps = ILaunchpadSnipe(launchpad).currentSnipeBps(tokenIn);
         if (sellBps == 0) return 0;
         skim = (amountIn * sellBps) / 10000;
-        if (skim > 0) _pay(tokenIn, payer, ILaunchpadSnipe(launchpad).treasury(), skim);
+        if (skim > 0) _paySkim(tokenIn, payer, skim);
     }
 
     /// @notice Swap an exact `amountIn` of `tokenIn` for `tokenOut` in a single

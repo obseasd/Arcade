@@ -79,6 +79,18 @@ const ARCADE_BRIDGE_FEE_BPS = 5n; // 0.05%
 // fast transfers on those routes. 2bp covers every current route with room;
 // the exact price is still whatever Circle charges, attested as `feeExecuted`.
 const CCTP_FAST_MAX_FEE_BPS = 2n;
+
+/** Is this bytes32 mintRecipient one of OUR receivers, current or historical?
+ *  A burn commits its mintRecipient on the source chain, so a transfer in
+ *  flight across a redeploy still names the old one. Gating on the current
+ *  address alone rejected those forever as a "payload mismatch", and with
+ *  destinationCaller pinned to that old receiver nobody could rescue them. */
+function isKnownReceiver32(mintRecipient32: string): boolean {
+  const target = mintRecipient32.toLowerCase();
+  return [ADDRESSES.cctpBuyReceiver, ...ADDRESSES.cctpBuyReceiverHistory].some(
+    (a) => a !== zeroAddress && addressToBytes32(a).toLowerCase() === target,
+  );
+}
 const BPS_DENOMINATOR = 10_000n;
 
 /** Formats an elapsed-second count like "1m 24s" or "47s". Used by the
@@ -963,8 +975,7 @@ export function BridgeCard() {
           // fee-forward path, so this must not be gated on BRIDGE_BUY_ENABLED.
           (parsed.mintRecipient.toLowerCase() !==
             addressToBytes32(expectedRecipient as Address).toLowerCase() &&
-            parsed.mintRecipient.toLowerCase() !==
-              addressToBytes32(ADDRESSES.cctpBuyReceiver).toLowerCase())
+            !isKnownReceiver32(parsed.mintRecipient))
         ) {
           // eslint-disable-next-line no-console
           console.warn("[CCTP] Iris payload mismatch, ignoring", { parsed });
@@ -1099,8 +1110,7 @@ export function BridgeCard() {
         // plain fast fee-forward path, so this is not gated on BRIDGE_BUY_ENABLED.
         (parsed.mintRecipient.toLowerCase() !==
           addressToBytes32(expectedRecipient as Address).toLowerCase() &&
-          parsed.mintRecipient.toLowerCase() !==
-            addressToBytes32(ADDRESSES.cctpBuyReceiver).toLowerCase())
+          !isKnownReceiver32(parsed.mintRecipient))
       ) {
         return;
       }
