@@ -34,6 +34,63 @@ contract ArcadeV2Pair is ArcadeV2ERC20 {
     ///         permissionless forever.
     address public seedGate;
 
+    /// @notice When non-zero, this pair is a GRADUATED launchpad market and the
+    ///         0.30% the trader already pays is split at the POOL level:
+    ///         0.10% stays in reserves (LPs), 0.15% goes to the protocol
+    ///         (`factory.feeTo`) and 0.05% to `launchCreator`.
+    ///
+    ///         Why this exists. Graduated pairs mint 100% of their LP to DEAD,
+    ///         so "0.30% to LPs" means 0.25% accrues to an unclaimable position
+    ///         forever: destroyed, not earned. The protocol's answer used to be
+    ///         a 0.30% royalty bolted onto launchpad.buyMigrated/sellMigrated,
+    ///         but the pair is a permissionless V2 pool, so anyone trading it
+    ///         directly paid 0 and it cost them HALF (0.30% vs 0.60% via the
+    ///         UI). A fee only honest users pay is worse than no fee.
+    ///
+    ///         Charging it here instead makes it unavoidable: it lives in the
+    ///         K invariant of the contract that custodies the liquidity, so
+    ///         every route (our router, any aggregator, a raw pair.swap, a
+    ///         flash-swap callback) pays it. Trader cost DROPS 0.60% -> 0.30%
+    ///         and is identical everywhere. Same economics as the old royalty
+    ///         (0.15+0.05 here vs 0.20+0.10 there), but collected.
+    ///
+    ///         Zero on ordinary DEX pairs, which keep stock V2 behaviour
+    ///         (full 0.30% to real LPs + the 1/6 `feeTo` mint), so genuine
+    ///         liquidity providers are not taxed by this.
+    address public launchCreator;
+
+    /// @notice Which side of this pair is the QUOTE token (USDC). Only set on
+    ///         graduated launch pairs, alongside `launchCreator`.
+    ///
+    ///         The fee is ALWAYS taken in quote, in BOTH directions, so the
+    ///         protocol and creator never accrue the launch token:
+    ///           BUY  (quote in ) -> skim the INPUT.
+    ///           SELL (quote out) -> skim the OUTPUT, before the optimistic
+    ///                               transfer (amountOut is a caller-supplied
+    ///                               parameter, so it is known up front).
+    ///
+    ///         This is Meteora DBC's `CollectFeeMode::QuoteToken` truth table
+    ///         (fee on input when QuoteToBase, on output when BaseToQuote,
+    ///         never on the base token) and pump.fun's model, where the fee
+    ///         destination accounts are quote-mint ATAs so paying in the coin
+    ///         is structurally impossible. Taking the fee on the INPUT in both
+    ///         directions instead (Uniswap V3 / Orca / Velodrome) would leave
+    ///         the treasury holding illiquid launch tokens with no sweep path:
+    ///         no major protocol auto-swaps that inventory on-chain, and
+    ///         market-selling it into its own thin pool reads as rugging your
+    ///         own holders. Never accruing it is strictly cheaper than building
+    ///         and then securing a conversion path.
+    bool public quoteIsToken0;
+
+    /// Basis points of the INPUT skimmed out of the pool per swap on a
+    /// graduated pair. 15 protocol + 5 creator = 20; the remaining 10 of the
+    /// trader's 30 stays in reserves.
+    uint256 private constant LAUNCH_PROTOCOL_BPS = 15;
+    uint256 private constant LAUNCH_CREATOR_BPS = 5;
+
+    event LaunchCreatorSet(address indexed creator);
+    event LaunchFeePaid(address indexed token, uint256 protocolAmount, uint256 creatorAmount);
+
     uint112 private reserve0;
     uint112 private reserve1;
     uint32 private blockTimestampLast;
@@ -192,15 +249,40 @@ contract ArcadeV2Pair is ArcadeV2ERC20 {
         (uint112 _r0, uint112 _r1,) = getReserves();
         if (amount0Out >= _r0 || amount1Out >= _r1) revert InsufficientLiquidity();
 
+        address _creator = launchCreator;
+        bool _q0 = quoteIsToken0;
+
         uint256 balance0;
         uint256 balance1;
         {
             address _t0 = token0;
             address _t1 = token1;
             if (to == _t0 || to == _t1) revert InvalidTo();
-            if (amount0Out > 0) _safeTransfer(_t0, to, amount0Out);
-            if (amount1Out > 0) _safeTransfer(_t1, to, amount1Out);
-            if (data.length > 0) IArcadeV2Callee(to).arcadeV2Call(msg.sender, amount0Out, amount1Out, data);
+
+            uint256 out0 = amount0Out;
+            uint256 out1 = amount1Out;
+
+            // SELL leg: the QUOTE token is going out. Skim the fee off the
+            // OUTPUT here, before the optimistic transfer. `amountOut` is a
+            // caller-supplied parameter, so it is known up front -- output
+            // skimming is in fact EASIER than input skimming, where the amount
+            // is only knowable after the flash-swap callback. Reserves are
+            // debited by the full `amountOut` either way, so the K check below
+            // is structurally untouched; the trader simply receives less.
+            if (_creator != address(0)) {
+                uint256 quoteOut = _q0 ? amount0Out : amount1Out;
+                if (quoteOut > 0) {
+                    (uint256 p, uint256 c) = _payLaunchFee(_q0 ? _t0 : _t1, quoteOut, _creator);
+                    if (_q0) out0 -= (p + c);
+                    else out1 -= (p + c);
+                }
+            }
+
+            if (out0 > 0) _safeTransfer(_t0, to, out0);
+            if (out1 > 0) _safeTransfer(_t1, to, out1);
+            // The callee is told what it ACTUALLY received, not what was
+            // requested, so flash-swap accounting stays honest.
+            if (data.length > 0) IArcadeV2Callee(to).arcadeV2Call(msg.sender, out0, out1, data);
             balance0 = IERC20Minimal(_t0).balanceOf(address(this));
             balance1 = IERC20Minimal(_t1).balanceOf(address(this));
         }
@@ -208,13 +290,66 @@ contract ArcadeV2Pair is ArcadeV2ERC20 {
         uint256 amount0In = balance0 > _r0 - amount0Out ? balance0 - (_r0 - amount0Out) : 0;
         uint256 amount1In = balance1 > _r1 - amount1Out ? balance1 - (_r1 - amount1Out) : 0;
         if (amount0In == 0 && amount1In == 0) revert InsufficientInputAmount();
+
+        // BUY leg: the QUOTE token came IN. Skim the fee off the input.
+        // Combined with coeff = 1 below this is algebraically the stock check:
+        //     (B - 2*in/1000)*1000 - in*1  ==  B*1000 - 3*in
+        // so a buy costs the trader exactly the same 0.30% as stock V2, and the
+        // 0.20% simply moves from the DEAD position to protocol + creator.
+        //
+        // On a sell the fee was already taken off the quote OUTPUT above, and
+        // coeff = 1 leaves 0.10% of the base input in reserves, so the trader
+        // pays ~0.30% there too. Either way the fee is denominated in QUOTE.
+        uint256 coeff = 3;
+        if (_creator != address(0)) {
+            coeff = 1;
+            uint256 quoteIn = _q0 ? amount0In : amount1In;
+            if (quoteIn > 0) {
+                (uint256 p, uint256 c) = _payLaunchFee(_q0 ? token0 : token1, quoteIn, _creator);
+                if (_q0) balance0 -= (p + c);
+                else balance1 -= (p + c);
+            }
+        }
         {
-            uint256 balance0Adj = (balance0 * 1000) - (amount0In * 3);
-            uint256 balance1Adj = (balance1 * 1000) - (amount1In * 3);
+            uint256 balance0Adj = (balance0 * 1000) - (amount0In * coeff);
+            uint256 balance1Adj = (balance1 * 1000) - (amount1In * coeff);
             if (balance0Adj * balance1Adj < uint256(_r0) * uint256(_r1) * 1_000_000) revert KInvariant();
         }
         _update(balance0, balance1, _r0, _r1);
         emit Swap(msg.sender, amount0In, amount1In, amount0Out, amount1Out, to);
+    }
+
+    /// @notice Mark this pair as a graduated launchpad market. Only the
+    ///         seedGate (the launchpad) can call it, and only once, so a pair's
+    ///         fee split can never be changed under its LPs after the fact.
+    ///         Ordinary pairs never get this and keep stock V2 behaviour.
+    function setLaunchCreator(address creator, address quoteToken) external {
+        address _gate = seedGate;
+        if (_gate == address(0) || msg.sender != _gate) revert Forbidden();
+        if (launchCreator != address(0)) revert Forbidden(); // set once
+        if (creator == address(0)) revert Forbidden();
+        if (quoteToken != token0 && quoteToken != token1) revert Forbidden();
+        launchCreator = creator;
+        quoteIsToken0 = (quoteToken == token0);
+        emit LaunchCreatorSet(creator);
+    }
+
+    /// @dev Pay the protocol + creator legs of a graduated pair's swap fee.
+    ///      Rounds DOWN, and a zero-address feeTo simply routes nothing (the
+    ///      pool keeps it, i.e. stock behaviour), so an unset factory feeTo can
+    ///      never brick swaps.
+    function _payLaunchFee(address token, uint256 amount, address creator)
+        private
+        returns (uint256 protocolAmount, uint256 creatorAmount)
+    {
+        address feeTo = IArcadeV2Factory(factory).feeTo();
+        protocolAmount = feeTo == address(0) ? 0 : (amount * LAUNCH_PROTOCOL_BPS) / 10_000;
+        creatorAmount = (amount * LAUNCH_CREATOR_BPS) / 10_000;
+        if (protocolAmount > 0) _safeTransfer(token, feeTo, protocolAmount);
+        if (creatorAmount > 0) _safeTransfer(token, creator, creatorAmount);
+        if (protocolAmount > 0 || creatorAmount > 0) {
+            emit LaunchFeePaid(token, protocolAmount, creatorAmount);
+        }
     }
 
     function skim(address to) external lock {

@@ -636,13 +636,14 @@ contract ArcadeMultiSwap is ReentrancyGuard {
         if (inMigrated || outMigrated) {
             // Case A: USDC -> migrated (buyMigrated) - royalty off the input.
             if (tokenIn == address(USDC)) {
-                uint256 netIn = amountIn - (amountIn * QUOTE_MIGRATED_ROYALTY_BPS) / QUOTE_FEE_DENOM;
-                return _v2Out2(tokenIn, tokenOut, netIn);
+                // The pair charges the graduated fee in-pool now, and
+                // getAmountsOut already prices it, so no extra deduction.
+                return _v2Out2(tokenIn, tokenOut, amountIn);
             }
             // Case B: migrated -> USDC (sellMigrated) - royalty off the output.
             if (tokenOut == address(USDC)) {
-                uint256 gross = _v2Out2(tokenIn, tokenOut, amountIn);
-                return gross - (gross * QUOTE_MIGRATED_ROYALTY_BPS) / QUOTE_FEE_DENOM;
+                // Pair-level fee, already priced by getAmountsOut.
+                return _v2Out2(tokenIn, tokenOut, amountIn);
             }
             // Case C: token <-> token pivot - launchpad's royalty-aware quote.
             try launchpad.quoteSwapMigratedRoute(tokenIn, tokenOut, amountIn) returns (

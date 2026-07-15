@@ -725,13 +725,12 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
 
         USDC.safeTransferFrom(msg.sender, address(this), usdcIn);
 
-        uint256 royalty;
-        uint256 netIn;
-        unchecked {
-            royalty = (usdcIn * MIGRATED_ROYALTY_BPS) / FEE_DENOMINATOR;
-            netIn = usdcIn - royalty;
-        }
-        if (royalty > 0) _distributeMigratedFee(s, royalty);
+        // No wrapper royalty any more: ArcadeV2Pair charges the graduated-pair
+        // fee itself (0.10% LP / 0.15% protocol / 0.05% creator) inside the K
+        // invariant, so it is paid on EVERY route. Charging here too would
+        // double-bill the only people who use our own UI -- exactly backwards,
+        // and precisely the 0.60%-vs-0.30% split this change removes.
+        uint256 netIn = usdcIn;
         USDC.forceApprove(v2Router, netIn);
 
         uint256[] memory amounts = IArcadeV2Router(v2Router).swapExactTokensForTokens(
@@ -761,19 +760,21 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         IERC20(tokenAddr).safeTransferFrom(msg.sender, address(this), tokensIn);
         IERC20(tokenAddr).forceApprove(v2Router, tokensIn);
 
-        uint256[] memory amounts = IArcadeV2Router(v2Router).swapExactTokensForTokens(
+        // MEASURE the USDC actually received rather than trusting the router's
+        // returned `amounts[1]`. On a graduated pair the sell leg's fee is
+        // skimmed off the USDC OUTPUT inside the pair, so the pair delivers
+        // less than the library's getAmountsOut predicts. Trusting the quoted
+        // figure here would make us try to forward USDC we never received and
+        // revert on our own balance. Any integrator of these pairs must use a
+        // balance delta for the same reason.
+        uint256 balBefore = USDC.balanceOf(address(this));
+        IArcadeV2Router(v2Router).swapExactTokensForTokens(
             tokensIn, 0, _path2(tokenAddr, address(USDC)), address(this), deadline
         );
-        uint256 grossUsdc = amounts[1];
+        usdcOut = USDC.balanceOf(address(this)) - balBefore;
 
-        uint256 royalty;
-        unchecked {
-            royalty = (grossUsdc * MIGRATED_ROYALTY_BPS) / FEE_DENOMINATOR;
-            usdcOut = grossUsdc - royalty;
-        }
+        // See buyMigrated: the pair charges the fee now, so no wrapper royalty.
         if (usdcOut < minUsdcOut) revert Slippage();
-
-        if (royalty > 0) _distributeMigratedFee(s, royalty);
         USDC.safeTransfer(msg.sender, usdcOut);
     }
 
@@ -842,10 +843,14 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         IERC20(tokenIn).safeTransferFrom(msg.sender, address(this), tokensIn);
         IERC20(tokenIn).forceApprove(v2Router, tokensIn);
 
-        uint256[] memory leg1 = IArcadeV2Router(v2Router).swapExactTokensForTokens(
+        // Measure the real delta, not the router's quoted amounts[1]: if
+        // tokenIn is a graduated launch token, its pair skims this leg's fee
+        // off the USDC output, so we receive less than the library predicts.
+        uint256 balBeforeMid = USDC.balanceOf(address(this));
+        IArcadeV2Router(v2Router).swapExactTokensForTokens(
             tokensIn, 0, _path2(tokenIn, address(USDC)), address(this), deadline
         );
-        uint256 usdcMid = leg1[1];
+        uint256 usdcMid = USDC.balanceOf(address(this)) - balBeforeMid;
         // Audit 2026-06-11 contract #10: mid-leg slippage floor mirrors
         // the V3 router's MID_SLIPPAGE defence. Sandwiching the leg-1
         // pool drives usdcMid arbitrarily low; without this gate the
@@ -861,31 +866,11 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         // combined royalty stays exactly at 2 * MIGRATED_ROYALTY_BPS (advertised
         // 60 bps) instead of compounding to 59.91 bps. Previously royaltyB ran
         // on usdcMid AFTER royaltyA was deducted, shaving 0.09 bps off the
-        // creator B share. Deducting BOTH from usdcMid afterward keeps the
-        // trader's net second-leg input identical to what the quote function
-        // returns when its own mirror is updated.
-        uint256 usdcMidOriginal = usdcMid;
-
-        // Royalty on the USDC produced by selling tokenIn. Unchecked: both
-        // royalties bounded by MIGRATED_ROYALTY_BPS (60 bps) of usdcMid,
-        // and the subtractions can never underflow since combined royalty
-        // tops out at 1.2% of usdcMid.
-        unchecked {
-            if (inMigrated) {
-                uint256 royaltyA = (usdcMidOriginal * MIGRATED_ROYALTY_BPS) / FEE_DENOMINATOR;
-                if (royaltyA > 0) {
-                    _distributeMigratedFee(tokens[tokenIn], royaltyA);
-                    usdcMid -= royaltyA;
-                }
-            }
-            if (outMigrated) {
-                uint256 royaltyB = (usdcMidOriginal * MIGRATED_ROYALTY_BPS) / FEE_DENOMINATOR;
-                if (royaltyB > 0) {
-                    _distributeMigratedFee(tokens[tokenOut], royaltyB);
-                    usdcMid -= royaltyB;
-                }
-            }
-        }
+        // No wrapper royalty on either leg any more: each migrated token's own
+        // ArcadeV2Pair charges the graduated-pair fee inside its K invariant,
+        // so leg 1 (selling tokenIn) and leg 2 (buying tokenOut) each already
+        // paid 0.30% at the pool. The old double-skim here charged a SECOND
+        // 0.60% on top, on the one route only our UI takes.
 
         // --- Leg 2: USDC -> tokenOut, delivered to the user ---
         USDC.forceApprove(v2Router, usdcMid);
@@ -917,15 +902,14 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         );
         uint256 usdcMid = leg1[1];
 
-        // CSEC-018 mirror: both royalty legs computed on the ORIGINAL usdcMid
-        // so the quoted total matches the executed total (60 bps exact, not
-        // 59.91 bps compounded).
-        uint256 usdcMidOriginal = usdcMid;
-        uint256 royaltyA = inMigrated ? (usdcMidOriginal * MIGRATED_ROYALTY_BPS) / FEE_DENOMINATOR : 0;
-        usdcMid -= royaltyA;
-        uint256 royaltyB = outMigrated ? (usdcMidOriginal * MIGRATED_ROYALTY_BPS) / FEE_DENOMINATOR : 0;
-        usdcMid -= royaltyB;
-        totalRoyaltyUsdc = royaltyA + royaltyB;
+        // No wrapper royalty to mirror any more: each pair charges the
+        // graduated fee itself, and getAmountsOut already prices the 997/1000
+        // the pair enforces, so the quote needs no extra deduction. The K check
+        // is algebraically unchanged by the split, so the trader's output is
+        // identical to before. Kept in the return shape for ABI stability.
+        inMigrated;
+        outMigrated;
+        totalRoyaltyUsdc = 0;
 
         uint256[] memory leg2 = IArcadeV2Router(v2Router).getAmountsOut(
             usdcMid, _path2(address(USDC), tokenOut)
@@ -1013,6 +997,19 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         USDC.safeTransfer(pair, usdcForLP);
         IERC20(tokenAddr).safeTransfer(pair, tokensForLP);
         IArcadeV2Pair(pair).mint(DEAD);
+
+        // Arm the pool-level fee split now that this pair is a real market.
+        // From here every swap, by ANY route, pays 0.30%: 0.10% to reserves,
+        // 0.15% protocol, 0.05% creator. This replaces the buyMigrated /
+        // sellMigrated royalty, which only our own UI ever paid (the pair is
+        // permissionless, so trading it directly cost HALF and paid us zero).
+        // Same economics, collected instead of avoided, and the trader's cost
+        // drops from 0.60% to a flat 0.30% everywhere. We mint 100% of the LP
+        // to DEAD, so without this the 0.25% LP share would accrue to an
+        // unclaimable position forever.
+        // Quote side is USDC, so the fee is USDC on buys AND sells and the
+        // treasury never accrues the launch token.
+        IArcadeV2Pair(pair).setLaunchCreator(s.creator, address(USDC));
         s.v2Pair = pair;
         emit Migrated(tokenAddr, pair, usdcForLP, tokensForLP);
     }

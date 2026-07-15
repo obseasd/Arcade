@@ -36,6 +36,9 @@ contract ArcadeMultiSwapTest is Test {
     function setUp() public {
         usdc = new MockUSDC();
         factory = new ArcadeV2Factory(address(this));
+        // Graduated pairs pay 0.15% to factory.feeTo; unset it and the protocol
+        // leg silently pays 0 (fails toward the pool, by design).
+        factory.setFeeTo(treasury);
         router = new ArcadeV2Router(address(factory));
         launchpad = new ArcadeLaunchpad(
             IERC20(address(usdc)), factory, address(router), treasury, IArcadeV3Factory(address(0)), address(0)

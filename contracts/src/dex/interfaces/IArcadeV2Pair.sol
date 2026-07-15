@@ -49,6 +49,11 @@ interface IArcadeV2Pair {
     function burn(address to) external returns (uint256 amount0, uint256 amount1);
     function swap(uint256 amount0Out, uint256 amount1Out, address to, bytes calldata data) external;
     function skim(address to) external;
+
+    /// Arm the graduated-pair fee split (0.10% reserves / 0.15% protocol /
+    /// 0.05% creator), always denominated in `quoteToken`. seedGate-only,
+    /// set once.
+    function setLaunchCreator(address creator, address quoteToken) external;
     function sync() external;
 
     function initialize(address, address, address) external;
