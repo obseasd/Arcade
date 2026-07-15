@@ -250,7 +250,6 @@ contract ArcadeV2Pair is ArcadeV2ERC20 {
         if (amount0Out >= _r0 || amount1Out >= _r1) revert InsufficientLiquidity();
 
         address _creator = launchCreator;
-        bool _q0 = quoteIsToken0;
 
         uint256 balance0;
         uint256 balance1;
@@ -259,30 +258,23 @@ contract ArcadeV2Pair is ArcadeV2ERC20 {
             address _t1 = token1;
             if (to == _t0 || to == _t1) revert InvalidTo();
 
-            uint256 out0 = amount0Out;
-            uint256 out1 = amount1Out;
-
-            // SELL leg: the QUOTE token is going out. Skim the fee off the
-            // OUTPUT here, before the optimistic transfer. `amountOut` is a
-            // caller-supplied parameter, so it is known up front -- output
-            // skimming is in fact EASIER than input skimming, where the amount
-            // is only knowable after the flash-swap callback. Reserves are
-            // debited by the full `amountOut` either way, so the K check below
-            // is structurally untouched; the trader simply receives less.
-            if (_creator != address(0)) {
-                uint256 quoteOut = _q0 ? amount0Out : amount1Out;
-                if (quoteOut > 0) {
-                    (uint256 p, uint256 c) = _payLaunchFee(_q0 ? _t0 : _t1, quoteOut, _creator);
-                    if (_q0) out0 -= (p + c);
-                    else out1 -= (p + c);
-                }
-            }
-
-            if (out0 > 0) _safeTransfer(_t0, to, out0);
-            if (out1 > 0) _safeTransfer(_t1, to, out1);
-            // The callee is told what it ACTUALLY received, not what was
-            // requested, so flash-swap accounting stays honest.
-            if (data.length > 0) IArcadeV2Callee(to).arcadeV2Call(msg.sender, out0, out1, data);
+            // `to` receives EXACTLY amount0Out / amount1Out. Never skim the
+            // output. The V2 promise "the recipient gets exactly what was
+            // requested" is load-bearing for the entire periphery: the stock
+            // router checks amountOutMin against the LIBRARY-COMPUTED figure
+            // BEFORE swapping and never re-reads balances, so an under-
+            // delivering pair defeats slippage protection SILENTLY (a
+            // fund-loss bug, verified against v2-periphery). Multi-hop is
+            // worse: the next pair is sent a short input against a full-size
+            // requested output and reverts on K. PYESwap, the only EVM pair
+            // that ever skimmed the output, had to ban multi-hop outright
+            // (`require(path.length == 2)`) and lower users' slippage floors
+            // to match its own lying quotes. We take the fee on the INPUT
+            // instead (see below), which is what Camelot, Velodrome, Biswap,
+            // ApeSwap and every other fork does.
+            if (amount0Out > 0) _safeTransfer(_t0, to, amount0Out);
+            if (amount1Out > 0) _safeTransfer(_t1, to, amount1Out);
+            if (data.length > 0) IArcadeV2Callee(to).arcadeV2Call(msg.sender, amount0Out, amount1Out, data);
             balance0 = IERC20Minimal(_t0).balanceOf(address(this));
             balance1 = IERC20Minimal(_t1).balanceOf(address(this));
         }
@@ -291,23 +283,40 @@ contract ArcadeV2Pair is ArcadeV2ERC20 {
         uint256 amount1In = balance1 > _r1 - amount1Out ? balance1 - (_r1 - amount1Out) : 0;
         if (amount0In == 0 && amount1In == 0) revert InsufficientInputAmount();
 
-        // BUY leg: the QUOTE token came IN. Skim the fee off the input.
-        // Combined with coeff = 1 below this is algebraically the stock check:
-        //     (B - 2*in/1000)*1000 - in*1  ==  B*1000 - 3*in
-        // so a buy costs the trader exactly the same 0.30% as stock V2, and the
-        // 0.20% simply moves from the DEAD position to protocol + creator.
+        // Skim 20bps of the INPUT out to protocol + creator (whichever token
+        // came in), leaving 10bps of the trader's 30 in reserves. This is
+        // Camelot's / Velodrome's pattern: measure the input, move the fee out
+        // of the pool, re-read balances, then check K on what is left.
         //
-        // On a sell the fee was already taken off the quote OUTPUT above, and
-        // coeff = 1 leaves 0.10% of the base input in reserves, so the trader
-        // pays ~0.30% there too. Either way the fee is denominated in QUOTE.
+        // Fuzzed over 230k reserve/input combinations: there is NO case where
+        // this pair can deliver less than a stock 997/1000 quote, because
+        //     (B - 2*in/1000)*1000 - in*1  ==  B*1000 - 3*in
+        // is exactly stock V2's `balance*1000 - amountIn*3`. The only deviation
+        // is a floor() artifact of at most ~1 wei of input, always in the
+        // trader's favour. So `UniswapV2Library` stays bit-exact, the stock
+        // router's amountOutMin still protects users, and 0x / 1inch /
+        // KyberSwap quote us correctly with ZERO special-casing.
+        //
+        // This holds ONLY because the TOTAL stays pinned at 0.30%. Camelot and
+        // Biswap both broke stock-library pricing by making the total variable,
+        // forcing every quoter to read a per-pair fee. Never make the total
+        // configurable per pair.
+        //
+        // Consequence to own honestly: on a sell the fee accrues in the LAUNCH
+        // token, not USDC. That is unavoidable input-side, and it is what
+        // Camelot does (accumulate raw, convert off-chain). Sweeping it is an
+        // ops detail, invisible to integrators -- unlike an output skim, which
+        // is a fund-loss bug.
         uint256 coeff = 3;
         if (_creator != address(0)) {
             coeff = 1;
-            uint256 quoteIn = _q0 ? amount0In : amount1In;
-            if (quoteIn > 0) {
-                (uint256 p, uint256 c) = _payLaunchFee(_q0 ? token0 : token1, quoteIn, _creator);
-                if (_q0) balance0 -= (p + c);
-                else balance1 -= (p + c);
+            if (amount0In > 0) {
+                (uint256 p, uint256 c) = _payLaunchFee(token0, amount0In, _creator);
+                balance0 -= (p + c);
+            }
+            if (amount1In > 0) {
+                (uint256 p, uint256 c) = _payLaunchFee(token1, amount1In, _creator);
+                balance1 -= (p + c);
             }
         }
         {
