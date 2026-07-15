@@ -40,8 +40,16 @@ contract ArcadeV2Pair is ArcadeV2ERC20 {
     ///         (`factory.feeTo`) and 0.05% to `launchCreator`.
     ///
     ///         Why this exists. Graduated pairs mint 100% of their LP to DEAD,
-    ///         so "0.30% to LPs" means 0.25% accrues to an unclaimable position
-    ///         forever: destroyed, not earned. The protocol's answer used to be
+    ///         so "0.30% to LPs" means the FULL 0.30% accrues to an unclaimable
+    ///         position. Note `feeTo`'s 1/6 does NOT land here: _mintFee only
+    ///         runs from mint()/burn(), and a graduated pair sees neither once
+    ///         the LP is burned. It is dormant rather than destroyed (mint() is
+    ///         permissionless once seeded, so the protocol can poke the pair
+    ///         with dust to crystallise the growth since kLast) but poking caps
+    ///         at 1/6 of 0.30% = 5bps. That is exactly pump.fun's 5bps
+    ///         post-graduation take, which is what V2-family economics pay a
+    ///         protocol that never touches swap(). Skimming here gets 15bps, 3x
+    ///         that, with no keeper poking pairs forever. The protocol's answer used to be
     ///         a 0.30% royalty bolted onto launchpad.buyMigrated/sellMigrated,
     ///         but the pair is a permissionless V2 pool, so anyone trading it
     ///         directly paid 0 and it cost them HALF (0.30% vs 0.60% via the
@@ -59,28 +67,6 @@ contract ArcadeV2Pair is ArcadeV2ERC20 {
     ///         liquidity providers are not taxed by this.
     address public launchCreator;
 
-    /// @notice Which side of this pair is the QUOTE token (USDC). Only set on
-    ///         graduated launch pairs, alongside `launchCreator`.
-    ///
-    ///         The fee is ALWAYS taken in quote, in BOTH directions, so the
-    ///         protocol and creator never accrue the launch token:
-    ///           BUY  (quote in ) -> skim the INPUT.
-    ///           SELL (quote out) -> skim the OUTPUT, before the optimistic
-    ///                               transfer (amountOut is a caller-supplied
-    ///                               parameter, so it is known up front).
-    ///
-    ///         This is Meteora DBC's `CollectFeeMode::QuoteToken` truth table
-    ///         (fee on input when QuoteToBase, on output when BaseToQuote,
-    ///         never on the base token) and pump.fun's model, where the fee
-    ///         destination accounts are quote-mint ATAs so paying in the coin
-    ///         is structurally impossible. Taking the fee on the INPUT in both
-    ///         directions instead (Uniswap V3 / Orca / Velodrome) would leave
-    ///         the treasury holding illiquid launch tokens with no sweep path:
-    ///         no major protocol auto-swaps that inventory on-chain, and
-    ///         market-selling it into its own thin pool reads as rugging your
-    ///         own holders. Never accruing it is strictly cheaper than building
-    ///         and then securing a conversion path.
-    bool public quoteIsToken0;
 
     /// Basis points of the INPUT skimmed out of the pool per swap on a
     /// graduated pair. 15 protocol + 5 creator = 20; the remaining 10 of the
@@ -332,14 +318,12 @@ contract ArcadeV2Pair is ArcadeV2ERC20 {
     ///         seedGate (the launchpad) can call it, and only once, so a pair's
     ///         fee split can never be changed under its LPs after the fact.
     ///         Ordinary pairs never get this and keep stock V2 behaviour.
-    function setLaunchCreator(address creator, address quoteToken) external {
+    function setLaunchCreator(address creator) external {
         address _gate = seedGate;
         if (_gate == address(0) || msg.sender != _gate) revert Forbidden();
         if (launchCreator != address(0)) revert Forbidden(); // set once
         if (creator == address(0)) revert Forbidden();
-        if (quoteToken != token0 && quoteToken != token1) revert Forbidden();
         launchCreator = creator;
-        quoteIsToken0 = (quoteToken == token0);
         emit LaunchCreatorSet(creator);
     }
 

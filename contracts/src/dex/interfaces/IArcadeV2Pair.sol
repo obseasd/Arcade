@@ -51,9 +51,10 @@ interface IArcadeV2Pair {
     function skim(address to) external;
 
     /// Arm the graduated-pair fee split (0.10% reserves / 0.15% protocol /
-    /// 0.05% creator), always denominated in `quoteToken`. seedGate-only,
+    /// 0.05% creator). Taken on the INPUT, so it is denominated in whichever
+    /// token came in: USDC on a buy, the launch token on a sell. seedGate-only,
     /// set once.
-    function setLaunchCreator(address creator, address quoteToken) external;
+    function setLaunchCreator(address creator) external;
     function sync() external;
 
     function initialize(address, address, address) external;

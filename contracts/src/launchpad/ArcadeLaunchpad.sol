@@ -1007,9 +1007,7 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         // drops from 0.60% to a flat 0.30% everywhere. We mint 100% of the LP
         // to DEAD, so without this the 0.25% LP share would accrue to an
         // unclaimable position forever.
-        // Quote side is USDC, so the fee is USDC on buys AND sells and the
-        // treasury never accrues the launch token.
-        IArcadeV2Pair(pair).setLaunchCreator(s.creator, address(USDC));
+        IArcadeV2Pair(pair).setLaunchCreator(s.creator);
         s.v2Pair = pair;
         emit Migrated(tokenAddr, pair, usdcForLP, tokensForLP);
     }
