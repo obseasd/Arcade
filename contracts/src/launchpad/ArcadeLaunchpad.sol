@@ -1265,7 +1265,16 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
             uint256 currentUsdc = VIRTUAL_USDC_RESERVE + s.realUsdcReserve;
             uint256 currentTokens = VIRTUAL_TOKEN_RESERVE - s.tokensSold;
             if (currentTokens == 0) return 0;
-            return (currentUsdc * TOTAL_SUPPLY) / currentTokens;
+            // Circulating, like every other branch. Audit 2026-07-15: only the
+            // migrated branch was converted, so this one and _v3MarketCap kept
+            // dividing the curve price by TOTAL_SUPPLY while the frontend
+            // divided the RESULT by circulatingSupply() -- the two denominators
+            // cancelled correctly when mcap used TOTAL_SUPPLY, and stopped
+            // cancelling the moment one branch changed. Burning is a
+            // permissionless plain ERC20 transfer to DEAD, so any holder could
+            // inflate a pre-migration token's displayed price at will.
+            uint256 circulatingNow = TOTAL_SUPPLY - IERC20(tokenAddr).balanceOf(DEAD);
+            return (currentUsdc * circulatingNow) / currentTokens;
         }
     }
 
@@ -1281,13 +1290,19 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
             address token0 = IArcadeV3Pool(pool).token0();
             if (token0 != address(USDC) && IArcadeV3Pool(pool).token1() != address(USDC)) return 0;
             uint256 p = uint256(sqrtPriceX96);
+            // Circulating, matching marketCap()'s other branches and the
+            // circulatingSupply() denominator every off-chain price consumer
+            // divides by. CLANKER_V3 launches burn nothing at graduation, so
+            // this equals TOTAL_SUPPLY until a holder burns -- but "usually
+            // equal" is what made the inconsistency invisible.
+            uint256 supply = TOTAL_SUPPLY - IERC20(s.token).balanceOf(DEAD);
             if (token0 == address(USDC)) {
-                // mcap = TOTAL_SUPPLY * 2**192 / sqrtPriceX96^2
-                uint256 part = (TOTAL_SUPPLY * (1 << 96)) / p;
+                // mcap = supply * 2**192 / sqrtPriceX96^2
+                uint256 part = (supply * (1 << 96)) / p;
                 return (part * (1 << 96)) / p;
             }
-            // mcap = TOTAL_SUPPLY * sqrtPriceX96^2 / 2**192
-            uint256 partA = (p * TOTAL_SUPPLY) / (1 << 96);
+            // mcap = supply * sqrtPriceX96^2 / 2**192
+            uint256 partA = (p * supply) / (1 << 96);
             return (partA * p) / (1 << 96);
         }
     }

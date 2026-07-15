@@ -62,8 +62,13 @@ export function useTokenPrices(tokens: { address: Address }[]): Map<string, stri
         if (r?.status !== "success") continue;
         const mcapRaw = r.result as bigint;
         if (mcapRaw === 0n) continue;
-        // price (USD per token) = marketCap / circulatingSupply. Both come from
-        // the launchpad so they can never disagree about the denominator.
+        // price (USD per token) = marketCap / circulatingSupply. Coming from the
+        // same contract does NOT make them agree: marketCap priced circulating
+        // on the migrated branch only, while the curve and CLANKER_V3 branches
+        // still divided by TOTAL_SUPPLY, so this division double-counted the
+        // burn and overstated the price by TOTAL_SUPPLY/circulating on exactly
+        // the tokens nobody checked. All three branches now price circulating
+        // (audit 2026-07-15); this comment is the tripwire if one ever drifts.
         const supplyRes = supplyCalls.data?.[i];
         if (supplyRes?.status !== "success") continue;
         const circulating = supplyRes.result as bigint;

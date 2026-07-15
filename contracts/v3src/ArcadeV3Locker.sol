@@ -723,13 +723,26 @@ contract ArcadeV3Locker is IUniswapV3MintCallback {
             emit RecipientPaid(positionId, slotIndex, token, to, amount);
             return;
         }
-        // RESIDUAL, documented: if `to` is the escrow, the credit above already
-        // landed, so crediting pendingWithdrawals here double-counts against an
-        // escrow balance it never received. That needs the token itself to
-        // fail a transfer to our own escrow, which the launch token and USDC do
-        // not do; the distinct event lets ops reconcile if it ever happens. We
-        // still do NOT revert, keeping M-14's property that one bad token can
-        // never brick distribution to the OTHER slots in the same collectFees.
+        // RESIDUAL, and REACHABLE -- an earlier version of this comment claimed
+        // it "needs the token itself to fail a transfer to our own escrow,
+        // which the launch token and USDC do not do". That is false, and
+        // _payOrCredit's own NatSpec says so three lines up: USDC REVERTS on a
+        // transfer to a blacklisted recipient. If Circle blacklists the escrow,
+        // creditSlot (pure bookkeeping) succeeds and this transfer then fails.
+        //
+        // What that state actually is: the escrow's books lead its balance by
+        // `amount`. balances[posId][slot] and creditedTotal are both already
+        // incremented, but the tokens are HERE, in pendingWithdrawals. Because
+        // claimByTwitter pays from the shared pool, the escrow is under-funded
+        // until an owner calls pullFromLocker -- so the first claimant is paid
+        // with another slot's backing and the last one reverts. pullFromLocker
+        // restores the invariant exactly (balance rises to meet creditedTotal,
+        // and free balance returns to zero, so rescue cannot take it).
+        //
+        // Not silently swallowed: the distinct event below is the reconcile
+        // signal. We still do NOT revert, keeping M-14's property that one bad
+        // token can never brick distribution to the OTHER slots in the same
+        // collectFees.
         if (to == twitterEscrow && twitterEscrow != address(0)) {
             emit EscrowCreditFailed(positionId, slotIndex, token, amount, bytes("TRANSFER_AFTER_CREDIT"));
         }
