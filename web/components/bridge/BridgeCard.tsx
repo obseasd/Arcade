@@ -70,7 +70,15 @@ const ETH_SEPOLIA_ID = 11_155_111;
 /** Arcade fee on bridges. Currently shown as preview only; will be charged
  * on-chain once we deploy the fee router on all source chains for mainnet. */
 const ARCADE_BRIDGE_FEE_BPS = 5n; // 0.05%
-const CCTP_FAST_MAX_FEE_BPS = 1n; // 0.01% upper bound on Circle's fast transfer fee
+// Upper bound we authorise Circle to charge for a Fast Transfer. This is a
+// CEILING, not the price: Circle only ever takes its published `minimumFee`.
+// It MUST stay >= that minimum or the burn cannot be served fast and silently
+// degrades to standard finality (slow) despite the user picking Fast.
+// Live Iris values into Arc (domain 26): 1bp from Ethereum, but 1.3bp from
+// Base and Arbitrum -- the previous 1n bound was BELOW the latter and broke
+// fast transfers on those routes. 2bp covers every current route with room;
+// the exact price is still whatever Circle charges, attested as `feeExecuted`.
+const CCTP_FAST_MAX_FEE_BPS = 2n;
 const BPS_DENOMINATOR = 10_000n;
 
 /** Formats an elapsed-second count like "1m 24s" or "47s". Used by the
@@ -729,7 +737,12 @@ export function BridgeCard() {
       const destinationCaller = ("0x" + "00".repeat(32)) as `0x${string}`;
       // Fast Transfer: short finality + non-zero maxFee (1 bp upper bound; Iris
       // typically charges much less). Standard Transfer: full finality, no fee.
-      const maxFee = fastTransfer ? amountRaw / 10_000n : 0n; // ≤0.01% of the amount
+      // Ceiling we allow Circle to charge; must cover the route's minimumFee
+      // (1.3bp from Base/Arbitrum) or the transfer silently falls back to
+      // standard finality. Circle still only takes its published minimum.
+      const maxFee = fastTransfer
+        ? (amountRaw * CCTP_FAST_MAX_FEE_BPS) / BPS_DENOMINATOR
+        : 0n;
       const minFinality = fastTransfer ? 1000 : 2000;
       // hookData = abi.encode(beneficiary, token, minTokensOut, ammRouter,
       // v3Router, v3Fee). minOut is the best-venue quote minus 15% (cross-chain

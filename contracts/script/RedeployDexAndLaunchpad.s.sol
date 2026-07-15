@@ -102,6 +102,16 @@ contract RedeployDexAndLaunchpad is Script {
         //    MUST precede any createToken (createToken pre-creates the pair).
         factory.setLaunchpad(address(launchpad));
 
+        // 2b. Turn the V2 protocol fee ON (1/6 of LP fee growth ~= 0.05% of
+        //     volume -> treasury). This was MISSING from this script while
+        //     DeployTestnet.s.sol and DeploySecurityV3.s.sol both set it, so the
+        //     2026-06-30 redeploy shipped a factory with feeTo == address(0) and
+        //     the protocol earned 0% of all V2 volume until 2026-07-11.
+        //     Enabling is NOT retroactive: _mintFee skips while kLast == 0 and
+        //     only then snapshots kLast, so every day it stays off is revenue
+        //     that can never be recovered. Never deploy a factory without it.
+        factory.setFeeTo(treasury);
+
         // 3. Escrow (LOCKER unset, signer + owner only).
         ArcadeTwitterEscrowV3 escrow = new ArcadeTwitterEscrowV3(signer, escrowOwner);
 

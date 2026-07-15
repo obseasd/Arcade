@@ -34,11 +34,17 @@ contract MockMessageTransmitter {
         used[h] = true;
         bytes32 mrWord;
         bytes32 amtWord;
+        bytes32 feeWord;
         assembly {
             mrWord := calldataload(add(message.offset, 184))
             amtWord := calldataload(add(message.offset, 216))
+            feeWord := calldataload(add(message.offset, 312))
         }
-        usdc.mint(address(uint160(uint256(mrWord))), uint256(amtWord));
+        // Real CCTP mints amount MINUS the fee Circle actually took.
+        usdc.mint(
+            address(uint160(uint256(mrWord))),
+            uint256(amtWord) - uint256(feeWord)
+        );
         return true;
     }
 }
@@ -155,7 +161,11 @@ contract ArcadeCctpBuyReceiverTest is Test {
 
     address beneficiary = makeAddr("beneficiary");
     address attacker = makeAddr("attacker");
+    address treasury = makeAddr("treasury");
     uint256 constant AMT = 1_000e6;
+    // Fast transfer executed threshold (<=1000 == Fast); standard is 2000.
+    uint32 constant FAST = 1000;
+    uint32 constant STANDARD = 2000;
 
     function setUp() public {
         usdc = new MintableERC20("USDC", "USDC");
@@ -168,7 +178,8 @@ contract ArcadeCctpBuyReceiverTest is Test {
             address(mt),
             address(usdc),
             address(launchpad),
-            address(v2Router)
+            address(v2Router),
+            treasury
         );
     }
 
@@ -196,8 +207,39 @@ contract ArcadeCctpBuyReceiverTest is Test {
         address v3RouterAddr,
         uint256 v3Fee
     ) internal pure returns (bytes memory m) {
+        // Default: STANDARD transfer, no Circle fee -> no Arcade bridge fee, so
+        // the pre-existing route tests keep their exact expected amounts.
+        return
+            _msgFee(
+                mintRecipient,
+                amount,
+                ben,
+                tok,
+                minOut,
+                ammRouter,
+                v3RouterAddr,
+                v3Fee,
+                STANDARD,
+                0
+            );
+    }
+
+    function _msgFee(
+        address mintRecipient,
+        uint256 amount,
+        address ben,
+        address tok,
+        uint256 minOut,
+        address ammRouter,
+        address v3RouterAddr,
+        uint256 v3Fee,
+        uint32 finalityExecuted,
+        uint256 feeExecuted
+    ) internal pure returns (bytes memory m) {
         m = new bytes(568);
         bytes32 mr = bytes32(uint256(uint160(mintRecipient)));
+        // finalityThresholdExecuted is a uint32 at bytes 144-147.
+        bytes32 fin = bytes32(uint256(finalityExecuted) << 224);
         bytes memory hook = abi.encode(
             ben,
             tok,
@@ -208,8 +250,10 @@ contract ArcadeCctpBuyReceiverTest is Test {
         ); // 192 bytes
         assembly {
             let p := add(m, 32)
+            mstore(add(p, 144), fin)
             mstore(add(p, 184), mr)
             mstore(add(p, 216), amount)
+            mstore(add(p, 312), feeExecuted)
             mstore(add(p, 376), mload(add(hook, 32)))
             mstore(add(p, 408), mload(add(hook, 64)))
             mstore(add(p, 440), mload(add(hook, 96)))
@@ -298,6 +342,82 @@ contract ArcadeCctpBuyReceiverTest is Test {
         assertEq(usdc.balanceOf(beneficiary), AMT, "USDC returned when V3 fails");
         assertEq(token.balanceOf(beneficiary), 0, "no tokens");
         assertEq(usdc.allowance(address(receiver), address(v3Router)), 0, "v3 approval reset");
+    }
+
+    // --- bridge fee ----------------------------------------------------
+
+    /// Fast transfer: all-in cost is pinned to 0.05% of the burned amount, so
+    /// Arcade skims exactly the gap left by Circle's own fee.
+    function test_bridgeFee_fastPinsAllInTo5Bps() public {
+        // Circle's Base->Arc fast fee is 1.3bp = 130_000 of 1_000e6.
+        uint256 circleFee = 130_000;
+        bytes memory m = _msgFee(
+            address(receiver), AMT, beneficiary, address(token), 0,
+            address(0), address(0), 0, FAST, circleFee
+        );
+        receiver.receiveAndBuy(m, "");
+
+        uint256 target = (AMT * 5) / 10_000; // 500_000 = 0.05%
+        uint256 arcadeFee = target - circleFee; // 370_000
+        assertEq(usdc.balanceOf(treasury), arcadeFee, "arcade skims the gap");
+        // All-in the user gave up exactly 0.05%: circle 130k + arcade 370k.
+        assertEq(circleFee + usdc.balanceOf(treasury), target, "all-in == 5bps");
+        // The curve bought with the NET amount (minted 999.87 - fee 0.37).
+        uint256 net = AMT - circleFee - arcadeFee;
+        assertEq(token.balanceOf(beneficiary), net * 2, "buy uses net amount");
+        assertEq(usdc.balanceOf(address(receiver)), 0, "receiver drained");
+    }
+
+    /// Standard transfer: Circle charges nothing, and neither do we.
+    function test_bridgeFee_standardIsFree() public {
+        bytes memory m = _msgFee(
+            address(receiver), AMT, beneficiary, address(token), 0,
+            address(0), address(0), 0, STANDARD, 0
+        );
+        receiver.receiveAndBuy(m, "");
+        assertEq(usdc.balanceOf(treasury), 0, "no fee on standard transfer");
+        assertEq(token.balanceOf(beneficiary), AMT * 2, "full amount bought");
+    }
+
+    /// If Circle's own fee already meets/exceeds the target, we skim zero
+    /// rather than pushing the user above the advertised all-in.
+    function test_bridgeFee_neverExceedsTarget() public {
+        uint256 circleFee = (AMT * 9) / 10_000; // 9bp > 5bp target
+        bytes memory m = _msgFee(
+            address(receiver), AMT, beneficiary, address(token), 0,
+            address(0), address(0), 0, FAST, circleFee
+        );
+        receiver.receiveAndBuy(m, "");
+        assertEq(usdc.balanceOf(treasury), 0, "no skim when Circle exceeds target");
+    }
+
+    /// Plain bridge (no buy): fee skimmed, remainder forwarded.
+    function test_receiveAndForward_takesFeeAndForwards() public {
+        uint256 circleFee = 130_000;
+        bytes memory m = _msgFee(
+            address(receiver), AMT, beneficiary, address(0xdead), 0,
+            address(0), address(0), 0, FAST, circleFee
+        );
+        receiver.receiveAndForward(m, "");
+        uint256 arcadeFee = (AMT * 5) / 10_000 - circleFee;
+        assertEq(usdc.balanceOf(treasury), arcadeFee, "fee to treasury");
+        assertEq(
+            usdc.balanceOf(beneficiary),
+            AMT - circleFee - arcadeFee,
+            "net USDC forwarded to beneficiary"
+        );
+        assertEq(usdc.balanceOf(address(receiver)), 0, "receiver drained");
+    }
+
+    function test_receiveAndForward_trustless() public {
+        bytes memory m = _msgFee(
+            address(receiver), AMT, beneficiary, address(0xdead), 0,
+            address(0), address(0), 0, STANDARD, 0
+        );
+        vm.prank(attacker);
+        receiver.receiveAndForward(m, "");
+        assertEq(usdc.balanceOf(beneficiary), AMT, "goes to attested beneficiary");
+        assertEq(usdc.balanceOf(attacker), 0, "attacker gets nothing");
     }
 
     function test_trustless_attackerCannotRedirect() public {

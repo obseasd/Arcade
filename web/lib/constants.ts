@@ -74,9 +74,13 @@ export const ADDRESSES = {
   v4Router: safeAddress(process.env.NEXT_PUBLIC_V4_ROUTER_ADDRESS),
   /** CCTP V2 "bridge and buy" landing contract on Arc (ArcadeCctpBuyReceiver).
    *  Curve -> AMM (frontend-chosen venue: V2 router OR V3 router+fee for ETH)
-   *  -> refund. Redeployed 2026-07-11 with the V3 route; env-overridable. */
+   *  -> refund. Also skims the fast-transfer bridge fee: it pins the ALL-IN
+   *  cost to 0.05% of the burned amount by reading Circle's own `feeExecuted`
+   *  and `finalityThresholdExecuted` off the ATTESTED message, so standard
+   *  transfers stay free and we never exceed the advertised 0.05%.
+   *  Redeployed 2026-07-11 with the bridge fee; env-overridable. */
   cctpBuyReceiver: (process.env.NEXT_PUBLIC_CCTP_BUY_RECEIVER ??
-    "0x6654C0763DBC49f3943c18478e3d32c209B2D427") as Address,
+    "0x9E87B0732BAA1aB0e001A220b505720971ED3621") as Address,
   /** ArcadeIncentiveDistributor: escrow-backed liquidity-incentive campaigns
    *  (Merkl-style) — the on-chain backend for /swap/incentivize. Deployed
    *  2026-07-11; env-overridable. When zeroAddress the incentivize form falls

@@ -24,13 +24,16 @@ contract DeployCctpBuyReceiver is Script {
         address usdc = vm.envAddress("ARC_USDC_ADDRESS");
         address launchpad = vm.envAddress("LAUNCHPAD_ADDRESS");
         address v2Router = vm.envAddress("V2_ROUTER_ADDRESS");
+        // Receives the 0.05%-all-in fast-transfer bridge fee. Immutable.
+        address treasury = vm.envAddress("TREASURY_ADDRESS");
 
         vm.startBroadcast(pk);
         ArcadeCctpBuyReceiver receiver = new ArcadeCctpBuyReceiver(
             messageTransmitter,
             usdc,
             launchpad,
-            v2Router
+            v2Router,
+            treasury
         );
         vm.stopBroadcast();
 
@@ -39,6 +42,7 @@ contract DeployCctpBuyReceiver is Script {
         console2.log("  usdc:", usdc);
         console2.log("  launchpad:", launchpad);
         console2.log("  v2Router:", v2Router);
+        console2.log("  treasury:", treasury);
         console2.log("Set NEXT_PUBLIC_CCTP_BUY_RECEIVER to the address above.");
     }
 }

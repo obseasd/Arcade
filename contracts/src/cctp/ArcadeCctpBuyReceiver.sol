@@ -80,9 +80,30 @@ contract ArcadeCctpBuyReceiver is ReentrancyGuard {
     /// V2 router used as an AMM fallback when the token isn't a live curve
     /// token (migrated launch, cirBTC, EURC, any USDC-paired token).
     address public immutable v2Router;
+    /// Receives the bridge fee. Immutable so a compromised key can never
+    /// redirect it; a new treasury means a new receiver.
+    address public immutable treasury;
+
+    /// @notice Target ALL-IN bridge cost, in bps of the burned amount, for a
+    ///         FAST transfer. Circle's own fast fee is deducted at mint (it is
+    ///         attested in the message as `feeExecuted`), so we only skim the
+    ///         REMAINDER up to this target: fee = amount*5/10000 - feeExecuted.
+    ///         Net effect: the user always pays ~0.05% total no matter what
+    ///         Circle charges on that route (0.01% ETH, 0.013% Base/Arb today),
+    ///         and if Circle ever raises its fee past the target we skim zero
+    ///         rather than exceeding it. STANDARD transfers are never charged.
+    uint256 private constant TARGET_BRIDGE_FEE_BPS = 5;
+    /// CCTP's fast/standard boundary: minFinalityThreshold <= 1000 is Fast.
+    uint32 private constant FAST_FINALITY_MAX = 1000;
 
     // Byte offsets of fields inside the full CCTP V2 `message`.
+    // MessageV2 header is 148 bytes; BurnMessageV2 body then lays out
+    // version(4) burnToken(32) mintRecipient(32) amount(32) messageSender(32)
+    // maxFee(32) feeExecuted(32) expirationBlock(32) hookData(...).
+    uint256 private constant FINALITY_EXECUTED_OFFSET = 144; // header, uint32
     uint256 private constant MINT_RECIPIENT_OFFSET = 184; // body(148) + 36
+    uint256 private constant AMOUNT_OFFSET = 216; // body(148) + 68
+    uint256 private constant FEE_EXECUTED_OFFSET = 312; // body(148) + 164
     uint256 private constant HOOK_DATA_OFFSET = 376; // body(148) + 228
     // hookData = abi.encode(address beneficiary, address token, uint256 minOut,
     // address ammRouter, address v3Router, uint256 v3Fee) = 6 * 32 bytes.
@@ -99,6 +120,10 @@ contract ArcadeCctpBuyReceiver is ReentrancyGuard {
         uint256 tokensOut,
         bool bought
     );
+    /// Fast-transfer bridge fee skimmed to the treasury.
+    event BridgeFeeTaken(uint256 fee);
+    /// Plain bridge (no buy) forwarded to the beneficiary, net of the fee.
+    event BridgeForward(address indexed beneficiary, uint256 usdcOut);
 
     error BadMessage();
     error NotForThisReceiver();
@@ -108,19 +133,49 @@ contract ArcadeCctpBuyReceiver is ReentrancyGuard {
         address _messageTransmitter,
         address _usdc,
         address _launchpad,
-        address _v2Router
+        address _v2Router,
+        address _treasury
     ) {
         require(
             _messageTransmitter != address(0) &&
                 _usdc != address(0) &&
                 _launchpad != address(0) &&
-                _v2Router != address(0),
+                _v2Router != address(0) &&
+                _treasury != address(0),
             "zero addr"
         );
         messageTransmitter = IMessageTransmitterV2(_messageTransmitter);
         usdc = IERC20(_usdc);
         launchpad = _launchpad;
         v2Router = _v2Router;
+        treasury = _treasury;
+    }
+
+    /// @dev Bridge fee for this message, derived ENTIRELY from Circle-attested
+    ///      fields so the sender cannot understate it: the burned `amount`, the
+    ///      `feeExecuted` Circle actually took, and the executed finality
+    ///      threshold. Returns 0 for a standard transfer, and 0 if Circle's own
+    ///      fee already meets/exceeds the all-in target.
+    function _bridgeFee(bytes calldata message, uint256 minted)
+        private
+        pure
+        returns (uint256 fee)
+    {
+        uint32 finalityExecuted = uint32(
+            uint256(_loadWord(message, FINALITY_EXECUTED_OFFSET)) >> 224
+        );
+        // Standard transfer: Circle charges nothing and neither do we.
+        if (finalityExecuted > FAST_FINALITY_MAX) return 0;
+
+        uint256 amount = uint256(_loadWord(message, AMOUNT_OFFSET));
+        uint256 feeExecuted = uint256(_loadWord(message, FEE_EXECUTED_OFFSET));
+
+        uint256 target = (amount * TARGET_BRIDGE_FEE_BPS) / 10_000;
+        if (feeExecuted >= target) return 0;
+        fee = target - feeExecuted;
+        // Never skim more than actually landed (defensive; cannot happen with
+        // sane values since minted == amount - feeExecuted).
+        if (fee > minted) fee = minted;
     }
 
     /**
@@ -162,6 +217,11 @@ contract ArcadeCctpBuyReceiver is ReentrancyGuard {
         // Mints USDC to this contract (mintRecipient). Reverts if already used.
         messageTransmitter.receiveMessage(message, attestation);
         uint256 minted = usdc.balanceOf(address(this)) - balBefore;
+        if (minted == 0) revert NothingMinted();
+
+        // Skim the fast-transfer bridge fee before anything else, so the buy
+        // and every refund path below operate on the net amount.
+        minted -= _takeBridgeFee(message, minted);
         if (minted == 0) revert NothingMinted();
 
         // Route 1: the bonding-curve launchpad (works only for a live,
@@ -245,6 +305,52 @@ contract ArcadeCctpBuyReceiver is ReentrancyGuard {
         // Both routes failed — return the bridged USDC so funds are never stuck.
         usdc.safeTransfer(beneficiary, minted);
         emit BridgeBuy(beneficiary, token, minted, 0, false);
+    }
+
+    /// @dev Compute + transfer the bridge fee. Returns the amount skimmed.
+    function _takeBridgeFee(bytes calldata message, uint256 minted)
+        private
+        returns (uint256 fee)
+    {
+        fee = _bridgeFee(message, minted);
+        if (fee > 0) {
+            usdc.safeTransfer(treasury, fee);
+            emit BridgeFeeTaken(fee);
+        }
+    }
+
+    /**
+     * @notice Redeem an attested CCTP transfer WITHOUT buying: skim the
+     *         fast-transfer bridge fee and forward the rest to the beneficiary.
+     *         This is the plain-bridge path. hookData carries only the
+     *         beneficiary (32 bytes), since there is no token/route to commit.
+     * @dev Same trustless property as receiveAndBuy: the beneficiary comes from
+     *      the ATTESTED message, so this is safe to leave permissionless.
+     */
+    function receiveAndForward(bytes calldata message, bytes calldata attestation)
+        external
+        nonReentrant
+    {
+        if (message.length < HOOK_DATA_OFFSET + 32) revert BadMessage();
+
+        address mintRecipient = address(
+            uint160(uint256(_loadWord(message, MINT_RECIPIENT_OFFSET)))
+        );
+        if (mintRecipient != address(this)) revert NotForThisReceiver();
+
+        address beneficiary = address(
+            uint160(uint256(_loadWord(message, HOOK_DATA_OFFSET)))
+        );
+        if (beneficiary == address(0)) revert BadMessage();
+
+        uint256 balBefore = usdc.balanceOf(address(this));
+        messageTransmitter.receiveMessage(message, attestation);
+        uint256 minted = usdc.balanceOf(address(this)) - balBefore;
+        if (minted == 0) revert NothingMinted();
+
+        minted -= _takeBridgeFee(message, minted);
+        if (minted > 0) usdc.safeTransfer(beneficiary, minted);
+        emit BridgeForward(beneficiary, minted);
     }
 
     /// @dev Read a 32-byte word at `offset` inside the `message` calldata bytes.
