@@ -185,16 +185,14 @@ contract ArcadeLaunchpadTest is Test {
         uint256 expectedPlatform = (amountIn * 15) / 10_000; // 0.15 USDC
         uint256 expectedCreator = (amountIn * 5) / 10_000; // 0.05 USDC
         assertEq(usdc.balanceOf(treasury), t0 + expectedPlatform, "pair paid protocol leg");
-        assertEq(usdc.balanceOf(creator), c1_0 + expectedCreator, "pair paid creator leg");
+        assertEq(usdc.balanceOf(creator), c1_0 + (expectedCreator - (expectedCreator * 5_000) / 10_000), "creator1 paid its share + dust");
 
-        // KNOWN REGRESSION (documented, not accidental): the pair only knows a
-        // single `launchCreator`, so CLANKER's creator2 split does NOT survive
-        // post-migration. The old _distributeMigratedFee shared the creator
-        // portion between creator and creator2; the pair pays s.creator only.
-        // Fixing this needs launchCreator to point at a splitter contract, or
-        // the pair to carry the second recipient. Asserted so the gap is
-        // visible in CI rather than discovered by creator2 in production.
-        assertEq(usdc.balanceOf(creator2), c2_0, "creator2 gets NOTHING post-migration (gap)");
+        // creator2 survives migration: the pair carries the second recipient,
+        // mirroring the launchpad's own creator/creator2 model. This launch is
+        // CLANKER with creator2 at 50/50, so the 0.05% creator leg splits in
+        // half, with creator1 taking the rounding remainder.
+        uint256 expectedC2 = (expectedCreator * 5_000) / 10_000;
+        assertEq(usdc.balanceOf(creator2), c2_0 + expectedC2, "creator2 paid its share");
     }
 
     function test_sellMigrated_takesRoyaltyOnOutput() public {

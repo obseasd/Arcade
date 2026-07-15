@@ -54,7 +54,7 @@ interface IArcadeV2Pair {
     /// 0.05% creator). Taken on the INPUT, so it is denominated in whichever
     /// token came in: USDC on a buy, the launch token on a sell. seedGate-only,
     /// set once.
-    function setLaunchCreator(address creator) external;
+    function setLaunchCreator(address creator, address creator2, uint16 creator2Bps) external;
     function sync() external;
 
     function initialize(address, address, address) external;

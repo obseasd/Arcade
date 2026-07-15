@@ -67,6 +67,15 @@ contract ArcadeV2Pair is ArcadeV2ERC20 {
     ///         liquidity providers are not taxed by this.
     address public launchCreator;
 
+    /// @notice Optional second creator recipient and its share (in bps) of the
+    ///         CREATOR leg only. Mirrors the launchpad's own creator/creator2
+    ///         model, which _distributeMigratedFee used to honour. Without this
+    ///         the pair would silently pay creator1 100% of the creator leg and
+    ///         creator2 nothing, breaking a shipped CLANKER feature for launches
+    ///         that already exist. Zero when the launch has a single creator.
+    address public launchCreator2;
+    uint16 public creator2ShareBps;
+
 
     /// Basis points of the INPUT skimmed out of the pool per swap on a
     /// graduated pair. 15 protocol + 5 creator = 20; the remaining 10 of the
@@ -318,12 +327,18 @@ contract ArcadeV2Pair is ArcadeV2ERC20 {
     ///         seedGate (the launchpad) can call it, and only once, so a pair's
     ///         fee split can never be changed under its LPs after the fact.
     ///         Ordinary pairs never get this and keep stock V2 behaviour.
-    function setLaunchCreator(address creator) external {
+    function setLaunchCreator(address creator, address creator2, uint16 creator2Bps) external {
         address _gate = seedGate;
         if (_gate == address(0) || msg.sender != _gate) revert Forbidden();
         if (launchCreator != address(0)) revert Forbidden(); // set once
         if (creator == address(0)) revert Forbidden();
+        // creator2 is optional, but a share without a recipient (or a share
+        // that would starve creator1 entirely) is a config error, not a launch.
+        if (creator2 == address(0) && creator2Bps != 0) revert Forbidden();
+        if (creator2 != address(0) && (creator2Bps == 0 || creator2Bps > 10_000)) revert Forbidden();
         launchCreator = creator;
+        launchCreator2 = creator2;
+        creator2ShareBps = creator2Bps;
         emit LaunchCreatorSet(creator);
     }
 
@@ -339,7 +354,17 @@ contract ArcadeV2Pair is ArcadeV2ERC20 {
         protocolAmount = feeTo == address(0) ? 0 : (amount * LAUNCH_PROTOCOL_BPS) / 10_000;
         creatorAmount = (amount * LAUNCH_CREATOR_BPS) / 10_000;
         if (protocolAmount > 0) _safeTransfer(token, feeTo, protocolAmount);
-        if (creatorAmount > 0) _safeTransfer(token, creator, creatorAmount);
+        if (creatorAmount > 0) {
+            address _c2 = launchCreator2;
+            uint256 c2Amount = _c2 == address(0)
+                ? 0
+                : (creatorAmount * creator2ShareBps) / 10_000;
+            // creator1 takes the remainder, so rounding dust never strands and
+            // the two legs always sum to exactly creatorAmount.
+            if (c2Amount > 0) _safeTransfer(token, _c2, c2Amount);
+            uint256 c1Amount = creatorAmount - c2Amount;
+            if (c1Amount > 0) _safeTransfer(token, creator, c1Amount);
+        }
         if (protocolAmount > 0 || creatorAmount > 0) {
             emit LaunchFeePaid(token, protocolAmount, creatorAmount);
         }
