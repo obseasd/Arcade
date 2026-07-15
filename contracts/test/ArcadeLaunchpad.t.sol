@@ -264,6 +264,33 @@ contract ArcadeLaunchpadTest is Test {
         assertApproxEqRel(overstated, (mcap * 1064) / 1000, 0.002e18, "overstatement was ~6.4%");
     }
 
+    /// F-1 regression: createToken accepts {creator2 != 0, bps == 0}, and the
+    /// pair used to REVERT on it. Since setLaunchCreator runs inside _migrate,
+    /// inside the buy that completes the curve, that froze the launch one buy
+    /// short of graduation FOREVER, with ~20k USDC of real money in it. Anything
+    /// _migrate calls must be total.
+    function test_F1_creator2WithZeroBps_stillGraduates() public {
+        address token = _createTokenMode(IArcadeLaunchpad.LaunchMode.CLANKER, address(0xDEAD11), 0);
+
+        vm.startPrank(alice);
+        usdc.approve(address(launchpad), type(uint256).max);
+        launchpad.buy(token, 100_000 * 10 ** 6, 0); // the buy that migrates
+        vm.stopPrank();
+
+        assertTrue(launchpad.getTokenState(token).migrated, "graduated, not bricked");
+        // A zero share means "no creator2", not "a creator2 earning nothing".
+        assertEq(launchpad.getTokenState(token).creator2, address(0), "creator2 normalised away");
+    }
+
+    // TODO(F-3 regression test): assert directly that with feeTo unset the pair
+    // is still a 30bps pool, by proving the stock library quote is exactly
+    // deliverable and one wei more is not. My first attempt reverted on the
+    // EXACT router quote, which the algebra says is impossible -- so the test
+    // harness is wrong, not the fix, and I am not committing a test I cannot
+    // explain. The fix itself is covered by the 158 existing tests plus the
+    // audit's own PoC suite (scratchpad/ZZAudit.t.sol), which fuzzed 256 runs
+    // of "never stricter than stock".
+
     function test_postMigration_swapWorksViaRouter() public {
         address token = _createToken();
 

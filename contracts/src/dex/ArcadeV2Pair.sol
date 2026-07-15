@@ -302,22 +302,44 @@ contract ArcadeV2Pair is ArcadeV2ERC20 {
         // Camelot does (accumulate raw, convert off-chain). Sweeping it is an
         // ops detail, invisible to integrators -- unlike an output skim, which
         // is a fund-loss bug.
-        uint256 coeff = 3;
+        // `feePaid` is what ACTUALLY left. The K check is derived from it, not
+        // from a hardcoded coefficient -- that was the root cause of audit
+        // F-3/F-4: the coefficient is not a constant, it is a function of the
+        // fee that actually departed. The old code forced coeff = 1 whenever a
+        // launch fee existed, but zeroed the protocol leg when feeTo was unset,
+        // so the pair silently became a 15bps pool that still quoted 30bps --
+        // and anyone calling swap() directly pocketed the difference. It failed
+        // toward the TRADER, not the pool, contrary to the comment that stood
+        // here. Same root cause made dust inputs (whose legs floor to 0) a
+        // 10bps pool.
+        uint256 fee0Paid;
+        uint256 fee1Paid;
         if (_creator != address(0)) {
-            coeff = 1;
             if (amount0In > 0) {
                 (uint256 p, uint256 c) = _payLaunchFee(token0, amount0In, _creator);
-                balance0 -= (p + c);
+                fee0Paid = p + c;
+                balance0 -= fee0Paid;
             }
             if (amount1In > 0) {
                 (uint256 p, uint256 c) = _payLaunchFee(token1, amount1In, _creator);
-                balance1 -= (p + c);
+                fee1Paid = p + c;
+                balance1 -= fee1Paid;
             }
         }
         {
-            uint256 balance0Adj = (balance0 * 1000) - (amount0In * coeff);
-            uint256 balance1Adj = (balance1 * 1000) - (amount1In * coeff);
-            if (balance0Adj * balance1Adj < uint256(_r0) * uint256(_r1) * 1_000_000) revert KInvariant();
+            // Rebased to 10000. Because balance_post + feePaid == balance_pre:
+            //   balance*10000 - in*30 + feePaid*10000 == balance_pre*10000 - in*30
+            // which is EXACTLY stock V2's `balance*1000 - in*3`, scaled by 10.
+            // Holds for ANY feePaid including 0 (ordinary pair, unset feeTo, or
+            // a dust input whose legs floor away) with no rounding cases:
+            // whatever is not removed simply stays in the pool, which IS the
+            // stock outcome. One expression, no branch, no coefficient to keep
+            // in sync with the fee.
+            uint256 balance0Adj = (balance0 * 10_000) - (amount0In * 30) + (fee0Paid * 10_000);
+            uint256 balance1Adj = (balance1 * 10_000) - (amount1In * 30) + (fee1Paid * 10_000);
+            if (balance0Adj * balance1Adj < uint256(_r0) * uint256(_r1) * 100_000_000) {
+                revert KInvariant();
+            }
         }
         _update(balance0, balance1, _r0, _r1);
         emit Swap(msg.sender, amount0In, amount1In, amount0Out, amount1Out, to);
@@ -332,10 +354,15 @@ contract ArcadeV2Pair is ArcadeV2ERC20 {
         if (_gate == address(0) || msg.sender != _gate) revert Forbidden();
         if (launchCreator != address(0)) revert Forbidden(); // set once
         if (creator == address(0)) revert Forbidden();
-        // creator2 is optional, but a share without a recipient (or a share
-        // that would starve creator1 entirely) is a config error, not a launch.
-        if (creator2 == address(0) && creator2Bps != 0) revert Forbidden();
-        if (creator2 != address(0) && (creator2Bps == 0 || creator2Bps > 10_000)) revert Forbidden();
+        // NORMALISE, never revert. This runs inside _migrate, i.e. inside the
+        // buy that completes the curve: a revert here freezes the launch one
+        // buy short of graduation, forever, with real money in it. Anything on
+        // that path must be TOTAL. createToken accepts {creator2 != 0, bps = 0}
+        // (only bps > 10_000 reverts), so rejecting it here bricked a config
+        // the system had always accepted. (Audit F-1.)
+        if (creator2Bps > 10_000) revert Forbidden();
+        if (creator2Bps == 0) creator2 = address(0);
+        if (creator2 == address(0)) creator2Bps = 0;
         launchCreator = creator;
         launchCreator2 = creator2;
         creator2ShareBps = creator2Bps;

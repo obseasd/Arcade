@@ -323,7 +323,14 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         s.creator = msg.sender;
         // creator2 is a CLANKER-only feature (per the NatSpec): PUMP is a plain
         // 50/50 platform/creator split and ignores any creator2 passed in.
-        bool useCreator2 = mode == LaunchMode.CLANKER && creator2 != address(0);
+        // A zero share means "no creator2", NOT "a creator2 that earns nothing".
+        // createToken accepts creator2ShareBps == 0 (only > 10_000 reverts), so
+        // without this the pair would be handed {creator2 != 0, bps == 0} at
+        // graduation and reject it -- reverting the buy that completes the
+        // curve, permanently, with ~20k USDC of real money stuck one buy short
+        // of migrating. Anything _migrate calls must be TOTAL. (Audit F-1.)
+        bool useCreator2 =
+            mode == LaunchMode.CLANKER && creator2 != address(0) && creator2ShareBps != 0;
         s.creator2 = useCreator2 ? creator2 : address(0);
         s.creator2ShareBps = useCreator2 ? creator2ShareBps : 0;
         s.mode = mode;
