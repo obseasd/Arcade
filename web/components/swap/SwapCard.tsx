@@ -1277,16 +1277,19 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
           // slippage tolerance instead of hardcoding 97%. A user on a thin
           // pair who set slippage to 5% should get the same 5% tolerance
           // on the mid leg, not a tighter 3%.
+          // The quoter now returns the REAL usdcMid. This used to read
+          // `totalRoyaltyUsdc` and reconstruct the mid by inverting the royalty
+          // math (`* 10_000 / (30 * migratedLegs)`) -- a fragile inversion that
+          // broke outright the moment the pair-level fee redesign deleted the
+          // wrapper royalty and left that slot returning a hardcoded 0: the
+          // `> 0n` guard never passed, the floor stayed 0, and the throw below
+          // killed every migrated->migrated swap in the UI.
           let usdcMidMinForRoute = 0n;
           if (quoteMigratedOut.data) {
-            const totalRoyaltyUsdc = (quoteMigratedOut.data as readonly bigint[])[1];
-            if (totalRoyaltyUsdc > 0n) {
-              const migratedLegs = (route.inMigrated ? 1n : 0n) + (route.outMigrated ? 1n : 0n);
-              if (migratedLegs > 0n) {
-                const usdcMidEstimate = (totalRoyaltyUsdc * 10_000n) / (30n * migratedLegs);
-                const tolerance = 10_000n - BigInt(slippageBps);
-                usdcMidMinForRoute = (usdcMidEstimate * tolerance) / 10_000n;
-              }
+            const usdcMid = (quoteMigratedOut.data as readonly bigint[])[1];
+            if (usdcMid > 0n) {
+              const tolerance = 10_000n - BigInt(slippageBps);
+              usdcMidMinForRoute = (usdcMid * tolerance) / 10_000n;
             }
           }
           // G9-5 fix (cont): refuse to sign a swap whose mid-leg floor would

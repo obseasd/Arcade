@@ -894,29 +894,37 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
      * (incl. royalty skim) so the frontend can display an accurate output.
      * Returns `(tokensOut, totalRoyaltyUsdc)`.
      */
+    /// @return tokensOut  final tokenOut for `tokensIn`.
+    /// @return usdcMid     the USDC produced by leg 1, i.e. the input to leg 2.
+    ///
+    /// The second return used to be `totalRoyaltyUsdc`, mirroring a wrapper
+    /// royalty that no longer exists (each pair now charges the graduated fee
+    /// itself, and getAmountsOut already prices the 997/1000 the pair enforces,
+    /// so the quote needs no extra deduction). It was left returning a hardcoded
+    /// 0 "for ABI stability" -- but SwapCard derives the mid-leg slippage floor
+    /// EXCLUSIVELY from this value and throws when it is 0, so the constant
+    /// bricked the entire migrated->migrated route in the UI, and passing 0 to
+    /// swapMigratedRoute's usdcMidMin would silently re-open the mid-leg
+    /// sandwich that audit 2026-06-11 #10 closed. Returning `usdcMid` makes the
+    /// floor derivable again, which is what the caller actually needed. Same
+    /// arity and types, so the ABI shape is unchanged; only the meaning is, and
+    /// every caller moves with it.
     function quoteSwapMigratedRoute(address tokenIn, address tokenOut, uint256 tokensIn)
         external
         view
-        returns (uint256 tokensOut, uint256 totalRoyaltyUsdc)
+        returns (uint256 tokensOut, uint256 usdcMid)
     {
         if (v2Router == address(0) || tokensIn == 0) return (0, 0);
         // Same shared validation as swapMigratedRoute (invalid routes quote 0).
         (bool inMigrated, bool outMigrated, bool ok) = _migratedPair(tokenIn, tokenOut);
         if (!ok) return (0, 0);
+        inMigrated;
+        outMigrated;
 
         uint256[] memory leg1 = IArcadeV2Router(v2Router).getAmountsOut(
             tokensIn, _path2(tokenIn, address(USDC))
         );
-        uint256 usdcMid = leg1[1];
-
-        // No wrapper royalty to mirror any more: each pair charges the
-        // graduated fee itself, and getAmountsOut already prices the 997/1000
-        // the pair enforces, so the quote needs no extra deduction. The K check
-        // is algebraically unchanged by the split, so the trader's output is
-        // identical to before. Kept in the return shape for ABI stability.
-        inMigrated;
-        outMigrated;
-        totalRoyaltyUsdc = 0;
+        usdcMid = leg1[1];
 
         uint256[] memory leg2 = IArcadeV2Router(v2Router).getAmountsOut(
             usdcMid, _path2(address(USDC), tokenOut)

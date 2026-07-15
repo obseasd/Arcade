@@ -85,6 +85,19 @@ contract ArcadeV2Pair is ArcadeV2ERC20 {
 
     event LaunchCreatorSet(address indexed creator);
     event LaunchFeePaid(address indexed token, uint256 protocolAmount, uint256 creatorAmount);
+    /// A fee leg we could not deliver; booked to the pull ledger instead of
+    /// reverting the swap. Alarms that a recipient has stopped being payable.
+    event LaunchFeeDeferred(address indexed token, address indexed to, uint256 amount);
+    event LaunchFeeClaimed(address indexed token, address indexed to, uint256 amount);
+
+    /// @notice Launch fees this pair owes but could not deliver, keyed
+    ///         [token][recipient]. Claim with claimLaunchFees.
+    mapping(address => mapping(address => uint256)) public pendingLaunchFees;
+    /// @notice Per-token sum of pendingLaunchFees. Load-bearing for skim(),
+    ///         which pays out `balanceOf - reserve` -- precisely the shape a
+    ///         deferred fee has. Without this, skim() would hand a creator's
+    ///         unclaimed fees to whoever calls it first.
+    mapping(address => uint256) public pendingLaunchFeeTotal;
 
     uint112 private reserve0;
     uint112 private reserve1;
@@ -373,6 +386,18 @@ contract ArcadeV2Pair is ArcadeV2ERC20 {
     ///      Rounds DOWN, and a zero-address feeTo simply routes nothing (the
     ///      pool keeps it, i.e. stock behaviour), so an unset factory feeTo can
     ///      never brick swaps.
+    ///
+    ///      Every leg goes through _payOrCreditFee, NEVER a hard _safeTransfer.
+    ///      These transfers run inside swap(), and `launchCreator` is set-once
+    ///      with no setter (setLaunchCreator is seedGate-only and one-shot), so
+    ///      a hard transfer meant that Circle blacklisting the creator would
+    ///      revert EVERY USDC-in swap on that pair forever: the market goes
+    ///      sell-only and dies, unrecoverably, taking the creator's own future
+    ///      fees with it. This is the same hard-transfer-to-an-immutable-
+    ///      recipient pattern already fixed in ArcadeLaunchpad._safePayUsdc,
+    ///      ArcadeV3Locker._payOrCredit, ArcadeCctpBuyReceiver.pendingFees and
+    ///      ArcadeV3SwapRouter.pendingSnipeFees -- the sixth instance. The payer
+    ///      always pays; only the destination may defer.
     function _payLaunchFee(address token, uint256 amount, address creator)
         private
         returns (uint256 protocolAmount, uint256 creatorAmount)
@@ -380,7 +405,7 @@ contract ArcadeV2Pair is ArcadeV2ERC20 {
         address feeTo = IArcadeV2Factory(factory).feeTo();
         protocolAmount = feeTo == address(0) ? 0 : (amount * LAUNCH_PROTOCOL_BPS) / 10_000;
         creatorAmount = (amount * LAUNCH_CREATOR_BPS) / 10_000;
-        if (protocolAmount > 0) _safeTransfer(token, feeTo, protocolAmount);
+        if (protocolAmount > 0) _payOrCreditFee(token, feeTo, protocolAmount);
         if (creatorAmount > 0) {
             address _c2 = launchCreator2;
             uint256 c2Amount = _c2 == address(0)
@@ -388,20 +413,70 @@ contract ArcadeV2Pair is ArcadeV2ERC20 {
                 : (creatorAmount * creator2ShareBps) / 10_000;
             // creator1 takes the remainder, so rounding dust never strands and
             // the two legs always sum to exactly creatorAmount.
-            if (c2Amount > 0) _safeTransfer(token, _c2, c2Amount);
+            if (c2Amount > 0) _payOrCreditFee(token, _c2, c2Amount);
             uint256 c1Amount = creatorAmount - c2Amount;
-            if (c1Amount > 0) _safeTransfer(token, creator, c1Amount);
+            if (c1Amount > 0) _payOrCreditFee(token, creator, c1Amount);
         }
         if (protocolAmount > 0 || creatorAmount > 0) {
             emit LaunchFeePaid(token, protocolAmount, creatorAmount);
         }
     }
 
+    /// @dev Try to hand `amount` to `to`; on ANY failure, book it to the pull
+    ///      ledger instead of reverting the swap.
+    ///
+    ///      The amount is deducted from `balance` by the caller either way, so
+    ///      it leaves the reserves either way -- the K check and the price are
+    ///      identical whether the leg was delivered or deferred. What changes is
+    ///      only WHERE the tokens sit.
+    function _payOrCreditFee(address token, address to, uint256 amount) private {
+        (bool ok, bytes memory data) =
+            token.call(abi.encodeWithSelector(IERC20Minimal.transfer.selector, to, amount));
+        if (ok && (data.length == 0 || (data.length >= 32 && abi.decode(data, (bool))))) return;
+        pendingLaunchFees[token][to] += amount;
+        // Tracked in aggregate too, because skim() pays out
+        // `balanceOf - reserve` and a deferred fee is EXACTLY that difference:
+        // without netting it out, the first caller of skim() would walk off with
+        // the creator's unclaimed fees. (The CCTP receiver shipped this same
+        // bug: its leftover sweep ate the deferred fee.)
+        pendingLaunchFeeTotal[token] += amount;
+        emit LaunchFeeDeferred(token, to, amount);
+    }
+
+    /// @notice Withdraw launch fees this pair could not deliver (eg the
+    ///         recipient was blacklisted at the time of the swap). Permissionless
+    ///         and always pays msg.sender, so nobody can redirect it.
+    function claimLaunchFees(address token) external lock returns (uint256 amount) {
+        amount = pendingLaunchFees[token][msg.sender];
+        if (amount == 0) revert Forbidden();
+        // Zeroed BEFORE the transfer: a revert rolls both back and preserves the
+        // row for a retry; a reentrant token reads 0.
+        pendingLaunchFees[token][msg.sender] = 0;
+        pendingLaunchFeeTotal[token] -= amount;
+        _safeTransfer(token, msg.sender, amount);
+        emit LaunchFeeClaimed(token, msg.sender, amount);
+    }
+
+    /// @dev Nets out pendingLaunchFeeTotal. skim() exists to sweep the gap
+    ///      between the real balance and the booked reserves to an ARBITRARY
+    ///      caller, and a deferred launch fee is exactly that gap -- it sits in
+    ///      this contract while _update has already excluded it from reserves.
+    ///      Un-netted, the first person to call skim() on a pair with a
+    ///      blacklisted creator would take the creator's fees. Only genuine
+    ///      donations are skimmable.
     function skim(address to) external lock {
         address _t0 = token0;
         address _t1 = token1;
-        _safeTransfer(_t0, to, IERC20Minimal(_t0).balanceOf(address(this)) - reserve0);
-        _safeTransfer(_t1, to, IERC20Minimal(_t1).balanceOf(address(this)) - reserve1);
+        _safeTransfer(
+            _t0,
+            to,
+            IERC20Minimal(_t0).balanceOf(address(this)) - reserve0 - pendingLaunchFeeTotal[_t0]
+        );
+        _safeTransfer(
+            _t1,
+            to,
+            IERC20Minimal(_t1).balanceOf(address(this)) - reserve1 - pendingLaunchFeeTotal[_t1]
+        );
     }
 
     function sync() external lock {
@@ -411,9 +486,15 @@ contract ArcadeV2Pair is ArcadeV2ERC20 {
         if (totalSupply == 0 && seedGate != address(0) && msg.sender != seedGate) {
             revert Forbidden();
         }
+        // Net out the deferred launch fees for the same reason skim() does:
+        // they are physically held here but are OWED, not liquidity. Syncing
+        // them into reserves would book someone else's fee as pool depth, and
+        // the later claimLaunchFees would then drop the balance BELOW the
+        // recorded reserve -- underflowing skim() and leaving the pair quoting
+        // against depth it does not have.
         _update(
-            IERC20Minimal(token0).balanceOf(address(this)),
-            IERC20Minimal(token1).balanceOf(address(this)),
+            IERC20Minimal(token0).balanceOf(address(this)) - pendingLaunchFeeTotal[token0],
+            IERC20Minimal(token1).balanceOf(address(this)) - pendingLaunchFeeTotal[token1],
             reserve0,
             reserve1
         );

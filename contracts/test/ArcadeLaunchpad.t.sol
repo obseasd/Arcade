@@ -427,9 +427,14 @@ contract ArcadeLaunchpadTest is Test {
         // wrapper royalty is deleted and each leg's own pair charges the fee
         // in-pool. getAmountsOut already prices the 997/1000 the pair enforces,
         // so the quote needs no extra deduction and stays exact.
-        (uint256 quotedOut, uint256 quotedRoyalty) =
+        // The second return is the REAL mid-leg USDC, not the dead royalty. It
+        // used to assert == 0, which pinned the bug: SwapCard derives the
+        // mid-leg slippage floor exclusively from this value and throws when it
+        // is 0, so a hardcoded 0 bricked the whole migrated->migrated route in
+        // the UI while this test called that correct.
+        (uint256 quotedOut, uint256 quotedUsdcMid) =
             launchpad.quoteSwapMigratedRoute(tokenA, tokenB, tokensA);
-        assertEq(quotedRoyalty, 0, "wrapper royalty is gone; the pair charges it");
+        assertGt(quotedUsdcMid, 0, "usdcMid is derivable, so the mid-leg floor is too");
         assertGt(quotedOut, 0, "quote shows an output");
 
         // Execute the multi-hop swap through the launchpad

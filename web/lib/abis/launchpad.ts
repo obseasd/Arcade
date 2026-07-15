@@ -276,7 +276,11 @@ export const LAUNCHPAD_ABI = [
     ],
     outputs: [
       { name: "tokensOut", type: "uint256" },
-      { name: "totalRoyaltyUsdc", type: "uint256" },
+      // Was `totalRoyaltyUsdc`, which the pair-level fee redesign left
+      // hardcoded to 0. Now the real mid-leg USDC, so the caller can derive the
+      // usdcMidMin floor directly instead of reconstructing it by inverting a
+      // royalty that no longer exists.
+      { name: "usdcMid", type: "uint256" },
     ],
   },
   {
