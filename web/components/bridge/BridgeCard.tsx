@@ -388,6 +388,19 @@ export function BridgeCard() {
     isArcDest &&
     !isSolanaBridgeId(srcChainId);
 
+  // Plain bridge (no buy) that still owes the fast-transfer fee: route it
+  // through the receiver so the fee is skimmed on arrival and the remainder
+  // forwarded. Standard transfers are free, so they keep the cheaper direct
+  // mint (no extra contract in the path). The receiver re-checks the finality
+  // threshold on the ATTESTED message, so this flag cannot be used to dodge
+  // or fake the fee.
+  const useFeeHook =
+    !useBuyHook &&
+    fastTransfer &&
+    isArcDest &&
+    !isSolanaBridgeId(srcChainId) &&
+    ADDRESSES.cctpBuyReceiver !== zeroAddress;
+
   // Solana bridge mode: one side is the Solana sentinel. App Kit only
   // bridges Solana <-> Arc, so the pickers force Arc on the opposite side.
   const solanaMode =
@@ -556,13 +569,20 @@ export function BridgeCard() {
   // 15% tolerance for cross-chain price drift during the ~30-60s bridge.
   const buyMinOut = buyQuoteOut > 0n ? (buyQuoteOut * 85n) / 100n : 0n;
 
-  // Fees only apply when Fast Transfer is enabled: 0.05% Arcade + up to 0.01%
-  // Circle. Standard Transfer stays completely free.
-  const arcadeFee =
-    amountRaw > 0n && fastTransfer ? (amountRaw * ARCADE_BRIDGE_FEE_BPS) / BPS_DENOMINATOR : 0n;
+  // Fees only apply to Fast Transfer; Standard is free on both sides.
+  // The on-chain receiver PINS the all-in cost to ARCADE_BRIDGE_FEE_BPS of the
+  // burned amount: it skims exactly the gap Circle's own fee leaves
+  // (fee = amount*5/10000 - feeExecuted). So the user's total is this number
+  // whatever Circle charges on the route, and Arcade's share is the remainder.
+  // (This replaces the old `arcadeFee + circleMaxFee` sum, which double-counted
+  // and quoted 0.07% for what is a 0.05% all-in.)
+  const totalFee =
+    amountRaw > 0n && fastTransfer
+      ? (amountRaw * ARCADE_BRIDGE_FEE_BPS) / BPS_DENOMINATOR
+      : 0n;
   const circleMaxFee =
     amountRaw > 0n && fastTransfer ? (amountRaw * CCTP_FAST_MAX_FEE_BPS) / BPS_DENOMINATOR : 0n;
-  const totalFee = arcadeFee + circleMaxFee;
+  const arcadeFee = totalFee > circleMaxFee ? totalFee - circleMaxFee : 0n;
   const estReceived = amountRaw > 0n ? amountRaw - totalFee : 0n;
   const isProcessing =
     step.kind === "approving" ||
@@ -732,7 +752,7 @@ export function BridgeCard() {
       // who receives the bought tokens is encoded in the hook.
       const beneficiary = (recipientOverride ?? account) as Address;
       const mintRecipient32 = addressToBytes32(
-        useBuyHook ? ADDRESSES.cctpBuyReceiver : beneficiary,
+        useBuyHook || useFeeHook ? ADDRESSES.cctpBuyReceiver : beneficiary,
       );
       const destinationCaller = ("0x" + "00".repeat(32)) as `0x${string}`;
       // Fast Transfer: short finality + non-zero maxFee (1 bp upper bound; Iris
@@ -784,7 +804,29 @@ export function BridgeCard() {
             ],
             chainId: srcChain.id,
           })
-        : await writeContractAsync({
+        : useFeeHook
+          ? // Plain FAST bridge: mint to the receiver with a 32-byte hook
+            // carrying only the beneficiary. On arrival receiveAndForward
+            // skims the fee and forwards the rest. The 32-byte hookData also
+            // makes the message shorter than the buy path's 192, which is how
+            // the claim below tells the two apart.
+            await writeContractAsync({
+              address: CCTP_V2_TOKEN_MESSENGER,
+              abi: TOKEN_MESSENGER_V2_ABI,
+              functionName: "depositForBurnWithHook",
+              args: [
+                amountRaw,
+                dstChain.cctpDomain,
+                mintRecipient32,
+                srcChain.usdc,
+                destinationCaller,
+                maxFee,
+                minFinality,
+                encodeAbiParameters([{ type: "address" }], [beneficiary]),
+              ],
+              chainId: srcChain.id,
+            })
+          : await writeContractAsync({
             address: CCTP_V2_TOKEN_MESSENGER,
             abi: TOKEN_MESSENGER_V2_ABI,
             functionName: "depositForBurn",
@@ -893,15 +935,14 @@ export function BridgeCard() {
           (dstChainCfg && parsed.destinationDomain !== dstChainCfg.cctpDomain) ||
           // B-1: fail closed when expectedRecipient is missing
           !expectedRecipient ||
-          // Accept either the user's own mintRecipient OR our bridge-and-buy
-          // receiver (the attestation is already bound to this burnTxHash).
+          // Accept either the user's own mintRecipient OR our receiver (the
+          // attestation is already bound to this burnTxHash). The receiver is
+          // the mintRecipient for BOTH bridge-and-buy and the plain fast
+          // fee-forward path, so this must not be gated on BRIDGE_BUY_ENABLED.
           (parsed.mintRecipient.toLowerCase() !==
             addressToBytes32(expectedRecipient as Address).toLowerCase() &&
-            !(
-              BRIDGE_BUY_ENABLED &&
-              parsed.mintRecipient.toLowerCase() ===
-                addressToBytes32(ADDRESSES.cctpBuyReceiver).toLowerCase()
-            ))
+            parsed.mintRecipient.toLowerCase() !==
+              addressToBytes32(ADDRESSES.cctpBuyReceiver).toLowerCase())
         ) {
           // eslint-disable-next-line no-console
           console.warn("[CCTP] Iris payload mismatch, ignoring", { parsed });
@@ -1032,13 +1073,12 @@ export function BridgeCard() {
         parsed.sourceDomain !== step.srcDomain ||
         (dstChainCfg && parsed.destinationDomain !== dstChainCfg.cctpDomain) ||
         !expectedRecipient ||
+        // The receiver is a valid mintRecipient for both the buy path and the
+        // plain fast fee-forward path, so this is not gated on BRIDGE_BUY_ENABLED.
         (parsed.mintRecipient.toLowerCase() !==
           addressToBytes32(expectedRecipient as Address).toLowerCase() &&
-          !(
-            BRIDGE_BUY_ENABLED &&
-            parsed.mintRecipient.toLowerCase() ===
-              addressToBytes32(ADDRESSES.cctpBuyReceiver).toLowerCase()
-          ))
+          parsed.mintRecipient.toLowerCase() !==
+            addressToBytes32(ADDRESSES.cctpBuyReceiver).toLowerCase())
       ) {
         return;
       }
@@ -1125,12 +1165,25 @@ export function BridgeCard() {
       // message itself, so it works even after a page refresh with no extra
       // state — and if the receiver isn't wired, we fall back to receiveMessage.
       const claimMintRecipient = mintRecipientFromMessage(step.message);
-      const isBridgeBuy =
-        BRIDGE_BUY_ENABLED &&
+      const mintsToReceiver =
         !!claimMintRecipient &&
         ADDRESSES.cctpBuyReceiver !== ("0x0000000000000000000000000000000000000000" as Address) &&
         claimMintRecipient.toLowerCase() === ADDRESSES.cctpBuyReceiver.toLowerCase();
-      const hash = isBridgeBuy
+      // Which receiver entrypoint: the buy path commits a 192-byte hookData
+      // (message = 376 + 192 = 568 bytes), the fee-only path a 32-byte one
+      // (408). Read it off the message so a refresh needs no extra state.
+      const msgBytes = (step.message.length - 2) / 2;
+      const isBridgeBuy = BRIDGE_BUY_ENABLED && mintsToReceiver && msgBytes >= 568;
+      const isFeeForward = mintsToReceiver && !isBridgeBuy;
+      const hash = isFeeForward
+        ? await writeContractAsync({
+            address: ADDRESSES.cctpBuyReceiver,
+            abi: CCTP_BUY_RECEIVER_ABI,
+            functionName: "receiveAndForward",
+            args: [step.message, step.attestation],
+            chainId: ARC_CHAIN_ID,
+          })
+        : isBridgeBuy
         ? await writeContractAsync({
             address: ADDRESSES.cctpBuyReceiver,
             abi: CCTP_BUY_RECEIVER_ABI,
@@ -1382,6 +1435,28 @@ export function BridgeCard() {
       {sameChain && (
         <div className="mt-3 rounded-xl border border-arc-warn/30 bg-arc-warn/10 p-2 text-xs text-arc-warn">
           Source and destination must be different chains.
+        </div>
+      )}
+
+      {/* Itemised bridge fee. Previously the fee silently lowered the "You
+          receive" estimate with no line explaining it. Standard Transfer is
+          free on both sides, so the row only appears for Fast. */}
+      {!sameChain && amountRaw > 0n && (
+        <div className="mt-3 space-y-1 rounded-xl border border-arc-border bg-white/[0.015] p-3 text-xs">
+          <div className="flex items-center justify-between">
+            <span className="text-arc-text-muted">
+              Bridge fee {fastTransfer ? "(Fast, all-in)" : "(Standard)"}
+            </span>
+            <span className="tabular-nums text-arc-text">
+              {fastTransfer ? `${formatUSDC(totalFee, 6, 4)} USDC (0.05%)` : "Free"}
+            </span>
+          </div>
+          {fastTransfer && (
+            <div className="text-[10px] text-arc-text-faint">
+              Includes Circle&apos;s fast-transfer fee. Total never exceeds 0.05%.
+              Switch to Standard for a free transfer.
+            </div>
+          )}
         </div>
       )}
 

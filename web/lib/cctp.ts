@@ -232,6 +232,18 @@ export const CCTP_BUY_RECEIVER_ABI = [
     ],
     outputs: [],
   },
+  {
+    // Plain bridge (no buy): skims the fast-transfer fee and forwards the
+    // remainder to the beneficiary encoded in the 32-byte hookData.
+    type: "function",
+    name: "receiveAndForward",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "message", type: "bytes" },
+      { name: "attestation", type: "bytes" },
+    ],
+    outputs: [],
+  },
 ] as const;
 
 // ============ Helpers ============
