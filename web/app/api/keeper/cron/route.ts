@@ -154,7 +154,17 @@ const EXCHANGE_V2_ABI = [
         ],
         outputs: [{ name: "dstAmountOut", type: "uint256" }],
     },
+    // MUST be in the ABI: without it viem cannot decode the revert and the
+    // precheck's error-name match fails (a denied keeper reads as allowed).
+    {
+        type: "error",
+        name: "TakerNotAllowed",
+        inputs: [{ name: "taker", type: "address" }],
+    },
 ] as const;
+// The 4-byte selector of TakerNotAllowed(address), matched as a belt in
+// case a provider surfaces the raw signature instead of the decoded name.
+const TAKER_NOT_ALLOWED_SELECTOR = "0x8435d2bb";
 // A well-formed (uint256, bytes) blob so the allowed-taker branch decodes
 // cleanly; the denied branch reverts before ever reaching the decode.
 const PROBE_BID_DATA = encodeAbiParameters(
@@ -322,9 +332,13 @@ async function runOrbsLeg(
                 args: [ZERO as Address, ZERO as Address, 0n, "0x", PROBE_BID_DATA, keeper],
             })
             .then(() => true)
-            .catch((e: unknown) =>
-                errMsg(e).includes("TakerNotAllowed") ? "denied" : true,
-            ),
+            .catch((e: unknown) => {
+                const m = errMsg(e);
+                return m.includes("TakerNotAllowed") ||
+                    m.toLowerCase().includes(TAKER_NOT_ALLOWED_SELECTOR)
+                    ? "denied"
+                    : true;
+            }),
         RPC_TIMEOUT_MS,
     );
     if (allowProbe === "denied") {

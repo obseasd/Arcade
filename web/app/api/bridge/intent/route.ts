@@ -6,11 +6,13 @@ import {
     countPendingBridgeIntents,
 } from "@/lib/keeperPersistence";
 
-// Refuse new intents once the pending backlog is implausibly large. A real
-// deployment has a handful of in-flight bridges at once; a backlog past this
-// means someone is spamming, so we stop growing the table (the keeper still
-// drains + age-expires the existing rows). 500 is far above any honest load.
-const MAX_PENDING_INTENTS = 500;
+// Refuse new intents only once the pending backlog is absurdly large. This
+// is a table-GROWTH backstop, not the primary spam defense (that is the 3h
+// age-expiry + the on-sight expiry of completed non-receiver burns + the
+// known-receiver guard). Set high enough that an honest user is never 429'd
+// even while a spammer's junk is draining: honest in-flight bridges number in
+// the low tens, never thousands, so 5000 bounds storage without a self-DoS.
+const MAX_PENDING_INTENTS = 5_000;
 
 /**
  * Records a CCTP bridge-and-buy intent the moment the user's burn lands
