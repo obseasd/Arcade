@@ -441,25 +441,37 @@ export async function pruneTerminalIntents(olderThanSecs: number): Promise<void>
  * advisory locks). Fails OPEN (returns true) when the DB is unconfigured so a
  * no-DB deploy still runs single-threaded via the caller.
  */
-export async function tryAcquireKeeperLease(leaseSecs: number): Promise<boolean> {
+export async function tryAcquireKeeperLease(
+    leaseSecs: number,
+    holder: string,
+): Promise<boolean> {
     if (!isDbConfigured()) return true;
     const sql = getSql();
     const rows = (await sql`
-        INSERT INTO keeper_lock (id, locked_until)
-        VALUES (1, NOW() + (${leaseSecs} * INTERVAL '1 second'))
+        INSERT INTO keeper_lock (id, locked_until, holder)
+        VALUES (1, NOW() + (${leaseSecs} * INTERVAL '1 second'), ${holder})
         ON CONFLICT (id) DO UPDATE
-            SET locked_until = NOW() + (${leaseSecs} * INTERVAL '1 second')
+            SET locked_until = NOW() + (${leaseSecs} * INTERVAL '1 second'),
+                holder = ${holder}
             WHERE keeper_lock.locked_until < NOW()
         RETURNING id
     `) as { id: number }[];
     return rows.length > 0;
 }
 
-/** Release the lease early (best-effort; it self-expires regardless). */
-export async function releaseKeeperLease(): Promise<void> {
+/**
+ * Release the lease early (best-effort; it self-expires regardless). Only
+ * clears it when WE still hold it (holder match), so an overrunning run whose
+ * lease already self-expired and was re-taken by a successor cannot clobber
+ * the successor's lease.
+ */
+export async function releaseKeeperLease(holder: string): Promise<void> {
     if (!isDbConfigured()) return;
     const sql = getSql();
-    await sql`UPDATE keeper_lock SET locked_until = NOW() WHERE id = 1`;
+    await sql`
+        UPDATE keeper_lock SET locked_until = NOW()
+        WHERE id = 1 AND holder = ${holder}
+    `;
 }
 
 // ---------------------------------------------------------------

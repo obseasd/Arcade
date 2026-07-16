@@ -158,5 +158,9 @@ CREATE INDEX IF NOT EXISTS idx_keeper_events_ref
 -- self-expires so a crashed run never wedges the keeper.
 CREATE TABLE IF NOT EXISTS keeper_lock (
     id              INT PRIMARY KEY,
-    locked_until    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    locked_until    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    -- Per-run token of the current holder. Release only clears the lease
+    -- when this matches, so an overrunning run can never clobber a
+    -- successor that already re-acquired the (self-expired) lease.
+    holder          VARCHAR(64)
 );

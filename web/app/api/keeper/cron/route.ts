@@ -279,8 +279,10 @@ export async function POST(req: NextRequest) {
 
     // Single-run lease: refuse to run two overlapping ticks against the same
     // wallet (nonce races) / the same intent (double-relay). The lease
-    // self-expires so a crashed run never wedges the keeper.
-    const gotLease = await tryAcquireKeeperLease(LEASE_SECONDS);
+    // self-expires so a crashed run never wedges the keeper. A per-run token
+    // scopes the release so an overrunning run cannot clobber a successor.
+    const runToken = crypto.randomUUID();
+    const gotLease = await tryAcquireKeeperLease(LEASE_SECONDS, runToken);
     if (!gotLease) {
         return NextResponse.json(
             { ran: false, reason: "another keeper run holds the lease" },
@@ -288,18 +290,21 @@ export async function POST(req: NextRequest) {
         );
     }
 
-    // Use the chain's clock for every on-chain timing comparison so the
-    // keeper agrees with the contract's block.timestamp, not the server's.
-    const latestBlock = await publicClient.getBlock();
-    const now = Number(latestBlock.timestamp);
-
     const summary: RunSummary = {
         orbs: { scanned: 0, bid: 0, filled: 0, closed: 0, skipped: 0, failed: 0 },
         cctp: { scanned: 0, relayed: 0, skipped: 0, failed: 0 },
         notes: [],
     };
 
+    // Everything after acquiring the lease runs in try/finally so a throw
+    // (e.g. a flaky getBlock) always releases it rather than wedging the
+    // keeper until the 90s self-expiry.
     try {
+        // Use the chain's clock for every on-chain timing comparison so the
+        // keeper agrees with the contract's block.timestamp, not the server's.
+        const latestBlock = await publicClient.getBlock();
+        const now = Number(latestBlock.timestamp);
+
         // ---- Leg A: Orbs TWAP ----
         try {
             await runOrbsLeg(
@@ -320,7 +325,7 @@ export async function POST(req: NextRequest) {
             summary.notes.push(`cctp-leg error=${errMsg(err)}`);
         }
     } finally {
-        await releaseKeeperLease().catch(() => {});
+        await releaseKeeperLease(runToken).catch(() => {});
     }
 
     return NextResponse.json({ ran: true, ...summary }, { status: 200 });
