@@ -83,7 +83,7 @@ Current generation (redeployed 2026-07-16, Safe-governed from construction). Ful
 | ArcadeAutoCompounder | `0x2DC0ABb9945506F78bf2490332329BA05E6541a8` | Keeper-driven V3 LP auto-compounder; Safe-owned, 10% protocol fee on collected fees only. |
 | ArcadeTokenVault | `0xF5F15Bfd59E2bf6dD7026fEEe21E57e2ade6a569` | Custodial vault holding curve-issued tokens between bond completion and migration. |
 | ArcadeTwitterEscrowV3 | `0x0E6140b3b8B2fD92A5F2F7FE82F02FA8979525aE` | EIP-712 signed-claim escrow attributing creator USDC fee streams to Twitter handles before wallet creation. |
-| Orbs ExchangeV2 (dLIMIT) | `0xC34e4dfAd598E70Ae59cf47ce98211EeEB42357d` | Orbs settlement adapter wiring TWAP limit-order fills into ArcadeV2Router. |
+| Orbs ExchangeV2 (dLIMIT) | `0x15E0E4C47ca822A5b7Fa02a7A2591072Bb87ddE5` | Orbs settlement adapter wiring TWAP limit-order + DCA fills into ArcadeV2Router (keeper-allowlisted). |
 | Orbs TWAP (book) | `0xb4b7B2ea8C033484921993cBBE3f61f1658D6102` | On-chain limit-order book (TWAP.book[]) holding live USDC-quoted limit orders + DCA schedules on Arc. |
 | ArcadeV4PoolManager (prototype) | `0x71CCed1c397EC974E74C350eBA6DBa98DE8e8e25` | Uniswap V4 PoolManager fork for the single-pool-lifecycle prototype. |
 | ArcadeHook / AntiSniper (prototype) | `0x90b7D816862f9ca2E2Fa8B8Dde2BF855E623BecE` | V4 hook: bonding curve, atomic graduation, locked LP, per-block buy caps. Not in production traffic yet. |

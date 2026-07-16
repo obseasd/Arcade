@@ -14,6 +14,13 @@ separate from the compounder operator so the two crons never collide on a
 shared nonce. Auth reuses `COMPOUNDER_CRON_SECRET` (same shared-bearer
 precedent the twitter cron uses).
 
+## ✅ DONE (Arc testnet, 2026-07-16)
+- Dedicated keeper wallet: `0xC3D6ED473B2D22908d1CBc45e74ABa1133BD4107` (fund with USDC for gas).
+- **ExchangeV2 redeployed + keeper allowlisted: `0x15E0E4C47ca822A5b7Fa02a7A2591072Bb87ddE5`**
+  (set `NEXT_PUBLIC_ORBS_EXCHANGE_V2_ADDRESS` to this). Deployed via
+  `FOUNDRY_PROFILE=orbs forge create` (a forge SCRIPT reverts StackUnderflow on Arc simulation).
+- REMAINING: fund the keeper wallet, set the two Vercel envs, apply `010_keeper.sql`, wire cron-job.org.
+
 ## Why leg A needs a contract redeploy
 
 Orbs `ExchangeV2` gates every fill on `allowed[taker]`, and that allowlist
