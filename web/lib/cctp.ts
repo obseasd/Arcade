@@ -17,8 +17,38 @@ import { Address } from "viem";
  *      the destination chain → mints USDC to the recipient
  */
 
-export const CCTP_V2_TOKEN_MESSENGER: Address = "0x8FE6B999Dc680CcFDD5Bf7EB0974218be2542DAA";
-export const CCTP_V2_MESSAGE_TRANSMITTER: Address = "0xE737e5cEBEEBa77EFE34D4aa090756590b1CE275";
+/** 'mainnet' iff NEXT_PUBLIC_CCTP_NETWORK is explicitly 'mainnet'; else
+ *  'testnet'. Single source of truth so the Iris host, the CCTP V2 contract
+ *  addresses, and the source-chain list all switch together. Defaults to
+ *  testnet so existing deployments keep working without a config flip. */
+export function cctpNetwork(): "mainnet" | "testnet" {
+  return (process.env.NEXT_PUBLIC_CCTP_NETWORK ?? "").toLowerCase() === "mainnet"
+    ? "mainnet"
+    : "testnet";
+}
+
+// CCTP V2 TokenMessenger / MessageTransmitter are DETERMINISTIC (same address
+// on every domain of a given environment), but they DIFFER between Circle's
+// testnet and mainnet deployments. Selected by network so a mainnet flip does
+// not silently keep burning through the testnet contracts.
+// VERIFY the mainnet pair against https://developers.circle.com/cctp before the
+// Arc mainnet cutover; they are unused until NEXT_PUBLIC_CCTP_NETWORK=mainnet.
+const CCTP_V2_CONTRACTS = {
+  testnet: {
+    tokenMessenger: "0x8FE6B999Dc680CcFDD5Bf7EB0974218be2542DAA" as Address,
+    messageTransmitter: "0xE737e5cEBEEBa77EFE34D4aa090756590b1CE275" as Address,
+  },
+  mainnet: {
+    // VERIFY: Circle CCTP V2 mainnet deterministic addresses.
+    tokenMessenger: "0x28b5a0e9C621a5BadaA536219b3a228C8168cf5d" as Address,
+    messageTransmitter: "0x81D40F21F12A8F0E3252Bccb954D722d4c464B64" as Address,
+  },
+} as const;
+
+export const CCTP_V2_TOKEN_MESSENGER: Address =
+  CCTP_V2_CONTRACTS[cctpNetwork()].tokenMessenger;
+export const CCTP_V2_MESSAGE_TRANSMITTER: Address =
+  CCTP_V2_CONTRACTS[cctpNetwork()].messageTransmitter;
 
 /**
  * Circle Iris attestation service hosts. The path
@@ -38,8 +68,7 @@ const IRIS_HOSTS = {
 } as const;
 
 function irisBase(): string {
-  const env = (process.env.NEXT_PUBLIC_CCTP_NETWORK ?? "").toLowerCase();
-  return env === "mainnet" ? IRIS_HOSTS.mainnet : IRIS_HOSTS.testnet;
+  return cctpNetwork() === "mainnet" ? IRIS_HOSTS.mainnet : IRIS_HOSTS.testnet;
 }
 
 export interface CctpChainConfig {
@@ -60,7 +89,7 @@ export interface CctpChainConfig {
  * Testnet CCTP source/destination chains. Arc testnet is the *destination* for
  * Arcade, but it can also be a source (e.g. to send USDC back out).
  */
-export const CCTP_CHAINS: CctpChainConfig[] = [
+export const CCTP_CHAINS_TESTNET: CctpChainConfig[] = [
   {
     id: 11_155_111,
     name: "Ethereum Sepolia",
@@ -116,6 +145,92 @@ export const CCTP_CHAINS: CctpChainConfig[] = [
     confirmations: 3,
   },
 ];
+
+/**
+ * Mainnet CCTP source/destination chains (Milestone 2 matrix). Arc is the
+ * canonical destination. USDC addresses and CCTP V2 domains below are the
+ * stable, well-known mainnet values; the ARC MAINNET entry is a PLACEHOLDER
+ * pending Arc mainnet launch (Circle-assigned domain + the mainnet USDC +
+ * RPC + explorer are TBD). Unused until NEXT_PUBLIC_CCTP_NETWORK=mainnet.
+ *
+ * VERIFY every row against https://developers.circle.com/cctp (domains + USDC)
+ * and the Arc mainnet docs (the ARC entry) before the cutover.
+ */
+export const CCTP_CHAINS_MAINNET: CctpChainConfig[] = [
+  {
+    id: 1,
+    name: "Ethereum",
+    cctpDomain: 0,
+    usdc: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+    rpc: "https://eth.llamarpc.com",
+    explorer: "https://etherscan.io",
+    confirmations: 12,
+  },
+  {
+    id: 8453,
+    name: "Base",
+    cctpDomain: 6,
+    usdc: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    rpc: "https://mainnet.base.org",
+    explorer: "https://basescan.org",
+    confirmations: 5,
+  },
+  {
+    id: 42_161,
+    name: "Arbitrum One",
+    cctpDomain: 3,
+    usdc: "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
+    rpc: "https://arb1.arbitrum.io/rpc",
+    explorer: "https://arbiscan.io",
+    confirmations: 5,
+  },
+  {
+    id: 10,
+    name: "Optimism",
+    cctpDomain: 2,
+    usdc: "0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85",
+    rpc: "https://mainnet.optimism.io",
+    explorer: "https://optimistic.etherscan.io",
+    confirmations: 5,
+  },
+  {
+    id: 137,
+    name: "Polygon",
+    cctpDomain: 7,
+    usdc: "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359",
+    rpc: "https://polygon-rpc.com",
+    explorer: "https://polygonscan.com",
+    confirmations: 12,
+  },
+  {
+    id: 43_114,
+    name: "Avalanche",
+    cctpDomain: 1,
+    usdc: "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E",
+    rpc: "https://api.avax.network/ext/bc/C/rpc",
+    explorer: "https://snowtrace.io",
+    confirmations: 3,
+  },
+  {
+    // PLACEHOLDER — Arc mainnet not live. VERIFY chainId, cctpDomain (Circle-
+    // assigned), usdc, rpc, explorer against the Arc mainnet docs before use.
+    id: 0,
+    name: "Arc",
+    cctpDomain: -1,
+    usdc: "0x0000000000000000000000000000000000000000",
+    rpc: "",
+    explorer: "",
+    confirmations: 3,
+  },
+];
+
+/**
+ * The active source/destination chain list, selected by NEXT_PUBLIC_CCTP_NETWORK
+ * (testnet default). Every caller that iterates chains or looks one up by id
+ * uses this, so the whole bridge UI flips network in one place.
+ */
+export const CCTP_CHAINS: CctpChainConfig[] =
+  cctpNetwork() === "mainnet" ? CCTP_CHAINS_MAINNET : CCTP_CHAINS_TESTNET;
 
 /**
  * Sentinel "chain id" for the Solana bridge family (non-EVM). It is
