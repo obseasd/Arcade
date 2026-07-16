@@ -5,6 +5,8 @@ import {
     http,
     isAddress,
     getAddress,
+    encodeAbiParameters,
+    parseAbiParameters,
     type Address,
     type Hex,
 } from "viem";
@@ -72,9 +74,15 @@ const MAX_BRIDGE_RELAYS_PER_RUN = 5;
 const MAX_BOOK_SCAN = 200;
 
 // Keeper slippage tolerance between the bid-time quote and the fill-time
-// reserves, in Orbs PERCENT_BASE units (100000 = 100%). 1% absorbs the
-// drift over the bidDelay window so an honest chunk still fills.
-const SLIPPAGE_PERCENT = 1_000;
+// reserves, in Orbs PERCENT_BASE units (100000 = 100%). This is a HAIRCUT
+// on the keeper's committed output: verifyBid subtracts it before checking
+// the maker floor, and performFill requires the actual output to clear
+// committed*(1-haircut). So it must be SMALLER than the maker's floor
+// discount, or no chunk clears at a flat price (a DCA/limit floor is set
+// as market*(1-floorDiscount); the fill band is floorDiscount - haircut).
+// 0.5% covers realistic 30s (bidDelay) drift on Arc; the DCA UI sets its
+// floor discount well above this (default 5%) so chunks keep filling.
+const SLIPPAGE_PERCENT = 500;
 
 // Taker fee in dstToken. 0 on testnet: the keeper subsidises its own gas
 // rather than skimming the maker's output. Mainnet can raise this (or use
@@ -91,10 +99,15 @@ const BRIDGE_MAX_ATTEMPTS = 6;
 
 // A pending intent whose burn never appears on Iris after this long is
 // expired, so a spammed/mistyped burn hash cannot occupy the poll budget
-// forever (CCTP fast-transfer attests in minutes; 24h is far past that).
-const BRIDGE_PENDING_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+// for long (CCTP fast-transfer attests in minutes; 3h is far past that yet
+// short enough that junk cannot hold the oldest-first slots for a day).
+const BRIDGE_PENDING_MAX_AGE_MS = 3 * 60 * 60 * 1000;
 
 const RPC_TIMEOUT_MS = 3_000;
+// A submitted tx must not hang the whole run to the 60s Vercel ceiling (and
+// starve leg B). Cap the receipt wait; a timeout is treated as "unknown, move
+// on" -- the on-chain state is re-read next tick, so no double-action results.
+const RECEIPT_TIMEOUT_MS = 20_000;
 const MAX_FEE_PER_GAS_WEI = 100_000_000_000n; // 100 gwei
 const MIN_OPERATOR_BALANCE_WEI = 1_000_000n; // 1 USDC (6 decimals)
 
@@ -122,6 +135,32 @@ const ARC_CHAIN = {
 // larger value is the order's deadline timestamp (open until now passes it).
 const STATUS_CANCELED = 1;
 const STATUS_COMPLETED = 2;
+
+// Minimal ExchangeV2 read used only for the allowlist precheck. getAmountOut
+// reverts TakerNotAllowed(taker) before decoding bidData when the taker is
+// not allowlisted.
+const EXCHANGE_V2_ABI = [
+    {
+        type: "function",
+        stateMutability: "view",
+        name: "getAmountOut",
+        inputs: [
+            { name: "srcToken", type: "address" },
+            { name: "dstToken", type: "address" },
+            { name: "amountIn", type: "uint256" },
+            { name: "askData", type: "bytes" },
+            { name: "bidData", type: "bytes" },
+            { name: "taker", type: "address" },
+        ],
+        outputs: [{ name: "dstAmountOut", type: "uint256" }],
+    },
+] as const;
+// A well-formed (uint256, bytes) blob so the allowed-taker branch decodes
+// cleanly; the denied branch reverts before ever reaching the decode.
+const PROBE_BID_DATA = encodeAbiParameters(
+    parseAbiParameters("uint256 amountOut, bytes swapData"),
+    [0n, "0x"],
+);
 
 async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | null> {
     let cancel: ReturnType<typeof setTimeout> | undefined;
@@ -269,6 +308,32 @@ async function runOrbsLeg(
     keeper: Address,
     summary: RunSummary,
 ) {
+    // Precheck: the keeper wallet MUST be allowlisted on ExchangeV2
+    // (constructor-only, no setter). getAmountOut reverts TakerNotAllowed
+    // for a non-allowlisted taker BEFORE decoding, so a cheap probe tells us
+    // whether the KEEPER_SETUP.md redeploy was done. If not, skip leg A
+    // entirely rather than burn gas reverting every bid this tick.
+    const allowProbe = await withTimeout(
+        publicClient
+            .readContract({
+                address: cfg.exchange,
+                abi: EXCHANGE_V2_ABI,
+                functionName: "getAmountOut",
+                args: [ZERO as Address, ZERO as Address, 0n, "0x", PROBE_BID_DATA, keeper],
+            })
+            .then(() => true)
+            .catch((e: unknown) =>
+                errMsg(e).includes("TakerNotAllowed") ? "denied" : true,
+            ),
+        RPC_TIMEOUT_MS,
+    );
+    if (allowProbe === "denied") {
+        summary.notes.push(
+            "keeper wallet not allowlisted on ExchangeV2 — skipping leg A (redeploy per KEEPER_SETUP.md)",
+        );
+        return;
+    }
+
     // 1. Discover any new orders past the highest id we already track.
     await discoverNewOrders(cfg, publicClient);
 
@@ -439,44 +504,76 @@ async function settleOrbsOrder(
     const srcToken = getAddr(order.ask.srcToken);
     const dstToken = getAddr(order.ask.dstToken);
 
-    // --- Case 1: we hold the winning bid and it has matured => FILL ---
-    if (
-        bidTaker.toLowerCase() === keeper.toLowerCase() &&
-        cfg.now > bidTime + bidDelay
-    ) {
-        try {
-            const hash = await walletClient.writeContract({
+    const STALE_BID_SECONDS = 600; // TWAP.STALE_BID_SECONDS
+    const weHoldBid = bidTaker !== ZERO && bidTaker.toLowerCase() === keeper.toLowerCase();
+    const ourBidStale = weHoldBid && cfg.now > bidTime + STALE_BID_SECONDS;
+
+    // --- Case 1: we hold the winning bid ---
+    if (weHoldBid) {
+        // Not matured yet: WAIT for it. Re-bidding our own live bid would
+        // revert "low bid" (verifyBid requires >101% over the current bid),
+        // so we must NOT fall through to Case 2 here.
+        if (cfg.now <= bidTime + bidDelay) {
+            summary.orbs.skipped++;
+            return false;
+        }
+        // Matured: only send fill if it would actually succeed. The bid's
+        // dst floor was fixed at bid time; if the pool drifted adverse
+        // beyond the haircut, the fill reverts (TWAP.sol performFill "min
+        // out"). Simulating first avoids a gas-burn loop that would retry
+        // the same reverting fill every tick. If the bid has since gone
+        // stale we fall through to re-bid at the current (lower) quote,
+        // which verifyBid accepts once past STALE_BID_SECONDS.
+        const fillOk = await withTimeout(
+            publicClient.simulateContract({
                 address: cfg.twap,
                 abi: ORBS_TWAP_ABI,
                 functionName: "fill",
                 args: [id],
-                chain: ARC_CHAIN,
                 account: keeper,
-                maxFeePerGas: MAX_FEE_PER_GAS_WEI,
-            });
-            await publicClient.waitForTransactionReceipt({ hash });
-            const newFilled = srcFilled + chunkIn;
-            const chunksFilled =
-                srcBidAmount > 0n ? Number(newFilled / srcBidAmount) : 1;
-            await markOrbsFilled(tracked.orderId, chunksFilled);
-            await insertKeeperEvent({
-                leg: "orbs",
-                eventType: "fill",
-                refId: tracked.orderId,
-                txHash: hash,
-                detail: { chunkIn: chunkIn.toString(), chunkFloor: chunkFloor.toString() },
-            });
-            summary.orbs.filled++;
-            return true;
-        } catch (err) {
-            await markOrbsError(tracked.orderId, errMsg(err));
-            summary.orbs.failed++;
-            return true; // a tx attempt was spent
+            }).then(() => true).catch(() => false),
+            RPC_TIMEOUT_MS,
+        );
+        if (fillOk === true) {
+            try {
+                const hash = await walletClient.writeContract({
+                    address: cfg.twap,
+                    abi: ORBS_TWAP_ABI,
+                    functionName: "fill",
+                    args: [id],
+                    chain: ARC_CHAIN,
+                    account: keeper,
+                    maxFeePerGas: MAX_FEE_PER_GAS_WEI,
+                });
+                await publicClient.waitForTransactionReceipt({ hash, timeout: RECEIPT_TIMEOUT_MS });
+                const newFilled = srcFilled + chunkIn;
+                const chunksFilled =
+                    srcBidAmount > 0n ? Number(newFilled / srcBidAmount) : 1;
+                await markOrbsFilled(tracked.orderId, chunksFilled);
+                await insertKeeperEvent({
+                    leg: "orbs",
+                    eventType: "fill",
+                    refId: tracked.orderId,
+                    txHash: hash,
+                    detail: { chunkIn: chunkIn.toString(), chunkFloor: chunkFloor.toString() },
+                });
+                summary.orbs.filled++;
+                return true;
+            } catch (err) {
+                await markOrbsError(tracked.orderId, errMsg(err));
+                summary.orbs.failed++;
+                return true; // a tx attempt was spent
+            }
+        }
+        // Fill would revert. If our bid is not yet stale, wait (no gas burn).
+        // If it IS stale, fall through and re-bid at the current price.
+        if (!ourBidStale) {
+            summary.orbs.skipped++;
+            return false;
         }
     }
 
     // If someone else holds a live (non-stale) winning bid, stand back.
-    const STALE_BID_SECONDS = 600;
     if (
         bidTaker !== ZERO &&
         bidTaker.toLowerCase() !== keeper.toLowerCase() &&
@@ -553,7 +650,7 @@ async function settleOrbsOrder(
             account: keeper,
             maxFeePerGas: MAX_FEE_PER_GAS_WEI,
         });
-        await publicClient.waitForTransactionReceipt({ hash });
+        await publicClient.waitForTransactionReceipt({ hash, timeout: RECEIPT_TIMEOUT_MS });
         await markOrbsBid(tracked.orderId, hash);
         await insertKeeperEvent({
             leg: "orbs",
@@ -624,13 +721,14 @@ async function runCctpLeg(
         const { message, attestation } = res.payload;
         const receiver = mintRecipientFromMessage(message);
         if (!receiver || !knownReceivers.has(receiver.toLowerCase())) {
-            // The message does not target a receiver we control — never relay.
-            await markBridgeRetryOrFail(
-                intent.id,
-                "message does not target a known receiver",
-                BRIDGE_MAX_ATTEMPTS,
-            );
-            summary.cctp.failed++;
+            // The message does not target a receiver we control, and never
+            // will (the attested message is immutable). This is a terminal
+            // state -> EXPIRE it, not retry. markBridgeRetryOrFail would keep
+            // it 'pending' forever here (attempts is still 0 because we never
+            // called markBridgeRelaying), letting a spammer's completed
+            // non-receiver burn permanently occupy the oldest-first poll slot.
+            await markBridgeExpired(intent.id);
+            summary.cctp.skipped++;
             continue;
         }
 
@@ -645,7 +743,7 @@ async function runCctpLeg(
                 account: keeper,
                 maxFeePerGas: MAX_FEE_PER_GAS_WEI,
             });
-            await publicClient.waitForTransactionReceipt({ hash });
+            await publicClient.waitForTransactionReceipt({ hash, timeout: RECEIPT_TIMEOUT_MS });
             await markBridgeRelayed(intent.id, hash);
             await insertKeeperEvent({
                 leg: "cctp",

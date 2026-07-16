@@ -81,6 +81,14 @@ type DcaIntervalId = (typeof DCA_INTERVALS)[number]["id"];
 const DCA_MIN_BUYS = 2;
 const DCA_MAX_BUYS = 100;
 
+// The DCA per-buy floor discount ("price band") must exceed the keeper's
+// own fill haircut (SLIPPAGE_PERCENT = 0.5% in the keeper) or NO chunk ever
+// clears at a flat price. We floor the DCA band at 2% regardless of the
+// user's limit-order slippage setting, so a DCA keeps buying across a
+// realistic per-interval price move. This is the fix for the audit's #1
+// (DCA-DOA-at-defaults) finding.
+const DCA_MIN_BAND_BPS = 200;
+
 interface LimitCardProps {
     tab: SwapTab;
     onTabChange: (t: SwapTab) => void;
@@ -334,24 +342,41 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
         }
     }, [tokenOut, marketPriceStr, srcAmountBn, inDec, outDec]);
 
-    // Per-chunk floor = (market expected × (1 - slippage)) / N. This is the
+    // The DCA price band: the per-buy floor discount, floored at
+    // DCA_MIN_BAND_BPS so it always exceeds the keeper's fill haircut (else
+    // no chunk clears at a flat price). A user who set a wider limit
+    // slippage keeps it; a default (0.5%) is widened to 2% for DCA.
+    const dcaBandBps = useMemo(
+        () => Math.max(DCA_MIN_BAND_BPS, slippageBps),
+        [slippageBps],
+    );
+
+    // Per-chunk floor = (market expected × (1 - band)) / N. This is the
     // Ask.dstMinAmount, the maker's per-chunk minimum. DCA uses a LOOSER
-    // slippage than a limit order so chunks keep filling as price drifts;
-    // the honest tradeoff (a fixed floor cannot track a strongly-trending
-    // price) is the inherent Orbs-as-DCA limit, solved later by the V3 vault.
+    // band than a limit order so chunks keep filling as price drifts; the
+    // honest tradeoff (a fixed floor cannot track a strongly-trending price)
+    // is the inherent Orbs-as-DCA limit, solved later by the V3 vault.
     const dcaChunkFloorBn = useMemo(() => {
         if (dcaMarketExpectedOutBn === 0n || numBuysInt <= 0) return 0n;
         const totalFloor =
-            (dcaMarketExpectedOutBn * BigInt(10_000 - slippageBps)) / 10_000n;
+            (dcaMarketExpectedOutBn * BigInt(10_000 - dcaBandBps)) / 10_000n;
         return totalFloor / BigInt(numBuysInt);
-    }, [dcaMarketExpectedOutBn, slippageBps, numBuysInt]);
+    }, [dcaMarketExpectedOutBn, dcaBandBps, numBuysInt]);
 
-    // The schedule must outlive its last chunk: N intervals + a 1-day margin,
-    // clamped to the 90-day ceiling.
-    const dcaScheduleSecs = useMemo(
-        () => Math.min(MAX_EXPIRY_SECONDS, numBuysInt * dcaIntervalSecs + 86400),
+    // The schedule must outlive its last chunk: N intervals + a 1-day margin.
+    const dcaRequestedSecs = useMemo(
+        () => numBuysInt * dcaIntervalSecs + 86400,
         [numBuysInt, dcaIntervalSecs],
     );
+    // Clamped to the 90-day ceiling for the on-chain deadline.
+    const dcaScheduleSecs = useMemo(
+        () => Math.min(MAX_EXPIRY_SECONDS, dcaRequestedSecs),
+        [dcaRequestedSecs],
+    );
+    // True when N × interval overflows 90 days: the later chunks could never
+    // fill (deadline reached). We block submit and warn rather than silently
+    // truncate the schedule.
+    const dcaScheduleOverflow = dcaRequestedSecs > MAX_EXPIRY_SECONDS;
 
     // Triger-vs-market delta: positive when limit price asks more than market.
     const triggerVsMarketPct = useMemo(() => {
@@ -480,7 +505,7 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
         srcAmountBn > 0n &&
         srcAmountBn <= balance &&
         (orderMode === "dca"
-            ? dcaChunkSrcBn > 0n && dcaChunkFloorBn > 0n && dcaScheduleSecs > 0
+            ? dcaChunkSrcBn > 0n && dcaChunkFloorBn > 0n && !dcaScheduleOverflow
             : dstMinAmountBn > 0n && expirySeconds > 0) &&
         ADDRESSES.orbsTwap !== zeroAddress &&
         ADDRESSES.orbsExchangeV2 !== zeroAddress &&
@@ -629,6 +654,7 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
         if (orderMode === "dca") {
             if (dcaChunkSrcBn <= 0n) return "Enter amount";
             if (dcaChunkFloorBn <= 0n) return "Waiting for market price";
+            if (dcaScheduleOverflow) return "Schedule exceeds 90 days";
             if (needsApproval) return "Approve then Start DCA";
             if (isWriting || submitting) return "Submitting...";
             return `Start DCA · ${numBuysInt} buys`;
@@ -765,10 +791,17 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
                                     , {numBuysInt} times.
                                 </div>
                                 <div>
-                                    Each buy accepts down to {(slippageBps / 100).toFixed(2)}% below
+                                    Each buy accepts down to {(dcaBandBps / 100).toFixed(2)}% below
                                     market. A strongly-trending price may pause fills until it comes
                                     back in range.
                                 </div>
+                                {dcaScheduleOverflow && (
+                                    <div className="text-arc-warn">
+                                        {numBuysInt} buys at this interval span over 90 days, past the
+                                        max order lifetime. Reduce the number of buys or shorten the
+                                        interval.
+                                    </div>
+                                )}
                             </div>
                         )}
                     </div>

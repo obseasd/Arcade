@@ -290,6 +290,23 @@ export async function recordBridgeIntent(i: {
     return rows.length > 0;
 }
 
+/**
+ * Count of intents currently awaiting attestation. The intent API uses this
+ * to refuse new inserts once the pending backlog is implausibly large, so an
+ * unauthenticated spammer cannot grow the table without bound. Returns 0 when
+ * the DB is unconfigured (the API then soft-fails open, which is fine: no DB
+ * means no keeper relay anyway).
+ */
+export async function countPendingBridgeIntents(): Promise<number> {
+    if (!isDbConfigured()) return 0;
+    const sql = getSql();
+    const rows = (await sql`
+        SELECT COUNT(*)::int AS n FROM keeper_bridge_intents
+        WHERE status = 'pending'
+    `) as { n: number }[];
+    return rows[0]?.n ?? 0;
+}
+
 /** Pending/in-flight intents the keeper should poll, oldest first. */
 export async function getOpenBridgeIntents(
     limit = 25,

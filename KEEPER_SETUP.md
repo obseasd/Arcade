@@ -82,11 +82,14 @@ testnet reference the old adapter).
 - **V2 pairs only** (Orbs `ExchangeV2` routes the V2 router). CLANKER_V3 /
   curve tokens are the phase-2 DCA-vault's job.
 - **DCA floor is fixed at creation** (inherent to Orbs-as-DCA): a strongly
-  trending price can pause fills until it re-enters the per-buy slippage
-  band. The phase-2 vault (on-chain per-chunk quote) removes this.
+  trending price can pause fills until it re-enters the per-buy price band.
+  The band defaults to 2% (floored above the keeper's 0.5% fill haircut so
+  chunks clear at a flat price) and the schedule is blocked past 90 days.
+  The phase-2 vault (on-chain per-chunk quote) removes the fixed-floor limit.
 - **Full-book discovery** each tick is capped at 200 orders; a cursor +
   the indexer replaces it at mainnet scale.
-- **Bridge-intent recording is unauthenticated** (a bridge has no session);
-  a spammed burn hash only occupies an Iris poll slot until the keeper
-  age-expires it (24h), and can never move funds (known-receiver guard +
-  beneficiary-from-attested-message).
+- **Bridge-intent recording is unauthenticated** (a bridge has no session).
+  A spammed burn hash can never move funds (known-receiver guard +
+  beneficiary-from-attested-message) and is bounded: a completed non-receiver
+  burn is expired on sight, a never-attesting one is age-expired after 3h,
+  and the intent API refuses new rows past a 500-pending backlog.

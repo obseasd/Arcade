@@ -38,6 +38,35 @@ describe("clearsFloor", () => {
         ).toBe(false);
     });
 
+    it("a DCA-band floor clears at a flat price (audit #1 regression guard)", () => {
+        // The keeper haircut is 0.5% (SLIPPAGE_PERCENT=500). The DCA UI sets
+        // the per-chunk floor at market*(1 - band) with band floored at 2%.
+        // At a flat price the live quote == market, so the gate is
+        // quote*(1-0.5%) >= market*(1-2%) => 0.995 >= 0.98 => MUST clear.
+        // If this regresses (band <= haircut), DCA is dead on arrival.
+        const market = 1_000_000n;
+        const band = 200; // 2% in bps
+        const floor = (market * BigInt(10_000 - band)) / 10_000n; // 980000
+        expect(
+            clearsFloor({
+                quotedOut: market,
+                chunkFloor: floor,
+                slippagePercent: 500, // keeper 0.5%
+                dstFee: 0n,
+            }),
+        ).toBe(true);
+        // And with the OLD broken defaults (band 0.5% == haircut 1%), it fails.
+        const tightFloor = (market * BigInt(10_000 - 50)) / 10_000n; // 995000
+        expect(
+            clearsFloor({
+                quotedOut: market,
+                chunkFloor: tightFloor,
+                slippagePercent: 1_000, // old keeper 1%
+                dstFee: 0n,
+            }),
+        ).toBe(false);
+    });
+
     it("accounts for the taker fee taken out of the output", () => {
         // quote 1000, 0% slippage, fee 30 -> 970 < floor 980 => fails
         expect(

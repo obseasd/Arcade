@@ -1,7 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isAddress } from "viem";
 import { isDbConfigured } from "@/lib/db";
-import { recordBridgeIntent } from "@/lib/keeperPersistence";
+import {
+    recordBridgeIntent,
+    countPendingBridgeIntents,
+} from "@/lib/keeperPersistence";
+
+// Refuse new intents once the pending backlog is implausibly large. A real
+// deployment has a handful of in-flight bridges at once; a backlog past this
+// means someone is spamming, so we stop growing the table (the keeper still
+// drains + age-expires the existing rows). 500 is far above any honest load.
+const MAX_PENDING_INTENTS = 500;
 
 /**
  * Records a CCTP bridge-and-buy intent the moment the user's burn lands
@@ -64,6 +73,18 @@ export async function POST(req: NextRequest) {
         typeof body.beneficiaryAddress === "string" && isAddress(body.beneficiaryAddress)
             ? body.beneficiaryAddress
             : null;
+
+    // Backlog guard against unauthenticated spam.
+    try {
+        if ((await countPendingBridgeIntents()) >= MAX_PENDING_INTENTS) {
+            return NextResponse.json(
+                { recorded: false, reason: "pending-backlog-full" },
+                { status: 429 },
+            );
+        }
+    } catch {
+        // Count failed: fail open (recording is best-effort anyway).
+    }
 
     try {
         const inserted = await recordBridgeIntent({
