@@ -18,7 +18,9 @@ Arcade is the USDC-native capital formation stack for Arc: a Uniswap V2 fork, a 
 
 Issuance flows through a deterministic bonding curve that raises up to 20,000 USDC per token and then migrates atomically into a V2 pool, with the CLANKER_V3 mode parking the migration liquidity in a single-sided V3 position whose fee stream is locked to the creator and treasury in perpetuity. The Twitter handle escrow lets fee streams be attributed to off-chain identities and unlocked via EIP-712 signed claims, opening capital formation to creators who have not yet generated a wallet.
 
-ArcadeMultiSwap aggregates V2 plus V3 routes around a USDC pivot, and the Orbs TWAP integration puts true on-chain limit orders into the same book. CCTP V2 is already wired in `web/lib/cctp.ts` using the canonical TokenMessenger and MessageTransmitter addresses, so capital can arrive from Ethereum, Base, Arbitrum, Optimism, Polygon, and Solana into a single USDC denominator at settlement.
+ArcadeMultiSwap aggregates V2 plus V3 routes around a USDC pivot, and the Orbs TWAP integration puts true on-chain limit orders into the same book. A self-hosted unified keeper now settles that book end to end: it bids and fills open limit orders AND dollar-cost-average schedules (a DCA order is a multi-chunk TWAP order, served by the same code), and it auto-relays CCTP bridge-and-buy so a deposit from any source chain completes into a token buy on Arc with no second signature. CCTP V2 is already wired in `web/lib/cctp.ts` using the canonical TokenMessenger and MessageTransmitter addresses, so capital can arrive from Ethereum, Base, Arbitrum, Optimism, Polygon, and Solana into a single USDC denominator at settlement.
+
+Every graduated pair charges a pair-level fee pinned at 0.30% (0.10% to LPs, 0.15% protocol, 0.05% creator), taken input-side so it never silently defeats a trader's minimum-out. The whole stack is governed by a live 2-of-3 Gnosis Safe: treasury, protocol fee sink, factory fee-setter, the V3 locker, the auto-compounder, and the Twitter escrow all resolve to the Safe, and a Ponder indexer serves complete USDC-denominated price history and volume behind the charts.
 
 ## FIELD: Why hasn't this problem been solved yet? What are the barriers?
 
@@ -38,17 +40,17 @@ Arc removes barrier three this year, EIP-712 removes barrier four, and Arcade is
 
 Arcade is built by a solo founder, pseudonymous publicly and doxxed to the Arc team through a hackathon win, available for KYC under a confidentiality side letter with Circle compliance. The honest framing is velocity, not headcount.
 
-In the current cohort the project has shipped and verified nine smart contracts on Arc testnet (V2 Factory, V2 Router, Launchpad, V3 Factory, V3 Router, V3 Quoter, V3 Locker, Token Vault, MultiSwap), wired Orbs TWAP for live on-chain limit orders, scaffolded a V4 hook prototype against confirmed EIP-1153 transient storage on Arc, and integrated CCTP V2 in the first cohort of Arc projects to do so, all behind a live frontend at arcade.trading.
+The project has shipped and verified the full USDC-native stack on Arc testnet: V2 Factory/Router with a pair-level fee, the PUMP/CLANKER/CLANKER_V3 Launchpad with atomic migration, a V3 Factory/Router/Quoter/NPM/Locker with permanent single-sided LP, a keeper-driven V3 auto-compounder, the MultiSwap aggregator with per-leg slippage floors, a periphery migrated-router, the EIP-712 Twitter-handle escrow, and the Orbs TWAP surface for on-chain limit orders. Beyond the contracts, three pieces of live infrastructure ship the "always-on markets" thesis: (1) a self-hosted unified keeper that actually settles the limit-order/DCA book and auto-relays CCTP bridge-and-buy, (2) a Ponder indexer serving complete USDC price/volume history behind the charts, and (3) a 2-of-3 Gnosis Safe governing treasury, fees, and every admin role, live on-chain.
 
-A multi-agent internal security audit was run end-to-end against the production code: seven of eight HIGH findings and eleven of fourteen MEDIUM findings closed in a single audit-fix commit, with the two remaining HIGH items documented as deferred and gated on external review.
+Security is a standing practice, not a one-off: production code has gone through many rounds of adversarial internal audit (multi-agent refuting reviewers that default to "broken" and must prove a regression test fails on the reverted fix). Recent examples include a full offensive exploit sweep, a governance-transfer review, a 4-round audit-and-fix loop on the keeper (a HIGH "DCA dead-on-arrival at defaults" and a no-op allowlist precheck both caught and closed), and a 2-round loop on the indexer. Findings are closed with executable regression tests; the residual mainnet-gated HIGH items are documented for the external review.
 
-The next milestones are a Hats Finance bounty vault and a Pashov private review, both bottlenecked only on grant capital rather than scope or readiness.
+The next external milestone is a Pashov Audit Group private review, bottlenecked only on grant capital rather than scope or readiness.
 
 Hackathon context: **[FOUNDER FILLS — exact hackathon name and month/year of the Arc team win]**
 
 ## FIELD: Is your project currently live in production?
 
-Not yet in mainnet production. Arcade is live end-to-end on Arc testnet (chainId 5042002) with 12 verified contracts, a public frontend at arcade.trading, a /stats dashboard surfacing cumulative USDC gas, and CCTP V2 bridging from Sepolia. Mainnet deploy is committed for Arc mainnet day one, Summer 2026, contingent only on Arc mainnet opening.
+Not yet in mainnet production. Arcade is live end-to-end on Arc testnet (chainId 5042002) with the full USDC-native stack (20+ verified contracts) deployed and Safe-governed, a public frontend at arcade.trading, a /stats dashboard surfacing cumulative USDC gas, a Ponder price/volume indexer and a unified settlement keeper both code-complete, and CCTP V2 bridging from Sepolia. Mainnet deploy is committed for Arc mainnet day one, Summer 2026, contingent only on Arc mainnet opening.
 
 ## FIELD: Are you live on Arc?
 
@@ -56,29 +58,35 @@ Yes, live on Arc testnet (chainId 5042002). The full stack is deployed and verif
 
 ## FIELD: Have you deployed any smart contracts?
 
-Yes. Twelve contracts are deployed and verified on Arc testnet (chainId 5042002), covering the full DEX, launchpad, locker, vault, aggregator, Twitter-handle escrow, and Orbs TWAP limit-order surfaces. All quote and settle in USDC, which is the native gas asset on Arc. Addresses are listed in the next field.
+Yes. The full stack (20+ contracts) is deployed and verified on Arc testnet (chainId 5042002), covering the DEX (V2 + V3 forks with a pair-level fee), the bonding-curve launchpad, the permanent V3 locker, a keeper-driven auto-compounder, the token vault, the MultiSwap aggregator, the migrated-route periphery router, the EIP-712 Twitter-handle escrow, and the Orbs TWAP limit-order surface, all governed by a 2-of-3 Safe. Every contract quotes and settles in USDC, the native gas asset on Arc. Key addresses are listed in the next field; the complete set is in `web/public/deployments.json`.
 
 ## FIELD: Smart contract addresses
 
 All deployed on Arc testnet (chainId 5042002):
 
+Current generation (redeployed 2026-07-16, Safe-governed from construction). Full set in `web/public/deployments.json`.
+
 | Contract | Address | Purpose |
 |---|---|---|
 | USDC | `0x3600000000000000000000000000000000000000` | Arc native gas token; settlement unit for every Arcade fee, LP share, and escrow credit. |
-| ArcadeV2Factory | `0x289b18cBFD9f2a2657c021F80423137Af6233332` | Uniswap V2 fork factory deploying USDC-quoted pairs for AMM trading. |
-| ArcadeV2Router | `0x529d7250652aAaA11b4E2407e8b49fa9ae0E5041` | Stateless router for V2 swaps and add/remove liquidity, USDC-quoted. |
-| ArcadeLaunchpad | `0x073a4869219D19843b57ab4CeF3AfAf24D499a56` | Bonding-curve token issuance engine (PUMP, CLANKER, CLANKER_V3 modes) raising USDC up to 20,000 then atomic migration. |
-| ArcadeMultiSwap | `0x019e2e4F3858c470aFFf54B82Ce3E6b6e391cfA5` | Aggregator routing USDC-pivot multi-token swaps across V2 and V3 pools in one tx. |
-| ArcadeV3Factory | `0xB9339dE1eeC40d4f513aBD567DAb6837fc7D63D6` | V3 fork factory for concentrated-liquidity USDC pools backing CLANKER_V3. |
-| ArcadeV3Locker | `0x60b23CEeA70c3846AC5f9b32E1f8598136E3E569` | Permanent single-sided LP vault locking CLANKER_V3 positions and streaming fees to creator + treasury forever. |
-| ArcadeV3Router | `0xE4CaD091D2be82332688bCab444C1e394fD13Fb4` | V3 swap router executing exactInput / exactOutput trades against V3 pools. |
-| ArcadeV3Quoter | `0xca7f8700F032eF1Cdd0708bBAcDB23cDE43bd4c7` | Off-chain quote helper for V3 pricing used by the frontend route builder. |
-| ArcadeTokenVault | `0x4fE2A2EeB955bbA0A94D3b23970279d13F6CeE14` | Custodial vault holding curve-issued tokens between bond completion and migration. |
+| Treasury / Governance Safe (2-of-3) | `0x0bDE09e3Bfc9b2Ee7b94e56A6A06e0a14706195D` | Gnosis Safe that owns treasury, protocol-fee sink, factory fee-setter, V3 locker, auto-compounder, and Twitter escrow. |
+| ArcadeV2Factory | `0x3a404154A7Ac320C93BB09A539BcF9B27Fc63067` | Uniswap V2 fork factory deploying USDC-quoted pairs with a pair-level 0.30% fee. |
+| ArcadeV2Router | `0xae744C9Acdc1E80F83B5895ba2C060dB921A6Aa5` | Stateless router for V2 swaps and add/remove liquidity, USDC-quoted. |
+| ArcadeLaunchpad | `0xB6c9bD475EE6596342c1c49DE6513C9451f8C7e4` | Bonding-curve token issuance engine (PUMP, CLANKER, CLANKER_V3 modes) raising USDC then atomic migration. |
+| ArcadeMultiSwap | `0x3D8fE90dE69Ba09b922880f5179b36bA3c1fa5c0` | Aggregator routing USDC-pivot multi-token swaps across V2 and V3 pools in one tx, per-leg minOut. |
+| ArcadeMigratedRouter | `0xa8E5BA23efA319BF286977942BA164683DACEd7C` | Periphery router for graduated-token buys/sells with a mid-leg sandwich floor (extracted to fit EIP-170). |
+| ArcadeV3Factory | `0x7E875574062613de8A4d43cDA21628368914c01A` | V3 fork factory for concentrated-liquidity USDC pools backing CLANKER_V3. |
+| ArcadeV3Locker | `0xBaAfC02fEAd665D398Cf8f53bE9C713c321c9eEB` | Permanent single-sided LP vault locking CLANKER_V3 positions and streaming fees to creator + treasury forever. |
+| ArcadeV3Router | `0xc2d2829caFb2763D1f4aDD95591FE5775EAade68` | V3 swap router executing exactInput / exactOutput trades against V3 pools. |
+| ArcadeV3Quoter | `0x77264120b8155aFfbcDD6B0E23d5F47264052656` | Off-chain quote helper for V3 pricing used by the frontend route builder. |
+| ArcadeV3PositionManager (NPM) | `0x9A0955174A200FcaFA232c9A2111771B8Ee4100b` | V3 NonfungiblePositionManager fork minting/managing concentrated LP NFTs. |
+| ArcadeAutoCompounder | `0x2DC0ABb9945506F78bf2490332329BA05E6541a8` | Keeper-driven V3 LP auto-compounder; Safe-owned, 10% protocol fee on collected fees only. |
+| ArcadeTokenVault | `0xF5F15Bfd59E2bf6dD7026fEEe21E57e2ade6a569` | Custodial vault holding curve-issued tokens between bond completion and migration. |
+| ArcadeTwitterEscrowV3 | `0x0E6140b3b8B2fD92A5F2F7FE82F02FA8979525aE` | EIP-712 signed-claim escrow attributing creator USDC fee streams to Twitter handles before wallet creation. |
 | Orbs ExchangeV2 (dLIMIT) | `0xC34e4dfAd598E70Ae59cf47ce98211EeEB42357d` | Orbs settlement adapter wiring TWAP limit-order fills into ArcadeV2Router. |
-| Orbs TWAP (book) | `0xb4b7B2ea8C033484921993cBBE3f61f1658D6102` | On-chain limit-order book (TWAP.book[]) holding live USDC-quoted limit orders on Arc. |
-| ArcadeTwitterEscrowV3 | **[FOUNDER FILLS — pull NEXT_PUBLIC_TWITTER_ESCROW_ADDRESS from Vercel env]** | EIP-712 signed-claim escrow attributing creator USDC fee streams to Twitter handles before wallet creation. |
-| ArcadeV4Launchpad (prototype) | **[FOUNDER FILLS — pull NEXT_PUBLIC_V4_LAUNCHPAD_ADDRESS from Vercel env if a testnet deploy exists]** | V4 hook-based launchpad prototype; not in production traffic yet. |
-| ArcadeAntiSniperHook (prototype) | **[FOUNDER FILLS — pull NEXT_PUBLIC_V4_HOOK_ADDRESS from Vercel env if a testnet deploy exists]** | V4 hook implementing bonding curve, atomic graduation, locked LP, and per-block buy caps. |
+| Orbs TWAP (book) | `0xb4b7B2ea8C033484921993cBBE3f61f1658D6102` | On-chain limit-order book (TWAP.book[]) holding live USDC-quoted limit orders + DCA schedules on Arc. |
+| ArcadeV4PoolManager (prototype) | `0x71CCed1c397EC974E74C350eBA6DBa98DE8e8e25` | Uniswap V4 PoolManager fork for the single-pool-lifecycle prototype. |
+| ArcadeHook / AntiSniper (prototype) | `0x90b7D816862f9ca2E2Fa8B8Dde2BF855E623BecE` | V4 hook: bonding curve, atomic graduation, locked LP, per-block buy caps. Not in production traffic yet. |
 
 ## FIELD: Which other chain(s) are you currently live on?
 
@@ -126,7 +134,7 @@ Only Arc testnet today. Arc mainnet day-1 deploy planned for Summer 2026. CCTP V
 
 ### Milestone 3: Public USDC-gas attribution dashboard live and ArcLens indexer in production
 
-**Scope:** Promote the current /stats page (cumulative USDC gas paid through Arcade contracts) to a production-grade public dashboard, and back it with ArcLens, a Ponder-based indexer that subscribes to every Arcade contract event on Arc mainnet (V2 Factory/Router/Pair, V3 Factory/Locker/Router, Launchpad mode transitions, MultiSwap routes, Orbs TWAP book, TwitterEscrowV3 claims, CCTP V2 burns/mints). The dashboard exposes per-protocol cumulative USDC gas burned, per-token USDC volume, per-creator USDC fees earned, per-Twitter-handle USDC pending in escrow, and per-CCTP-route USDC bridged. All metrics queryable via a public GraphQL endpoint at `api.arcade.trading`.
+**Scope:** The core indexer is already built and adversarially audited (a Ponder project in `indexer/`, code-complete on `main`): it auto-discovers every USDC-paired V3 pool via the factory, indexes launchpad Buy/Sell and pool Swaps, and already serves complete USDC price/volume history behind the charts (with a parity-tested price module and a client-scan fallback). This milestone hardens and expands it: promote the current /stats page to a production-grade public dashboard, extend the indexer to the full Arcade event surface (Launchpad mode transitions, MultiSwap routes, Orbs TWAP book + DCA, TwitterEscrowV3 claims, CCTP V2 burns/mints), and run it in production on Arc mainnet with a full genesis backfill. The dashboard exposes per-protocol cumulative USDC gas burned, per-token USDC volume, per-creator USDC fees earned, per-Twitter-handle USDC pending in escrow, and per-CCTP-route USDC bridged, all queryable via a public GraphQL/REST endpoint at `api.arcade.trading`. Because the indexer is already delivered, this milestone is de-risked to hosting + schema expansion rather than greenfield engineering.
 
 **Acceptance criteria:** (1) Ponder indexer in production with 99.5% uptime SLO and Grafana alerting, (2) hot path queries return under 200ms p95, (3) /stats renders the six headline numbers (cumulative USDC gas, cumulative USDC volume, cumulative USDC fees to creators, cumulative USDC bridged via CCTP V2, active tokens, graduated tokens), (4) historical backfill from Arc mainnet block 0 with replay-safety, (5) all-time event history queryable beyond the current 50k-500k block RPC scan cap that hooks/V4 frontend depend on, (6) open-source indexer schema published so other Arc apps can fork it.
 
@@ -166,11 +174,13 @@ Only Arc testnet today. Arc mainnet day-1 deploy planned for Summer 2026. CCTP V
 
 Arcade is testnet-only today and the traction numbers reflect that honestly.
 
-Nine production contracts are deployed and verified on Arc testnet (chainId 5042002): the V2 Factory and Router, the bonding-curve Launchpad with PUMP / CLANKER / CLANKER_V3 modes, the V3 Factory and Locker that holds single-sided LPs forever, the MultiSwap aggregator routing USDC-pivot trades across V2 and V3, the Twitter handle escrow with EIP-712 signed claims, and the Orbs TWAP fork powering live on-chain limit orders without an off-chain backend.
+The full USDC-native stack is deployed and verified on Arc testnet (chainId 5042002): the V2 Factory and Router with a pair-level fee, the bonding-curve Launchpad with PUMP / CLANKER / CLANKER_V3 modes, the V3 Factory / Router / Quoter / NonfungiblePositionManager and the Locker that holds single-sided LPs forever, a keeper-driven V3 auto-compounder, the MultiSwap aggregator routing USDC-pivot trades across V2 and V3 with per-leg slippage floors, the Twitter handle escrow with EIP-712 signed claims, and the Orbs TWAP fork powering on-chain limit orders and DCA without an off-chain backend. The whole stack is governed by a live 2-of-3 Gnosis Safe (verified on-chain: treasury, fee sink, factory fee-setter, locker, compounder, and escrow all resolve to the Safe).
+
+Two pieces of always-on infrastructure were shipped and adversarially audited this cycle: a self-hosted unified keeper (`/api/keeper/cron`) that bids and fills the limit-order/DCA book and auto-relays CCTP bridge-and-buy so a cross-chain deposit completes into a token buy with no second signature, and a Ponder indexer serving complete USDC price/volume history behind the charts (replacing a client-side scan capped at 500 trades). Both are code-complete on `main`; going live needs only hosting.
 
 CCTP V2 is wired end-to-end in production code (`web/lib/cctp.ts` hits TokenMessenger v2 at `0x8FE6B999...2542DAA` and polls Iris attestations) and bridges Sepolia USDC to Arc testnet today through the /bridge route.
 
-An internal multi-agent security audit closed 7 of 8 HIGH-severity findings and 11 of 14 MEDIUM-severity findings; the two deferred HIGHs are documented and gated to mainnet.
+Security is continuous: production code has passed many rounds of adversarial internal audit (offensive exploit sweeps, a governance-transfer review, a 4-round keeper loop, a 2-round indexer loop), each closed with executable regression tests; residual mainnet-gated HIGH items are documented for the external review.
 
 A V4 prototype targeting the Arcade anti-sniper hook is scaffolded on `contracts/v4src/` after confirming EIP-1153 transient storage works on Arc testnet.
 
@@ -236,13 +246,13 @@ Any remaining funds extend solo-founder runway through Arc mainnet stabilisation
 
 ## Founder action items before submission
 
-1. Record and upload a 2 to 4 minute product video walkthrough (Loom or unlisted YouTube) covering landing, /stats, Launchpad token creation, MultiSwap trade, CCTP V2 bridge end-to-end, and Orbs TWAP limit order; paste link into Video demo field.
+1. Record and upload a 2 to 4 minute product video walkthrough (Loom or unlisted YouTube) covering landing, /stats, Launchpad token creation, MultiSwap trade, CCTP V2 bridge end-to-end, an Orbs TWAP limit order, and (new) a DCA schedule + the auto-settling keeper; paste link into Video demo field.
 2. Paste public investor deck URL (Pitch, Figma, or Google Slides). If no deck exists, replace placeholder with "No deck; happy to do a live walkthrough."
 3. Fill in exact hackathon name and month/year of the Arc team win in the "Why are you uniquely suited" field and the Conflict of interest answer.
-4. Pull `NEXT_PUBLIC_TWITTER_ESCROW_ADDRESS` from Vercel env and paste into the Smart contract addresses table as ArcadeTwitterEscrowV3.
-5. Pull `NEXT_PUBLIC_V4_LAUNCHPAD_ADDRESS` and `NEXT_PUBLIC_V4_HOOK_ADDRESS` from Vercel env (or remove those two rows if no testnet V4 deploy exists yet).
-6. Fill quantitative testnet metrics in the Current traction field: cumulative tx count, unique connected wallets, cumulative USDC gas paid, tokens launched via Launchpad, tokens graduated, cumulative USDC bridged via CCTP V2. Pull from /stats and the Arc explorer.
-7. Answer the Conflict of interest field with Yes or No and a one-line explanation; default suggested wording is provided.
-8. Re-confirm the Pashov Audit Group quote in writing before submission so the $25k to $45k range and the $35k M1 ask reflect a live engagement letter rather than a public quote.
-9. Confirm the production Iris endpoint URL (`iris-api.circle.com`) is correct for the mainnet CCTP V2 matrix in M2 before paste.
-10. Verify the total $70,000 USDC ask is within the Circle Developer Grants per-project cap; if a lower ceiling applies, trim M3 ($9k) or M5 ($6k) first since M1 (audit) and M2 (CCTP V2 matrix) are highest leverage.
+4. Fill quantitative testnet metrics in the Current traction field: cumulative tx count, unique connected wallets, cumulative USDC gas paid, tokens launched via Launchpad, tokens graduated, cumulative USDC bridged via CCTP V2. Pull from /stats and the Arc explorer.
+5. Answer the Conflict of interest field with Yes or No and a one-line explanation; default suggested wording is provided.
+6. Re-confirm the Pashov Audit Group quote in writing before submission so the $25k to $45k range and the $35k M1 ask reflect a live engagement letter rather than a public quote.
+7. Confirm the production Iris endpoint URL (`iris-api.circle.com`) is correct for the mainnet CCTP V2 matrix in M2 before paste.
+8. Verify the total $70,000 USDC ask is within the Circle Developer Grants per-project cap; if a lower ceiling applies, trim M3 ($9k) or M5 ($6k) first since M1 (audit) and M2 (CCTP V2 matrix) are highest leverage.
+
+Note: contract addresses in the table are the current Safe-governed testnet generation (2026-07-16) pulled from `web/public/deployments.json`. Re-pull before submission only if a further redeploy has happened since.
