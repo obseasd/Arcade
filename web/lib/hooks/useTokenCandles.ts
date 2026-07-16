@@ -22,6 +22,7 @@ const INDEXER_URL = process.env.NEXT_PUBLIC_INDEXER_URL;
 async function fetchTradesFromIndexer(
     token: Address,
     mode: number,
+    pool?: Address,
 ): Promise<Trade[] | null> {
     if (!INDEXER_URL) return null;
     try {
@@ -30,10 +31,14 @@ async function fetchTradesFromIndexer(
         // (launchpad Buy/Sell). The V3 factory is permissionless, so a
         // graduated curve token can also have unrelated USDC/V3 pools indexed
         // under the same token; the source filter keeps the chart to exactly
-        // what the client would have shown.
+        // what the client would have shown, and for V3 we pin the exact pool
+        // the client charts (a token may have several USDC/V3 pools).
         const source = mode === 2 ? "v3" : "curve";
         const base = INDEXER_URL.replace(/\/$/, "");
-        const url = `${base}/trades?token=${token.toLowerCase()}&source=${source}`;
+        let url = `${base}/trades?token=${token.toLowerCase()}&source=${source}`;
+        if (source === "v3" && pool && pool !== "0x0000000000000000000000000000000000000000") {
+            url += `&pool=${pool.toLowerCase()}`;
+        }
         const res = await fetch(url);
         if (!res.ok) return null;
         const json = (await res.json()) as { trades?: unknown };
@@ -359,7 +364,7 @@ async function fetchTrades(
   // returns the same Trade shape with complete history + real timestamps; the
   // caller still merges live WS pushes and bucketizes. Any failure falls
   // through to the client RPC scan below so the chart is never blank.
-  const indexed = await fetchTradesFromIndexer(token, mode);
+  const indexed = await fetchTradesFromIndexer(token, mode, pool);
   if (indexed && indexed.length > 0) {
     return { trades: indexed };
   }

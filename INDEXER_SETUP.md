@@ -67,6 +67,11 @@ blocks (via `find-start-block.mjs`), a mainnet Neon DB, and the mainnet
 `npm run db -- reset` (or drop the indexer DB) then `npm start` re-backfills from
 the start blocks. Because the app DB is separate, this is always safe.
 
+Note: any change to `ponder.schema.ts` (a new column, a type change) changes the
+schema hash, so Ponder builds a fresh deployment id and re-backfills from scratch
+on next start rather than ALTER-ing existing rows. Expect a full re-index after a
+schema edit; the frontend falls back to the client scan meanwhile.
+
 ## Notes / limits
 
 - The `/trades` and `/candles` responses are capped at 50k rows per token

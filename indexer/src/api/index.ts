@@ -27,12 +27,23 @@ const SOURCES = new Set(["curve", "v3"]);
  * to exactly what the client would show, avoiding a mixed-source chart. Absent =
  * all sources (full history).
  */
-function sourceFilter(token: string, source: string | undefined) {
-    const tokenEq = eq(trade.token, token as `0x${string}`);
+function sourceFilter(
+    token: string,
+    source: string | undefined,
+    pool: string | undefined,
+) {
+    const conds = [eq(trade.token, token as `0x${string}`)];
     if (source && SOURCES.has(source)) {
-        return and(tokenEq, eq(trade.source, source));
+        conds.push(eq(trade.source, source));
     }
-    return tokenEq;
+    // When a specific V3 pool is named, restrict to it. A curve token can have
+    // several USDC/V3 pools (different fee tiers) once the permissionless
+    // factory is in play; the client charts exactly one pool, so pin it here
+    // for exact parity. Ignored for curve rows (their pool is null).
+    if (pool && /^0x[0-9a-f]{40}$/.test(pool)) {
+        conds.push(eq(trade.pool, pool as `0x${string}`));
+    }
+    return conds.length === 1 ? conds[0] : and(...conds);
 }
 
 app.use("*", async (c, next) => {
@@ -45,6 +56,7 @@ app.get("/candles", async (c) => {
     const token = (c.req.query("token") ?? "").toLowerCase();
     const tf = (c.req.query("tf") ?? "1m") as Timeframe;
     const source = c.req.query("source");
+    const pool = c.req.query("pool")?.toLowerCase();
 
     if (!/^0x[0-9a-f]{40}$/.test(token)) {
         return c.json({ error: "token must be a 20-byte hex address" }, 400);
@@ -61,7 +73,7 @@ app.get("/candles", async (c) => {
             isBuy: trade.isBuy,
         })
         .from(trade)
-        .where(sourceFilter(token, source))
+        .where(sourceFilter(token, source, pool))
         .orderBy(asc(trade.blockTime), asc(trade.blockNumber), asc(trade.logIndex))
         .limit(MAX_TRADES);
 
@@ -86,6 +98,7 @@ app.get("/candles", async (c) => {
 app.get("/trades", async (c) => {
     const token = (c.req.query("token") ?? "").toLowerCase();
     const source = c.req.query("source");
+    const pool = c.req.query("pool")?.toLowerCase();
     if (!/^0x[0-9a-f]{40}$/.test(token)) {
         return c.json({ error: "token must be a 20-byte hex address" }, 400);
     }
@@ -97,7 +110,7 @@ app.get("/trades", async (c) => {
             isBuy: trade.isBuy,
         })
         .from(trade)
-        .where(sourceFilter(token, source))
+        .where(sourceFilter(token, source, pool))
         .orderBy(asc(trade.blockTime), asc(trade.blockNumber), asc(trade.logIndex))
         .limit(MAX_TRADES);
     return c.json({ token, source: source ?? null, count: rows.length, trades: rows });
