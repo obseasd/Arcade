@@ -2,7 +2,7 @@
 
 import { ExternalLink, ShieldAlert, Sparkles } from "lucide-react";
 import { useState } from "react";
-import { erc20Abi, parseUnits } from "viem";
+import { erc20Abi, formatUnits, parseUnits } from "viem";
 import { useAccount, usePublicClient, useReadContract, useWriteContract } from "wagmi";
 import { TokenIcon } from "@/components/ui/TokenIcon";
 import { ADDRESSES, USDC_DECIMALS } from "@/lib/constants";
@@ -25,9 +25,13 @@ import { cn, formatUSDC } from "@/lib/utils";
  * entitlement-gated (KYC): a non-whitelisted wallet reverts, which the form
  * catches and explains. Balance reads are fully public.
  */
-/** Protocol treasury (deployer/treasury/signer on testnet). Read-only here. */
+/** Protocol treasury = the 2-of-3 Safe (== on-chain launchpad.treasury). The
+ *  card below is read-only + hides when the treasury holds 0 USYC, so it only
+ *  shows a TRUE protocol position (fund the Safe with USYC to demo it). Do NOT
+ *  default to the deployer EOA: it holds test USYC that isn't protocol capital,
+ *  which would mislabel a personal balance as treasury. */
 const TREASURY_ADDRESS = (process.env.NEXT_PUBLIC_TREASURY_ADDRESS ||
-    "0x3a0Dd90212838f32a953Acd4B32596b62859324A") as `0x${string}`;
+    "0x0bDE09e3Bfc9b2Ee7b94e56A6A06e0a14706195D") as `0x${string}`;
 
 export default function EarnPage() {
     const { address: account } = useAccount();
@@ -317,14 +321,17 @@ function UsycActions({
             onDone();
         } catch (e) {
             const raw = e instanceof Error ? e.message : "Transaction failed";
-            // The most common failure is a non-entitled wallet (the Teller
-            // reverts). Surface that plainly instead of a raw revert dump.
-            const entitlement = /revert|entitl|not.*(allow|whitelist)|execution/i.test(raw);
+            // A revert here is most often a non-entitled wallet (the Teller
+            // gates on the Hashnote entitlements list), but can also be an
+            // out-of-range amount or a transient oracle state. Surface a
+            // hedged, non-confident message on any revert rather than claiming
+            // entitlement is the cause.
+            const reverted = /revert|entitl|not.*(allow|whitelist)|execution/i.test(raw);
             pushToast({
                 kind: "error",
                 title: isDeposit ? "Deposit failed" : "Redeem failed",
-                message: entitlement
-                    ? "The Teller reverted. This wallet may not be entitled (whitelisted) for USYC yet, or the amount is out of range. Confirm the wallet is whitelisted with Hashnote / Circle."
+                message: reverted
+                    ? "The Teller reverted. Common causes: this wallet is not yet entitled (whitelisted) for USYC, the amount is out of range, or a transient oracle state. If it persists, confirm the wallet is whitelisted with Hashnote / Circle."
                     : raw.slice(0, 160),
             });
         } finally {
@@ -361,7 +368,12 @@ function UsycActions({
                     <span>You pay ({inSym})</span>
                     <button
                         type="button"
-                        onClick={() => setAmount(formatUSDC(inBal, USDC_DECIMALS, 6))}
+                        // formatUnits (NOT formatUSDC): a plain decimal with no
+                        // thousands-separator commas, so it survives parseUnits.
+                        // formatUSDC groups digits (1,234.56), which parseUnits
+                        // rejects -> amountRaw=0 -> the button silently disables
+                        // for any balance >= 1000.
+                        onClick={() => setAmount(formatUnits(inBal, USDC_DECIMALS))}
                         className="rounded-md bg-arc-surface-2 px-1.5 py-0.5 font-semibold text-arc-text hover:bg-arc-surface-3"
                     >
                         MAX

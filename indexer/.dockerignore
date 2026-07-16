@@ -1,0 +1,9 @@
+node_modules
+.env.local
+.env
+.ponder
+generated
+ponder-env.d.ts
+*.log
+Dockerfile
+.dockerignore
