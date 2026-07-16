@@ -7,110 +7,18 @@ import { usePublicClient, useReadContract } from "wagmi";
 import { ADDRESSES } from "@/lib/constants";
 import { BUY_EVT, SELL_EVT, V3_SWAP_EVT } from "@/lib/eventSignatures";
 import { CHUNK_LARGE, MAX_BACK_CANDLES, scanLogsChunked } from "@/lib/eventScan";
+import { fetchTradesFromGoldsky } from "@/lib/goldskyTrades";
 import { useWatchEvent } from "./useWatchEvent";
 
 const EARLY_EXIT_TRADES = 500;
 const Q192 = 2n ** 192n;
 
-// When the Goldsky subgraph is configured, prefer it for the HISTORICAL trade
-// base (complete history, real timestamps, no 500-trade cap, WETH-V3 covered).
-// The live WS append + bucketize path below is unchanged, so live updates keep
-// working and the subgraph only replaces the client RPC scan. Falls back to the
-// scan on any error / when unset, so the chart never goes blank.
+// When the Goldsky subgraph is configured, prefer it for the historical trade
+// base. The paginated, unit-tested fetch lives in lib/goldskyTrades.ts (pages
+// newest-first so busy tokens keep recent price action; returns oldest-first
+// for bucketize). Live WS append + bucketize below is unchanged; falls back to
+// the client RPC scan on any error / when unset so the chart never goes blank.
 const GOLDSKY_URL = process.env.NEXT_PUBLIC_GOLDSKY_URL;
-const ZERO_ADDR = "0x0000000000000000000000000000000000000000";
-// The Graph caps `first` at 1000; page by blockNumber cursor up to this many
-// pages (10k trades) so a busy token still gets complete-enough history.
-const GOLDSKY_PAGE = 1000;
-const GOLDSKY_MAX_PAGES = 10;
-
-interface GoldskyRow {
-    blockTime: string | number;
-    blockNumber: string | number;
-    logIndex: string | number;
-    price: string | number;
-    volumeUsdc: string | number;
-    isBuy: boolean;
-}
-
-async function fetchTradesFromGoldsky(
-    token: Address,
-    mode: number,
-    pool?: Address,
-): Promise<Trade[] | null> {
-    if (!GOLDSKY_URL) return null;
-    // Match the client's single-source-per-token behaviour: mode==2 is a
-    // CLANKER_V3 token (V3 pool swaps), everything else is a curve token
-    // (launchpad Buy/Sell). For V3 we pin the exact pool the client charts (the
-    // permissionless factory can index several USDC pools for one token).
-    const source = mode === 2 ? "v3" : "curve";
-    const wherePool =
-        source === "v3" && pool && pool.toLowerCase() !== ZERO_ADDR
-            ? `, pool: "${pool.toLowerCase()}"`
-            : "";
-    try {
-        const seen = new Set<string>();
-        const out: Trade[] = [];
-        let cursor = "0";
-        for (let page = 0; page < GOLDSKY_MAX_PAGES; page++) {
-            const query = `{ trades(first: ${GOLDSKY_PAGE}, orderBy: blockNumber, orderDirection: asc, where: { token: "${token.toLowerCase()}", source: "${source}"${wherePool}, blockNumber_gte: "${cursor}" }) { blockTime blockNumber logIndex price volumeUsdc isBuy } }`;
-            const res = await fetch(GOLDSKY_URL, {
-                method: "POST",
-                headers: { "content-type": "application/json" },
-                body: JSON.stringify({ query }),
-            });
-            if (!res.ok) return out.length > 0 ? finalizeGoldsky(out) : null;
-            const json = (await res.json()) as { data?: { trades?: GoldskyRow[] } };
-            const rows = json?.data?.trades;
-            if (!Array.isArray(rows)) return out.length > 0 ? finalizeGoldsky(out) : null;
-
-            let maxBlock = cursor;
-            for (const r of rows) {
-                const key = `${r.blockNumber}-${r.logIndex}`;
-                if (seen.has(key)) continue; // cursor overlap on the boundary block
-                seen.add(key);
-                const time = Number(r.blockTime);
-                const price = Number(r.price);
-                const volumeUsdc = Number(r.volumeUsdc);
-                if (!isFinite(time) || !isFinite(price) || !isFinite(volumeUsdc)) continue;
-                out.push({
-                    time,
-                    price,
-                    volumeUsdc,
-                    isBuy: typeof r.isBuy === "boolean" ? r.isBuy : undefined,
-                    // carried only for the deterministic client-side sort below
-                    _bn: Number(r.blockNumber),
-                    _li: Number(r.logIndex),
-                } as Trade & { _bn: number; _li: number });
-                if (String(r.blockNumber) > maxBlock || Number(r.blockNumber) > Number(maxBlock)) {
-                    maxBlock = String(r.blockNumber);
-                }
-            }
-            if (rows.length < GOLDSKY_PAGE) break; // last page
-            cursor = maxBlock; // advance; blockNumber_gte re-includes the boundary block (deduped)
-        }
-        return out.length > 0 ? finalizeGoldsky(out) : null;
-    } catch {
-        return null;
-    }
-}
-
-/** Deterministic (blockTime, blockNumber, logIndex) order = true on-chain order,
- *  matching the subgraph/Ponder ordering. Strips the sort-only fields. */
-function finalizeGoldsky(rows: Array<Trade & { _bn?: number; _li?: number }>): Trade[] {
-    rows.sort(
-        (a, b) =>
-            a.time - b.time ||
-            (a._bn ?? 0) - (b._bn ?? 0) ||
-            (a._li ?? 0) - (b._li ?? 0),
-    );
-    return rows.map((r) => ({
-        time: r.time,
-        price: r.price,
-        volumeUsdc: r.volumeUsdc,
-        isBuy: r.isBuy,
-    }));
-}
 
 export interface Candle {
   /** Unix timestamp in seconds. */
@@ -413,7 +321,7 @@ async function fetchTrades(
   // returns the same Trade shape with complete history + real timestamps; the
   // caller still merges live WS pushes and bucketizes. Any failure falls
   // through to the client RPC scan below so the chart is never blank.
-  const indexed = await fetchTradesFromGoldsky(token, mode, pool);
+  const indexed = await fetchTradesFromGoldsky(GOLDSKY_URL, token, mode, pool);
   if (indexed && indexed.length > 0) {
     return { trades: indexed };
   }
