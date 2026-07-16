@@ -56,8 +56,9 @@ export function useSwapRoute(tokenIn?: Address, tokenOut?: Address): SwapRoute {
 
   // Only relevant when we already know we're going via USDC (multi-hop). We
   // check both tokens against the launchpad so we know whether to route the
-  // swap through `swapMigratedRoute`. The `tokens(addr)` view returns a
-  // zeroed tuple for non-launchpad tokens, so `migrated` is just `false`.
+  // swap through the migrated router's `swapMigratedRoute`. The `getTokenState`
+  // view returns a zeroed struct for non-launchpad tokens, so `migrated` is
+  // just `false`.
   const migrationProbe = useReadContracts({
     contracts: [
       {

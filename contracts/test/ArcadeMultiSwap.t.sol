@@ -198,6 +198,37 @@ contract ArcadeMultiSwapTest is Test {
         assertGt(usdc.balanceOf(treasury), t0, "treasury paid in USDC on the buy leg");
     }
 
+    /// F-1: MultiSwap path 4's mid-leg floor had NO test. After the migrated
+    /// wrappers moved to ArcadeMigratedRouter, migrated token<->token flows
+    /// through MultiSwap path 4 (_swapV2 viaUsdc), whose midFloor = the caller's
+    /// usdcMidMin. This is the ONLY thing stopping a sandwicher who moves just
+    /// the tokenIn/USDC pool from driving usdcMid low and scraping past minOut.
+    /// A floor above the achievable mid MUST revert; deleting the midFloor
+    /// enforcement would leave every OTHER test green. Mirror of the router-side
+    /// guard test.
+    function test_swapToSingle_migratedMidLegFloor_revertsWhenUnreachable() public {
+        uint256 boughtA = _bobBuysMigrated(tokenA, 500e6);
+
+        _resetInputs();
+        // A floor far above any achievable mid (selling boughtA yields well
+        // under the 500e6 that bought them, after fee + price impact).
+        _pushInputWithMin(tokenA, boughtA, 0, 500e6);
+
+        vm.startPrank(bob);
+        IERC20(tokenA).approve(address(multiSwap), type(uint256).max);
+        vm.expectRevert(); // leg-1 V2 swap reverts: mid < midFloor
+        multiSwap.swapToSingle(inputsBuf, tokenB, 0, block.timestamp + 60);
+        vm.stopPrank();
+
+        // And a realistic floor (below the achievable mid) clears.
+        _resetInputs();
+        _pushInputWithMin(tokenA, boughtA, 0, 1);
+        vm.startPrank(bob);
+        uint256 out = multiSwap.swapToSingle(inputsBuf, tokenB, 0, block.timestamp + 60);
+        vm.stopPrank();
+        assertGt(out, 0, "a reachable floor clears");
+    }
+
     function test_swapToSingle_sameInOut_passthrough() public {
         _resetInputs();
         _pushInput(address(usdc), 50e6);

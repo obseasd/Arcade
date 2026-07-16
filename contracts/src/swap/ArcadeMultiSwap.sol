@@ -74,9 +74,11 @@ interface IArcadeV4SwapRouterMin {
  *           2. Either side is a Clanker V3 launch token (no V2 pair):
  *              route through the V3 router (single hop if the other side
  *              is USDC, two-hop pivoting through USDC otherwise).
- *           3. Either side is a curve-migrated launchpad token (with a V2
- *              pair): route through the launchpad's buyMigrated / sellMigrated /
- *              swapMigratedRoute wrappers.
+ *           3. (removed) A curve-migrated token needs no special case any more:
+ *              the graduated pair charges the fee in its own K on every route,
+ *              so migrated legs fall through to (4)/(5) like anything else. See
+ *              _routeOne. The old buyMigrated/sellMigrated/swapMigratedRoute
+ *              wrappers were extracted to ArcadeMigratedRouter.
  *           4. USDC on either side OR direct A<->B pool exists: direct V2.
  *           5. Otherwise: V2 multi-hop via USDC.
  *

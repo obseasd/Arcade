@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Address, erc20Abi, formatUnits, parseUnits } from "viem";
+import { Address, erc20Abi, formatUnits, parseUnits, zeroAddress } from "viem";
 import { useAccount, usePublicClient, useReadContract, useWriteContract } from "wagmi";
 import { LAUNCHPAD_ABI } from "@/lib/abis/launchpad";
 import { MIGRATED_ROUTER_ABI } from "@/lib/abis/migratedRouter";
@@ -54,6 +54,10 @@ export function TradePanel({
   const migratedRouter = ADDRESSES.migratedRouter;
   const tradeTarget = migrated ? migratedRouter : launchpad;
   const spender = tradeTarget;
+  // Post-migration trading needs the migrated router configured. Until its env
+  // is set (and the contract deployed) a migrated trade would revert on
+  // "approve to the zero address" -- gate it with a clear message instead.
+  const migratedRouterMissing = migrated && migratedRouter === zeroAddress;
 
   const usdcBalance = useReadContract({
     address: ADDRESSES.usdc,
@@ -307,7 +311,7 @@ export function TradePanel({
 
       <button type="button"
         onClick={onTrade}
-        disabled={!account || amountRaw === 0n || tx.status === "pending"}
+        disabled={!account || amountRaw === 0n || tx.status === "pending" || migratedRouterMissing}
         className={cn(
           "mt-4 w-full py-3 text-base",
           side === "buy" ? "arc-button-primary" : "arc-button-secondary",
@@ -315,13 +319,15 @@ export function TradePanel({
       >
         {!account
           ? "Connect wallet"
-          : amountRaw === 0n
-            ? "Enter amount"
-            : tx.status === "pending"
-              ? `${side === "buy" ? "Buying" : "Selling"}…`
-              : side === "buy"
-                ? `Buy ${symbol}`
-                : `Sell ${symbol}`}
+          : migratedRouterMissing
+            ? "Trading unavailable"
+            : amountRaw === 0n
+              ? "Enter amount"
+              : tx.status === "pending"
+                ? `${side === "buy" ? "Buying" : "Selling"}…`
+                : side === "buy"
+                  ? `Buy ${symbol}`
+                  : `Sell ${symbol}`}
       </button>
 
       <TxStatus state={tx} className="mt-3" />
