@@ -345,6 +345,12 @@ function KeeperRelayBadge({
     }
     let alive = true;
     let iv: ReturnType<typeof setInterval> | null = null;
+    let polls = 0;
+    // Safety cutoff (~15 min at 20s). A hooked intent is recorded within
+    // seconds of the burn, so a still-null intent past this is a plain
+    // no-hook bridge that will never have one -> stop polling. A genuine
+    // keeper relay reaches 'relayed' (and stops below) well inside this.
+    const MAX_POLLS = 45;
     const stop = () => {
       if (iv !== null) {
         clearInterval(iv);
@@ -353,8 +359,10 @@ function KeeperRelayBadge({
     };
     const load = async () => {
       // Don't poll a backgrounded tab (mirrors the Iris poller's gate two
-      // functions up); the next visible tick catches up.
+      // functions up); the next visible tick catches up (and doesn't count
+      // toward MAX_POLLS).
       if (typeof document !== "undefined" && document.hidden) return;
+      polls += 1;
       try {
         const r = await fetch(
           `/api/bridge/intent?burnTxHash=${burnTxHash}`,
@@ -364,18 +372,24 @@ function KeeperRelayBadge({
         const j = (await r.json()) as { intent?: { status: string; relayTxHash: string | null } | null };
         if (!alive) return;
         const it = j?.intent;
-        // Only keep the states worth surfacing; failed/expired fall back to
-        // the row's own status + manual claim, so don't badge them.
+        // Only badge the in-flight/settled keeper states.
         if (it && (it.status === "pending" || it.status === "relaying" || it.status === "relayed")) {
           setRelay({ status: it.status as "pending" | "relaying" | "relayed", relayTxHash: it.relayTxHash });
-          // "relayed" is the terminal keeper state -- the buy is done on Arc.
-          // Stop polling (the client row flips to "Claimed" on its own).
+          // 'relayed' is terminal (buy done on Arc) -> stop; the client row
+          // flips to "Claimed" on its own.
           if (it.status === "relayed") stop();
         } else {
           setRelay(null);
+          // A terminal keeper FAILURE (failed/expired) will not change ->
+          // stop polling (manual claim is the fallback). A null intent may
+          // still appear shortly for a hooked bridge, so keep polling until
+          // the MAX_POLLS cutoff handles the plain-bridge (always-null) case.
+          if (it) stop();
         }
       } catch {
         /* best-effort: no badge */
+      } finally {
+        if (polls >= MAX_POLLS) stop();
       }
     };
     void load();

@@ -10,8 +10,8 @@
 ALTER TABLE keeper_bridge_intents
     ADD COLUMN IF NOT EXISTS usdc_amount BIGINT;
 
--- The stats breakdown groups by src_domain over settled + in-flight intents.
--- A partial-ish index on src_domain keeps that GROUP BY cheap as the table
--- grows (the breakdown reads all non-failed rows, so we do not filter here).
+-- The stats breakdown groups by src_domain over keeper-engaged intents
+-- (status IN ('relaying','relayed') -- see getBridgeRouteVolume). This index
+-- keeps that GROUP BY cheap as the table grows.
 CREATE INDEX IF NOT EXISTS idx_keeper_bridge_route
     ON keeper_bridge_intents (src_domain);

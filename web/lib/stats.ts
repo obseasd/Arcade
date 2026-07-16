@@ -511,7 +511,11 @@ function decimalStringToMicros(v: string): bigint {
 export async function getGoldskyCreatorFees(limit = 10): Promise<CreatorFeeRow[]> {
     const url = process.env.NEXT_PUBLIC_GOLDSKY_URL;
     if (!url) return [];
-    const n = Math.max(1, Math.min(100, Math.floor(limit)));
+    // Guard NaN/Infinity (e.g. a caller passing parseInt of a missing param):
+    // Math.floor(NaN)=NaN survives min/max and would emit `first: NaN` (a query
+    // graph-node rejects, silently blanking the card). Fall back to 10.
+    const req = Number.isFinite(limit) ? Math.floor(limit) : 10;
+    const n = Math.max(1, Math.min(100, req));
     const query = `{ creators(first: ${n}, orderBy: totalVolumeUsdc, orderDirection: desc, where: { totalVolumeUsdc_gt: "0" }) { id tokenCount totalVolumeUsdc graduatedVolumeUsdc } }`;
     try {
         const res = await fetch(url, {

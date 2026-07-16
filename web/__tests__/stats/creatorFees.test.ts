@@ -16,7 +16,6 @@ beforeEach(() => {
 });
 afterEach(() => {
     delete process.env.NEXT_PUBLIC_GOLDSKY_URL;
-    delete process.env.CREATOR_FEE_BPS;
     vi.restoreAllMocks();
 });
 
@@ -79,6 +78,15 @@ describe("getGoldskyCreatorFees", () => {
         expect(rows[1].feeMicros).toBe(3_000_000n); // 1000 curve * 30 bps
         // "1.1234567" -> 1_123_456 (7th digit dropped, NOT rounded to ...457)
         expect(rows[2].volumeMicros).toBe(1_123_456n);
+    });
+
+    it("falls back to first:10 on a NaN limit (never emits first:NaN)", async () => {
+        const fetchMock = mockCreators([]);
+        vi.stubGlobal("fetch", fetchMock);
+        await getGoldskyCreatorFees(Number.NaN);
+        const body = String((fetchMock.mock.calls[0]?.[1] as { body?: string })?.body ?? "");
+        expect(body).toContain("first: 10");
+        expect(body).not.toContain("NaN");
     });
 
     it("returns [] on a non-ok response or malformed body", async () => {
