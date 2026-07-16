@@ -60,7 +60,10 @@ testnet reference the old adapter).
 4. **Set Vercel envs** (Production):
    - `NEXT_PUBLIC_ORBS_EXCHANGE_V2_ADDRESS` = the **new** adapter from step 2
    - `KEEPER_OPERATOR_PRIVATE_KEY` = the keeper key from step 1
-   - `COMPOUNDER_CRON_SECRET` = existing shared bearer (already set)
+   - `KEEPER_CRON_SECRET` = a fresh random bearer you generate
+     (`openssl rand -hex 32`), used ONLY by the keeper trigger. Preferred over
+     reusing `COMPOUNDER_CRON_SECRET` so you never need to know/rotate the shared
+     secret (which is write-only if set "Sensitive"). The route accepts either.
    - `DATABASE_URL` = existing Neon (already set)
    - (already set for the app) `NEXT_PUBLIC_ORBS_TWAP_ADDRESS`,
      `NEXT_PUBLIC_V2_ROUTER_ADDRESS`, `NEXT_PUBLIC_USDC_ADDRESS`,
@@ -70,7 +73,8 @@ testnet reference the old adapter).
 
 5. **Wire the trigger.** On cron-job.org, add a job that POSTs
    `https://<prod>/api/keeper/cron` every ~2 minutes with header
-   `Authorization: Bearer <COMPOUNDER_CRON_SECRET>`. The GitHub workflow
+   `Authorization: Bearer <KEEPER_CRON_SECRET>` (the fresh secret from step 4;
+   `COMPOUNDER_CRON_SECRET` also works if you prefer). The GitHub workflow
    `keeper-scan.yml` is the manual fallback (needs repo secrets
    `KEEPER_CRON_URL` + `COMPOUNDER_CRON_SECRET`).
 

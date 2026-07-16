@@ -213,16 +213,31 @@ type WalletClient = ReturnType<typeof createWalletClient>;
 type OnchainOrder = any;
 
 export async function POST(req: NextRequest) {
-    const secret = process.env.COMPOUNDER_CRON_SECRET;
-    if (!secret) {
+    // Accept a DEDICATED KEEPER_CRON_SECRET (preferred) OR the shared
+    // COMPOUNDER_CRON_SECRET (backward-compat). The dedicated var lets an
+    // operator wire the keeper trigger with a fresh secret WITHOUT knowing or
+    // rotating the shared bearer the compounder/twitter crons also use (which,
+    // if set "Sensitive" on Vercel, is write-only and unrecoverable).
+    const secrets = [
+        process.env.KEEPER_CRON_SECRET,
+        process.env.COMPOUNDER_CRON_SECRET,
+    ].filter((s): s is string => typeof s === "string" && s.length > 0);
+    if (secrets.length === 0) {
         return NextResponse.json(
-            { error: "COMPOUNDER_CRON_SECRET not configured" },
+            { error: "KEEPER_CRON_SECRET (or COMPOUNDER_CRON_SECRET) not configured" },
             { status: 500 },
         );
     }
     const auth = req.headers.get("authorization");
-    const expected = `Bearer ${secret}`;
-    if (!auth || auth.length !== expected.length || auth !== expected) {
+    // Match against any configured secret; per-secret length guard keeps the
+    // comparison from short-circuiting on length alone.
+    const ok =
+        !!auth &&
+        secrets.some((s) => {
+            const expected = `Bearer ${s}`;
+            return auth.length === expected.length && auth === expected;
+        });
+    if (!ok) {
         return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
