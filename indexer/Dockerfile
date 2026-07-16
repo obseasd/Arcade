@@ -29,4 +29,7 @@ EXPOSE 42069
 
 # `ponder start` = production mode: backfill from the start blocks, then follow
 # the head, serving the API. (Use `ponder dev` only for local hot-reload.)
-CMD ["npx", "ponder", "start"]
+# `ponder start` does NOT read $PORT automatically -- it defaults to 42069 -- so
+# pass it explicitly for hosts (Railway/Render) that inject a dynamic $PORT.
+# Hostname defaults to 0.0.0.0, correct for a container.
+CMD ["sh", "-c", "npx ponder start --port ${PORT:-42069}"]
