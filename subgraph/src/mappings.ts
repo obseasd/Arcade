@@ -15,16 +15,16 @@ import { Trade, Pool } from "../generated/schema";
  * bucketizes in TS. This mapping only stores the raw priced trades.
  */
 
-// 0x3600...0000 -- Arc's native USDC. VERIFY/CHANGE for mainnet.
-const USDC = Address.fromString("0x3600000000000000000000000000000000000000");
+// NOTE: graph-node does NOT reliably initialise module-level constants that
+// call functions (Address.fromString / BigInt.fromString / .pow) -- doing so
+// throws "Attempted to read past end of string content bytes chunk" at handler
+// time. So every such value is built LOCALLY inside a function below. The
+// per-event cost of rebuilding a few BigInts is negligible.
 
-// Fixed-point constants (BigInt) and decimal scales (BigDecimal).
-const TEN_POW_24 = BigInt.fromString("1000000000000000000000000"); // 10^24
-const TWO_POW_64 = BigInt.fromI32(2).pow(64); // 2^64
-const Q192 = BigInt.fromI32(2).pow(192); // 2^192
-const SCALE_1E12 = BigDecimal.fromString("1000000000000"); // 1e12
-const SCALE_1E6 = BigDecimal.fromString("1000000"); // 1e6
-const ZERO = BigInt.fromI32(0);
+// 0x3600...0000 -- Arc's native USDC. VERIFY/CHANGE for mainnet.
+function usdcAddress(): Address {
+  return Address.fromString("0x3600000000000000000000000000000000000000");
+}
 
 /**
  * Curve price. Mirrors priceFromNewPriceQ64:
@@ -32,8 +32,10 @@ const ZERO = BigInt.fromI32(0);
  *   price    = priceE24 / 1e24 * 1e12  ==  priceE24 / 1e12
  */
 function priceFromNewPriceQ64(priceQ64: BigInt): BigDecimal {
-  const priceE24 = priceQ64.times(TEN_POW_24).div(TWO_POW_64);
-  return priceE24.toBigDecimal().div(SCALE_1E12);
+  const tenPow24 = BigInt.fromString("1000000000000000000000000"); // 10^24
+  const twoPow64 = BigInt.fromI32(2).pow(64); // 2^64
+  const priceE24 = priceQ64.times(tenPow24).div(twoPow64);
+  return priceE24.toBigDecimal().div(BigDecimal.fromString("1000000000000")); // /1e12
 }
 
 /**
@@ -43,20 +45,23 @@ function priceFromNewPriceQ64(priceQ64: BigInt): BigDecimal {
  *   price    = ratioE24 / 1e12
  */
 function priceFromSqrtX96(sqrtPriceX96: BigInt, usdcIsToken0: boolean): BigDecimal {
+  const tenPow24 = BigInt.fromString("1000000000000000000000000"); // 10^24
+  const q192 = BigInt.fromI32(2).pow(192); // 2^192
   const num = sqrtPriceX96.times(sqrtPriceX96);
   let ratioE24: BigInt;
   if (usdcIsToken0) {
-    ratioE24 = Q192.times(TEN_POW_24).div(num);
+    ratioE24 = q192.times(tenPow24).div(num);
   } else {
-    ratioE24 = num.times(TEN_POW_24).div(Q192);
+    ratioE24 = num.times(tenPow24).div(q192);
   }
-  return ratioE24.toBigDecimal().div(SCALE_1E12);
+  return ratioE24.toBigDecimal().div(BigDecimal.fromString("1000000000000")); // /1e12
 }
 
 /** |raw| / 1e6 (human USDC). Mirrors usdcVolumeFromRaw. */
 function usdcVolume(raw: BigInt): BigDecimal {
-  const abs = raw.lt(ZERO) ? raw.neg() : raw;
-  return abs.toBigDecimal().div(SCALE_1E6);
+  const zero = BigInt.fromI32(0);
+  const abs = raw.lt(zero) ? raw.neg() : raw;
+  return abs.toBigDecimal().div(BigDecimal.fromString("1000000")); // /1e6
 }
 
 function tradeId(txHash: string, logIndex: BigInt): string {
@@ -98,8 +103,9 @@ export function handleSell(event: Sell): void {
 export function handlePoolCreated(event: PoolCreated): void {
   const token0 = event.params.token0;
   const token1 = event.params.token1;
-  const usdcIsToken0 = token0.equals(USDC);
-  const usdcIsToken1 = token1.equals(USDC);
+  const usdc = usdcAddress();
+  const usdcIsToken0 = token0.equals(usdc);
+  const usdcIsToken1 = token1.equals(usdc);
   if (!usdcIsToken0 && !usdcIsToken1) return; // not a USDC pool
 
   const p = new Pool(event.params.pool.toHexString());
@@ -125,7 +131,7 @@ export function handleSwap(event: Swap): void {
   t.pool = event.address;
   t.price = priceFromSqrtX96(event.params.sqrtPriceX96, p.usdcIsToken0);
   t.volumeUsdc = usdcVolume(usdcRaw);
-  t.isBuy = usdcRaw.gt(ZERO);
+  t.isBuy = usdcRaw.gt(BigInt.fromI32(0));
   t.blockTime = event.block.timestamp.toI32();
   t.blockNumber = event.block.number;
   t.logIndex = event.logIndex.toI32();
