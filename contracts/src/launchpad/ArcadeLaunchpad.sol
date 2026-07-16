@@ -86,13 +86,14 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
     // CLANKER mode: 70% platform / 30% creator(s)
     uint256 internal constant CLANKER_PLATFORM_BPS = 7_000; // 70% of the trade fee
 
-    /// @notice Post-migration royalty taken on top of V2 LP fees when the
-    /// swap is routed through `buyMigrated` / `sellMigrated`. Uniform split
-    /// across both launch modes (the bonding-curve split logic only applies
-    /// while the curve is active).
-    uint256 internal constant MIGRATED_PLATFORM_BPS = 20; // 0.20% to platform
-    uint256 internal constant MIGRATED_CREATOR_BPS = 10; // 0.10% to creator(s)
-    uint256 internal constant MIGRATED_ROYALTY_BPS = MIGRATED_PLATFORM_BPS + MIGRATED_CREATOR_BPS; // 0.30% total
+    /// @notice HISTORICAL: the wrapper royalty these described is REMOVED on the
+    /// pair-level-fee branch -- the graduated pair charges the fee in its own K,
+    /// so buyMigrated/sellMigrated skim nothing. Kept only because a few
+    /// comments still cite them as the advertised 0.20/0.10/0.30 figure; NO code
+    /// path reads them (the one that did, _distributeMigratedFee, was deleted).
+    uint256 internal constant MIGRATED_PLATFORM_BPS = 20; // 0.20% (historical)
+    uint256 internal constant MIGRATED_CREATOR_BPS = 10; // 0.10% (historical)
+    uint256 internal constant MIGRATED_ROYALTY_BPS = MIGRATED_PLATFORM_BPS + MIGRATED_CREATOR_BPS; // 0.30% (historical)
 
     // --- V3 vault (CLANKER_V3) migration params ---
     /// @notice V3 pool fee tier used for vault migrations: 1% (matches the
@@ -701,7 +702,7 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         emit Sell(tokenAddr, msg.sender, tokensIn, usdcOut, _spotPriceQ64(s));
     }
 
-    // ====================== Post-migration trading with creator royalty ======================
+    // ====================== Post-migration trading (thin V2 wrappers) ======================
 
     /**
      * @notice Buy a migrated token by routing through the V2 router. A thin
@@ -901,8 +902,9 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
 
     /**
      * @notice View quote for `swapMigratedRoute`. Mirrors the on-chain flow
-     * (incl. royalty skim) so the frontend can display an accurate output.
-     * Returns `(tokensOut, totalRoyaltyUsdc)`.
+     * (no royalty skim -- the pairs charge in-K) so the frontend can display an
+     * accurate output. Returns `(tokensOut, usdcMid)`; the second value was
+     * `totalRoyaltyUsdc` before the royalty was removed.
      */
     /// @return tokensOut  final tokenOut for `tokensIn`.
     /// @return usdcMid     the USDC produced by leg 1, i.e. the input to leg 2.

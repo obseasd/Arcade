@@ -60,17 +60,23 @@ interface IArcadeLaunchpad {
     /// for V3-vs-V2 routing).
     function getTokenState(address tokenAddr) external view returns (TokenState memory);
 
-    /// @notice Buy a migrated token with USDC via V2, skimming the post-migration royalty from the USDC input.
+    /// @notice Buy a migrated token with USDC via V2. Thin wrapper: the
+    /// graduated pair charges the 0.30% fee in its own K, so this skims nothing
+    /// extra (the wrapper royalty this line used to name was removed).
     function buyMigrated(address tokenAddr, uint256 usdcIn, uint256 minTokensOut, uint256 deadline)
         external
         returns (uint256 tokensOut);
 
-    /// @notice Sell a migrated token for USDC via V2, skimming the post-migration royalty from the USDC output.
+    /// @notice Sell a migrated token for USDC via V2. Thin wrapper: the pair
+    /// charges the fee INPUT-side in its own K, so this skims nothing. This line
+    /// used to say "from the USDC output" -- the reverted output-side design
+    /// that silently defeats amountOutMin; the body never did it.
     function sellMigrated(address tokenAddr, uint256 tokensIn, uint256 minUsdcOut, uint256 deadline)
         external
         returns (uint256 usdcOut);
 
-    /// @notice Royalty-aware multi-hop swap A -> USDC -> B with launchpad royalty on each migrated leg.
+    /// @notice Multi-hop swap A -> USDC -> B. Charges no wrapper fee on either
+    /// leg -- each migrated token's pair charges it in-K.
     /// @param deadline unix timestamp after which the call reverts (passed through to the V2 router on every leg).
     function swapMigratedRoute(
         address tokenIn,
