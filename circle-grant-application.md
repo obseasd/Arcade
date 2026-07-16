@@ -20,7 +20,7 @@ Issuance flows through a deterministic bonding curve that raises up to 20,000 US
 
 ArcadeMultiSwap aggregates V2 plus V3 routes around a USDC pivot, and the Orbs TWAP integration puts true on-chain limit orders into the same book. A self-hosted unified keeper now settles that book end to end: it bids and fills open limit orders AND dollar-cost-average schedules (a DCA order is a multi-chunk TWAP order, served by the same code), and it auto-relays CCTP bridge-and-buy so a deposit from any source chain completes into a token buy on Arc with no second signature. CCTP V2 is already wired in `web/lib/cctp.ts` using the canonical TokenMessenger and MessageTransmitter addresses, so capital can arrive from Ethereum, Base, Arbitrum, Optimism, Polygon, and Solana into a single USDC denominator at settlement.
 
-Every graduated pair charges a pair-level fee pinned at 0.30% (0.10% to LPs, 0.15% protocol, 0.05% creator), taken input-side so it never silently defeats a trader's minimum-out. The whole stack is governed by a live 2-of-3 Gnosis Safe: treasury, protocol fee sink, factory fee-setter, the V3 locker, the auto-compounder, and the Twitter escrow all resolve to the Safe, and a Ponder indexer serves complete USDC-denominated price history and volume behind the charts.
+Every graduated pair charges a pair-level fee pinned at 0.30% (0.10% to LPs, 0.15% protocol, 0.05% creator), taken input-side so it never silently defeats a trader's minimum-out. The whole stack is governed by a live 2-of-3 Gnosis Safe: treasury, protocol fee sink, factory fee-setter, the V3 locker, the auto-compounder, and the Twitter escrow all resolve to the Safe, and a managed Goldsky subgraph (an Arc Builders Fund data-infra partner) serves complete USDC-denominated price history and volume behind the charts.
 
 ## FIELD: Why hasn't this problem been solved yet? What are the barriers?
 
@@ -40,7 +40,7 @@ Arc removes barrier three this year, EIP-712 removes barrier four, and Arcade is
 
 Arcade is built by a solo founder, pseudonymous publicly and doxxed to the Arc team through a hackathon win, available for KYC under a confidentiality side letter with Circle compliance. The honest framing is velocity, not headcount.
 
-The project has shipped and verified the full USDC-native stack on Arc testnet: V2 Factory/Router with a pair-level fee, the PUMP/CLANKER/CLANKER_V3 Launchpad with atomic migration, a V3 Factory/Router/Quoter/NPM/Locker with permanent single-sided LP, a keeper-driven V3 auto-compounder, the MultiSwap aggregator with per-leg slippage floors, a periphery migrated-router, the EIP-712 Twitter-handle escrow, and the Orbs TWAP surface for on-chain limit orders. Beyond the contracts, three pieces of live infrastructure ship the "always-on markets" thesis: (1) a self-hosted unified keeper that actually settles the limit-order/DCA book and auto-relays CCTP bridge-and-buy, (2) a Ponder indexer serving complete USDC price/volume history behind the charts, and (3) a 2-of-3 Gnosis Safe governing treasury, fees, and every admin role, live on-chain.
+The project has shipped and verified the full USDC-native stack on Arc testnet: V2 Factory/Router with a pair-level fee, the PUMP/CLANKER/CLANKER_V3 Launchpad with atomic migration, a V3 Factory/Router/Quoter/NPM/Locker with permanent single-sided LP, a keeper-driven V3 auto-compounder, the MultiSwap aggregator with per-leg slippage floors, a periphery migrated-router, the EIP-712 Twitter-handle escrow, and the Orbs TWAP surface for on-chain limit orders. Beyond the contracts, three pieces of live infrastructure ship the "always-on markets" thesis: (1) a self-hosted unified keeper that actually settles the limit-order/DCA book and auto-relays CCTP bridge-and-buy, (2) a Goldsky subgraph (Arc Builders Fund partner) serving complete USDC price/volume history behind the charts, and (3) a 2-of-3 Gnosis Safe governing treasury, fees, and every admin role, live on-chain.
 
 Security is a standing practice, not a one-off: production code has gone through many rounds of adversarial internal audit (multi-agent refuting reviewers that default to "broken" and must prove a regression test fails on the reverted fix). Recent examples include a full offensive exploit sweep, a governance-transfer review, a 4-round audit-and-fix loop on the keeper (a HIGH "DCA dead-on-arrival at defaults" and a no-op allowlist precheck both caught and closed), and a 2-round loop on the indexer. Findings are closed with executable regression tests; the residual mainnet-gated HIGH items are documented for the external review.
 
@@ -50,7 +50,7 @@ Hackathon context: **[FOUNDER FILLS — exact hackathon name and month/year of t
 
 ## FIELD: Is your project currently live in production?
 
-Not yet in mainnet production. Arcade is live end-to-end on Arc testnet (chainId 5042002) with the full USDC-native stack (20+ verified contracts) deployed and Safe-governed, a public frontend at arcade.trading, a /stats dashboard surfacing cumulative USDC gas, a Ponder price/volume indexer and a unified settlement keeper both code-complete, and CCTP V2 bridging from Sepolia. Mainnet deploy is committed for Arc mainnet day one, Summer 2026, contingent only on Arc mainnet opening.
+Not yet in mainnet production. Arcade is live end-to-end on Arc testnet (chainId 5042002) with the full USDC-native stack (20+ verified contracts) deployed and Safe-governed, a public frontend at arcade.trading, a /stats dashboard surfacing cumulative USDC gas, a Goldsky subgraph for price/volume history and a unified settlement keeper both code-complete, and CCTP V2 bridging from Sepolia. Mainnet deploy is committed for Arc mainnet day one, Summer 2026, contingent only on Arc mainnet opening.
 
 ## FIELD: Are you live on Arc?
 
@@ -132,15 +132,15 @@ Only Arc testnet today. Arc mainnet day-1 deploy planned for Summer 2026. CCTP V
 
 **Timeline:** 6 weeks, parallel with M1.
 
-### Milestone 3: Public USDC-gas attribution dashboard live and ArcLens indexer in production
+### Milestone 3: Public USDC-gas dashboard + Goldsky subgraph (Arc partner) to full production
 
-**Scope:** The core indexer is already built and adversarially audited (a Ponder project in `indexer/`, code-complete on `main`): it auto-discovers every USDC-paired V3 pool via the factory, indexes launchpad Buy/Sell and pool Swaps, and already serves complete USDC price/volume history behind the charts (with a parity-tested price module and a client-scan fallback). This milestone hardens and expands it: promote the current /stats page to a production-grade public dashboard, extend the indexer to the full Arcade event surface (Launchpad mode transitions, MultiSwap routes, Orbs TWAP book + DCA, TwitterEscrowV3 claims, CCTP V2 burns/mints), and run it in production on Arc mainnet with a full genesis backfill. The dashboard exposes per-protocol cumulative USDC gas burned, per-token USDC volume, per-creator USDC fees earned, per-Twitter-handle USDC pending in escrow, and per-CCTP-route USDC bridged, all queryable via a public GraphQL/REST endpoint at `api.arcade.trading`. Because the indexer is already delivered, this milestone is de-risked to hosting + schema expansion rather than greenfield engineering.
+**Scope:** The core indexing is already built and delivered as a **Goldsky subgraph** (`subgraph/`, on `main`) — Goldsky is an Arc Builders Fund data-infra partner, so this milestone runs entirely on Arc-recommended, fully-managed infrastructure (no self-hosted servers). The subgraph auto-discovers every USDC-paired V3 pool via the factory template, indexes launchpad Buy/Sell and pool Swaps with the price math ported verbatim (parity-locked to the client), and already serves complete USDC price/volume history behind the charts (with a client-scan fallback). It also side-steps the Arc EIP-7708 native-Transfer trap by indexing Buy/Sell/Swap topics, never the 18-decimal system Transfer logs. This milestone hardens and expands it: promote the current /stats page to a production-grade public dashboard, extend the subgraph to the full Arcade event surface (Launchpad mode transitions, MultiSwap routes, Orbs TWAP book + DCA, TwitterEscrowV3 claims, CCTP V2 burns/mints), and run it in production on Arc mainnet with a full genesis backfill. The dashboard exposes per-protocol cumulative USDC gas burned, per-token USDC volume, per-creator USDC fees earned, per-Twitter-handle USDC pending in escrow, and per-CCTP-route USDC bridged, all over the subgraph's GraphQL endpoint. Because the core subgraph is already delivered on a managed Arc partner, this milestone is de-risked to schema expansion + dashboard, not greenfield indexing infrastructure.
 
-**Acceptance criteria:** (1) Ponder indexer in production with 99.5% uptime SLO and Grafana alerting, (2) hot path queries return under 200ms p95, (3) /stats renders the six headline numbers (cumulative USDC gas, cumulative USDC volume, cumulative USDC fees to creators, cumulative USDC bridged via CCTP V2, active tokens, graduated tokens), (4) historical backfill from Arc mainnet block 0 with replay-safety, (5) all-time event history queryable beyond the current 50k-500k block RPC scan cap that hooks/V4 frontend depend on, (6) open-source indexer schema published so other Arc apps can fork it.
+**Acceptance criteria:** (1) Goldsky subgraph in production (managed 99.9% uptime) covering the full Arcade event surface, (2) hot-path GraphQL queries return under 200ms p95, (3) /stats renders the six headline numbers (cumulative USDC gas, cumulative USDC volume, cumulative USDC fees to creators, cumulative USDC bridged via CCTP V2, active tokens, graduated tokens), (4) historical backfill from the Arc mainnet deploy blocks with replay-safety, (5) all-time event history queryable beyond the current 50k-500k block RPC scan cap that the charts/V4 frontend depend on, (6) open-source subgraph (schema + mappings) published so other Arc apps can fork it.
 
 **Circle integration angle:** Surfaces the only public number that proves Arc's USDC-as-gas thesis at scale: cumulative USDC gas paid by Arcade users, broken down by contract and by Circle product. Gives Circle marketing, BD, and product teams a citation-quality dashboard they can point at when pitching Arc and CCTP V2 adoption. Indexer also unblocks Circle Wallets embedded onboarding analytics (M5).
 
-**USDC ask:** $9,000 USDC (Ponder hosting for 12 months, Postgres tier, Grafana Cloud, one-time schema design and backfill).
+**USDC ask:** $6,000 USDC (Goldsky managed subgraph plan for 12 months, subgraph schema expansion to the full event surface, and the /stats dashboard build). Lower than a self-hosted stack because the indexing runs on a managed Arc partner rather than servers we operate.
 
 **Timeline:** 4 weeks, starts week 4 so backfill catches the mainnet genesis.
 
@@ -168,7 +168,7 @@ Only Arc testnet today. Arc mainnet day-1 deploy planned for Summer 2026. CCTP V
 
 **Timeline:** 5 weeks, starts week 8.
 
-**Total grant request across M1 to M5: $70,000 USDC.**
+**Total grant request across M1 to M5: $67,000 USDC.**
 
 ## FIELD: Current traction
 
@@ -253,6 +253,6 @@ Any remaining funds extend solo-founder runway through Arc mainnet stabilisation
 5. Answer the Conflict of interest field with Yes or No and a one-line explanation; default suggested wording is provided.
 6. Re-confirm the Pashov Audit Group quote in writing before submission so the $25k to $45k range and the $35k M1 ask reflect a live engagement letter rather than a public quote.
 7. Confirm the production Iris endpoint URL (`iris-api.circle.com`) is correct for the mainnet CCTP V2 matrix in M2 before paste.
-8. Verify the total $70,000 USDC ask is within the Circle Developer Grants per-project cap; if a lower ceiling applies, trim M3 ($9k) or M5 ($6k) first since M1 (audit) and M2 (CCTP V2 matrix) are highest leverage.
+8. Verify the total $67,000 USDC ask is within the Circle Developer Grants per-project cap; if a lower ceiling applies, trim M3 ($6k) or M5 ($6k) first since M1 (audit) and M2 (CCTP V2 matrix) are highest leverage.
 
 Note: contract addresses in the table are the current Safe-governed testnet generation (2026-07-16) pulled from `web/public/deployments.json`. Re-pull before submission only if a further redeploy has happened since.
