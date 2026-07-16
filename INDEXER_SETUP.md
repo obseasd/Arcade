@@ -74,3 +74,12 @@ the start blocks. Because the app DB is separate, this is always safe.
   raise it (and add pagination) if a token ever approaches it at mainnet scale.
 - Timeframe bucketing happens per request from the raw trades, so any timeframe
   is served from one dataset without pre-aggregation.
+- **Timestamp caveat at the fallback boundary**: the indexer uses REAL block
+  timestamps; the client scan fallback estimates them as `~1s/block`. So when a
+  token drops to the fallback (indexer down / URL unset), historical candles can
+  shift slightly on the time axis vs the indexer view (negligible for 1m+ on
+  Arc's ~1s blocks; visible only at 1s granularity). The indexer view is the
+  correct one; the fallback stays a degraded-but-never-blank safety net.
+- The frontend passes `?source=curve|v3` (derived from the token's mode) so the
+  chart shows exactly the single source the client always did, even though the
+  permissionless V3 factory may index unrelated USDC pools for a curve token.

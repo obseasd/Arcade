@@ -34,6 +34,13 @@ export const trade = onchainTable(
         // Block timestamp (unix seconds) -- REAL, not estimated like the client.
         blockTime: t.integer().notNull(),
         blockNumber: t.bigint().notNull(),
+        // Log index within the block. REQUIRED as the intra-block sort
+        // tiebreaker: trades in one block share (blockTime, blockNumber), so
+        // without this the API's ORDER BY leaves same-block trades in arbitrary
+        // heap order (and it shifts after a reorg re-insert), which changes the
+        // bucketized candles. Ordering by (blockTime, blockNumber, logIndex)
+        // reproduces the true on-chain execution order deterministically.
+        logIndex: t.integer().notNull(),
     }),
     (table) => ({
         // The hot query: all trades for a token, oldest-first, for bucketizing.

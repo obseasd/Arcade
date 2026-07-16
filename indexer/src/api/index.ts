@@ -1,7 +1,7 @@
 import { db } from "ponder:api";
 import { trade } from "ponder:schema";
 import { Hono } from "hono";
-import { asc, eq } from "ponder";
+import { and, asc, eq } from "ponder";
 import { bucketize, BUCKET_SIZE, type Trade, type Timeframe } from "../lib/price";
 
 /**
@@ -18,6 +18,22 @@ const app = new Hono();
 const TIMEFRAMES = new Set<Timeframe>(["1s", "1m", "5m", "1h", "1d"]);
 // Hard ceiling so a single request cannot pull an unbounded row set.
 const MAX_TRADES = 50_000;
+const SOURCES = new Set(["curve", "v3"]);
+
+/**
+ * Optional source filter. The client shows ONE source per token (mode==2 => v3,
+ * else curve); the V3 factory is permissionless, so a graduated curve token can
+ * ALSO have unrelated USDC/V3 pools. Passing ?source= lets the frontend restrict
+ * to exactly what the client would show, avoiding a mixed-source chart. Absent =
+ * all sources (full history).
+ */
+function sourceFilter(token: string, source: string | undefined) {
+    const tokenEq = eq(trade.token, token as `0x${string}`);
+    if (source && SOURCES.has(source)) {
+        return and(tokenEq, eq(trade.source, source));
+    }
+    return tokenEq;
+}
 
 app.use("*", async (c, next) => {
     await next();
@@ -28,6 +44,7 @@ app.use("*", async (c, next) => {
 app.get("/candles", async (c) => {
     const token = (c.req.query("token") ?? "").toLowerCase();
     const tf = (c.req.query("tf") ?? "1m") as Timeframe;
+    const source = c.req.query("source");
 
     if (!/^0x[0-9a-f]{40}$/.test(token)) {
         return c.json({ error: "token must be a 20-byte hex address" }, 400);
@@ -44,8 +61,8 @@ app.get("/candles", async (c) => {
             isBuy: trade.isBuy,
         })
         .from(trade)
-        .where(eq(trade.token, token as `0x${string}`))
-        .orderBy(asc(trade.blockTime), asc(trade.blockNumber))
+        .where(sourceFilter(token, source))
+        .orderBy(asc(trade.blockTime), asc(trade.blockNumber), asc(trade.logIndex))
         .limit(MAX_TRADES);
 
     const trades: Trade[] = rows.map((r) => ({
@@ -68,6 +85,7 @@ app.get("/candles", async (c) => {
  */
 app.get("/trades", async (c) => {
     const token = (c.req.query("token") ?? "").toLowerCase();
+    const source = c.req.query("source");
     if (!/^0x[0-9a-f]{40}$/.test(token)) {
         return c.json({ error: "token must be a 20-byte hex address" }, 400);
     }
@@ -79,10 +97,10 @@ app.get("/trades", async (c) => {
             isBuy: trade.isBuy,
         })
         .from(trade)
-        .where(eq(trade.token, token as `0x${string}`))
-        .orderBy(asc(trade.blockTime), asc(trade.blockNumber))
+        .where(sourceFilter(token, source))
+        .orderBy(asc(trade.blockTime), asc(trade.blockNumber), asc(trade.logIndex))
         .limit(MAX_TRADES);
-    return c.json({ token, count: rows.length, trades: rows });
+    return c.json({ token, source: source ?? null, count: rows.length, trades: rows });
 });
 
 app.get("/health", (c) => c.json({ ok: true }));

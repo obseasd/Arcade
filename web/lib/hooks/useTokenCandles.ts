@@ -19,10 +19,21 @@ const Q192 = 2n ** 192n;
 // scan on any error / when unset, so the chart never goes blank.
 const INDEXER_URL = process.env.NEXT_PUBLIC_INDEXER_URL;
 
-async function fetchTradesFromIndexer(token: Address): Promise<Trade[] | null> {
+async function fetchTradesFromIndexer(
+    token: Address,
+    mode: number,
+): Promise<Trade[] | null> {
     if (!INDEXER_URL) return null;
     try {
-        const url = `${INDEXER_URL.replace(/\/$/, "")}/trades?token=${token.toLowerCase()}`;
+        // Match the client's single-source-per-token behaviour: mode==2 is a
+        // CLANKER_V3 token (V3 pool swaps), everything else is a curve token
+        // (launchpad Buy/Sell). The V3 factory is permissionless, so a
+        // graduated curve token can also have unrelated USDC/V3 pools indexed
+        // under the same token; the source filter keeps the chart to exactly
+        // what the client would have shown.
+        const source = mode === 2 ? "v3" : "curve";
+        const base = INDEXER_URL.replace(/\/$/, "");
+        const url = `${base}/trades?token=${token.toLowerCase()}&source=${source}`;
         const res = await fetch(url);
         if (!res.ok) return null;
         const json = (await res.json()) as { trades?: unknown };
@@ -348,7 +359,7 @@ async function fetchTrades(
   // returns the same Trade shape with complete history + real timestamps; the
   // caller still merges live WS pushes and bucketizes. Any failure falls
   // through to the client RPC scan below so the chart is never blank.
-  const indexed = await fetchTradesFromIndexer(token);
+  const indexed = await fetchTradesFromIndexer(token, mode);
   if (indexed && indexed.length > 0) {
     return { trades: indexed };
   }

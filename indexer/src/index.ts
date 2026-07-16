@@ -13,6 +13,13 @@ import {
  */
 
 const USDC = (process.env.USDC_ADDRESS ?? "").toLowerCase();
+// Fail fast: an unset/invalid USDC address would make every V3 pool look
+// "not USDC", silently indexing ZERO v3 trades with no error.
+if (!/^0x[0-9a-f]{40}$/.test(USDC)) {
+    throw new Error(
+        "USDC_ADDRESS is unset or not a 20-byte hex address; V3 pool filtering needs it",
+    );
+}
 
 function tradeId(txHash: string, logIndex: number): string {
     return `${txHash}-${logIndex}`;
@@ -31,6 +38,7 @@ ponder.on("Launchpad:Buy", async ({ event, context }) => {
         isBuy: true,
         blockTime: Number(event.block.timestamp),
         blockNumber: event.block.number,
+        logIndex: event.log.logIndex,
     });
 });
 
@@ -45,6 +53,7 @@ ponder.on("Launchpad:Sell", async ({ event, context }) => {
         isBuy: false,
         blockTime: Number(event.block.timestamp),
         blockNumber: event.block.number,
+        logIndex: event.log.logIndex,
     });
 });
 
@@ -87,5 +96,6 @@ ponder.on("V3Pool:Swap", async ({ event, context }) => {
         isBuy: usdcRaw > 0n,
         blockTime: Number(event.block.timestamp),
         blockNumber: event.block.number,
+        logIndex: event.log.logIndex,
     });
 });
