@@ -1,6 +1,6 @@
 import { ArrowLeft, BarChart3, Coins, Repeat, Rocket, Users } from "lucide-react";
 import Link from "next/link";
-import { formatUsdcGas, getAggregateStats, type StatsSnapshot } from "@/lib/stats";
+import { formatUsdcGas, getAggregateStats, getGoldskyStats, type StatsSnapshot } from "@/lib/stats";
 import {
     getLatestPersistedSnapshot,
     getSnapshotHistory,
@@ -54,10 +54,18 @@ export default async function StatsPage({
     const backHref = from === "admin" ? "/admin" : "/";
     const backLabel = from === "admin" ? "Admin" : "Home";
 
+    // Prefer the Goldsky subgraph (one query, complete cumulative history) when
+    // configured; else the persisted DB snapshot; else the RPC scan. Insert the
+    // live snapshot so the sparkline history keeps building.
+    const goldsky = await getGoldskyStats();
     const persisted = await getLatestPersistedSnapshot();
     let snap: StatsSnapshot;
     let usingPersisted = false;
-    if (persisted) {
+    if (goldsky) {
+        // Live from the subgraph; the stats cron persists the history rows the
+        // sparkline reads, so no per-render insert here.
+        snap = goldsky;
+    } else if (persisted) {
         snap = persisted;
         usingPersisted = true;
     } else {
@@ -71,7 +79,7 @@ export default async function StatsPage({
     // History window for the delta + sparkline. Empty when the DB isn't
     // configured yet — the rest of the page renders without it.
     const sinceIso = new Date(Date.now() - HISTORY_WINDOW_MS).toISOString();
-    const history = usingPersisted ? await getSnapshotHistory(sinceIso, 720) : [];
+    const history = goldsky || usingPersisted ? await getSnapshotHistory(sinceIso, 720) : [];
     const oldest = history[0];
     const deltaVolume = oldest
         ? snap.volumeUsdcMicros - oldest.volumeUsdcMicros

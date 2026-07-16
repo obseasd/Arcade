@@ -24,7 +24,7 @@ export interface PersistedSnapshot extends StatsSnapshot {
     persistedAtIso: string;
     /** Provenance label so dashboards can distinguish cron-driven rows
      *  (canonical) from manual replays or cold-load fallbacks. */
-    source: "cron" | "manual" | "fallback";
+    source: "cron" | "manual" | "fallback" | "goldsky";
 }
 
 interface RawRow {
@@ -38,7 +38,7 @@ interface RawRow {
     volume_usdc_micros: string;
     estimated_usdc_gas_micros: string;
     truncated: boolean;
-    source: "cron" | "manual" | "fallback";
+    source: "cron" | "manual" | "fallback" | "goldsky";
 }
 
 function rowToSnapshot(r: RawRow): PersistedSnapshot {
@@ -243,7 +243,7 @@ export async function getSnapshotHistory(
  *  so GitHub Actions can alert). */
 export async function insertSnapshot(
     snap: StatsSnapshot,
-    source: "cron" | "manual" | "fallback",
+    source: "cron" | "manual" | "fallback" | "goldsky",
 ): Promise<boolean> {
     if (!isDbConfigured()) return false;
     try {

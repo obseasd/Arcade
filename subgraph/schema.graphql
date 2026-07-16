@@ -1,43 +1,68 @@
-# Goldsky subgraph schema for the Arcade OHLC charts.
+# Goldsky subgraph schema for Arcade charts + stats + referral.
 #
-# One Trade entity per on-chain trade (launchpad Buy/Sell OR V3 pool Swap) with
-# the USDC-per-token price already derived in the mappings (same math as the
-# client useTokenCandles / the Ponder indexer's price.ts). The frontend queries
-# `trades` over GraphQL, oldest-first, and bucketizes into OHLC client-side (the
-# bucketize logic stays in TS, it is NOT reimplemented in AssemblyScript).
-#
-# Pool records the USDC-paired V3 pools discovered from the factory so the Swap
-# handler knows the token0 orientation.
+# Trade  -- one row per on-chain trade (launchpad Buy/Sell OR V3 pool Swap) with
+#           price + the TRADER, for charts (bucketize in TS) and per-wallet reads.
+# Trader -- per-address running volume, for the referral earnings computation and
+#           the unique-wallet stat (subgraphs can't COUNT DISTINCT cheaply).
+# Token  -- launchpad token lifecycle (creator, mode, graduated) for /stats.
+# Global -- a single running-totals row for O(1) /stats aggregate reads.
 
 type Trade @entity(immutable: true) {
-  # `${txHash}-${logIndex}` -- unique per log.
   id: ID!
   # The token being priced (the non-USDC side).
   token: Bytes!
+  # The wallet that traded: Buy.buyer / Sell.seller / Swap.recipient.
+  trader: Bytes!
   # "curve" (launchpad Buy/Sell) | "v3" (pool Swap).
   source: String!
-  # The V3 pool, when source == "v3" (null for curve).
   pool: Bytes
-  # USDC per whole token (human units), already scaled.
   price: BigDecimal!
-  # USDC volume of the trade (human units).
   volumeUsdc: BigDecimal!
-  # True = USDC -> token (buy). Drives the candle side-break.
   isBuy: Boolean!
-  # Block timestamp (unix seconds) -- REAL, not estimated.
   blockTime: Int!
   blockNumber: BigInt!
-  # Intra-block sort tiebreaker (true on-chain order).
   logIndex: Int!
 }
 
 type Pool @entity(immutable: false) {
-  # The pool address (lowercase hex).
   id: ID!
   token0: Bytes!
   token1: Bytes!
-  # The non-USDC side (the token this pool prices).
   token: Bytes!
-  # True when USDC is token0 (selects the sqrtPrice inversion).
   usdcIsToken0: Boolean!
+}
+
+type Trader @entity(immutable: false) {
+  # The wallet address (lowercase hex).
+  id: ID!
+  firstSeenAt: Int!
+  # Cumulative USDC volume this wallet has traded (human units). The referral
+  # earnings query reads this per verified referred wallet; the fee %/share/cap
+  # policy is applied OFF-CHAIN in referralPayout.ts (so it can change without a
+  # subgraph re-backfill).
+  totalVolumeUsdc: BigDecimal!
+  tradeCount: Int!
+}
+
+type Token @entity(immutable: false) {
+  # The launchpad token address (lowercase hex).
+  id: ID!
+  creator: Bytes!
+  # 0=PUMP, 1=CLANKER, 2=CLANKER_V3 (uint8 on chain).
+  mode: Int!
+  createdAt: Int!
+  migrated: Boolean!
+  migratedAt: Int
+  # The V2/V3 pair the curve graduated into (null pre-graduation).
+  migratedPair: Bytes
+}
+
+# Single running-totals row (id = "global") for cheap /stats reads.
+type Global @entity(immutable: false) {
+  id: ID!
+  totalVolumeUsdc: BigDecimal!
+  tradeCount: Int!
+  tokenCount: Int!
+  graduatedCount: Int!
+  uniqueTraders: Int!
 }

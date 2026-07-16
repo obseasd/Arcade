@@ -21,6 +21,9 @@ export interface StatsSnapshot {
     uniqueWallets: number;
     /** Tokens created via the bonding-curve launchpad. */
     tokensLaunched: number;
+    /** Tokens that graduated (migrated) off the curve. Optional: only the
+     *  Goldsky-backed path sets it (the RPC scan leaves it undefined). */
+    tokensGraduated?: number;
     /** TokenCreated events on the V4 prototype launchpad (if any). */
     v4TokensLaunched: number;
     /** TokenLaunched events on the production ArcadeHook (V4 Phase 2). */
@@ -348,6 +351,80 @@ export async function getAggregateStats(): Promise<StatsSnapshot> {
         asOfIso: new Date().toISOString(),
         truncated,
     };
+}
+
+/**
+ * FAST stats from the Goldsky subgraph's Global running-totals singleton -- ONE
+ * GraphQL query instead of the 500k-block, 50-contract RPC scan above. Serves
+ * cumulative USDC volume, tokens launched + graduated, unique traders, and the
+ * trade count (as the "transactions routed" headline); gas stays the same
+ * estimate, derived from the trade count. Returns null when the subgraph is
+ * unset or errors so the caller falls back to getAggregateStats (RPC scan).
+ *
+ * v4* counts are 0 here (the subgraph does not index the V4 prototype); the
+ * consumers already treat those as additive, so the headline "tokens launched"
+ * = tokensLaunched. Complete history, so truncated=false.
+ */
+export async function getGoldskyStats(): Promise<StatsSnapshot | null> {
+    const url = process.env.NEXT_PUBLIC_GOLDSKY_URL;
+    if (!url) return null;
+    const query =
+        '{ global(id:"global"){ totalVolumeUsdc tradeCount tokenCount graduatedCount uniqueTraders } _meta { block { number } hasIndexingErrors } }';
+    try {
+        const res = await fetch(url, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ query }),
+            // Revalidate at the /stats cadence.
+            next: { revalidate: 30 },
+        });
+        if (!res.ok) return null;
+        const json = (await res.json()) as {
+            data?: {
+                global?: {
+                    totalVolumeUsdc: string;
+                    tradeCount: number;
+                    tokenCount: number;
+                    graduatedCount: number;
+                    uniqueTraders: number;
+                };
+                _meta?: { block?: { number?: number } };
+            };
+        };
+        const g = json?.data?.global;
+        if (!g) return null;
+
+        // totalVolumeUsdc is a 6-dp decimal string -> micros.
+        let volumeUsdcMicros = 0n;
+        const v = String(g.totalVolumeUsdc ?? "0");
+        const [whole, fracRaw] = v.split(".");
+        const frac = (fracRaw ?? "").slice(0, 6).padEnd(6, "0");
+        try {
+            volumeUsdcMicros = BigInt(whole || "0") * 1_000_000n + BigInt(frac || "0");
+        } catch {
+            volumeUsdcMicros = 0n;
+        }
+
+        const tradeCount = Number(g.tradeCount ?? 0);
+        const estimatedUsdcGasMicros =
+            (BigInt(tradeCount) * AVG_TX_GAS_USED * AVG_GAS_PRICE_WEI) / GAS_TO_USDC_DIVISOR;
+
+        return {
+            txCount: tradeCount,
+            uniqueWallets: Number(g.uniqueTraders ?? 0),
+            tokensLaunched: Number(g.tokenCount ?? 0),
+            tokensGraduated: Number(g.graduatedCount ?? 0),
+            v4TokensLaunched: 0,
+            v4HookLaunches: 0,
+            volumeUsdcMicros,
+            estimatedUsdcGasMicros,
+            asOfBlock: BigInt(json?.data?._meta?.block?.number ?? 0),
+            asOfIso: new Date().toISOString(),
+            truncated: false,
+        };
+    } catch {
+        return null;
+    }
 }
 
 /**

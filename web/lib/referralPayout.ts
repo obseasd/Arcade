@@ -1,7 +1,36 @@
-import { verifyTypedData, type Address } from "viem";
+import {
+    verifyTypedData,
+    createPublicClient,
+    createWalletClient,
+    http,
+    parseUnits,
+    erc20Abi,
+    type Address,
+    type Hex,
+} from "viem";
+import { privateKeyToAccount } from "viem/accounts";
 import { getSql, isDbConfigured } from "@/lib/db";
 import { arcTestnet } from "@/lib/chains";
+import { ADDRESSES } from "@/lib/constants";
 import { scanReferralAttribution } from "@/lib/referralOnchain";
+
+/**
+ * Earnings model (Phase 2). Referral pays 10% of the PROTOCOL fee a referred
+ * wallet paid. We credit the wallet's on-chain USDC trade volume (from the
+ * Goldsky subgraph's per-Trader running total) times the protocol-fee bps times
+ * the 10% share:
+ *   earnings = volume * PROTOCOL_FEE_BPS/10000 * REFERRAL_SHARE_BPS/10000
+ * PROTOCOL_FEE_BPS defaults to 15 (0.15%, the graduated pair's LAUNCH_PROTOCOL_BPS)
+ * -- a CONSERVATIVE floor: the curve take is higher (1%), so this under-credits
+ * rather than over-pays. Tune via env once the exact per-source split is pinned.
+ * The hard safety is elsewhere: only on-chain-VERIFIED referred wallets count,
+ * and every payout is bounded by the funded REFERRAL_PAYOUT_PRIVATE_KEY budget
+ * wallet (a transfer beyond its balance simply reverts).
+ */
+const PROTOCOL_FEE_BPS = BigInt(process.env.REFERRAL_PROTOCOL_FEE_BPS ?? "15");
+const REFERRAL_SHARE_BPS = 1000n; // 10%
+// Cap the wallets summed per claim so a huge downlist can't blow the request.
+const MAX_REFERRED_WALLETS = 500;
 
 /**
  * Referral PAYOUT layer (Phase 2). Disabled by default and built so the two
@@ -68,29 +97,71 @@ export async function getVerifiedReferredWallets(
 }
 
 /**
- * ⛔ STUB — the EARNINGS half. REPLACE WITH THE INDEXER.
+ * Sum the on-chain USDC trade volume (micros) of a set of wallets, read from the
+ * Goldsky subgraph's per-Trader running totals. Objective on-chain data -- NOT
+ * the forgeable referral_activity table. Returns 0 if the subgraph is unset.
+ */
+async function getWalletsVolumeMicros(wallets: string[]): Promise<bigint> {
+    const url = process.env.NEXT_PUBLIC_GOLDSKY_URL;
+    if (!url || wallets.length === 0) return 0n;
+    const ids = wallets.slice(0, MAX_REFERRED_WALLETS).map((w) => `"${norm(w)}"`).join(",");
+    const query = `{ traders(first: ${MAX_REFERRED_WALLETS}, where: { id_in: [${ids}] }) { id totalVolumeUsdc } }`;
+    try {
+        const res = await fetch(url, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ query }),
+        });
+        if (!res.ok) return 0n;
+        const json = (await res.json()) as {
+            data?: { traders?: { totalVolumeUsdc: string }[] };
+        };
+        const rows = json?.data?.traders;
+        if (!Array.isArray(rows)) return 0n;
+        let total = 0n;
+        for (const r of rows) {
+            // totalVolumeUsdc is a 6-dp decimal string; parse to micros exactly.
+            // Guard against a stray extra fractional digit by trimming to 6dp.
+            const v = String(r.totalVolumeUsdc ?? "0");
+            const [wholePart, fracRaw] = v.split(".");
+            const frac = (fracRaw ?? "").slice(0, 6);
+            try {
+                total += parseUnits(`${wholePart || "0"}.${frac || "0"}`, 6);
+            } catch {
+                /* skip a malformed row */
+            }
+        }
+        return total;
+    } catch {
+        return 0n;
+    }
+}
+
+/**
+ * The EARNINGS half. For each ON-CHAIN-VERIFIED referred wallet, credit 10% of
+ * the protocol fee it paid, derived from its indexed USDC trade volume (Goldsky
+ * per-Trader total) * PROTOCOL_FEE_BPS * REFERRAL_SHARE_BPS. See the earnings-
+ * model docblock at the top of this file.
  *
- * Attribution is already solved above and is NOT what is missing. What is
- * missing is, for each on-chain-verified referred wallet, the protocol fees it
- * ACTUALLY PAID on-chain, so we can pay 10% of that, capped at fees actually
- * collected, with sybil/circular netting (exclude wallets funded by / trading
- * only against the referrer).
- *
- * Reading `referral_activity.earned_usd_micros` here reintroduces audit C-1
- * (unbounded forged accrual: that table is fed by an unauthenticated,
- * replayable endpoint) and H-1 (self/circular wash farming). Hence the hard 0:
- * no verified earnings until the indexer fills this in. Note the table is also
- * numerically wrong regardless (it accrues a flat 5bp of volume, which is 10x
- * to 14x under the launchpad's real take and phantom on V3).
+ * Safety: starts from getVerifiedReferredWallets (on-chain Memo proof, self-
+ * referral already dropped), never the forgeable referral_activity table (audit
+ * C-1/H-1), and the payout is ultimately bounded by the funded budget wallet.
+ * Deeper sybil-netting (excluding wallets the referrer funded / only trades
+ * against) is a follow-up; the verified-wallet requirement already forces a
+ * sybil to emit a per-wallet on-chain Memo tag (real gas per fake wallet).
  */
 export async function getVerifiedEarningsUsdMicros(
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     referrer: string,
 ): Promise<bigint> {
-    // TODO(indexer): start from getVerifiedReferredWallets(publicClient,
-    // referrer), then sum each wallet's on-chain paid protocol fees, cap at
-    // fees actually collected, sybil-net, return the verified total.
-    return 0n;
+    if (!isAddr(referrer)) return 0n;
+    // A server-side reader to resolve the on-chain verified attribution.
+    const publicClient = createPublicClient({ chain: arcTestnet, transport: http() });
+    const wallets = await getVerifiedReferredWallets(publicClient, referrer);
+    if (wallets.length === 0) return 0n;
+
+    const volumeMicros = await getWalletsVolumeMicros(wallets);
+    // earnings = volume * PROTOCOL_FEE_BPS/1e4 * REFERRAL_SHARE_BPS/1e4
+    return (volumeMicros * PROTOCOL_FEE_BPS * REFERRAL_SHARE_BPS) / 100_000_000n;
 }
 
 /**
@@ -279,21 +350,42 @@ export async function verifyClaimSignature(args: {
 }
 
 /**
- * ⛔ STUB — REPLACE WITH A PAYOUT SIGNER.
+ * The PAYOUT SIGNER. Transfers `amountUsdMicros` of USDC (6dp = micros = raw
+ * USDC units on Arc) from the dedicated referral-budget wallet
+ * (REFERRAL_PAYOUT_PRIVATE_KEY) to `to`, returning the tx hash.
  *
- * Transfer `amountUsdMicros` of USDC from the referral-payout treasury wallet
- * to `to`, returning the tx hash. Requires a server-side signer
- * (REFERRAL_PAYOUT_PRIVATE_KEY) holding ONLY the referral budget — NEVER a
- * key with broader funds. Throws until wired so a misconfigured enable can't
- * silently no-op a "successful" claim.
+ * The key MUST hold ONLY the referral budget -- never a key with broader funds.
+ * Throws on a missing/malformed key or a zero/invalid amount so a misconfigured
+ * enable can't silently no-op a "successful" claim. A transfer beyond the
+ * wallet's balance reverts on-chain, which is the ultimate cap on payouts.
  */
 export async function sendUsdcFromTreasury(
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     to: string,
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     amountUsdMicros: bigint,
 ): Promise<`0x${string}`> {
-    // TODO(operator): build a viem walletClient from REFERRAL_PAYOUT_PRIVATE_KEY
-    // and call USDC.transfer(to, amount); return the tx hash.
-    throw new Error("referral payout signer not wired (Phase 2)");
+    if (!isAddr(to)) throw new Error("referral payout: invalid recipient");
+    if (amountUsdMicros <= 0n) throw new Error("referral payout: non-positive amount");
+    const key = process.env.REFERRAL_PAYOUT_PRIVATE_KEY as Hex | undefined;
+    if (!key || !/^0x[0-9a-fA-F]{64}$/.test(key)) {
+        throw new Error("REFERRAL_PAYOUT_PRIVATE_KEY missing or malformed");
+    }
+    const usdc = ADDRESSES.usdc as Address;
+    if (!/^0x[0-9a-fA-F]{40}$/.test(usdc)) {
+        throw new Error("USDC address not configured");
+    }
+    const account = privateKeyToAccount(key);
+    const walletClient = createWalletClient({
+        account,
+        chain: arcTestnet,
+        transport: http(),
+    });
+    // USDC on Arc is 6 decimals, so amountUsdMicros IS the raw transfer amount.
+    return walletClient.writeContract({
+        address: usdc,
+        abi: erc20Abi,
+        functionName: "transfer",
+        args: [to as Address, amountUsdMicros],
+        chain: arcTestnet,
+        account,
+    });
 }

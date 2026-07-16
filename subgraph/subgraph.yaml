@@ -29,6 +29,9 @@ dataSources:
       language: wasm/assemblyscript
       entities:
         - Trade
+        - Trader
+        - Token
+        - Global
       abis:
         - name: Launchpad
           file: ./abis/Launchpad.json
@@ -37,6 +40,10 @@ dataSources:
           handler: handleBuy
         - event: Sell(indexed address,indexed address,uint256,uint256,uint256)
           handler: handleSell
+        - event: TokenCreated(indexed address,indexed address,uint8,address,uint16,string,string,string)
+          handler: handleTokenCreated
+        - event: Migrated(indexed address,indexed address,uint256,uint256)
+          handler: handleMigrated
       file: ./src/mappings.ts
   - kind: ethereum
     name: V3Factory
@@ -71,6 +78,8 @@ templates:
       entities:
         - Trade
         - Pool
+        - Trader
+        - Global
       abis:
         - name: V3Pool
           file: ./abis/V3Pool.json

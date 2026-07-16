@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getAggregateStats } from "@/lib/stats";
+import { getAggregateStats, getGoldskyStats } from "@/lib/stats";
 import { insertSnapshot, lastCronSnapshotIso } from "@/lib/statsPersistence";
 import { isDbConfigured } from "@/lib/db";
 
@@ -100,11 +100,12 @@ export async function POST(req: NextRequest) {
         }
     }
 
+    // Prefer the Goldsky subgraph (one query, complete) over the heavy RPC scan.
     let snap;
     try {
-        snap = await getAggregateStats();
+        snap = (await getGoldskyStats()) ?? (await getAggregateStats());
     } catch (err) {
-        console.error("[stats-cron] getAggregateStats threw:", err);
+        console.error("[stats-cron] stats fetch threw:", err);
         return NextResponse.json(
             { persisted: false, error: "scan-failed" },
             { status: 500 },
