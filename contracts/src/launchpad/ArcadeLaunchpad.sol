@@ -532,18 +532,14 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         if (platformFee > 0) _safePayUsdc(treasury, platformFee);
     }
 
-    /**
-     * @dev Post-migration fee distribution: uniform 0.20% platform / 0.10%
-     * creator regardless of mode. The creator portion can still be split
-     * between two receivers (CLANKER feature).
-     */
-    function _distributeMigratedFee(TokenState storage s, uint256 totalRoyalty) internal {
-        if (totalRoyalty == 0) return;
-        uint256 platformFee = (totalRoyalty * MIGRATED_PLATFORM_BPS + MIGRATED_ROYALTY_BPS - 1)
-            / MIGRATED_ROYALTY_BPS;
-        _payCreatorShare(s, totalRoyalty - platformFee);
-        if (platformFee > 0) _safePayUsdc(treasury, platformFee);
-    }
+    // _distributeMigratedFee was DELETED. It split a wrapper royalty that no
+    // longer exists: buyMigrated/sellMigrated/swapMigratedRoute stopped charging
+    // it (each pair now charges the fee in its own K), so the function had no
+    // caller and the compiler stripped it from the bytecode anyway. Leaving it,
+    // with its live-looking MIGRATED_*_BPS constants, was the "dead code that
+    // teaches the removed design" trap -- the same one the sellMigrated comment
+    // fell into. The constants remain only because a couple of comments still
+    // cite them as the advertised historical figure.
 
     /// @dev Splits the creator portion between creator and (optional) creator2.
     function _payCreatorShare(TokenState storage s, uint256 creatorPortion) internal {
@@ -708,10 +704,15 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
     // ====================== Post-migration trading with creator royalty ======================
 
     /**
-     * @notice Buy a migrated token by routing through the V2 router, while
-     * skimming `MIGRATED_ROYALTY_BPS` from the input as a perpetual royalty
-     * for the creator(s) + platform. LPs still receive the standard 0.30%
-     * V2 swap fee on the remaining amount.
+     * @notice Buy a migrated token by routing through the V2 router. A thin
+     * wrapper: the graduated pair charges the whole 0.30% fee (0.10% LP /
+     * 0.15% protocol / 0.05% creator) in its own K, so this adds nothing.
+     *
+     * This docstring used to say it "skims MIGRATED_ROYALTY_BPS from the input
+     * as a perpetual royalty" ON TOP of the pair fee -- the removed
+     * double-charge that taxed our own UI's users 0.60% while a direct pair
+     * swap paid 0.30%. The body (see below) charges nothing extra; the docstring
+     * had not moved with it.
      */
     function buyMigrated(address tokenAddr, uint256 usdcIn, uint256 minTokensOut, uint256 deadline)
         external
@@ -748,7 +749,12 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         // belt-and-suspenders re-check was trimmed for EIP-170 budget.
     }
 
-    /// @notice Sell a migrated token via V2, then skim the royalty from the USDC output.
+    /// @notice Sell a migrated token via V2. A thin wrapper: the graduated pair
+    /// charges the fee in its own K (input-side), so this skims nothing. The
+    /// @notice used to say "then skim the royalty from the USDC output" -- the
+    /// reverted output-side design, on a public function's doc. An output skim
+    /// silently defeats amountOutMin and is a fund-loss bug; the body never did
+    /// it, and this line should never have implied it.
     function sellMigrated(address tokenAddr, uint256 tokensIn, uint256 minUsdcOut, uint256 deadline)
         external
         nonReentrant
@@ -791,32 +797,28 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         USDC.safeTransfer(msg.sender, usdcOut);
     }
 
-    // ====================== Multi-hop with royalty on both legs ======================
+    // ====================== Multi-hop, token <-> token via USDC ======================
 
     /**
-     * @notice Swap `tokensIn` of `tokenIn` for `tokenOut` via the USDC pivot,
-     * charging the post-migration royalty on each leg whose token is a
-     * migrated launchpad token. This is the path the frontend should use
-     * whenever at least one of {tokenIn, tokenOut} is a migrated launchpad
+     * @notice Swap `tokensIn` of `tokenIn` for `tokenOut` via the USDC pivot.
+     * Use whenever at least one of {tokenIn, tokenOut} is a migrated launchpad
      * token and the other is not USDC.
      *
      * Flow:
-     *   1. Pull `tokensIn` of `tokenIn` and swap it to USDC on V2.
-     *   2. If `tokenIn` is a migrated launchpad token, skim 0.30% of the
-     *      USDC output as royalty (split per `_distributeMigratedFee`).
-     *   3. If `tokenOut` is a migrated launchpad token, skim 0.30% of the
-     *      remaining USDC as royalty before the second leg.
-     *   4. Swap the remaining USDC to `tokenOut` on V2, delivering the
-     *      output directly to `msg.sender`.
+     *   1. Pull `tokensIn` of `tokenIn` and swap it to USDC on V2 (leg 1).
+     *   2. Enforce usdcMidMin against the measured mid, then swap that USDC to
+     *      `tokenOut` on V2 (leg 2), delivering the output to `msg.sender`.
      *
-     * If neither side is a migrated launchpad token this function still
-     * works but charges nothing; the user should call the V2 router
-     * directly in that case to save gas.
+     * Charges NO wrapper royalty on either leg. Each migrated token's own
+     * ArcadeV2Pair charges the 0.30% graduated-pair fee inside its K, so both
+     * legs already paid at the pool. This wrapper used to double-skim a second
+     * 0.60% here -- on the one route only our UI takes. See the body.
      */
     /// @dev Shared validation + classification for the token<->token migrated
     /// route (swapMigratedRoute + its quote). Returns `ok=false` for an
     /// unroutable pair: same token, either side USDC, either side CLANKER_V3, or
-    /// neither side a migrated launch. Royalty is only charged on migrated sides.
+    /// neither side a migrated launch. No wrapper fee is charged either way --
+    /// the pairs charge it themselves.
     function _migratedPair(address tokenIn, address tokenOut)
         internal
         view
@@ -877,15 +879,15 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         // forge nightly compiler used in CI.
         if (usdcMid < usdcMidMin) revert MidSlippage();
 
-        // CSEC-018: both royalty legs computed from the ORIGINAL usdcMid so the
-        // combined royalty stays exactly at 2 * MIGRATED_ROYALTY_BPS (advertised
-        // 60 bps) instead of compounding to 59.91 bps. Previously royaltyB ran
-        // on usdcMid AFTER royaltyA was deducted, shaving 0.09 bps off the
         // No wrapper royalty on either leg any more: each migrated token's own
         // ArcadeV2Pair charges the graduated-pair fee inside its K invariant,
         // so leg 1 (selling tokenIn) and leg 2 (buying tokenOut) each already
         // paid 0.30% at the pool. The old double-skim here charged a SECOND
-        // 0.60% on top, on the one route only our UI takes.
+        // 0.60% on top, on the one route only our UI takes. (The CSEC-018 note
+        // that used to sit here -- "both royalty legs from the ORIGINAL usdcMid
+        // so the combined stays at 2 * MIGRATED_ROYALTY_BPS" -- described that
+        // removed double-skim and was left dangling directly above its own
+        // refutation.)
 
         // --- Leg 2: USDC -> tokenOut, delivered to the user ---
         USDC.forceApprove(v2Router, usdcMid);

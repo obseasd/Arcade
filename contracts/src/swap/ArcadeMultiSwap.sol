@@ -75,14 +75,21 @@ interface IArcadeV4SwapRouterMin {
  *              route through the V3 router (single hop if the other side
  *              is USDC, two-hop pivoting through USDC otherwise).
  *           3. Either side is a curve-migrated launchpad token (with a V2
- *              pair): route through the launchpad so the post-migration
- *              royalty is paid -- buyMigrated for USDC->token, sellMigrated
- *              for token->USDC, swapMigratedRoute for token<->token. This
- *              MUST be checked before the direct-V2 branch (step 4): a
- *              migrated token trades on a USDC V2 pair, so ordering V2 first
- *              let every USDC-side migrated leg bypass the royalty (HIGH-1).
+ *              pair): route through the launchpad's buyMigrated / sellMigrated /
+ *              swapMigratedRoute wrappers.
  *           4. USDC on either side OR direct A<->B pool exists: direct V2.
  *           5. Otherwise: V2 multi-hop via USDC.
+ *
+ *         HISTORICAL NOTE, kept because the comments below still lean on it:
+ *         step 3 used to be load-bearing for FEES -- migrated wrappers skimmed a
+ *         0.30% royalty that a direct-V2 swap (step 4) bypassed, so 3 had to be
+ *         checked first (HIGH-1) or a USDC-side migrated leg dodged the fee. On
+ *         the pair-level-fee branch the graduated pair charges the fee in its
+ *         own K, on EVERY route, so nothing can bypass it and 3-before-4 is no
+ *         longer a fee constraint. The ordering is retained (the wrappers still
+ *         carry the CLANKER_V3 guard and the correct pool selection); the
+ *         "royalty" language in the per-branch comments is that dead rationale,
+ *         not a second charge.
  *
  *         No additional fee is charged by this router on top of the underlying
  *         routes; it only orchestrates approvals and accumulates outputs.

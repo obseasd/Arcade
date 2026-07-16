@@ -81,8 +81,11 @@ interface IArcadeLaunchpad {
         uint256 deadline
     ) external returns (uint256 tokensOut);
 
-    /// @notice View quote for `swapMigratedRoute`, returning the expected
-    /// output and total royalty (USDC) skimmed across both legs.
+    /// @notice View quote for `swapMigratedRoute`, returning the expected final
+    /// output and the mid-leg USDC (leg 2's input). The second value used to be
+    /// "total royalty across both legs"; there is no wrapper royalty any more
+    /// (each pair charges the fee in its own K), so it now carries usdcMid,
+    /// which the caller needs to derive usdcMidMin.
     function quoteSwapMigratedRoute(address tokenIn, address tokenOut, uint256 tokensIn)
         external
         view
