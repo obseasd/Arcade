@@ -129,22 +129,31 @@ contract ArcadeAutoCompounderTest {
 
     function test_constructor_rejectsFeeAboveCap() public {
         vm.expectRevert(bytes("FEE_TOO_HIGH"));
-        // MAX_PROTOCOL_FEE_BPS = 500; one past the cap rejects.
-        new ArcadeAutoCompounder(NPM, FACTORY, owner, operator, feeRecipient, 501);
+        // MAX_PROTOCOL_FEE_BPS = 1000 (raised from 500); one past rejects.
+        new ArcadeAutoCompounder(NPM, FACTORY, owner, operator, feeRecipient, 1001);
     }
 
     function test_constructor_acceptsCapExactly() public {
-        // Exactly 500 (5%) is the high-water mark; the cap is inclusive
-        // per the constructor's `<=` check.
+        // Exactly 1000 (10%) is the high-water mark; the cap is inclusive
+        // per the constructor's `<=` check. Raised from 500/5%.
         ArcadeAutoCompounder edge = new ArcadeAutoCompounder(
             NPM,
             FACTORY,
             owner,
             operator,
             feeRecipient,
-            500
+            1000
         );
-        assertEq(uint256(edge.protocolFeeBps()), 500);
+        assertEq(uint256(edge.protocolFeeBps()), 1000);
+    }
+
+    /// The OLD cap (500/5%) must now be ACCEPTED, not the boundary -- a value
+    /// between the old and new cap should no longer revert.
+    function test_constructor_acceptsBetweenOldAndNewCap() public {
+        ArcadeAutoCompounder mid = new ArcadeAutoCompounder(
+            NPM, FACTORY, owner, operator, feeRecipient, 750
+        );
+        assertEq(uint256(mid.protocolFeeBps()), 750);
     }
 
     // --------------------------------------------------------------
@@ -160,7 +169,14 @@ contract ArcadeAutoCompounderTest {
     function test_admin_setProtocolFeeBps_rejectsAboveCap() public {
         vm.prank(owner);
         vm.expectRevert(bytes("FEE_TOO_HIGH"));
-        compounder.setProtocolFeeBps(501);
+        compounder.setProtocolFeeBps(1001); // one past the raised 1000/10% cap
+    }
+
+    /// 10% (1000) is now settable by the owner; it was rejected before.
+    function test_admin_setProtocolFeeBps_accepts10Percent() public {
+        vm.prank(owner);
+        compounder.setProtocolFeeBps(1000);
+        assertEq(uint256(compounder.protocolFeeBps()), 1000);
     }
 
     function test_admin_setProtocolFeeBps_writesValue() public {

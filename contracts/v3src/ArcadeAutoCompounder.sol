@@ -104,7 +104,7 @@ interface IERC721ReceiverMin {
  *             wins the race in the common case.
  *           - NFT theft: only the recorded depositor can withdraw, and
  *             configs are deleted in the same call as the transfer.
- *           - Admin abuse: protocolFeeBps is bounded at 500 (5%) on-chain;
+ *           - Admin abuse: protocolFeeBps is bounded at 1000 (10%) on-chain;
  *             setOperator / setFeeRecipient cannot drain user funds, they
  *             only redirect routing of newly-collected fees.
  *
@@ -141,7 +141,7 @@ contract ArcadeAutoCompounder is IERC721ReceiverMin {
     ///         protocol fee / fee recipient and pause new actions in an
     ///         emergency. Cannot pull user NFTs or accumulated fees out of
     ///         escrow — the only privileged path that touches tokens is
-    ///         setProtocolFee, capped at 5%.
+    ///         setProtocolFee, capped at 10%.
     address public owner;
 
     /// @notice Audit I6 fix: two-step ownership handoff. transferOwnership
@@ -163,7 +163,7 @@ contract ArcadeAutoCompounder is IERC721ReceiverMin {
     address public feeRecipient;
 
     /// @notice Basis points taken from collected fees on every successful
-    ///         compound / pushFees. Hard-capped at 500 (5%) on-chain.
+    ///         compound / pushFees. Hard-capped at 1000 (10%) on-chain.
     uint16 public protocolFeeBps;
 
     /// @notice Pause switch for new actions. Withdraw remains live so users
@@ -174,7 +174,7 @@ contract ArcadeAutoCompounder is IERC721ReceiverMin {
     // Constants
     // --------------------------------------------------------------------
 
-    uint16 internal constant MAX_PROTOCOL_FEE_BPS = 500; // 5% ceiling
+    uint16 internal constant MAX_PROTOCOL_FEE_BPS = 1_000; // 10% ceiling (was 500/5%)
     uint16 internal constant BPS_DENOMINATOR = 10_000;
     uint64 internal constant ACTION_COOLDOWN_SECONDS = 5 minutes;
     uint64 internal constant TX_DEADLINE_BUFFER_SECONDS = 60;
