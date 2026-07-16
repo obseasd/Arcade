@@ -7,6 +7,7 @@ import {MockWETH} from "../src/mocks/MockWETH.sol";
 import {ArcadeV2Factory} from "../src/dex/ArcadeV2Factory.sol";
 import {ArcadeV2Router} from "../src/dex/ArcadeV2Router.sol";
 import {ArcadeLaunchpad} from "../src/launchpad/ArcadeLaunchpad.sol";
+import {ArcadeMigratedRouter} from "../src/swap/ArcadeMigratedRouter.sol";
 import {ArcadeTokenVault} from "../src/launchpad/ArcadeTokenVault.sol";
 import {IArcadeLaunchpad} from "../src/launchpad/interfaces/IArcadeLaunchpad.sol";
 import {IArcadeV3Factory, IArcadeV3Pool, IArcadeV3Locker} from "../src/v3/interfaces/IArcadeV3Minimal.sol";
@@ -43,6 +44,7 @@ contract ArcadeV3MigrationTest is Test {
     ArcadeV2Factory v2Factory;
     ArcadeV2Router v2Router;
     ArcadeLaunchpad launchpad;
+    ArcadeMigratedRouter migratedRouter;
     address v3Factory;
     address v3Locker;
     address v3Router;
@@ -102,6 +104,7 @@ contract ArcadeV3MigrationTest is Test {
         launchpad = new ArcadeLaunchpad(
             IERC20(address(usdc)), v2Factory, address(v2Router), treasury, IArcadeV3Factory(v3Factory), address(weth)
         );
+        migratedRouter = new ArcadeMigratedRouter(IERC20(address(usdc)), address(v2Router), IArcadeLaunchpad(address(launchpad)));
         v3Locker = _deploy(
             "out-v3/ArcadeV3Locker.sol/ArcadeV3Locker.json",
             // address(0) = legacy behavior (no Twitter escrow integration).
@@ -179,9 +182,9 @@ contract ArcadeV3MigrationTest is Test {
 
         vm.startPrank(alice);
         vm.expectRevert(); // InvalidRoute()
-        launchpad.buyMigrated(token, 1_000e6, 0, block.timestamp + 60);
+        migratedRouter.buyMigrated(token, 1_000e6, 0, block.timestamp + 60);
         vm.expectRevert(); // InvalidRoute()
-        launchpad.sellMigrated(token, 1, 0, block.timestamp + 60);
+        migratedRouter.sellMigrated(token, 1, 0, block.timestamp + 60);
         vm.stopPrank();
     }
 

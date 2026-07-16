@@ -8,6 +8,7 @@ import {ArcadeV2Router} from "../src/dex/ArcadeV2Router.sol";
 import {ArcadeV2Pair} from "../src/dex/ArcadeV2Pair.sol";
 import {IArcadeV2Pair} from "../src/dex/interfaces/IArcadeV2Pair.sol";
 import {ArcadeLaunchpad} from "../src/launchpad/ArcadeLaunchpad.sol";
+import {ArcadeMigratedRouter} from "../src/swap/ArcadeMigratedRouter.sol";
 import {IArcadeLaunchpad} from "../src/launchpad/interfaces/IArcadeLaunchpad.sol";
 import {ArcadeLaunchToken} from "../src/launchpad/ArcadeLaunchToken.sol";
 import {IArcadeV3Factory} from "../src/v3/interfaces/IArcadeV3Minimal.sol";
@@ -18,6 +19,7 @@ contract ArcadeLaunchpadTest is Test {
     ArcadeV2Factory factory;
     ArcadeV2Router router;
     ArcadeLaunchpad launchpad;
+    ArcadeMigratedRouter migratedRouter;
 
     address treasury = address(0xBEEF);
     address creator = address(0xC0FFEE);
@@ -36,6 +38,10 @@ contract ArcadeLaunchpadTest is Test {
         );
         // Authorize the launchpad to create seed-gated pairs (feeToSetter == this).
         factory.setLaunchpad(address(launchpad));
+        // Migrated-route wrappers were extracted to this periphery contract.
+        migratedRouter = new ArcadeMigratedRouter(
+            IERC20(address(usdc)), address(router), IArcadeLaunchpad(address(launchpad))
+        );
 
         // Fund users
         usdc.mint(creator, 100 * 10 ** 6);
@@ -173,8 +179,8 @@ contract ArcadeLaunchpadTest is Test {
         // Bob buys 100 USDC of the migrated token via the launchpad's wrapper
         uint256 amountIn = 100 * 10 ** 6;
         vm.startPrank(bob);
-        usdc.approve(address(launchpad), type(uint256).max);
-        uint256 tokensOut = launchpad.buyMigrated(token, amountIn, 0, block.timestamp + 600);
+        usdc.approve(address(migratedRouter), type(uint256).max);
+        uint256 tokensOut = migratedRouter.buyMigrated(token, amountIn, 0, block.timestamp + 600);
         vm.stopPrank();
 
         assertGt(tokensOut, 0, "tokens received");
@@ -205,14 +211,14 @@ contract ArcadeLaunchpadTest is Test {
 
         // Bob buys some via the migrated wrapper to acquire tokens
         vm.startPrank(bob);
-        usdc.approve(address(launchpad), type(uint256).max);
-        uint256 bought = launchpad.buyMigrated(token, 500 * 10 ** 6, 0, block.timestamp + 600);
+        usdc.approve(address(migratedRouter), type(uint256).max);
+        uint256 bought = migratedRouter.buyMigrated(token, 500 * 10 ** 6, 0, block.timestamp + 600);
 
         uint256 t0 = usdc.balanceOf(treasury);
         uint256 c0 = usdc.balanceOf(creator);
 
-        IERC20(token).approve(address(launchpad), type(uint256).max);
-        uint256 received = launchpad.sellMigrated(token, bought, 0, block.timestamp + 600);
+        IERC20(token).approve(address(migratedRouter), type(uint256).max);
+        uint256 received = migratedRouter.sellMigrated(token, bought, 0, block.timestamp + 600);
         vm.stopPrank();
 
         // A sell's INPUT is the launch token, so the pair's fee is denominated
@@ -419,8 +425,8 @@ contract ArcadeLaunchpadTest is Test {
 
         // Bob now has some tokenA from an unrelated buy
         vm.startPrank(bob);
-        usdc.approve(address(launchpad), type(uint256).max);
-        uint256 tokensA = launchpad.buyMigrated(tokenA, 200 * 10 ** 6, 0, block.timestamp + 600);
+        usdc.approve(address(migratedRouter), type(uint256).max);
+        uint256 tokensA = migratedRouter.buyMigrated(tokenA, 200 * 10 ** 6, 0, block.timestamp + 600);
         vm.stopPrank();
 
         // Snapshot AFTER the prior buyMigrated has paid its own royalty
@@ -438,14 +444,14 @@ contract ArcadeLaunchpadTest is Test {
         // is 0, so a hardcoded 0 bricked the whole migrated->migrated route in
         // the UI while this test called that correct.
         (uint256 quotedOut, uint256 quotedUsdcMid) =
-            launchpad.quoteSwapMigratedRoute(tokenA, tokenB, tokensA);
+            migratedRouter.quoteSwapMigratedRoute(tokenA, tokenB, tokensA);
         assertGt(quotedUsdcMid, 0, "usdcMid is derivable, so the mid-leg floor is too");
         assertGt(quotedOut, 0, "quote shows an output");
 
         // Execute the multi-hop swap through the launchpad
         vm.startPrank(bob);
-        IERC20(tokenA).approve(address(launchpad), type(uint256).max);
-        uint256 receivedB = launchpad.swapMigratedRoute(tokenA, tokenB, tokensA, 0, 0, block.timestamp + 600);
+        IERC20(tokenA).approve(address(migratedRouter), type(uint256).max);
+        uint256 receivedB = migratedRouter.swapMigratedRoute(tokenA, tokenB, tokensA, 0, 0, block.timestamp + 600);
         vm.stopPrank();
 
         assertGt(receivedB, 0, "multi-hop delivered");
@@ -473,9 +479,44 @@ contract ArcadeLaunchpadTest is Test {
         // Audit renamed this from UnknownToken to InvalidRoute since the tokens
         // ARE known; the route shape is what's wrong.
         vm.expectRevert(ArcadeLaunchpad.InvalidRoute.selector);
-        launchpad.swapMigratedRoute(address(usdc), tokenA, 1, 0, 0, block.timestamp + 600);
+        migratedRouter.swapMigratedRoute(address(usdc), tokenA, 1, 0, 0, block.timestamp + 600);
         vm.expectRevert(ArcadeLaunchpad.InvalidRoute.selector);
-        launchpad.swapMigratedRoute(tokenA, address(usdc), 1, 0, 0, block.timestamp + 600);
+        migratedRouter.swapMigratedRoute(tokenA, address(usdc), 1, 0, 0, block.timestamp + 600);
+    }
+
+    /// THE MID-LEG SANDWICH GUARD, which had NO test anywhere (audit flagged the
+    /// recurring "guard untested" pattern). swapMigratedRoute enforces
+    /// usdcMidMin on the intermediate USDC of the two hops -- the only thing
+    /// stopping a sandwicher who moves just the tokenIn/USDC pool from driving
+    /// usdcMid low and scraping past the final minOut (audit 2026-06-11 #10). A
+    /// floor above the achievable mid MUST revert MidSlippage.
+    function test_swapMigratedRoute_midLegGuard_revertsWhenFloorTooHigh() public {
+        address tokenA = _createTokenAs(address(0xA0A0), IArcadeLaunchpad.LaunchMode.PUMP, "Alpha", "A");
+        address tokenB = _createTokenAs(address(0xB0B0), IArcadeLaunchpad.LaunchMode.PUMP, "Bravo", "B");
+        _migrateByBuyingOut(tokenA);
+        _migrateByBuyingOut(tokenB);
+
+        vm.startPrank(bob);
+        usdc.approve(address(migratedRouter), type(uint256).max);
+        uint256 tokensA = migratedRouter.buyMigrated(tokenA, 200 * 10 ** 6, 0, block.timestamp + 600);
+
+        (, uint256 quotedUsdcMid) = migratedRouter.quoteSwapMigratedRoute(tokenA, tokenB, tokensA);
+        assertGt(quotedUsdcMid, 0, "there is a real mid");
+
+        IERC20(tokenA).approve(address(migratedRouter), type(uint256).max);
+        // A floor ABOVE the achievable mid must revert. With no other trades the
+        // executed mid == the quote, so quote+1 is unreachable.
+        vm.expectRevert(ArcadeMigratedRouter.MidSlippage.selector);
+        migratedRouter.swapMigratedRoute(
+            tokenA, tokenB, tokensA, 0, quotedUsdcMid + 1, block.timestamp + 600
+        );
+
+        // And a realistic 97% floor clears -- the guard does not over-reject.
+        uint256 got = migratedRouter.swapMigratedRoute(
+            tokenA, tokenB, tokensA, 0, (quotedUsdcMid * 97) / 100, block.timestamp + 600
+        );
+        assertGt(got, 0, "realistic floor clears");
+        vm.stopPrank();
     }
 
     function test_marketCap_increasesWithBuys() public {

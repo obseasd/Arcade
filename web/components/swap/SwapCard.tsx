@@ -9,6 +9,7 @@ import { erc20Abi, formatUnits, maxUint256, parseUnits } from "viem";
 import { useAccount, useReadContract, useReadContracts, useWriteContract, usePublicClient } from "wagmi";
 import { ROUTER_ABI } from "@/lib/abis/dex";
 import { LAUNCHPAD_ABI } from "@/lib/abis/launchpad";
+import { MIGRATED_ROUTER_ABI } from "@/lib/abis/migratedRouter";
 import { V3_QUOTER_ABI, V3_ROUTER_ABI } from "@/lib/abis/v3";
 import { ADDRESSES, USDC_DECIMALS } from "@/lib/constants";
 import { arcTestnet } from "@/lib/chains";
@@ -438,8 +439,8 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
   // leg whose token is a migrated launchpad token. Only used in multi-hop
   // mode when at least one side is migrated.
   const quoteMigratedOut = useReadContract({
-    address: ADDRESSES.launchpad,
-    abi: LAUNCHPAD_ABI,
+    address: ADDRESSES.migratedRouter,
+    abi: MIGRATED_ROUTER_ABI,
     functionName: "quoteSwapMigratedRoute",
     args:
       route.useLaunchpadRouter && tokenOut && amountInRaw > 0n
@@ -991,7 +992,7 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
       isV3Swap || activeRoute?.provider === "arcade-v3"
       ? ADDRESSES.v3Router
       : route.useLaunchpadRouter
-        ? ADDRESSES.launchpad
+        ? ADDRESSES.migratedRouter
         : ADDRESSES.router;
   const { allowance: currentAllowance, ensureAllowance } = useApproveIfNeeded(
     tokenIn.address,
@@ -1307,8 +1308,8 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
             );
           }
           swapCall = {
-            address: ADDRESSES.launchpad,
-            abi: LAUNCHPAD_ABI,
+            address: ADDRESSES.migratedRouter,
+            abi: MIGRATED_ROUTER_ABI,
             functionName: "swapMigratedRoute",
             args: [tokenIn.address, tokenOut.address, finalAmountIn, minOut, usdcMidMinForRoute, deadline],
           };

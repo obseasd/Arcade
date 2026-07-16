@@ -218,44 +218,10 @@ export const LAUNCHPAD_ABI = [
     ],
     outputs: [{ name: "usdcOut", type: "uint256" }],
   },
-  {
-    type: "function",
-    name: "buyMigrated",
-    stateMutability: "nonpayable",
-    inputs: [
-      { name: "token", type: "address" },
-      { name: "usdcIn", type: "uint256" },
-      { name: "minTokensOut", type: "uint256" },
-      { name: "deadline", type: "uint256" },
-    ],
-    outputs: [{ name: "tokensOut", type: "uint256" }],
-  },
-  {
-    type: "function",
-    name: "sellMigrated",
-    stateMutability: "nonpayable",
-    inputs: [
-      { name: "token", type: "address" },
-      { name: "tokensIn", type: "uint256" },
-      { name: "minUsdcOut", type: "uint256" },
-      { name: "deadline", type: "uint256" },
-    ],
-    outputs: [{ name: "usdcOut", type: "uint256" }],
-  },
-  {
-    type: "function",
-    name: "swapMigratedRoute",
-    stateMutability: "nonpayable",
-    inputs: [
-      { name: "tokenIn", type: "address" },
-      { name: "tokenOut", type: "address" },
-      { name: "tokensIn", type: "uint256" },
-      { name: "minTokensOut", type: "uint256" },
-      { name: "usdcMidMin", type: "uint256" },
-      { name: "deadline", type: "uint256" },
-    ],
-    outputs: [{ name: "tokensOut", type: "uint256" }],
-  },
+  // buyMigrated / sellMigrated / swapMigratedRoute / quoteSwapMigratedRoute
+  // moved to ArcadeMigratedRouter (see abis/migratedRouter.ts) to keep the
+  // launchpad under EIP-170. Target ADDRESSES.migratedRouter with
+  // MIGRATED_ROUTER_ABI for those.
   // Pull-payment withdrawal: claim USDC the caller is credited with from
   // failed inline payouts (eg a previous trade's fee transfer reverted).
   {
@@ -264,24 +230,6 @@ export const LAUNCHPAD_ABI = [
     stateMutability: "nonpayable",
     inputs: [],
     outputs: [{ name: "amount", type: "uint256" }],
-  },
-  {
-    type: "function",
-    name: "quoteSwapMigratedRoute",
-    stateMutability: "view",
-    inputs: [
-      { name: "tokenIn", type: "address" },
-      { name: "tokenOut", type: "address" },
-      { name: "tokensIn", type: "uint256" },
-    ],
-    outputs: [
-      { name: "tokensOut", type: "uint256" },
-      // Was `totalRoyaltyUsdc`, which the pair-level fee redesign left
-      // hardcoded to 0. Now the real mid-leg USDC, so the caller can derive the
-      // usdcMidMin floor directly instead of reconstructing it by inverting a
-      // royalty that no longer exists.
-      { name: "usdcMid", type: "uint256" },
-    ],
   },
   {
     type: "function",

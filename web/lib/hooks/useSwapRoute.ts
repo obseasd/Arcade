@@ -14,21 +14,25 @@ import { ADDRESSES } from "@/lib/constants";
  *   3. Otherwise → 3-hop via USDC: [A, USDC, B]
  *
  * Multi-hop via USDC ALSO checks whether either side is a migrated launchpad
- * token. If so, `useLaunchpadRouter` is set so the caller routes the swap
- * through `Launchpad.swapMigratedRoute` instead of the V2 router - this
- * ensures the post-migration creator royalty is charged on each launchpad
- * leg (a plain V2 multi-hop would silently skip the royalty).
+ * token. If so, `useLaunchpadRouter` is set so the caller routes the token<->
+ * token swap through `ArcadeMigratedRouter.swapMigratedRoute` (extracted from
+ * the launchpad for EIP-170) instead of the plain V2 router. This is NOT about
+ * a royalty any more -- the graduated pair charges the fee in its own K on
+ * every route -- it is about the usdcMidMin MID-LEG SANDWICH GUARD: the plain
+ * V2 3-hop checks only the final minOut, so token<->token migrated MUST go
+ * through the router that enforces the intermediate floor.
  */
 export interface SwapRoute {
   path: Address[];
   hops: number; // 1 = direct, 2 = via USDC
   viaUsdc: boolean;
-  /** True when the route must execute via `Launchpad.swapMigratedRoute` so
-   * royalties on launchpad-migrated tokens are honoured. Only ever true when
-   * `viaUsdc` is also true. */
+  /** True when the token<->token route must execute via
+   * `ArcadeMigratedRouter.swapMigratedRoute` for its mid-leg sandwich guard.
+   * Only ever true when `viaUsdc` is also true. (Name kept for churn reasons;
+   * it targets the migrated ROUTER, not the launchpad.) */
   useLaunchpadRouter: boolean;
-  /** Whether the input token is a curve-migrated launchpad token (charges
-   *  royalty on leg 1). Used by the swap card to compute the displayed fee. */
+  /** Whether the input token is a curve-migrated launchpad token. Used by the
+   *  swap card to compute the displayed fee (the pair's in-K 0.30%). */
   inMigrated: boolean;
   /** Whether the output token is curve-migrated (royalty on leg 2). */
   outMigrated: boolean;

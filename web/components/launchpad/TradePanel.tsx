@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { Address, erc20Abi, formatUnits, parseUnits } from "viem";
 import { useAccount, usePublicClient, useReadContract, useWriteContract } from "wagmi";
 import { LAUNCHPAD_ABI } from "@/lib/abis/launchpad";
+import { MIGRATED_ROUTER_ABI } from "@/lib/abis/migratedRouter";
 import { ROUTER_ABI } from "@/lib/abis/dex";
 import { ADDRESSES, LAUNCHPAD_TOKEN_DECIMALS, USDC_DECIMALS } from "@/lib/constants";
 import { AmountInput } from "@/components/ui/AmountInput";
@@ -46,10 +47,13 @@ export function TradePanel({
   const [slippageBps, setSlippageBps] = useState(100); // 1% default for curve
   const [tx, setTx] = useState<TxState>({ status: "idle" });
 
-  // Both pre- and post-migration swaps go through the Launchpad contract now
-  // (post-migration uses `buyMigrated`/`sellMigrated` which take a royalty for
-  // the creator + platform on top of the V2 LP fee).
-  const spender = launchpad;
+  // Pre-migration (curve) buy/sell go through the Launchpad. Post-migration
+  // buyMigrated/sellMigrated moved to ArcadeMigratedRouter (extracted for
+  // EIP-170); those charge no wrapper fee, the graduated pair charges 0.30% in
+  // its own K. Spend/approve the contract the trade actually targets.
+  const migratedRouter = ADDRESSES.migratedRouter;
+  const tradeTarget = migrated ? migratedRouter : launchpad;
+  const spender = tradeTarget;
 
   const usdcBalance = useReadContract({
     address: ADDRESSES.usdc,
@@ -157,8 +161,8 @@ export function TradePanel({
       }
       setTx({ status: "pending", message: "Submitting trade…" });
       hash = await writeContractAsync({
-        address: launchpad,
-        abi: LAUNCHPAD_ABI,
+        address: tradeTarget,
+        abi: migrated ? MIGRATED_ROUTER_ABI : LAUNCHPAD_ABI,
         functionName: fn,
         args: args as unknown as readonly [`0x${string}`, bigint, bigint],
       });

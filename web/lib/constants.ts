@@ -26,6 +26,10 @@ export const ADDRESSES = {
   v2Zap: safeAddress(process.env.NEXT_PUBLIC_V2_ZAP_ADDRESS),
   launchpad: safeAddress(process.env.NEXT_PUBLIC_LAUNCHPAD_ADDRESS),
   multiSwap: safeAddress(process.env.NEXT_PUBLIC_MULTISWAP_ADDRESS),
+  // Post-migration trading wrappers (buyMigrated / sellMigrated /
+  // swapMigratedRoute), extracted from the launchpad for EIP-170. The migrated
+  // routes in TradePanel + SwapCard target THIS, not the launchpad.
+  migratedRouter: safeAddress(process.env.NEXT_PUBLIC_MIGRATED_ROUTER_ADDRESS),
   // Uniswap V3 fork (CLANKER_V3 locked-LP tokens)
   v3Factory: safeAddress(process.env.NEXT_PUBLIC_V3_FACTORY_ADDRESS),
   v3Router: safeAddress(process.env.NEXT_PUBLIC_V3_ROUTER_ADDRESS),

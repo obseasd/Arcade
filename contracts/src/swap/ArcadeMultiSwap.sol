@@ -300,94 +300,28 @@ contract ArcadeMultiSwap is ReentrancyGuard {
             return _swapV3(tokenIn, tokenOut, amountIn, minOut, usdcMidMin, deadline);
         }
 
-        // 2) HIGH-1 (2026-07-02 fee audit): migrated launch tokens MUST be
-        // routed through the launchpad BEFORE the plain-V2 branch below. A
-        // curve-migrated token trades on a real USDC V2 pair, so the old
-        // ordering let every USDC-side migrated leg (the common buy/sell
-        // direction) short-circuit into a royalty-free V2 swap, permanently
-        // bypassing the post-migration royalty (0.30% = 0.20% platform +
-        // 0.10% creator). Any migrated leg now pays the royalty.
-        bool inMigrated = launchpad.isMigrated(tokenIn);
-        bool outMigrated = launchpad.isMigrated(tokenOut);
-        if (inMigrated || outMigrated) {
-            return _swapMigrated(tokenIn, tokenOut, amountIn, minOut, usdcMidMin, deadline);
-        }
+        // 2) A curve-migrated launch token has a normal USDC V2 pair and needs
+        // no special routing any more. The HIGH-1 "route migrated through the
+        // launchpad BEFORE plain-V2" ordering existed ONLY to force the
+        // now-removed wrapper royalty; the graduated pair charges the 0.30% fee
+        // in its own K on EVERY route, so a plain-V2 swap pays it too and there
+        // is nothing to bypass. Migrated legs therefore fall straight through:
+        //   - USDC on one side  -> path 3, direct V2 on the USDC/token pair.
+        //   - token <-> token    -> path 4, via-USDC, which STILL enforces
+        //     usdcMidMin on the intermediate leg (see _swapV2 viaUsdc), so the
+        //     2026-06-11 #10 mid-leg sandwich guard is preserved identically to
+        //     the old swapMigratedRoute. CLANKER_V3 was already caught at (1).
 
-        // 3) Direct V2 path (non-migrated only): USDC pivot or an explicit
-        // A<->B pool exists.
+        // 3) Direct V2 path: USDC pivot or an explicit A<->B pool exists.
         bool oneSideUsdc = tokenIn == address(USDC) || tokenOut == address(USDC);
         if (oneSideUsdc || v2Factory.getPair(tokenIn, tokenOut) != address(0)) {
             return _swapV2(tokenIn, tokenOut, amountIn, /*viaUsdc=*/ false, minOut, usdcMidMin, deadline);
         }
 
-        // 4) Multi-hop via USDC for a non-migrated pair with no direct pool.
+        // 4) Multi-hop via USDC (floored) for a pair with no direct pool.
         return _swapV2(tokenIn, tokenOut, amountIn, /*viaUsdc=*/ true, minOut, usdcMidMin, deadline);
     }
 
-    /// @dev Routes a leg where at least one side is a curve-migrated launchpad
-    ///      token through the launchpad so the post-migration royalty is
-    ///      charged on every direction. HIGH-1 fix (2026-07-02): the previous
-    ///      code only reached the multi-hop `swapMigratedRoute`, which reverts
-    ///      when either side is USDC, so USDC-side migrated buys/sells fell
-    ///      through to a royalty-free V2 swap. We now dispatch the single-hop
-    ///      USDC cases to buyMigrated / sellMigrated and keep swapMigratedRoute
-    ///      for the token<->token pivot. Clanker V3 launches are handled earlier
-    ///      in _routeOne, so any migrated token reaching here has a V2 pair.
-    /// @param minOut     H-07 final-hop floor (tokens for a buy, USDC for a
-    ///                   sell, tokenOut for the pivot); enforced by the
-    ///                   launchpad on every branch.
-    /// @param usdcMidMin H-07 floor for the intermediate USDC hop; only the
-    ///                   token<->token pivot uses it (the single-hop USDC cases
-    ///                   have no distinct mid-hop).
-    function _swapMigrated(
-        address tokenIn,
-        address tokenOut,
-        uint256 amountIn,
-        uint256 minOut,
-        uint256 usdcMidMin,
-        uint256 deadline
-    ) internal returns (uint256) {
-        // Case A: USDC -> migrated token (buy). Royalty skimmed from usdcIn;
-        // the launchpad delivers the tokens to this contract (msg.sender).
-        if (tokenIn == address(USDC)) {
-            USDC.forceApprove(address(launchpad), amountIn);
-            uint256 outA = launchpad.buyMigrated(tokenOut, amountIn, minOut, deadline);
-            USDC.forceApprove(address(launchpad), 0);
-            return outA;
-        }
-
-        // Case B: migrated token -> USDC (sell). Royalty skimmed from the USDC
-        // output; the launchpad delivers the net USDC to this contract.
-        if (tokenOut == address(USDC)) {
-            IERC20(tokenIn).forceApprove(address(launchpad), amountIn);
-            uint256 outB = launchpad.sellMigrated(tokenIn, amountIn, minOut, deadline);
-            IERC20(tokenIn).forceApprove(address(launchpad), 0);
-            return outB;
-        }
-
-        // Case C: migrated token <-> non-USDC token via the USDC pivot, royalty
-        // on each migrated leg.
-        //
-        // Audit 2026-06-11 v2 G9-2: the balance-delta sanity check is `>=`, not
-        // `==`. A 1-wei USDC donation to this contract (anyone can
-        // `USDC.transfer(multiswap, 1)`) would brick a `==` check; the
-        // realistic threat -- USDC drained OUT -- is still caught because
-        // `balAfter >= balBefore` only tolerates incoming transfers. Combined
-        // with `nonReentrant` this is sufficient.
-        //
-        // H-07: `usdcMidMin` is the caller-supplied floor for the intermediate
-        // USDC hop (was quoted inline at execution-time reserves, which a
-        // sandwicher controls); `minOut` is threaded as the launchpad's
-        // `minTokensOut` so a sandwiched leg reverts rather than scraping past.
-        IERC20(tokenIn).forceApprove(address(launchpad), amountIn);
-        uint256 balBefore = USDC.balanceOf(address(this));
-        uint256 outC = launchpad.swapMigratedRoute(tokenIn, tokenOut, amountIn, minOut, usdcMidMin, deadline);
-        uint256 balAfter = USDC.balanceOf(address(this));
-        require(balAfter >= balBefore, "BAL_DRIFT");
-        // M-08 / L-05: reset launchpad allowance after the call.
-        IERC20(tokenIn).forceApprove(address(launchpad), 0);
-        return outC;
-    }
 
     /// @dev Dispatch for legs touching a V4 launch. Cases:
     ///        (V4, USDC)  -> single V4 swap
@@ -636,35 +570,14 @@ contract ArcadeMultiSwap is ReentrancyGuard {
         if (_isV3LaunchToken(tokenIn) || _isV3LaunchToken(tokenOut)) return 0;
         if (_isV4LaunchToken(tokenIn) || _isV4LaunchToken(tokenOut)) return 0;
 
-        // HIGH-1: mirror _routeOne's ordering. Migrated legs are royalty-charged
-        // BEFORE the plain-V2 branch, so the quote must deduct the royalty too;
-        // quoting them as a bare V2 swap would over-state the output by 0.30%.
-        bool inMigrated = launchpad.isMigrated(tokenIn);
-        bool outMigrated = launchpad.isMigrated(tokenOut);
-        if (inMigrated || outMigrated) {
-            // Case A: USDC -> migrated (buyMigrated) - royalty off the input.
-            if (tokenIn == address(USDC)) {
-                // The pair charges the graduated fee in-pool now, and
-                // getAmountsOut already prices it, so no extra deduction.
-                return _v2Out2(tokenIn, tokenOut, amountIn);
-            }
-            // Case B: migrated -> USDC (sellMigrated) - royalty off the output.
-            if (tokenOut == address(USDC)) {
-                // Pair-level fee, already priced by getAmountsOut.
-                return _v2Out2(tokenIn, tokenOut, amountIn);
-            }
-            // Case C: token <-> token pivot - launchpad's royalty-aware quote.
-            try launchpad.quoteSwapMigratedRoute(tokenIn, tokenOut, amountIn) returns (
-                uint256 tokensOut,
-                uint256 /*royalty*/
-            ) {
-                return tokensOut;
-            } catch {
-                return 0;
-            }
-        }
+        // Migrated tokens need no special quote any more: the graduated pair
+        // charges the fee in-K and getAmountsOut already prices it, so a
+        // migrated leg quotes IDENTICALLY to a plain V2 swap. It falls straight
+        // through to the V2 paths below (USDC-side -> _v2Out2; token<->token ->
+        // the via-USDC multi-hop quote), which is exactly what the old
+        // migrated branch computed. See _routeOne.
 
-        // Non-migrated direct V2: USDC pivot or an explicit A<->B pool.
+        // Direct V2: USDC pivot or an explicit A<->B pool.
         bool oneSideUsdc = tokenIn == address(USDC) || tokenOut == address(USDC);
         if (oneSideUsdc || v2Factory.getPair(tokenIn, tokenOut) != address(0)) {
             return _v2Out2(tokenIn, tokenOut, amountIn);

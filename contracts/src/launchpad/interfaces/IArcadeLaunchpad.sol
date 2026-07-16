@@ -60,43 +60,10 @@ interface IArcadeLaunchpad {
     /// for V3-vs-V2 routing).
     function getTokenState(address tokenAddr) external view returns (TokenState memory);
 
-    /// @notice Buy a migrated token with USDC via V2. Thin wrapper: the
-    /// graduated pair charges the 0.30% fee in its own K, so this skims nothing
-    /// extra (the wrapper royalty this line used to name was removed).
-    function buyMigrated(address tokenAddr, uint256 usdcIn, uint256 minTokensOut, uint256 deadline)
-        external
-        returns (uint256 tokensOut);
-
-    /// @notice Sell a migrated token for USDC via V2. Thin wrapper: the pair
-    /// charges the fee INPUT-side in its own K, so this skims nothing. This line
-    /// used to say "from the USDC output" -- the reverted output-side design
-    /// that silently defeats amountOutMin; the body never did it.
-    function sellMigrated(address tokenAddr, uint256 tokensIn, uint256 minUsdcOut, uint256 deadline)
-        external
-        returns (uint256 usdcOut);
-
-    /// @notice Multi-hop swap A -> USDC -> B. Charges no wrapper fee on either
-    /// leg -- each migrated token's pair charges it in-K.
-    /// @param deadline unix timestamp after which the call reverts (passed through to the V2 router on every leg).
-    function swapMigratedRoute(
-        address tokenIn,
-        address tokenOut,
-        uint256 tokensIn,
-        uint256 minTokensOut,
-        uint256 usdcMidMin,
-        uint256 deadline
-    ) external returns (uint256 tokensOut);
-
-    /// @notice View quote for `swapMigratedRoute`, returning the expected final
-    /// output and the mid-leg USDC (leg 2's input). The second value used to be
-    /// "total royalty across both legs"; there is no wrapper royalty any more
-    /// (each pair charges the fee in its own K), so it now carries usdcMid,
-    /// which the caller needs to derive usdcMidMin.
-    function quoteSwapMigratedRoute(address tokenIn, address tokenOut, uint256 tokensIn)
-        external
-        view
-        // Second return is the mid-leg USDC (the input to leg 2), NOT a royalty:
-        // the wrapper royalty is gone, each pair charges the fee in its own K.
-        // Callers derive usdcMidMin from this.
-        returns (uint256 tokensOut, uint256 usdcMid);
+    // buyMigrated / sellMigrated / swapMigratedRoute / quoteSwapMigratedRoute
+    // were EXTRACTED to ArcadeMigratedRouter (a periphery contract) to bring
+    // ArcadeLaunchpad back under the EIP-170 24,576-byte limit. The logic --
+    // including the usdcMidMin mid-leg sandwich guard and the CLANKER_V3
+    // rejection -- is byte-identical there; only the address moved. Callers
+    // (MultiSwap, the frontend) target the router, not the launchpad.
 }

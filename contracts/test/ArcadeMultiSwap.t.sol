@@ -6,6 +6,7 @@ import {MockUSDC} from "../src/mocks/MockUSDC.sol";
 import {ArcadeV2Factory} from "../src/dex/ArcadeV2Factory.sol";
 import {ArcadeV2Router} from "../src/dex/ArcadeV2Router.sol";
 import {ArcadeLaunchpad} from "../src/launchpad/ArcadeLaunchpad.sol";
+import {ArcadeMigratedRouter} from "../src/swap/ArcadeMigratedRouter.sol";
 import {IArcadeLaunchpad} from "../src/launchpad/interfaces/IArcadeLaunchpad.sol";
 import {ArcadeMultiSwap, IArcadeV4SwapRouterMin, IArcadeV4LaunchpadMin} from "../src/swap/ArcadeMultiSwap.sol";
 import {IArcadeV3Factory, IArcadeV3Router} from "../src/v3/interfaces/IArcadeV3Minimal.sol";
@@ -19,6 +20,7 @@ contract ArcadeMultiSwapTest is Test {
     ArcadeV2Factory factory;
     ArcadeV2Router router;
     ArcadeLaunchpad launchpad;
+    ArcadeMigratedRouter migratedRouter;
     ArcadeMultiSwap multiSwap;
 
     address treasury = address(0xBEEF);
@@ -44,6 +46,7 @@ contract ArcadeMultiSwapTest is Test {
             IERC20(address(usdc)), factory, address(router), treasury, IArcadeV3Factory(address(0)), address(0)
         );
         factory.setLaunchpad(address(launchpad));
+        migratedRouter = new ArcadeMigratedRouter(IERC20(address(usdc)), address(router), IArcadeLaunchpad(address(launchpad)));
         multiSwap = new ArcadeMultiSwap(
             IERC20(address(usdc)),
             factory,
@@ -94,8 +97,8 @@ contract ArcadeMultiSwapTest is Test {
 
     function _bobBuysMigrated(address token, uint256 usdcIn) internal returns (uint256) {
         vm.startPrank(bob);
-        usdc.approve(address(launchpad), type(uint256).max);
-        uint256 amount = launchpad.buyMigrated(token, usdcIn, 0, block.timestamp + 600);
+        usdc.approve(address(migratedRouter), type(uint256).max);
+        uint256 amount = migratedRouter.buyMigrated(token, usdcIn, 0, block.timestamp + 600);
         vm.stopPrank();
         return amount;
     }

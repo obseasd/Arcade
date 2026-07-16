@@ -9,6 +9,7 @@ import {ArcadeLaunchpad} from "../src/launchpad/ArcadeLaunchpad.sol";
 import {IArcadeLaunchpad} from "../src/launchpad/interfaces/IArcadeLaunchpad.sol";
 import {ArcadeIdentityIssuer} from "../src/identity/ArcadeIdentityIssuer.sol";
 import {ArcadeMultiSwap, IArcadeV4SwapRouterMin, IArcadeV4LaunchpadMin} from "../src/swap/ArcadeMultiSwap.sol";
+import {ArcadeMigratedRouter} from "../src/swap/ArcadeMigratedRouter.sol";
 import {ArcadeTokenVault} from "../src/launchpad/ArcadeTokenVault.sol";
 import {ArcadeTwitterEscrowV3} from "../src/launchpad/ArcadeTwitterEscrowV3.sol";
 import {IArcadeV3Factory, IArcadeV3Router} from "../src/v3/interfaces/IArcadeV3Minimal.sol";
@@ -115,8 +116,12 @@ contract RedeployDexAndLaunchpad is Script {
         // 3. Escrow (LOCKER unset, signer + owner only).
         ArcadeTwitterEscrowV3 escrow = new ArcadeTwitterEscrowV3(signer, escrowOwner);
 
-        // 4. Locker with immutable twitterEscrow = escrow.
-        address locker = _deployV3Locker(address(launchpad), v3Factory, address(escrow), deployer);
+        // 4. Locker with immutable twitterEscrow = escrow. Owner = `treasury`
+        //    (the Safe on mainnet), set AT CONSTRUCTION because the locker has
+        //    NO transferOwnership -- its owner is permanent. No locker onlyOwner
+        //    function is called during this broadcast, so Safe-from-birth is
+        //    safe. Defaults to deployer when TREASURY_ADDRESS is unset.
+        address locker = _deployV3Locker(address(launchpad), v3Factory, address(escrow), treasury);
 
         // 5. Wire the escrow to the locker (one-shot, owner-only).
         escrow.setLocker(locker);
@@ -141,6 +146,17 @@ contract RedeployDexAndLaunchpad is Script {
             IArcadeV4LaunchpadMin(v4Launchpad)
         );
 
+        // 9b. Migrated-route periphery. The buyMigrated / sellMigrated /
+        //     swapMigratedRoute wrappers were EXTRACTED from the launchpad here
+        //     to bring it back under EIP-170 (it was 25,399 > 24,576). The
+        //     usdcMidMin mid-leg sandwich guard and the CLANKER_V3 rejection are
+        //     byte-identical in this contract; only the address moved. The
+        //     frontend's TradePanel + SwapCard migrated routes target THIS, not
+        //     the launchpad.
+        ArcadeMigratedRouter migratedRouter = new ArcadeMigratedRouter(
+            IERC20(usdc), address(router), IArcadeLaunchpad(address(launchpad))
+        );
+
         // 10. Zaps. The V2 zap MUST be fresh (it targets the new factory/router).
         //     The V3 zap carries the delta-only-sweep theft fix, so redeploy it
         //     too (it reuses the unchanged v3 factory + NPM).
@@ -156,6 +172,22 @@ contract RedeployDexAndLaunchpad is Script {
             identityIssuer = address(new ArcadeIdentityIssuer(address(launchpad), address(0), erc8004Registry));
         }
 
+        // 12. GOVERNANCE HANDOVER to the Safe (treasury). Only when treasury is
+        //     a distinct address -- with TREASURY_ADDRESS unset both are the
+        //     deployer and there is nothing to hand over.
+        //
+        //     - feeToSetter: deployer set it at construction so setFeeTo could
+        //       land above; move it to the Safe so future fee changes need 2-of-3.
+        //     - escrow: Ownable2Step, so this only INITIATES the transfer; the
+        //       Safe must call acceptOwnership() itself (a 2-of-3 tx) to finish.
+        //     The locker is already Safe-owned from construction (see step 4);
+        //     the launchpad has no transferable owner (treasury is immutable and
+        //     the deployer admin slot is burned by setV3Infra).
+        if (treasury != deployer) {
+            factory.setFeeToSetter(treasury);
+            escrow.transferOwnership(treasury); // Safe must acceptOwnership() to finish
+        }
+
         vm.stopBroadcast();
 
         console2.log("==== RedeployDexAndLaunchpad (seed-gate migration fix) ====");
@@ -169,6 +201,7 @@ contract RedeployDexAndLaunchpad is Script {
         console2.log("v3Router:         ", v3Router);
         console2.log("tokenVault:       ", address(tokenVault));
         console2.log("multiSwap:        ", address(multiSwap));
+        console2.log("migratedRouter:   ", address(migratedRouter));
         console2.log("v2Zap:            ", address(v2Zap));
         console2.log("v3Zap:            ", v3Zap);
         console2.log("identityIssuer:   ", identityIssuer);
@@ -181,6 +214,7 @@ contract RedeployDexAndLaunchpad is Script {
         console2.log("NEXT_PUBLIC_V3_ROUTER_ADDRESS=", v3Router);
         console2.log("NEXT_PUBLIC_TOKEN_VAULT_ADDRESS=", address(tokenVault));
         console2.log("NEXT_PUBLIC_MULTISWAP_ADDRESS=", address(multiSwap));
+        console2.log("NEXT_PUBLIC_MIGRATED_ROUTER_ADDRESS=", address(migratedRouter));
         console2.log("NEXT_PUBLIC_V2_ZAP_ADDRESS=", address(v2Zap));
         console2.log("NEXT_PUBLIC_V3_ZAP_ADDRESS=", v3Zap);
         console2.log("NEXT_PUBLIC_IDENTITY_ISSUER_ADDRESS=", identityIssuer);
