@@ -1,6 +1,15 @@
 import { ArrowLeft, BarChart3, Coins, Repeat, Rocket, Users } from "lucide-react";
 import Link from "next/link";
-import { formatUsdcGas, getAggregateStats, getGoldskyStats, type StatsSnapshot } from "@/lib/stats";
+import {
+    formatUsdcGas,
+    getAggregateStats,
+    getGoldskyCreatorFees,
+    getGoldskyStats,
+    type CreatorFeeRow,
+    type StatsSnapshot,
+} from "@/lib/stats";
+import { getBridgeRouteVolume, type BridgeRouteVolume } from "@/lib/keeperPersistence";
+import { cctpDomainLabel } from "@/lib/cctp";
 import {
     getLatestPersistedSnapshot,
     getSnapshotHistory,
@@ -75,6 +84,15 @@ export default async function StatsPage({
     // Supplementary: the graduated-token count from the subgraph (additive; does
     // not affect any headline number). Null when the subgraph is unset/behind.
     const graduated = (await getGoldskyStats())?.tokensGraduated ?? null;
+
+    // M3 breakdowns (additive, each hides when empty):
+    //   - top creators by attributable volume + estimated fee (subgraph)
+    //   - bridged USDC volume per CCTP source route (keeper DB)
+    // Both soft-fail to [] so a missing subgraph / DB never breaks the page.
+    const [creatorFees, bridgeRoutes] = await Promise.all([
+        getGoldskyCreatorFees(8).catch(() => [] as CreatorFeeRow[]),
+        getBridgeRouteVolume().catch(() => [] as BridgeRouteVolume[]),
+    ]);
 
     // History window for the delta + sparkline. Empty when the DB isn't
     // configured yet — the rest of the page renders without it.
@@ -187,6 +205,98 @@ export default async function StatsPage({
                 />
             </section>
 
+            {creatorFees.length > 0 && (
+                <section className="mb-10 rounded-2xl border border-arc-border bg-arc-bg-elevated p-6 sm:p-8">
+                    <h2 className="text-base font-semibold text-arc-text">
+                        Top creators by fees earned
+                    </h2>
+                    <p className="mt-1 text-xs text-arc-text-faint">
+                        Estimated creator fees: ~0.30% of bonding-curve volume
+                        (the creator&apos;s share of the 1% curve fee) plus ~0.80%
+                        of graduated V3-pool volume. A floor: post-graduation V2
+                        pair volume is not yet indexed.
+                    </p>
+                    <div className="mt-4 overflow-x-auto">
+                        <table className="w-full min-w-[420px] text-sm">
+                            <thead>
+                                <tr className="text-left text-[10px] uppercase tracking-wider text-arc-text-muted">
+                                    <th className="pb-2 font-medium">Creator</th>
+                                    <th className="pb-2 text-right font-medium">Tokens</th>
+                                    <th className="pb-2 text-right font-medium">Volume</th>
+                                    <th className="pb-2 text-right font-medium">Fees (est.)</th>
+                                </tr>
+                            </thead>
+                            <tbody className="tabular-nums">
+                                {creatorFees.map((c) => (
+                                    <tr
+                                        key={c.creator}
+                                        className="border-t border-arc-border/60"
+                                    >
+                                        <td className="py-2 font-mono text-xs text-arc-text">
+                                            {shortAddr(c.creator)}
+                                        </td>
+                                        <td className="py-2 text-right text-arc-text-muted">
+                                            {c.tokenCount.toLocaleString("en-US")}
+                                        </td>
+                                        <td className="py-2 text-right text-arc-text-muted">
+                                            {formatUsdcGas(c.volumeMicros)}
+                                        </td>
+                                        <td className="py-2 text-right font-medium text-arc-success">
+                                            {formatUsdcGas(c.feeMicros)}
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+            )}
+
+            {bridgeRoutes.length > 0 && (
+                <section className="mb-10 rounded-2xl border border-arc-border bg-arc-bg-elevated p-6 sm:p-8">
+                    <h2 className="text-base font-semibold text-arc-text">
+                        Bridged in by route
+                    </h2>
+                    <p className="mt-1 text-xs text-arc-text-faint">
+                        USDC bridged into Arc via Circle CCTP, grouped by source
+                        chain. Counts keeper-relayed bridge-and-buys (each backed
+                        by a Circle-attested burn).
+                    </p>
+                    <div className="mt-4 overflow-x-auto">
+                        <table className="w-full min-w-[360px] text-sm">
+                            <thead>
+                                <tr className="text-left text-[10px] uppercase tracking-wider text-arc-text-muted">
+                                    <th className="pb-2 font-medium">Source route</th>
+                                    <th className="pb-2 text-right font-medium">Bridges</th>
+                                    <th className="pb-2 text-right font-medium">Volume</th>
+                                </tr>
+                            </thead>
+                            <tbody className="tabular-nums">
+                                {bridgeRoutes.map((r) => (
+                                    <tr
+                                        key={r.srcDomain}
+                                        className="border-t border-arc-border/60"
+                                    >
+                                        <td className="py-2 text-arc-text">
+                                            {cctpDomainLabel(r.srcDomain)}
+                                            <span className="ml-2 text-arc-text-muted">
+                                                &rarr; Arc
+                                            </span>
+                                        </td>
+                                        <td className="py-2 text-right text-arc-text-muted">
+                                            {r.count.toLocaleString("en-US")}
+                                        </td>
+                                        <td className="py-2 text-right font-medium text-arc-text">
+                                            {formatUsdcGas(r.volumeMicros)}
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+            )}
+
             <section className="rounded-2xl border border-arc-border bg-arc-bg-elevated p-6 text-sm text-arc-text-muted sm:p-8">
                 <h2 className="text-base font-semibold text-arc-text">Methodology</h2>
                 <ul className="mt-4 list-disc space-y-2 pl-5">
@@ -258,6 +368,12 @@ function formatRelativeTime(iso: string): string {
     const day = Math.floor(hr / 24);
     if (day < 7) return `${day} d ago`;
     return new Date(iso).toISOString().slice(0, 10);
+}
+
+/** 0x1234…abcd short form for a wallet address column. */
+function shortAddr(a: string): string {
+    if (!a || a.length < 10) return a;
+    return `${a.slice(0, 6)}…${a.slice(-4)}`;
 }
 
 function MetricCard({

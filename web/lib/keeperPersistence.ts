@@ -273,21 +273,86 @@ export async function recordBridgeIntent(i: {
     receiverAddress?: string | null;
     beneficiaryAddress?: string | null;
     intentKind: BridgeIntentKind;
+    // Burned USDC in 6-dp micros, for the /stats per-route breakdown. Optional:
+    // a null keeps the row out of the dollar SUM but still counted per route.
+    usdcAmountMicros?: bigint | null;
 }): Promise<boolean> {
     if (!isDbConfigured()) return false;
     const sql = getSql();
+    // Store as a decimal string; the column is BIGINT so pass a stringified
+    // bigint (neon serializes bigint literals as numbers, which lose precision
+    // above 2^53 -- a string binds exactly). Null when unknown/invalid.
+    const amt =
+        typeof i.usdcAmountMicros === "bigint" && i.usdcAmountMicros > 0n
+            ? i.usdcAmountMicros.toString()
+            : null;
     const rows = (await sql`
         INSERT INTO keeper_bridge_intents (
-            burn_tx_hash, src_domain, receiver_address, beneficiary_address, intent_kind
+            burn_tx_hash, src_domain, receiver_address, beneficiary_address, intent_kind, usdc_amount
         ) VALUES (
             ${i.burnTxHash.toLowerCase()}, ${i.srcDomain},
             ${i.receiverAddress?.toLowerCase() ?? null},
-            ${i.beneficiaryAddress?.toLowerCase() ?? null}, ${i.intentKind}
+            ${i.beneficiaryAddress?.toLowerCase() ?? null}, ${i.intentKind}, ${amt}
         )
         ON CONFLICT (burn_tx_hash) DO NOTHING
         RETURNING id
     `) as { id: string | number }[];
     return rows.length > 0;
+}
+
+/** One row of the /stats per-CCTP-route bridged-volume breakdown. */
+export interface BridgeRouteVolume {
+    /** CCTP source domain (0=Ethereum, 6=Base, ...). */
+    srcDomain: number;
+    /** Keeper-engaged bridges from this route ('relaying' + 'relayed'). */
+    count: number;
+    /** Sum of usdc_amount for this route, in 6-dp micros (rows with a NULL
+     *  amount are excluded from the sum but still counted). */
+    volumeMicros: bigint;
+}
+
+/**
+ * Bridged USDC volume grouped by CCTP source domain, for the /stats breakdown.
+ *
+ * Counts ONLY keeper-engaged intents ('relaying' / 'relayed'): both statuses
+ * are reached only AFTER Circle Iris attests the burn (the keeper polls Iris
+ * and flips pending->relaying only on a real attested message), so a spammer
+ * cannot inflate the public number. 'pending' is deliberately EXCLUDED because
+ * /api/bridge/intent is unauthenticated and its usdc_amount is client-supplied
+ * and unverified until the keeper engages -- summing pending rows would let
+ * anyone post fabricated amounts (audit 2026-07-16 M-2). 'failed'/'expired'
+ * are excluded too. Returns [] when the DB is unconfigured.
+ *
+ * Residual (testnet-acceptable): a 'relayed' row's usdc_amount is still the
+ * client-reported burn size, not the on-chain attested amount -- inflating it
+ * requires doing a REAL attesting bridge and lying about its size. Mainnet
+ * hardening: have the keeper overwrite usdc_amount with the message's attested
+ * `amount` field at relay time.
+ */
+export async function getBridgeRouteVolume(): Promise<BridgeRouteVolume[]> {
+    if (!isDbConfigured()) return [];
+    const sql = getSql();
+    // ORDER BY the numeric aggregate, NOT the ::text alias (which would sort
+    // lexicographically -- "9000000" > "10000000" -- mis-ranking routes). The
+    // ::text on the projection stays: it preserves >2^53 precision for BigInt.
+    const rows = (await sql`
+        SELECT src_domain,
+               COUNT(*)::int AS n,
+               COALESCE(SUM(usdc_amount), 0)::text AS vol
+        FROM keeper_bridge_intents
+        WHERE status IN ('relaying', 'relayed')
+        GROUP BY src_domain
+        ORDER BY COALESCE(SUM(usdc_amount), 0) DESC
+    `) as { src_domain: number; n: number; vol: string }[];
+    return rows.map((r) => {
+        let volumeMicros = 0n;
+        try {
+            volumeMicros = BigInt(r.vol ?? "0");
+        } catch {
+            volumeMicros = 0n;
+        }
+        return { srcDomain: Number(r.src_domain), count: Number(r.n), volumeMicros };
+    });
 }
 
 /**
@@ -305,6 +370,27 @@ export async function countPendingBridgeIntents(): Promise<number> {
         WHERE status = 'pending'
     `) as { n: number }[];
     return rows[0]?.n ?? 0;
+}
+
+/**
+ * Look up a single bridge intent by its burn tx hash, for the bridge-history
+ * UI to show whether the unified keeper auto-relayed the buy (leg B). Returns
+ * null when unconfigured or unknown (no intent was recorded -- e.g. a plain
+ * no-hook bridge that mints directly to the user, which the keeper never
+ * touches). Read-only, safe to call unauthenticated: it exposes only the
+ * keeper's own relay bookkeeping for a hash the caller already possesses.
+ */
+export async function getBridgeIntentByBurn(
+    burnTxHash: string,
+): Promise<KeeperBridgeIntent | null> {
+    if (!isDbConfigured()) return null;
+    const sql = getSql();
+    const rows = (await sql`
+        SELECT * FROM keeper_bridge_intents
+        WHERE burn_tx_hash = ${burnTxHash.toLowerCase()}
+        LIMIT 1
+    `) as RawBridgeRow[];
+    return rows[0] ? mapBridgeRow(rows[0]) : null;
 }
 
 /** Pending/in-flight intents the keeper should poll, oldest first. */

@@ -415,6 +415,39 @@ function OrderRow({
             ? Number((order.srcFilledAmount * 1000n) / order.ask.srcAmount) / 10
             : 0;
 
+    // A DCA schedule is a multi-chunk TWAP order: srcBidAmount (per-fill size)
+    // is strictly less than srcAmount (the total). A one-shot limit order fills
+    // its whole srcAmount in a single chunk (srcBidAmount == srcAmount). The
+    // keeper serves both identically; this is a purely cosmetic distinction the
+    // maker cares about, derived entirely from the on-chain order.
+    const bid = order.ask.srcBidAmount;
+    const isDca = bid > 0n && bid < order.ask.srcAmount;
+    // Chunk counts: ceil(total / perChunk) chunks, floor(filled / perChunk)
+    // done. Guard bid>0 (a malformed 0 bid would divide-by-zero).
+    const chunksTotal = isDca && bid > 0n
+        ? Number((order.ask.srcAmount + bid - 1n) / bid)
+        : 1;
+    // Cap at chunksTotal: when srcAmount is not a multiple of bid, the final
+    // fill takes only the remainder, so at completion srcFilledAmount==srcAmount
+    // while floor(srcAmount/bid)==chunksTotal-1. Without the cap a done DCA
+    // renders a contradictory "3/4 · 100%". A fully-filled order shows all
+    // chunks; otherwise floor(filled/bid).
+    const chunksFilled = isDca && bid > 0n
+        ? order.srcFilledAmount >= order.ask.srcAmount
+            ? chunksTotal
+            : Number(order.srcFilledAmount / bid)
+        : filledPct >= 100
+          ? 1
+          : 0;
+    // Next chunk becomes fillable at last-fill-time + fillDelay. filledTime is
+    // 0 before the first fill, in which case the first chunk is fillable now.
+    const nextChunkAt =
+        order.filledTime > 0 ? order.filledTime + order.ask.fillDelay : now;
+    const nextChunkEtaSec =
+        isDca && state === "open" && chunksFilled < chunksTotal
+            ? Math.max(0, nextChunkAt - now)
+            : 0;
+
     return (
         <div className="rounded-xl border border-arc-border bg-arc-bg-elevated px-4 py-3">
             <div className="flex items-start justify-between gap-3">
@@ -422,6 +455,14 @@ function OrderRow({
                     <div className="flex items-center gap-2 text-xs">
                         <span className="text-arc-text-faint">#{Number(order.id)}</span>
                         <StatusPill state={state} />
+                        {isDca && (
+                            <span
+                                className="rounded-md bg-arc-primary/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-arc-primary"
+                                title={`DCA schedule: ${chunksTotal} chunks, one every ${formatDuration(order.ask.fillDelay)}.`}
+                            >
+                                DCA
+                            </span>
+                        )}
                         {inMotion && (
                             <span
                                 className="inline-flex items-center gap-1 rounded-md bg-sky-400/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-sky-400"
@@ -476,10 +517,36 @@ function OrderRow({
                             {formatToken(order.ask.dstMinAmount, dst.decimals, 4)} {dst.symbol}
                         </span>
                     </div>
-                    {filledPct > 0 && (
-                        <div className="mt-1 text-[10px] text-arc-text-faint">
-                            Filled: {filledPct.toFixed(1)}%
+                    {isDca ? (
+                        <div className="mt-1 space-y-0.5">
+                            <div className="text-[10px] text-arc-text-faint tabular-nums">
+                                Chunks: {chunksFilled}/{chunksTotal} filled
+                                {filledPct > 0 && ` · ${filledPct.toFixed(1)}%`}
+                            </div>
+                            {/* Thin progress bar for the DCA schedule. */}
+                            <div className="h-1 w-full overflow-hidden rounded-full bg-arc-border">
+                                <div
+                                    className="h-full rounded-full bg-arc-primary transition-all"
+                                    style={{
+                                        width: `${Math.min(100, chunksTotal > 0 ? (chunksFilled / chunksTotal) * 100 : 0)}%`,
+                                    }}
+                                />
+                            </div>
+                            {state === "open" && chunksFilled < chunksTotal && (
+                                <div className="text-[10px] text-arc-text-faint">
+                                    Next chunk:{" "}
+                                    {nextChunkEtaSec > 0
+                                        ? `in ${formatDuration(nextChunkEtaSec)}`
+                                        : "ready now"}
+                                </div>
+                            )}
                         </div>
+                    ) : (
+                        filledPct > 0 && (
+                            <div className="mt-1 text-[10px] text-arc-text-faint">
+                                Filled: {filledPct.toFixed(1)}%
+                            </div>
+                        )
                     )}
                     {state === "open" && (
                         <div className="mt-1 text-[10px] text-arc-text-faint">
@@ -529,6 +596,27 @@ function formatExpiresIn(deadlineSec: number): string {
     }
     const mins = Math.floor(dt / 60);
     return mins >= 1 ? `${mins}m` : `<1m`;
+}
+
+/** Compact duration for a chunk interval / countdown ("2h", "30m", "45s"). */
+function formatDuration(sec: number): string {
+    if (sec <= 0) return "0s";
+    const days = Math.floor(sec / 86_400);
+    if (days >= 1) {
+        const hrs = Math.floor((sec - days * 86_400) / 3600);
+        return hrs > 0 ? `${days}d ${hrs}h` : `${days}d`;
+    }
+    const hours = Math.floor(sec / 3600);
+    if (hours >= 1) {
+        const mins = Math.floor((sec - hours * 3600) / 60);
+        return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`;
+    }
+    const mins = Math.floor(sec / 60);
+    if (mins >= 1) {
+        const s = sec - mins * 60;
+        return s > 0 ? `${mins}m ${s}s` : `${mins}m`;
+    }
+    return `${sec}s`;
 }
 
 function StatusPill({ state }: { state: "open" | "expired" | "cancelled" | "completed" }) {

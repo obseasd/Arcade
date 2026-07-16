@@ -969,6 +969,11 @@ export function BridgeCard() {
             srcDomain: srcChain.cctpDomain,
             beneficiaryAddress: beneficiary,
             intentKind: useBuyHook ? "buy" : "forward",
+            // The burned amount is CCTP USDC (6-dp micros on every source
+            // chain), which matches the /stats micros convention. Advisory
+            // only: the receiver mints from the attested message. String to
+            // survive JSON's 2^53 limit.
+            usdcAmountMicros: amountRaw.toString(),
           }),
         }).catch(() => {
           /* best-effort: manual claim remains available */

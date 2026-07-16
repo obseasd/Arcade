@@ -3,7 +3,7 @@ import { Buy, Sell, TokenCreated, Migrated } from "../generated/Launchpad/Launch
 import { PoolCreated } from "../generated/V3Factory/V3Factory";
 import { Swap } from "../generated/templates/V3Pool/V3Pool";
 import { V3Pool } from "../generated/templates";
-import { Trade, Pool, Trader, Token, Global } from "../generated/schema";
+import { Trade, Pool, Trader, Token, Global, Creator } from "../generated/schema";
 
 /**
  * Charts + stats + referral mappings. Price math is a VERBATIM port of the
@@ -68,6 +68,57 @@ function loadGlobal(): Global {
 }
 
 /**
+ * Credit a trade's USDC volume to the creator of the traded token, for the
+ * /stats "top creators" breakdown. Only launchpad tokens have a Token entity
+ * (created in handleTokenCreated), so a swap on a non-launchpad V3 pool finds
+ * no Token and is skipped -- creator fees only accrue on launchpad tokens. The
+ * Creator row is upserted (defensively; the creator always exists by then).
+ *
+ * `pool` is the V3 pool the swap came from, or null for a curve trade. The
+ * graduated-volume bucket (where the 0.05% creator pool-fee accrues) is
+ * credited ONLY when the swap came from the token's OFFICIAL graduated pool
+ * (tok.migratedPair) -- NOT any permissionless V3 pool a third party may have
+ * created for the token, which would otherwise let anyone inflate a creator's
+ * fee number by spinning up a fake USDC pool. Curve volume is never graduated.
+ */
+function creditCreator(token: Bytes, volumeUsdc: BigDecimal, blockTime: i32, pool: Bytes | null): void {
+  const tok = Token.load(token.toHexString());
+  if (tok == null) return; // not a launchpad token
+  const creatorAddr = tok.creator;
+  // A zero creator (only set by the defensive Migrated-before-Created branch)
+  // is not a real wallet -- don't create a "0x0" creator row.
+  if (creatorAddr.equals(Address.zero())) return;
+
+  // Graduated iff this swap is on the token's official migrated pool.
+  let graduated = false;
+  if (pool !== null && tok.migrated) {
+    const mp = tok.migratedPair;
+    if (mp !== null && (mp as Bytes).equals(pool as Bytes)) {
+      graduated = true;
+    }
+  }
+
+  const cid = creatorAddr.toHexString();
+  let c = Creator.load(cid);
+  if (c == null) {
+    c = new Creator(cid);
+    c.tokenCount = 0;
+    c.tradeCount = 0;
+    c.totalVolumeUsdc = BigDecimal.fromString("0");
+    c.graduatedVolumeUsdc = BigDecimal.fromString("0");
+    c.firstSeenAt = blockTime;
+    c.lastTradeAt = blockTime;
+  }
+  c.tradeCount = c.tradeCount + 1;
+  c.totalVolumeUsdc = c.totalVolumeUsdc.plus(volumeUsdc);
+  if (graduated) {
+    c.graduatedVolumeUsdc = c.graduatedVolumeUsdc.plus(volumeUsdc);
+  }
+  c.lastTradeAt = blockTime;
+  c.save();
+}
+
+/**
  * Common trade path: writes the Trade, upserts the Trader running volume, and
  * bumps the Global totals. Called by all three trade handlers.
  */
@@ -113,6 +164,11 @@ function recordTrade(
   tr.tradeCount = tr.tradeCount + 1;
   tr.save();
 
+  // Attribute this trade's volume to the token's creator (launchpad tokens
+  // only; skipped for non-launchpad pools). `pool` lets creditCreator credit
+  // graduated volume ONLY for the token's official migrated pool.
+  creditCreator(token, volumeUsdc, blockTime, pool);
+
   g.save();
 }
 
@@ -145,16 +201,38 @@ export function handleSell(event: Sell): void {
 }
 
 export function handleTokenCreated(event: TokenCreated): void {
+  const blockTime = event.block.timestamp.toI32();
   const tok = new Token(event.params.token.toHexString());
   tok.creator = event.params.creator;
   tok.mode = event.params.mode;
-  tok.createdAt = event.block.timestamp.toI32();
+  tok.createdAt = blockTime;
   tok.migrated = false;
   tok.save();
 
   const g = loadGlobal();
   g.tokenCount = g.tokenCount + 1;
   g.save();
+
+  // Upsert the Creator row and bump their launch count. Volume is credited
+  // later, per trade, in creditCreator.
+  const creatorAddr = event.params.creator;
+  if (!creatorAddr.equals(Address.zero())) {
+    const cid = creatorAddr.toHexString();
+    let c = Creator.load(cid);
+    if (c == null) {
+      c = new Creator(cid);
+      c.tokenCount = 0;
+      c.tradeCount = 0;
+      c.totalVolumeUsdc = BigDecimal.fromString("0");
+      c.graduatedVolumeUsdc = BigDecimal.fromString("0");
+      c.firstSeenAt = blockTime;
+      // 0 = "never traded" sentinel (the non-null schema forces a value).
+      // creditCreator stamps the real block time on the first trade.
+      c.lastTradeAt = 0;
+    }
+    c.tokenCount = c.tokenCount + 1;
+    c.save();
+  }
 }
 
 export function handleMigrated(event: Migrated): void {

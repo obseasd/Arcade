@@ -4,6 +4,7 @@ import { isDbConfigured } from "@/lib/db";
 import {
     recordBridgeIntent,
     countPendingBridgeIntents,
+    getBridgeIntentByBurn,
 } from "@/lib/keeperPersistence";
 
 // Refuse new intents only once the pending backlog is absurdly large. This
@@ -40,6 +41,47 @@ interface Body {
     receiverAddress?: string;
     beneficiaryAddress?: string;
     intentKind?: "buy" | "forward";
+    // Burned USDC in 6-dp micros (string to survive JSON's 2^53 limit), for
+    // the /stats per-route breakdown. Advisory only: the CONTRACT derives the
+    // real minted amount from the attested message, never from this value.
+    usdcAmountMicros?: string | number;
+}
+
+/**
+ * Read the keeper's relay status for a bridge, so the bridge-history UI can
+ * show "keeper queued / relaying / auto-claimed" instead of only the client's
+ * own view. Returns { intent: null } when the DB is unconfigured or no intent
+ * exists for the hash (a plain no-hook bridge the keeper never touches). Only
+ * the keeper's own relay bookkeeping is exposed, and only for a burn hash the
+ * caller already has -- nothing sensitive, no auth needed.
+ */
+export async function GET(req: NextRequest) {
+    if (!isDbConfigured()) {
+        return NextResponse.json({ intent: null }, { status: 200 });
+    }
+    const burnTxHash = (req.nextUrl.searchParams.get("burnTxHash") ?? "").trim();
+    if (!/^0x[0-9a-fA-F]{64}$/.test(burnTxHash)) {
+        return NextResponse.json({ error: "burnTxHash must be a 32-byte hex tx hash" }, { status: 400 });
+    }
+    try {
+        const intent = await getBridgeIntentByBurn(burnTxHash);
+        return NextResponse.json(
+            {
+                intent: intent
+                    ? {
+                          status: intent.status,
+                          intentKind: intent.intentKind,
+                          relayTxHash: intent.relayTxHash,
+                          attempts: intent.attempts,
+                      }
+                    : null,
+            },
+            { status: 200 },
+        );
+    } catch {
+        // Read failure is non-fatal: the UI simply shows no keeper badge.
+        return NextResponse.json({ intent: null }, { status: 200 });
+    }
 }
 
 export async function POST(req: NextRequest) {
@@ -66,6 +108,20 @@ export async function POST(req: NextRequest) {
     }
 
     const intentKind: "buy" | "forward" = body.intentKind === "forward" ? "forward" : "buy";
+
+    // Parse the advisory burn amount (micros). Reject anything non-integer,
+    // negative, or implausibly large (> $1e12) so a crafted intent cannot
+    // poison the per-route SUM on /stats. Display-only, so a bad value simply
+    // drops to null rather than 400-ing the whole record.
+    let usdcAmountMicros: bigint | null = null;
+    if (body.usdcAmountMicros !== undefined && body.usdcAmountMicros !== null) {
+        try {
+            const v = BigInt(String(body.usdcAmountMicros).trim());
+            if (v > 0n && v <= 1_000_000_000_000_000_000n) usdcAmountMicros = v;
+        } catch {
+            usdcAmountMicros = null;
+        }
+    }
 
     const receiverAddress =
         typeof body.receiverAddress === "string" && isAddress(body.receiverAddress)
@@ -95,6 +151,7 @@ export async function POST(req: NextRequest) {
             receiverAddress,
             beneficiaryAddress,
             intentKind,
+            usdcAmountMicros,
         });
         return NextResponse.json({ recorded: true, inserted }, { status: 200 });
     } catch (err) {

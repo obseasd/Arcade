@@ -264,6 +264,7 @@ function Row({
             push the relative timestamp inline next to the amount. */}
         <span className="shrink-0 text-[10px] text-arc-text-faint">{ago}</span>
       </div>
+      <KeeperRelayBadge burnTxHash={entry.burnTxHash} clientStatus={entry.status} />
       <StatusBadge status={entry.status} attestationReady={entry.attestationReady} />
       {/* Audit Bridge H-3: Retry button on failed rows so the user has
           a way back into the attestation poll without manually
@@ -306,6 +307,104 @@ function Row({
         <CrossIcon size={12} />
       </button>
     </div>
+  );
+}
+
+/**
+ * Surfaces the unified keeper's leg-B relay status for a hooked bridge
+ * (buy/forward), so the user can see the keeper is auto-completing the buy on
+ * Arc and they don't need to come back to claim. Only rendered while the
+ * client's own view is still non-terminal (pending / attesting): once the mint
+ * lands the row flips to "Claimed" on its own, at which point the keeper badge
+ * would be redundant. Polls /api/bridge/intent every 20s while waiting.
+ *
+ * Shows nothing when no intent exists for the hash (a plain no-hook bridge, or
+ * the DB is unconfigured), so a badge only ever appears when the keeper is
+ * genuinely engaged. Best-effort: any fetch error just leaves it blank.
+ */
+function KeeperRelayBadge({
+  burnTxHash,
+  clientStatus,
+}: {
+  burnTxHash?: string;
+  clientStatus: HistoryEntry["status"];
+}) {
+  const [relay, setRelay] = useState<
+    | { status: "pending" | "relaying" | "relayed" | "failed" | "expired"; relayTxHash: string | null }
+    | null
+  >(null);
+  const terminal = clientStatus === "minted" || clientStatus === "failed";
+  const ZERO_HASH = `0x${"0".repeat(64)}`;
+
+  useEffect(() => {
+    // No point querying once the client already resolved, or for a
+    // placeholder hash (Solana App Kit rows).
+    if (terminal || !burnTxHash || burnTxHash === ZERO_HASH) {
+      setRelay(null);
+      return;
+    }
+    let alive = true;
+    let iv: ReturnType<typeof setInterval> | null = null;
+    const stop = () => {
+      if (iv !== null) {
+        clearInterval(iv);
+        iv = null;
+      }
+    };
+    const load = async () => {
+      // Don't poll a backgrounded tab (mirrors the Iris poller's gate two
+      // functions up); the next visible tick catches up.
+      if (typeof document !== "undefined" && document.hidden) return;
+      try {
+        const r = await fetch(
+          `/api/bridge/intent?burnTxHash=${burnTxHash}`,
+          { cache: "no-store" },
+        );
+        if (!r.ok) return;
+        const j = (await r.json()) as { intent?: { status: string; relayTxHash: string | null } | null };
+        if (!alive) return;
+        const it = j?.intent;
+        // Only keep the states worth surfacing; failed/expired fall back to
+        // the row's own status + manual claim, so don't badge them.
+        if (it && (it.status === "pending" || it.status === "relaying" || it.status === "relayed")) {
+          setRelay({ status: it.status as "pending" | "relaying" | "relayed", relayTxHash: it.relayTxHash });
+          // "relayed" is the terminal keeper state -- the buy is done on Arc.
+          // Stop polling (the client row flips to "Claimed" on its own).
+          if (it.status === "relayed") stop();
+        } else {
+          setRelay(null);
+        }
+      } catch {
+        /* best-effort: no badge */
+      }
+    };
+    void load();
+    iv = setInterval(load, 20_000);
+    return () => {
+      alive = false;
+      stop();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [burnTxHash, terminal]);
+
+  if (!relay) return null;
+  const label =
+    relay.status === "relayed"
+      ? "Auto-claimed"
+      : relay.status === "relaying"
+        ? "Keeper relaying"
+        : "Keeper queued";
+  const tone =
+    relay.status === "relayed"
+      ? "bg-arc-success/15 text-arc-success"
+      : "bg-sky-400/15 text-sky-300";
+  return (
+    <span
+      className={cn("rounded-full px-2 py-0.5 text-[10px] font-medium", tone)}
+      title="The unified keeper auto-relays your bridged buy on Arc so you don't have to claim manually."
+    >
+      {label}
+    </span>
   );
 }
 

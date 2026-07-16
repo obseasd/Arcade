@@ -427,6 +427,130 @@ export async function getGoldskyStats(): Promise<StatsSnapshot | null> {
     }
 }
 
+// Creator fee-share rates for the /stats "top creators" estimate. The creator
+// earns fees in TWO venues with very different rates (from ArcadeLaunchpad.sol):
+//   - Bonding curve: 1% TRADE_FEE_BPS; the creator takes 50% (PUMP) or 30%
+//     (CLANKER) of it -> 30-50 bps of curve volume. We default to the LOWER
+//     30 bps (CLANKER) as a conservative floor so mixed PUMP/CLANKER creators
+//     are under- not over-credited.
+//   - Graduated V3 pool: the creator takes V3_CREATOR_BPS = 80% of the pool's
+//     LP fee (~1% tier) -> ~80 bps of graduated volume.
+// Applied here (off-chain) so the rates retune without a subgraph re-backfill.
+// Env-tunable + clamped so a bad value can never over-credit or throw at load.
+function clampEnvBps(name: string, def: bigint, max: bigint): bigint {
+    let v = def;
+    try {
+        const raw = process.env[name];
+        v = raw === undefined || raw === "" ? def : BigInt(raw);
+    } catch {
+        v = def;
+    }
+    if (v < 0n) return 0n;
+    return v > max ? max : v;
+}
+// Curve creator share of volume, in bps. Clamp [0,100] (100 bps = the full 1%
+// curve trade fee, an impossible upper bound for the creator's slice alone).
+const CURVE_CREATOR_BPS = clampEnvBps("CURVE_CREATOR_BPS", 30n, 100n);
+// Graduated-pool creator share of volume, in bps. Clamp [0,300] to leave room
+// for a higher V3 fee tier without letting a misconfig run away.
+const GRAD_CREATOR_BPS = clampEnvBps("GRAD_CREATOR_BPS", 80n, 300n);
+
+/** One creator's attributable trading activity + the fee it implies. */
+export interface CreatorFeeRow {
+    /** Creator wallet (lowercase hex). */
+    creator: string;
+    /** Tokens this wallet launched. */
+    tokenCount: number;
+    /** Cumulative USDC volume across all their tokens' trades (micros): curve
+     *  (all modes) + official graduated V3 pool. A FLOOR of true volume: the
+     *  subgraph does not index post-graduation V2 pairs. */
+    volumeMicros: bigint;
+    /** Estimated creator fee: curve volume * CURVE_CREATOR_BPS + graduated
+     *  volume * GRAD_CREATOR_BPS, in micros. */
+    feeMicros: bigint;
+}
+
+/**
+ * Two-bucket creator fee estimate: curve volume at the (conservative CLANKER)
+ * curve rate + graduated-pool volume at the higher pool rate, floored (integer
+ * micros). Pure + exported for tests. Floors so it only under-estimates by
+ * sub-micro dust. `gradMicros` must be <= (curve+grad total); the caller passes
+ * curve = total - graduated (both from the subgraph, where graduated is a
+ * verified subset).
+ */
+export function computeCreatorFeeMicros(
+    curveMicros: bigint,
+    gradMicros: bigint,
+    curveBps: bigint = CURVE_CREATOR_BPS,
+    gradBps: bigint = GRAD_CREATOR_BPS,
+): bigint {
+    let fee = 0n;
+    if (curveMicros > 0n && curveBps > 0n) fee += (curveMicros * curveBps) / 10_000n;
+    if (gradMicros > 0n && gradBps > 0n) fee += (gradMicros * gradBps) / 10_000n;
+    return fee;
+}
+
+/** Parse a 6-dp decimal string ("1234.56") to exact micros. */
+function decimalStringToMicros(v: string): bigint {
+    const [whole, fracRaw] = String(v ?? "0").split(".");
+    const frac = (fracRaw ?? "").slice(0, 6).padEnd(6, "0");
+    try {
+        return BigInt(whole || "0") * 1_000_000n + BigInt(frac || "0");
+    } catch {
+        return 0n;
+    }
+}
+
+/**
+ * Top launchpad creators by attributable trading volume, from the Goldsky
+ * subgraph's Creator running-totals, with an estimated fee earned. Returns []
+ * when the subgraph is unset or errors (the /stats section then hides). The
+ * volume is a FLOOR (no post-graduation V2 pair volume is indexed); the card
+ * documents this.
+ */
+export async function getGoldskyCreatorFees(limit = 10): Promise<CreatorFeeRow[]> {
+    const url = process.env.NEXT_PUBLIC_GOLDSKY_URL;
+    if (!url) return [];
+    const n = Math.max(1, Math.min(100, Math.floor(limit)));
+    const query = `{ creators(first: ${n}, orderBy: totalVolumeUsdc, orderDirection: desc, where: { totalVolumeUsdc_gt: "0" }) { id tokenCount totalVolumeUsdc graduatedVolumeUsdc } }`;
+    try {
+        const res = await fetch(url, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ query }),
+            next: { revalidate: 30 },
+        });
+        if (!res.ok) return [];
+        const json = (await res.json()) as {
+            data?: {
+                creators?: {
+                    id: string;
+                    tokenCount: number;
+                    totalVolumeUsdc: string;
+                    graduatedVolumeUsdc: string;
+                }[];
+            };
+        };
+        const rows = json?.data?.creators;
+        if (!Array.isArray(rows)) return [];
+        return rows.map((r) => {
+            const total = decimalStringToMicros(r.totalVolumeUsdc);
+            const grad = decimalStringToMicros(r.graduatedVolumeUsdc);
+            // graduated is a verified subset of total; clamp defensively so a
+            // stray rounding never yields a negative curve bucket.
+            const curve = total > grad ? total - grad : 0n;
+            return {
+                creator: String(r.id).toLowerCase(),
+                tokenCount: Number(r.tokenCount ?? 0),
+                volumeMicros: total,
+                feeMicros: computeCreatorFeeMicros(curve, grad),
+            };
+        });
+    } catch {
+        return [];
+    }
+}
+
 /**
  * Map a log's topic[0] (event signature hash) to the topic slot that
  * holds the user wallet address, then extract that address. Returns

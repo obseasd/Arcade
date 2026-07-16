@@ -52,8 +52,10 @@ testnet reference the old adapter).
    Note the new adapter address. (Include the deployer as a second
    allowlisted taker so manual fills still work if the keeper is down.)
 
-3. **Apply the DB migration** (Neon SQL editor or the migrate route):
-   `web/db/migrations/010_keeper.sql`.
+3. **Apply the DB migrations** (Neon SQL editor or the migrate route):
+   `web/db/migrations/010_keeper.sql` then `web/db/migrations/011_bridge_amount.sql`
+   (011 adds the `usdc_amount` column the /stats per-route bridged breakdown
+   sums; it is a no-op backfill on an already-populated table).
 
 4. **Set Vercel envs** (Production):
    - `NEXT_PUBLIC_ORBS_EXCHANGE_V2_ADDRESS` = the **new** adapter from step 2

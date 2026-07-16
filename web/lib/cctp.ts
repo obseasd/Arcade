@@ -266,6 +266,23 @@ export function getCctpChain(chainId: number): CctpChainConfig | undefined {
 }
 
 /**
+ * Human label for a CCTP source domain, for the /stats per-route breakdown.
+ * Resolves across BOTH the testnet and mainnet chain lists (a persisted intent
+ * may name a domain not in the currently-active list) and drops the network
+ * suffix ("Base Sepolia" -> "Base") so a route reads cleanly. Falls back to
+ * "Domain N" for an unrecognised domain. Excludes the Arc destination itself.
+ */
+export function cctpDomainLabel(domain: number): string {
+  const hit =
+    [...CCTP_CHAINS_TESTNET, ...CCTP_CHAINS_MAINNET].find(
+      (c) => c.cctpDomain === domain && c.id !== 5_042_002,
+    ) ??
+    (SOLANA_PSEUDO_CHAIN.cctpDomain === domain ? SOLANA_PSEUDO_CHAIN : undefined);
+  if (!hit) return `Domain ${domain}`;
+  return hit.name.replace(/\s+(Sepolia|Fuji|Devnet|Testnet)$/i, "").trim();
+}
+
+/**
  * True iff a chain config is fully filled for a real burn/mint. Guards against a
  * PLACEHOLDER row (e.g. the Arc mainnet entry before its Circle-assigned domain
  * and mainnet USDC are known: cctpDomain -1, usdc 0x0). A -1 domain would throw

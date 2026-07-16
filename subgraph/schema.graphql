@@ -66,3 +66,31 @@ type Global @entity(immutable: false) {
   graduatedCount: Int!
   uniqueTraders: Int!
 }
+
+# Per-creator running totals for the /stats "top creators" breakdown. A creator
+# is credited the trading volume of every launchpad token they created: curve
+# Buy/Sell (all modes) PLUS graduated V3 pool Swaps (CLANKER_V3 mode). Note the
+# subgraph does NOT index post-graduation V2 pairs (PUMP/CLANKER graduate to a
+# V2 pair, only CLANKER_V3 to a V3 pool), so totalVolumeUsdc is a FLOOR of true
+# creator-attributable volume. The fee it implies (CREATOR_FEE_BPS) is applied
+# OFF-CHAIN in stats.ts so the rate can change without a re-backfill -- the same
+# policy split the referral earnings use.
+type Creator @entity(immutable: false) {
+  # The creator wallet address (lowercase hex).
+  id: ID!
+  # Tokens this wallet has launched.
+  tokenCount: Int!
+  # Trades observed across all of this creator's tokens.
+  tradeCount: Int!
+  # Cumulative USDC volume across those trades (human units, 6-dp).
+  totalVolumeUsdc: BigDecimal!
+  # Of totalVolumeUsdc, the portion from swaps on the token's OFFICIAL migrated
+  # V3 pool (Token.migratedPair) -- where the ~80% creator LP-fee share accrues.
+  # Swaps on a permissionless third-party V3 pool for the token are NOT counted
+  # here (they would let anyone inflate a creator's fee number). stats.ts uses
+  # this as the higher-rate bucket of the two-part creator fee estimate (curve
+  # volume = totalVolumeUsdc - graduatedVolumeUsdc gets the lower curve rate).
+  graduatedVolumeUsdc: BigDecimal!
+  firstSeenAt: Int!
+  lastTradeAt: Int!
+}
