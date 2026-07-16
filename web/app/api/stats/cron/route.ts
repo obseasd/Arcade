@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getAggregateStats, getGoldskyStats } from "@/lib/stats";
+import { getAggregateStats } from "@/lib/stats";
 import { insertSnapshot, lastCronSnapshotIso } from "@/lib/statsPersistence";
 import { isDbConfigured } from "@/lib/db";
 
@@ -100,12 +100,14 @@ export async function POST(req: NextRequest) {
         }
     }
 
-    // Prefer the Goldsky subgraph (one query, complete) over the heavy RPC scan.
+    // Full-scope RPC scan (includes V2 pairs). The Goldsky subgraph is a strict
+    // subset (Launchpad + V3 only), so it must NOT feed the persisted headline
+    // history -- it would lower the monotonic MAX's source coverage over time.
     let snap;
     try {
-        snap = (await getGoldskyStats()) ?? (await getAggregateStats());
+        snap = await getAggregateStats();
     } catch (err) {
-        console.error("[stats-cron] stats fetch threw:", err);
+        console.error("[stats-cron] getAggregateStats threw:", err);
         return NextResponse.json(
             { persisted: false, error: "scan-failed" },
             { status: 500 },

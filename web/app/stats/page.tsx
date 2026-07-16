@@ -54,18 +54,15 @@ export default async function StatsPage({
     const backHref = from === "admin" ? "/admin" : "/";
     const backLabel = from === "admin" ? "Admin" : "Home";
 
-    // Prefer the Goldsky subgraph (one query, complete cumulative history) when
-    // configured; else the persisted DB snapshot; else the RPC scan. Insert the
-    // live snapshot so the sparkline history keeps building.
-    const goldsky = await getGoldskyStats();
+    // Headline stays on the persisted DB snapshot (monotonic all-time MAX, full
+    // scope incl. V2 pairs) -> RPC scan. The Goldsky subgraph is a strict SUBSET
+    // (Launchpad + V3 only, no V2) so it must NOT drive the cumulative headline
+    // (it would visibly lower Volume / Txs / Wallets). We read it ONLY for the
+    // additive "graduated" count, which the RPC path does not have.
     const persisted = await getLatestPersistedSnapshot();
     let snap: StatsSnapshot;
     let usingPersisted = false;
-    if (goldsky) {
-        // Live from the subgraph; the stats cron persists the history rows the
-        // sparkline reads, so no per-render insert here.
-        snap = goldsky;
-    } else if (persisted) {
+    if (persisted) {
         snap = persisted;
         usingPersisted = true;
     } else {
@@ -75,11 +72,14 @@ export default async function StatsPage({
         // retry hourly anyway.
         void insertSnapshot(snap, "fallback").catch(() => {});
     }
+    // Supplementary: the graduated-token count from the subgraph (additive; does
+    // not affect any headline number). Null when the subgraph is unset/behind.
+    const graduated = (await getGoldskyStats())?.tokensGraduated ?? null;
 
     // History window for the delta + sparkline. Empty when the DB isn't
     // configured yet — the rest of the page renders without it.
     const sinceIso = new Date(Date.now() - HISTORY_WINDOW_MS).toISOString();
-    const history = goldsky || usingPersisted ? await getSnapshotHistory(sinceIso, 720) : [];
+    const history = usingPersisted ? await getSnapshotHistory(sinceIso, 720) : [];
     const oldest = history[0];
     const deltaVolume = oldest
         ? snap.volumeUsdcMicros - oldest.volumeUsdcMicros
@@ -160,6 +160,14 @@ export default async function StatsPage({
                             : undefined
                     }
                 />
+                {graduated !== null && (
+                    <MetricCard
+                        icon={<Rocket className="h-5 w-5" />}
+                        label="Tokens graduated"
+                        value={graduated.toLocaleString("en-US")}
+                        note="Curve tokens that migrated into an on-chain pool (from the subgraph)."
+                    />
+                )}
                 <MetricCard
                     icon={<BarChart3 className="h-5 w-5" />}
                     label="Total volume routed"

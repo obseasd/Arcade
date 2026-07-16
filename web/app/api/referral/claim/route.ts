@@ -87,8 +87,11 @@ export async function POST(req: NextRequest) {
         );
     }
 
-    // --- Pay. A throw here means the transfer NEVER broadcast (signer
-    // contract), so releasing the reservation for a retry is safe. ---
+    // --- Pay. sendUsdcFromTreasury awaits the receipt and only THROWS when the
+    // funds provably did NOT move (pre-broadcast failure OR a definitive on-chain
+    // revert), so releasing the reservation for a retry is safe. A returned hash
+    // means success OR an unknown-but-broadcast tx (receipt timeout), which it
+    // settles as paid to block a double-pay. ---
     let txHash: string;
     try {
         txHash = await sendUsdcFromTreasury(referrer, claimable);

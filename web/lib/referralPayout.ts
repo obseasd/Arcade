@@ -27,7 +27,19 @@ import { scanReferralAttribution } from "@/lib/referralOnchain";
  * and every payout is bounded by the funded REFERRAL_PAYOUT_PRIVATE_KEY budget
  * wallet (a transfer beyond its balance simply reverts).
  */
-const PROTOCOL_FEE_BPS = BigInt(process.env.REFERRAL_PROTOCOL_FEE_BPS ?? "15");
+// Clamped to [0, 100] bps: 100 bps (1%) is the curve's full TRADE_FEE_BPS, so
+// the protocol PORTION can never exceed it. Prevents a misconfigured env from
+// over-crediting (defensive; the funded budget wallet is still the hard cap).
+const PROTOCOL_FEE_BPS = (() => {
+    let v = 15n;
+    try {
+        v = BigInt(process.env.REFERRAL_PROTOCOL_FEE_BPS ?? "15");
+    } catch {
+        v = 15n;
+    }
+    if (v < 0n) return 0n;
+    return v > 100n ? 100n : v;
+})();
 const REFERRAL_SHARE_BPS = 1000n; // 10%
 // Cap the wallets summed per claim so a huge downlist can't blow the request.
 const MAX_REFERRED_WALLETS = 500;
@@ -160,8 +172,20 @@ export async function getVerifiedEarningsUsdMicros(
     if (wallets.length === 0) return 0n;
 
     const volumeMicros = await getWalletsVolumeMicros(wallets);
-    // earnings = volume * PROTOCOL_FEE_BPS/1e4 * REFERRAL_SHARE_BPS/1e4
-    return (volumeMicros * PROTOCOL_FEE_BPS * REFERRAL_SHARE_BPS) / 100_000_000n;
+    return computeReferralEarningsMicros(volumeMicros);
+}
+
+/**
+ * earnings = volume * PROTOCOL_FEE_BPS/1e4 * REFERRAL_SHARE_BPS/1e4 (integer
+ * micros). Pure + exported for tests. Floors (BigInt division), so it can only
+ * ever under-credit by sub-micro dust -- never over-pay.
+ */
+export function computeReferralEarningsMicros(
+    volumeMicros: bigint,
+    protocolFeeBps: bigint = PROTOCOL_FEE_BPS,
+): bigint {
+    if (volumeMicros <= 0n) return 0n;
+    return (volumeMicros * protocolFeeBps * REFERRAL_SHARE_BPS) / 100_000_000n;
 }
 
 /**
@@ -380,7 +404,7 @@ export async function sendUsdcFromTreasury(
         transport: http(),
     });
     // USDC on Arc is 6 decimals, so amountUsdMicros IS the raw transfer amount.
-    return walletClient.writeContract({
+    const hash = await walletClient.writeContract({
         address: usdc,
         abi: erc20Abi,
         functionName: "transfer",
@@ -388,4 +412,32 @@ export async function sendUsdcFromTreasury(
         chain: arcTestnet,
         account,
     });
+
+    // The claim route settles a returned hash as 'paid' and releases the
+    // reservation on a THROW. writeContract resolves at BROADCAST, so a tx that
+    // reverts (e.g. the budget wallet is out of USDC) would be marked paid and
+    // strand the claim. Await the receipt to decide:
+    //   - success        -> return the hash (caller settles as paid).
+    //   - definitive revert -> THROW so the caller RELEASES (funds did NOT move,
+    //                          so re-claiming is safe -- no double-pay).
+    //   - receipt timeout (unknown) -> return the hash so the caller settles as
+    //     paid. The tx was broadcast and most likely lands; marking it paid
+    //     blocks a re-claim, so we NEVER double-pay. If it truly never lands, an
+    //     operator reconciles the one stranded claim (safe under-pay direction).
+    const publicClient = createPublicClient({ chain: arcTestnet, transport: http() });
+    try {
+        const receipt = await publicClient.waitForTransactionReceipt({
+            hash,
+            timeout: 30_000,
+        });
+        if (receipt.status !== "success") {
+            throw new Error(`referral payout reverted on-chain: ${hash}`);
+        }
+        return hash;
+    } catch (e) {
+        if (e instanceof Error && e.message.includes("reverted on-chain")) throw e;
+        // Timeout / transient RPC error while waiting: assume in-flight and let
+        // the caller settle it (blocks re-claim; reconcile if it never lands).
+        return hash;
+    }
 }
