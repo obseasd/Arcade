@@ -12,6 +12,41 @@ import { useWatchEvent } from "./useWatchEvent";
 const EARLY_EXIT_TRADES = 500;
 const Q192 = 2n ** 192n;
 
+// When the indexer is configured, prefer it for the HISTORICAL trade base
+// (complete history, real timestamps, no 500-trade cap, WETH-V3 covered). The
+// live WS append + bucketize path below is unchanged, so live updates keep
+// working and the indexer only replaces the client RPC scan. Falls back to the
+// scan on any error / when unset, so the chart never goes blank.
+const INDEXER_URL = process.env.NEXT_PUBLIC_INDEXER_URL;
+
+async function fetchTradesFromIndexer(token: Address): Promise<Trade[] | null> {
+    if (!INDEXER_URL) return null;
+    try {
+        const url = `${INDEXER_URL.replace(/\/$/, "")}/trades?token=${token.toLowerCase()}`;
+        const res = await fetch(url);
+        if (!res.ok) return null;
+        const json = (await res.json()) as { trades?: unknown };
+        if (!Array.isArray(json.trades)) return null;
+        const trades: Trade[] = [];
+        for (const r of json.trades as Array<Record<string, unknown>>) {
+            const time = Number(r.time);
+            const price = Number(r.price);
+            const volumeUsdc = Number(r.volumeUsdc);
+            if (!isFinite(time) || !isFinite(price) || !isFinite(volumeUsdc)) continue;
+            trades.push({
+                time,
+                price,
+                volumeUsdc,
+                isBuy: typeof r.isBuy === "boolean" ? r.isBuy : undefined,
+            });
+        }
+        trades.sort((a, b) => a.time - b.time);
+        return trades;
+    } catch {
+        return null;
+    }
+}
+
 export interface Candle {
   /** Unix timestamp in seconds. */
   time: number;
@@ -309,6 +344,15 @@ async function fetchTrades(
   mode: number,
   pool?: Address,
 ): Promise<FetchResult> {
+  // Prefer the indexer for the historical base when it is configured. It
+  // returns the same Trade shape with complete history + real timestamps; the
+  // caller still merges live WS pushes and bucketizes. Any failure falls
+  // through to the client RPC scan below so the chart is never blank.
+  const indexed = await fetchTradesFromIndexer(token);
+  if (indexed && indexed.length > 0) {
+    return { trades: indexed };
+  }
+
   // Skip per-block getBlock calls: O(N events) round trips otherwise. Arc
   // averages ~1s blocks; we estimate timestamp from latest block:
   // t ≈ latestTs - (latestBlock - blockNumber).
