@@ -1,0 +1,43 @@
+# Goldsky subgraph schema for the Arcade OHLC charts.
+#
+# One Trade entity per on-chain trade (launchpad Buy/Sell OR V3 pool Swap) with
+# the USDC-per-token price already derived in the mappings (same math as the
+# client useTokenCandles / the Ponder indexer's price.ts). The frontend queries
+# `trades` over GraphQL, oldest-first, and bucketizes into OHLC client-side (the
+# bucketize logic stays in TS, it is NOT reimplemented in AssemblyScript).
+#
+# Pool records the USDC-paired V3 pools discovered from the factory so the Swap
+# handler knows the token0 orientation.
+
+type Trade @entity(immutable: true) {
+  # `${txHash}-${logIndex}` -- unique per log.
+  id: ID!
+  # The token being priced (the non-USDC side).
+  token: Bytes!
+  # "curve" (launchpad Buy/Sell) | "v3" (pool Swap).
+  source: String!
+  # The V3 pool, when source == "v3" (null for curve).
+  pool: Bytes
+  # USDC per whole token (human units), already scaled.
+  price: BigDecimal!
+  # USDC volume of the trade (human units).
+  volumeUsdc: BigDecimal!
+  # True = USDC -> token (buy). Drives the candle side-break.
+  isBuy: Boolean!
+  # Block timestamp (unix seconds) -- REAL, not estimated.
+  blockTime: Int!
+  blockNumber: BigInt!
+  # Intra-block sort tiebreaker (true on-chain order).
+  logIndex: Int!
+}
+
+type Pool @entity(immutable: false) {
+  # The pool address (lowercase hex).
+  id: ID!
+  token0: Bytes!
+  token1: Bytes!
+  # The non-USDC side (the token this pool prices).
+  token: Bytes!
+  # True when USDC is token0 (selects the sqrtPrice inversion).
+  usdcIsToken0: Boolean!
+}

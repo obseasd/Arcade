@@ -1,0 +1,80 @@
+# Goldsky subgraph manifest for the Arcade OHLC charts (Arc testnet).
+#
+# Data sources:
+#   - Launchpad Buy/Sell  -> curve/migrated token trades (price from newPriceQ64)
+#   - V3 Factory PoolCreated -> records each USDC-paired pool + spawns a V3Pool
+#     template (the subgraph factory pattern, analogous to Ponder's factory()).
+#   - V3Pool (template) Swap -> pool trades (price from sqrtPriceX96).
+#
+# `network`: Goldsky's slug for Arc testnet. VERIFY against Goldsky's Arc support
+# (their dashboard / `goldsky` CLI). If Goldsky needs a chain config for Arc, set
+# it there; the address + startBlock below are the current Safe-governed gen
+# (from web/public/deployments.json, found 2026-07-16).
+#
+# Deploy:  goldsky subgraph deploy arcade-charts/v1 --path .
+specVersion: 1.0.0
+schema:
+  file: ./schema.graphql
+dataSources:
+  - kind: ethereum
+    name: Launchpad
+    network: arc-testnet
+    source:
+      address: "0xB6c9bD475EE6596342c1c49DE6513C9451f8C7e4"
+      abi: Launchpad
+      startBlock: 52095981
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.9
+      language: wasm/assemblyscript
+      entities:
+        - Trade
+      abis:
+        - name: Launchpad
+          file: ./abis/Launchpad.json
+      eventHandlers:
+        - event: Buy(indexed address,indexed address,uint256,uint256,uint256)
+          handler: handleBuy
+        - event: Sell(indexed address,indexed address,uint256,uint256,uint256)
+          handler: handleSell
+      file: ./src/mappings.ts
+  - kind: ethereum
+    name: V3Factory
+    network: arc-testnet
+    source:
+      address: "0x7E875574062613de8A4d43cDA21628368914c01A"
+      abi: V3Factory
+      startBlock: 49467254
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.9
+      language: wasm/assemblyscript
+      entities:
+        - Pool
+      abis:
+        - name: V3Factory
+          file: ./abis/V3Factory.json
+      eventHandlers:
+        - event: PoolCreated(indexed address,indexed address,indexed uint24,int24,address)
+          handler: handlePoolCreated
+      file: ./src/mappings.ts
+templates:
+  - kind: ethereum
+    name: V3Pool
+    network: arc-testnet
+    source:
+      abi: V3Pool
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.9
+      language: wasm/assemblyscript
+      entities:
+        - Trade
+        - Pool
+      abis:
+        - name: V3Pool
+          file: ./abis/V3Pool.json
+      eventHandlers:
+        - event: Swap(indexed address,indexed address,int256,int256,uint160,uint128,int24)
+          handler: handleSwap
+      file: ./src/mappings.ts

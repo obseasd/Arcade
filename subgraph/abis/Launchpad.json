@@ -1,0 +1,26 @@
+[
+  {
+    "anonymous": false,
+    "name": "Buy",
+    "type": "event",
+    "inputs": [
+      { "indexed": true, "name": "token", "type": "address" },
+      { "indexed": true, "name": "buyer", "type": "address" },
+      { "indexed": false, "name": "usdcIn", "type": "uint256" },
+      { "indexed": false, "name": "tokensOut", "type": "uint256" },
+      { "indexed": false, "name": "newPriceQ64", "type": "uint256" }
+    ]
+  },
+  {
+    "anonymous": false,
+    "name": "Sell",
+    "type": "event",
+    "inputs": [
+      { "indexed": true, "name": "token", "type": "address" },
+      { "indexed": true, "name": "seller", "type": "address" },
+      { "indexed": false, "name": "tokensIn", "type": "uint256" },
+      { "indexed": false, "name": "usdcOut", "type": "uint256" },
+      { "indexed": false, "name": "newPriceQ64", "type": "uint256" }
+    ]
+  }
+]
