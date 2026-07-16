@@ -348,6 +348,23 @@ export async function markBridgeRelayed(
 }
 
 /**
+ * The message's CCTP nonce is already consumed on-chain (relayed by a prior
+ * tick whose receipt timed out, by a concurrent run, or by the user's manual
+ * claim). Mark the intent done WITHOUT a relay tx of our own, so it stops
+ * being polled and is never mis-reported as 'failed'. This is the leg-B
+ * idempotency guard (mirrors leg A re-reading on-chain order state).
+ */
+export async function markBridgeConsumed(id: string): Promise<void> {
+    if (!isDbConfigured()) return;
+    const sql = getSql();
+    await sql`
+        UPDATE keeper_bridge_intents
+        SET status = 'relayed', last_error = NULL, relayed_at = NOW(), updated_at = NOW()
+        WHERE id = ${id} AND status <> 'relayed'
+    `;
+}
+
+/**
  * Relay attempt failed. Reset to 'pending' so a later tick retries,
  * unless it has already burned through maxAttempts, in which case park
  * it as 'failed' so the keeper stops paying gas on a doomed message.
@@ -376,6 +393,73 @@ export async function markBridgeExpired(id: string): Promise<void> {
         SET status = 'expired', updated_at = NOW()
         WHERE id = ${id}
     `;
+}
+
+/**
+ * Bulk-expire EVERY pending intent older than maxAgeSecs in one statement
+ * (not one-at-a-time as they surface in the poll window). This bounds the
+ * queue against an unauthenticated flood: junk that never attests can only
+ * occupy the pending set for maxAgeSecs, not until the keeper happens to
+ * poll each row. Returns the number expired.
+ */
+export async function expireAgedPendingIntents(
+    maxAgeSecs: number,
+): Promise<number> {
+    if (!isDbConfigured()) return 0;
+    const sql = getSql();
+    const rows = (await sql`
+        UPDATE keeper_bridge_intents
+        SET status = 'expired', updated_at = NOW()
+        WHERE status = 'pending'
+          AND created_at < NOW() - (${maxAgeSecs} * INTERVAL '1 second')
+        RETURNING id
+    `) as { id: string | number }[];
+    return rows.length;
+}
+
+/** Prune terminal rows older than olderThanSecs to bound table growth. */
+export async function pruneTerminalIntents(olderThanSecs: number): Promise<void> {
+    if (!isDbConfigured()) return;
+    const sql = getSql();
+    await sql`
+        DELETE FROM keeper_bridge_intents
+        WHERE status IN ('relayed', 'expired', 'failed')
+          AND updated_at < NOW() - (${olderThanSecs} * INTERVAL '1 second')
+    `;
+}
+
+// ---------------------------------------------------------------
+// Single-run lease lock
+// ---------------------------------------------------------------
+
+/**
+ * Try to take the keeper's single-run lease for the next `leaseSecs`. Returns
+ * true iff acquired (the lease was unheld or expired). Overlapping runs get
+ * false and should exit immediately. Atomic: the INSERT ... ON CONFLICT DO
+ * UPDATE ... WHERE only writes when the lease is free, and RETURNING tells us
+ * whether we won. Works over Neon's stateless HTTP driver (unlike session
+ * advisory locks). Fails OPEN (returns true) when the DB is unconfigured so a
+ * no-DB deploy still runs single-threaded via the caller.
+ */
+export async function tryAcquireKeeperLease(leaseSecs: number): Promise<boolean> {
+    if (!isDbConfigured()) return true;
+    const sql = getSql();
+    const rows = (await sql`
+        INSERT INTO keeper_lock (id, locked_until)
+        VALUES (1, NOW() + (${leaseSecs} * INTERVAL '1 second'))
+        ON CONFLICT (id) DO UPDATE
+            SET locked_until = NOW() + (${leaseSecs} * INTERVAL '1 second')
+            WHERE keeper_lock.locked_until < NOW()
+        RETURNING id
+    `) as { id: number }[];
+    return rows.length > 0;
+}
+
+/** Release the lease early (best-effort; it self-expires regardless). */
+export async function releaseKeeperLease(): Promise<void> {
+    if (!isDbConfigured()) return;
+    const sql = getSql();
+    await sql`UPDATE keeper_lock SET locked_until = NOW() WHERE id = 1`;
 }
 
 // ---------------------------------------------------------------

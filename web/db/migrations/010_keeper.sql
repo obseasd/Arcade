@@ -145,3 +145,18 @@ CREATE INDEX IF NOT EXISTS idx_keeper_events_recent
 
 CREATE INDEX IF NOT EXISTS idx_keeper_events_ref
     ON keeper_events (leg, ref_id, created_at DESC);
+
+-- ---------------------------------------------------------------
+-- Single-run lease lock
+-- ---------------------------------------------------------------
+-- The keeper cron has no external scheduler lock, so two overlapping HTTP
+-- triggers (a slow tick + the next tick) could act on the same order /
+-- intent with the same wallet. Postgres session advisory locks do NOT
+-- survive Neon's stateless HTTP driver (each query is its own connection),
+-- so we use a single-row time-lease instead: a run atomically takes the
+-- lease iff it is unheld/expired, and overlapping runs skip. The lease
+-- self-expires so a crashed run never wedges the keeper.
+CREATE TABLE IF NOT EXISTS keeper_lock (
+    id              INT PRIMARY KEY,
+    locked_until    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);

@@ -16,8 +16,11 @@ import { ORBS_TWAP_ABI } from "@/lib/abis/orbsTwap";
 import { ROUTER_ABI } from "@/lib/abis/dex";
 import {
     CCTP_BUY_RECEIVER_ABI,
+    MESSAGE_TRANSMITTER_V2_ABI,
+    CCTP_V2_MESSAGE_TRANSMITTER,
     fetchAttestationDetailed,
     mintRecipientFromMessage,
+    parseCctpV2Message,
 } from "@/lib/cctp";
 import { buildOrbsBid, clearsFloor } from "@/lib/keeper/orbsRoute";
 import {
@@ -30,8 +33,13 @@ import {
     getOpenBridgeIntents,
     markBridgeRelaying,
     markBridgeRelayed,
+    markBridgeConsumed,
     markBridgeRetryOrFail,
     markBridgeExpired,
+    expireAgedPendingIntents,
+    pruneTerminalIntents,
+    tryAcquireKeeperLease,
+    releaseKeeperLease,
     insertKeeperEvent,
     type KeeperOrbsOrder,
 } from "@/lib/keeperPersistence";
@@ -102,6 +110,10 @@ const BRIDGE_MAX_ATTEMPTS = 6;
 // for long (CCTP fast-transfer attests in minutes; 3h is far past that yet
 // short enough that junk cannot hold the oldest-first slots for a day).
 const BRIDGE_PENDING_MAX_AGE_MS = 3 * 60 * 60 * 1000;
+
+// The single-run lease covers a full tick (maxDuration=60s) plus slack, so a
+// slow run's lease outlives its execution; it self-expires if the run crashes.
+const LEASE_SECONDS = 90;
 
 const RPC_TIMEOUT_MS = 3_000;
 // A submitted tx must not hang the whole run to the 60s Vercel ceiling (and
@@ -265,6 +277,17 @@ export async function POST(req: NextRequest) {
         );
     }
 
+    // Single-run lease: refuse to run two overlapping ticks against the same
+    // wallet (nonce races) / the same intent (double-relay). The lease
+    // self-expires so a crashed run never wedges the keeper.
+    const gotLease = await tryAcquireKeeperLease(LEASE_SECONDS);
+    if (!gotLease) {
+        return NextResponse.json(
+            { ran: false, reason: "another keeper run holds the lease" },
+            { status: 200 },
+        );
+    }
+
     // Use the chain's clock for every on-chain timing comparison so the
     // keeper agrees with the contract's block.timestamp, not the server's.
     const latestBlock = await publicClient.getBlock();
@@ -276,24 +299,28 @@ export async function POST(req: NextRequest) {
         notes: [],
     };
 
-    // ---- Leg A: Orbs TWAP ----
     try {
-        await runOrbsLeg(
-            { twap, exchange, router, usdc, now },
-            publicClient,
-            walletClient,
-            account.address,
-            summary,
-        );
-    } catch (err) {
-        summary.notes.push(`orbs-leg error=${errMsg(err)}`);
-    }
+        // ---- Leg A: Orbs TWAP ----
+        try {
+            await runOrbsLeg(
+                { twap, exchange, router, usdc, now },
+                publicClient,
+                walletClient,
+                account.address,
+                summary,
+            );
+        } catch (err) {
+            summary.notes.push(`orbs-leg error=${errMsg(err)}`);
+        }
 
-    // ---- Leg B: CCTP bridge-and-buy relay ----
-    try {
-        await runCctpLeg(publicClient, walletClient, account.address, now, summary);
-    } catch (err) {
-        summary.notes.push(`cctp-leg error=${errMsg(err)}`);
+        // ---- Leg B: CCTP bridge-and-buy relay ----
+        try {
+            await runCctpLeg(publicClient, walletClient, account.address, now, summary);
+        } catch (err) {
+            summary.notes.push(`cctp-leg error=${errMsg(err)}`);
+        }
+    } finally {
+        await releaseKeeperLease().catch(() => {});
     }
 
     return NextResponse.json({ ran: true, ...summary }, { status: 200 });
@@ -697,6 +724,13 @@ async function runCctpLeg(
     now: number,
     summary: RunSummary,
 ) {
+    // Bulk-expire aged pending intents in ONE statement (not one-at-a-time as
+    // they surface in the poll window) so an unauthenticated flood cannot hold
+    // the oldest-first slots longer than the age window, and prune old terminal
+    // rows so junk cannot grow the table without bound.
+    await expireAgedPendingIntents(Math.floor(BRIDGE_PENDING_MAX_AGE_MS / 1000)).catch(() => {});
+    await pruneTerminalIntents(24 * 60 * 60).catch(() => {});
+
     const intents = await getOpenBridgeIntents(MAX_BRIDGE_RELAYS_PER_RUN * 3);
     let relays = 0;
 
@@ -744,6 +778,30 @@ async function runCctpLeg(
             await markBridgeExpired(intent.id);
             summary.cctp.skipped++;
             continue;
+        }
+
+        // Idempotency guard (leg B has no on-chain re-read like leg A): if the
+        // message's CCTP nonce is already consumed on-chain -- relayed by a
+        // prior tick whose receipt timed out, by a concurrent run, or by the
+        // user's manual claim -- the receiveMessage would revert on the spent
+        // nonce. Detect it and mark the intent done, so a COMPLETED bridge is
+        // never re-tried and mis-reported as 'failed'.
+        const parsed = parseCctpV2Message(message);
+        if (parsed) {
+            const used = (await withTimeout(
+                publicClient.readContract({
+                    address: CCTP_V2_MESSAGE_TRANSMITTER,
+                    abi: MESSAGE_TRANSMITTER_V2_ABI,
+                    functionName: "usedNonces",
+                    args: [parsed.nonceHash],
+                }) as Promise<bigint>,
+                RPC_TIMEOUT_MS,
+            )) as bigint | null;
+            if (used !== null && used !== 0n) {
+                await markBridgeConsumed(intent.id);
+                summary.cctp.skipped++;
+                continue;
+            }
         }
 
         await markBridgeRelaying(intent.id);

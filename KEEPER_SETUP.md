@@ -76,6 +76,13 @@ testnet reference the old adapter).
 - **No fund custody**: leg A pulls the maker's chunk atomically inside
   the fill; leg B's receiver derives the beneficiary from the attested
   message, so relaying from the keeper can never redirect funds.
+- **Single-run lease**: a DB time-lease (`keeper_lock`) makes overlapping
+  cron triggers skip, so two runs never race the shared wallet's nonce or
+  double-relay the same intent. It self-expires if a run crashes.
+- **Leg-B idempotency**: before relaying, the keeper checks
+  `MessageTransmitter.usedNonces` and skips an already-consumed message, so
+  a completed bridge (relayed on a prior timed-out tick or claimed manually)
+  is never re-tried or mis-reported as failed.
 
 ## Known limits (testnet scope)
 
