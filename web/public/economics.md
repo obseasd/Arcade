@@ -98,8 +98,9 @@ Cross-chain USDC via Circle's Cross-Chain Transfer Protocol (burn + mint).
 - **Standard Transfer:** full finality (~minutes). **Completely free** — no
   Arcade fee, no Circle fee (`maxFee = 0`).
 - **Fast Transfer:** ~10-30s. Fees:
-  - **Circle:** ≤ 0.01% (`maxFee = amount / 10,000`, upper bound; Iris usually
-    charges less).
+  - **Circle:** ≤ 0.02% (`maxFee = amount * 2 / 10,000`, the ceiling we
+    authorise; Iris usually charges its published minimum, ~1.3bp on Base/Arb).
+    This counts toward Arcade's 0.05% all-in, it is not on top of it.
   - **Arcade:** 0.05% **all-in**, on **Fast transfers only** — Standard is free.
     All-in means Circle's own fee counts toward the 0.05%: the receiver reads
     the attested `feeExecuted` and only tops up the difference, so the total you
@@ -110,7 +111,8 @@ Cross-chain USDC via Circle's Cross-Chain Transfer Protocol (burn + mint).
 - Editable destination address; mid-bridge recovery on page refresh.
 
 **Inspiration:** Circle CCTP fast transfers. Our take: standard stays free as a
-loss-leader, fast is monetized (0.05%) once the fee router ships.
+loss-leader, fast is monetized at 0.05% all-in, charged on-chain today by the
+bridge receiver (not pending any "fee router").
 
 ---
 
@@ -123,5 +125,5 @@ loss-leader, fast is monetized (0.05%) once the fee router ships.
 | Arcade curve | 0.7% of curve volume |
 | Post-migration | 0.20% of routed volume |
 | Clanker | 20% of LP fees, always (≈0.20% of volume on a 1% pool) + anti-sniper skim |
-| Fast bridge | 0.05% (once the fee router ships) |
+| Fast bridge | 0.05% all-in, charged on-chain (Standard free) |
 | Creation | 3 USDC per token, all modes |

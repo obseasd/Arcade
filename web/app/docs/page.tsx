@@ -160,7 +160,7 @@ export default function DocsPage() {
         />
         <ul className="mt-3 list-disc space-y-1 pl-5">
           <li><b>Standard</b> transfer is free (waits for full finality). <b>Fast Transfer</b> settles in ~10-30s with a tiny Circle fee; minimum 0.5 USDC.</li>
-          <li>Fee preview: 0.05% Arcade + up to 0.01% Circle on Fast only. <span className="text-arc-text-faint">(The Arcade fee is preview-only on testnet — not charged on-chain yet.)</span></li>
+          <li>Fee: 0.05% Arcade all-in on Fast only (Standard is free). <span className="text-arc-text-faint">All-in means Circle&apos;s own fee counts toward the 0.05% — the receiver tops up only the difference, so you never pay more. Charged on-chain by the bridge receiver; avoidable only by bridging without using this UI.</span></li>
           <li>Bridge to a different recipient address, resume an interrupted bridge after refresh, and retry failed ones from history.</li>
         </ul>
 
