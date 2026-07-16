@@ -50,6 +50,41 @@ export const ORBS_TWAP_ABI = [
         outputs: [],
     },
 
+    // ============ keeper writes (taker flow) ============
+    // Used by the unified keeper (web/app/api/keeper/cron) to settle open
+    // order chunks. bid() records the keeper as the winning taker; fill()
+    // executes the chunk but is only valid after bid.time + bidDelay, so the
+    // keeper bids on one tick and fills on a later one. prune() is a
+    // permissionless cleanup of an order whose maker no longer has the
+    // balance/allowance to back the next chunk.
+    {
+        type: "function",
+        stateMutability: "nonpayable",
+        name: "bid",
+        inputs: [
+            { name: "id", type: "uint64" },
+            { name: "exchange", type: "address" },
+            { name: "dstFee", type: "uint256" },
+            { name: "slippagePercent", type: "uint32" },
+            { name: "data", type: "bytes" },
+        ],
+        outputs: [],
+    },
+    {
+        type: "function",
+        stateMutability: "nonpayable",
+        name: "fill",
+        inputs: [{ name: "id", type: "uint64" }],
+        outputs: [],
+    },
+    {
+        type: "function",
+        stateMutability: "nonpayable",
+        name: "prune",
+        inputs: [{ name: "id", type: "uint64" }],
+        outputs: [],
+    },
+
     // ============ reads ============
     {
         type: "function",

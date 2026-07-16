@@ -64,6 +64,23 @@ const BID_DELAY_SECONDS = 30;
 // the same order after a failed fill.
 const FILL_DELAY_SECONDS = 0;
 
+// DCA (dollar-cost-average) is the SAME Orbs TWAP order with more than one
+// chunk: srcBidAmount = total / N and fillDelay = the interval between buys.
+// The unified keeper fills each chunk on its interval exactly as it fills a
+// limit order. Only V2-settleable pairs (same constraint as limit orders).
+const DCA_INTERVALS = [
+    { id: "1h", label: "Hourly", seconds: 60 * 60 },
+    { id: "4h", label: "Every 4h", seconds: 4 * 60 * 60 },
+    { id: "1d", label: "Daily", seconds: 24 * 60 * 60 },
+    { id: "1w", label: "Weekly", seconds: 7 * 24 * 60 * 60 },
+] as const;
+type DcaIntervalId = (typeof DCA_INTERVALS)[number]["id"];
+// Bounds on the number of DCA buys. >=2 (else it is just a market/limit
+// order); a ceiling keeps the total schedule inside MAX_EXPIRY and the
+// per-chunk size above dust.
+const DCA_MIN_BUYS = 2;
+const DCA_MAX_BUYS = 100;
+
 interface LimitCardProps {
     tab: SwapTab;
     onTabChange: (t: SwapTab) => void;
@@ -98,6 +115,11 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
     const [amountIn, setAmountIn] = useState("");
     const [triggerPrice, setTriggerPrice] = useState("");
     const [forAmount, setForAmount] = useState("");
+    // Limit vs DCA. Both create an Orbs TWAP order; DCA just splits it into
+    // N chunks spaced by an interval (see DCA_INTERVALS).
+    const [orderMode, setOrderMode] = useState<"limit" | "dca">("limit");
+    const [numBuys, setNumBuys] = useState("10");
+    const [dcaIntervalId, setDcaIntervalId] = useState<DcaIntervalId>("1d");
     const [expiryId, setExpiryId] = useState<ExpiryId>("7d");
     const [customDays, setCustomDays] = useState("0");
     const [customHours, setCustomHours] = useState("0");
@@ -282,6 +304,55 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
     }, [spotOutBn, tokenOut, outDec]);
     const marketPriceStr = useMemo(() => formatPriceStr(marketPriceNum), [marketPriceNum]);
 
+    // ----- DCA-derived values (only meaningful when orderMode === 'dca') -----
+    const numBuysInt = useMemo(() => {
+        const n = Math.floor(Number(numBuys));
+        if (!isFinite(n)) return DCA_MIN_BUYS;
+        return Math.min(DCA_MAX_BUYS, Math.max(DCA_MIN_BUYS, n));
+    }, [numBuys]);
+
+    const dcaIntervalSecs = useMemo(
+        () => DCA_INTERVALS.find((i) => i.id === dcaIntervalId)?.seconds ?? 86400,
+        [dcaIntervalId],
+    );
+
+    // Per-chunk input size = total / N (the last chunk absorbs any remainder
+    // on-chain via srcBidAmountNext's Math.min).
+    const dcaChunkSrcBn = useMemo(
+        () => (numBuysInt > 0 ? srcAmountBn / BigInt(numBuysInt) : 0n),
+        [srcAmountBn, numBuysInt],
+    );
+
+    // Total expected output at the CURRENT market price (DCA has no trigger).
+    const dcaMarketExpectedOutBn = useMemo(() => {
+        if (!tokenOut || !marketPriceStr || Number(marketPriceStr) <= 0) return 0n;
+        try {
+            const priceBn = parseUnits(marketPriceStr, outDec);
+            return (srcAmountBn * priceBn) / 10n ** BigInt(inDec);
+        } catch {
+            return 0n;
+        }
+    }, [tokenOut, marketPriceStr, srcAmountBn, inDec, outDec]);
+
+    // Per-chunk floor = (market expected × (1 - slippage)) / N. This is the
+    // Ask.dstMinAmount, the maker's per-chunk minimum. DCA uses a LOOSER
+    // slippage than a limit order so chunks keep filling as price drifts;
+    // the honest tradeoff (a fixed floor cannot track a strongly-trending
+    // price) is the inherent Orbs-as-DCA limit, solved later by the V3 vault.
+    const dcaChunkFloorBn = useMemo(() => {
+        if (dcaMarketExpectedOutBn === 0n || numBuysInt <= 0) return 0n;
+        const totalFloor =
+            (dcaMarketExpectedOutBn * BigInt(10_000 - slippageBps)) / 10_000n;
+        return totalFloor / BigInt(numBuysInt);
+    }, [dcaMarketExpectedOutBn, slippageBps, numBuysInt]);
+
+    // The schedule must outlive its last chunk: N intervals + a 1-day margin,
+    // clamped to the 90-day ceiling.
+    const dcaScheduleSecs = useMemo(
+        () => Math.min(MAX_EXPIRY_SECONDS, numBuysInt * dcaIntervalSecs + 86400),
+        [numBuysInt, dcaIntervalSecs],
+    );
+
     // Triger-vs-market delta: positive when limit price asks more than market.
     const triggerVsMarketPct = useMemo(() => {
         if (!triggerPrice || marketPriceNum <= 0) return 0;
@@ -408,8 +479,9 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
         tokenOut.address !== zeroAddress &&
         srcAmountBn > 0n &&
         srcAmountBn <= balance &&
-        dstMinAmountBn > 0n &&
-        expirySeconds > 0 &&
+        (orderMode === "dca"
+            ? dcaChunkSrcBn > 0n && dcaChunkFloorBn > 0n && dcaScheduleSecs > 0
+            : dstMinAmountBn > 0n && expirySeconds > 0) &&
         ADDRESSES.orbsTwap !== zeroAddress &&
         ADDRESSES.orbsExchangeV2 !== zeroAddress &&
         // Pages audit 2026-07-02: every order is encoded with exchange =
@@ -442,26 +514,40 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
         setSubmitting(true);
         try {
             const now = Math.floor(Date.now() / 1000);
-            const deadline = now + expirySeconds;
 
             // Ask struct mirrors contracts/orbs/src/OrderLib.sol.Ask exactly.
-            // For a single-chunk limit order we set srcBidAmount = srcAmount,
-            // so the entire order fills atomically when a taker bids and the
-            // bid delay elapses. The auction window is BID_DELAY_SECONDS (30s
-            // minimum enforced by TWAP). Within that window any taker can
-            // outbid the current winner before fill becomes available.
-            const ask = {
-                exchange: ADDRESSES.orbsExchangeV2,
-                srcToken: tokenIn.address,
-                dstToken: tokenOut.address,
-                srcAmount: srcAmountBn,
-                srcBidAmount: srcAmountBn,
-                dstMinAmount: dstMinAmountBn,
-                deadline: deadline,
-                bidDelay: BID_DELAY_SECONDS,
-                fillDelay: FILL_DELAY_SECONDS,
-                data: "0x" as const,
-            };
+            //   - LIMIT: one chunk (srcBidAmount = srcAmount), floor from the
+            //     user's trigger; fills atomically once a taker bids and the
+            //     bid delay elapses.
+            //   - DCA: N chunks (srcBidAmount = total / N) spaced by fillDelay
+            //     = the chosen interval; the keeper fills one chunk per
+            //     interval. Same contract, same keeper code path.
+            const ask =
+                orderMode === "dca"
+                    ? {
+                          exchange: ADDRESSES.orbsExchangeV2,
+                          srcToken: tokenIn.address,
+                          dstToken: tokenOut.address,
+                          srcAmount: srcAmountBn,
+                          srcBidAmount: dcaChunkSrcBn,
+                          dstMinAmount: dcaChunkFloorBn,
+                          deadline: now + dcaScheduleSecs,
+                          bidDelay: BID_DELAY_SECONDS,
+                          fillDelay: dcaIntervalSecs,
+                          data: "0x" as const,
+                      }
+                    : {
+                          exchange: ADDRESSES.orbsExchangeV2,
+                          srcToken: tokenIn.address,
+                          dstToken: tokenOut.address,
+                          srcAmount: srcAmountBn,
+                          srcBidAmount: srcAmountBn,
+                          dstMinAmount: dstMinAmountBn,
+                          deadline: now + expirySeconds,
+                          bidDelay: BID_DELAY_SECONDS,
+                          fillDelay: FILL_DELAY_SECONDS,
+                          data: "0x" as const,
+                      };
 
             // Arc's callFrom precompile is dead, so the old "approve + ask
             // in one signature" Multicall3From batch reverts on-chain. Run
@@ -494,16 +580,21 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
                 }
             }
 
+            const isDca = orderMode === "dca";
             pushToast({
                 kind: "info",
-                title: "Limit order placed",
-                message: `Order on-chain.`,
+                title: isDca ? "DCA schedule started" : "Limit order placed",
+                message: isDca
+                    ? `${numBuysInt} buys, ${DCA_INTERVALS.find((i) => i.id === dcaIntervalId)?.label.toLowerCase()}.`
+                    : `Order on-chain.`,
             });
 
             addActivity({
                 type: "swap",
-                label: `Limit order placed`,
-                value: `${amountIn} ${tokenIn.symbol} ≥ ${triggerPrice} ${tokenOut.symbol}/1`,
+                label: isDca ? `DCA schedule started` : `Limit order placed`,
+                value: isDca
+                    ? `${amountIn} ${tokenIn.symbol} → ${tokenOut.symbol} over ${numBuysInt} buys`
+                    : `${amountIn} ${tokenIn.symbol} ≥ ${triggerPrice} ${tokenOut.symbol}/1`,
                 txHash: hash,
                 account: account,
             });
@@ -535,6 +626,13 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
         if (!tokenOut) return "Pick output token";
         if (srcAmountBn <= 0n) return "Enter amount";
         if (srcAmountBn > balance) return "Insufficient balance";
+        if (orderMode === "dca") {
+            if (dcaChunkSrcBn <= 0n) return "Enter amount";
+            if (dcaChunkFloorBn <= 0n) return "Waiting for market price";
+            if (needsApproval) return "Approve then Start DCA";
+            if (isWriting || submitting) return "Submitting...";
+            return `Start DCA · ${numBuysInt} buys`;
+        }
         if (dstMinAmountBn <= 0n) return "Enter trigger price";
         if (expirySeconds <= 0) return "Pick expiry";
         if (needsApproval) return "Approve then Submit";
@@ -555,6 +653,26 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
                         onPreset={onSlippagePreset}
                         onCustom={onSlippageCustom}
                     />
+                </div>
+
+                {/* Limit vs DCA mode toggle. Both place an Orbs TWAP order;
+                    DCA splits it into N chunks over an interval. */}
+                <div className="mb-3 grid grid-cols-2 gap-1 rounded-xl border border-arc-border bg-arc-bg-elevated p-1">
+                    {(["limit", "dca"] as const).map((m) => (
+                        <button
+                            key={m}
+                            type="button"
+                            onClick={() => setOrderMode(m)}
+                            className={cn(
+                                "rounded-lg px-3 py-1.5 text-xs font-medium transition-colors",
+                                orderMode === m
+                                    ? "bg-arc-surface-3 text-arc-text"
+                                    : "text-arc-text-muted hover:text-arc-text",
+                            )}
+                        >
+                            {m === "limit" ? "Limit order" : "DCA"}
+                        </button>
+                    ))}
                 </div>
 
                 <TokenRow
@@ -599,6 +717,64 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
                     onTokenPick={() => setPickerOpen("out")}
                 />
 
+                {orderMode === "dca" && (
+                    <div className="mt-4 rounded-xl border border-arc-border bg-arc-bg-elevated p-4">
+                        <div className="grid grid-cols-2 gap-3">
+                            <div>
+                                <div className="mb-1 text-xs text-arc-text-muted">
+                                    Number of buys
+                                </div>
+                                <input
+                                    aria-label="Number of buys"
+                                    type="text"
+                                    inputMode="numeric"
+                                    value={numBuys}
+                                    onChange={(e) =>
+                                        setNumBuys(e.target.value.replace(/[^0-9]/g, ""))
+                                    }
+                                    placeholder="10"
+                                    className="w-full bg-transparent text-2xl font-medium text-arc-text outline-none"
+                                />
+                            </div>
+                            <div>
+                                <div className="mb-1 text-xs text-arc-text-muted">Interval</div>
+                                <select
+                                    aria-label="DCA interval"
+                                    value={dcaIntervalId}
+                                    onChange={(e) =>
+                                        setDcaIntervalId(e.target.value as DcaIntervalId)
+                                    }
+                                    className="w-full rounded-lg border border-arc-border bg-arc-bg-elevated px-2 py-2 text-sm text-arc-text outline-none"
+                                >
+                                    {DCA_INTERVALS.map((i) => (
+                                        <option key={i.id} value={i.id}>
+                                            {i.label}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+                        </div>
+                        {tokenOut && srcAmountBn > 0n && dcaChunkSrcBn > 0n && (
+                            <div className="mt-3 space-y-1 text-[10px] text-arc-text-faint">
+                                <div>
+                                    Buys {formatToken(dcaChunkSrcBn, inDec, 6).replace(/,/g, "")}{" "}
+                                    {tokenIn.symbol} of {tokenOut.symbol} every{" "}
+                                    {DCA_INTERVALS.find(
+                                        (i) => i.id === dcaIntervalId,
+                                    )?.label.toLowerCase()}
+                                    , {numBuysInt} times.
+                                </div>
+                                <div>
+                                    Each buy accepts down to {(slippageBps / 100).toFixed(2)}% below
+                                    market. A strongly-trending price may pause fills until it comes
+                                    back in range.
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                )}
+
+                {orderMode === "limit" && (
                 <div className="mt-4 rounded-xl border border-arc-border bg-arc-bg-elevated p-4">
                     <div className="mb-2 flex items-center justify-between">
                         <div className="text-xs text-arc-text-muted">{triggerLabel}</div>
@@ -652,6 +828,7 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
                         </div>
                     )}
                 </div>
+                )}
 
                 {/* Route + min-out row. Inline (no card chrome) to match the
                     regular Swap card's "via Arcade X" line exactly. Right side

@@ -1,0 +1,67 @@
+name: keeper scan
+
+# POST /api/keeper/cron on a short cadence. The handler runs the unified
+# keeper:
+#   Leg A (Orbs TWAP): bids + fills open limit-order / DCA chunks.
+#   Leg B (CCTP):      relays receiveAndBuy/receiveAndForward for bridge
+#                      intents once Circle Iris attests the message.
+#
+# Cadence rationale: the Orbs fill flow is two-phase (bid on one tick,
+# fill on a later tick once bidDelay elapses), and DCA/limit orders are
+# not latency-critical, so a ~2-minute cadence keeps the bid->fill gap
+# tight without burning budget. Scheduling lives on cron-job.org (same as
+# the compounder); this workflow is the manual fallback.
+#
+# Required repo secrets:
+#   KEEPER_CRON_URL       : Full URL, e.g.
+#                           https://arcade.trading/api/keeper/cron
+#   COMPOUNDER_CRON_SECRET : Bearer secret matching the Vercel env of the
+#                           same name (the keeper reuses it, like the
+#                           twitter cron does).
+#
+# Vercel-side env vars required for the route to act:
+#   KEEPER_OPERATOR_PRIVATE_KEY = <dedicated keeper hot wallet 0x...,
+#                                  allowlisted on the Orbs ExchangeV2>
+#   COMPOUNDER_CRON_SECRET      = <same hex as the repo secret>
+#   DATABASE_URL                = <Neon> (migration 010_keeper.sql applied)
+#   NEXT_PUBLIC_ORBS_TWAP_ADDRESS / NEXT_PUBLIC_ORBS_EXCHANGE_V2_ADDRESS /
+#   NEXT_PUBLIC_V2_ROUTER_ADDRESS / NEXT_PUBLIC_USDC_ADDRESS
+#   NEXT_PUBLIC_CCTP_BUY_RECEIVER (for leg B)
+#
+# Manual trigger: Actions tab -> "keeper scan" -> Run workflow.
+
+on:
+  # Scheduled runs live on cron-job.org (free) to stay under the GitHub
+  # Actions minute budget. Kept here as a manual fallback only.
+  workflow_dispatch: {}
+
+# Cancel an in-flight run if a new one starts. bid()/fill()/relay are all
+# re-checked on-chain so a duplicate HTTP retry cannot double-act, but
+# back-to-back runs waste the Vercel function budget.
+concurrency:
+  group: keeper-scan
+  cancel-in-progress: true
+
+jobs:
+  scan:
+    name: POST /api/keeper/cron
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: fire scan
+        env:
+          KEEPER_CRON_URL: ${{ secrets.KEEPER_CRON_URL }}
+          COMPOUNDER_CRON_SECRET: ${{ secrets.COMPOUNDER_CRON_SECRET }}
+        run: |
+          if [ -z "$KEEPER_CRON_URL" ] || [ -z "$COMPOUNDER_CRON_SECRET" ]; then
+            echo "Missing KEEPER_CRON_URL or COMPOUNDER_CRON_SECRET repo secret"
+            exit 1
+          fi
+          curl --fail-with-body \
+               --max-time 90 \
+               --retry 2 \
+               --retry-delay 5 \
+               -X POST \
+               -H "Authorization: Bearer $COMPOUNDER_CRON_SECRET" \
+               -H "Content-Type: application/json" \
+               "$KEEPER_CRON_URL"

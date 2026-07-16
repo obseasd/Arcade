@@ -941,6 +941,30 @@ export function BridgeCard() {
             chainId: srcChain.id,
           });
       await srcClient.waitForTransactionReceipt({ hash: burnHash });
+
+      // Record a keeper relay intent for the hooked paths (buy / forward),
+      // whose mintRecipient is our receiver, so the unified keeper can
+      // auto-relay receiveAndBuy/receiveAndForward on Arc once Iris attests
+      // - the user no longer has to come back and click claim. Fire-and-
+      // forget + best-effort: the manual claim flow below stays the
+      // fallback if the keeper is down or the DB is unconfigured. The
+      // plain no-hook depositForBurn mints to the user directly, so there
+      // is nothing for our receiver to relay - skip it.
+      if (useBuyHook || useFeeHook) {
+        void fetch("/api/bridge/intent", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            burnTxHash: burnHash,
+            srcDomain: srcChain.cctpDomain,
+            beneficiaryAddress: beneficiary,
+            intentKind: useBuyHook ? "buy" : "forward",
+          }),
+        }).catch(() => {
+          /* best-effort: manual claim remains available */
+        });
+      }
+
       // Persist now - funds are committed on the source chain. If the page
       // refreshes before mint, the user can resume claim from this entry.
       savePendingBridge({

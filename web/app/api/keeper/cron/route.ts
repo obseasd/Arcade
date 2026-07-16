@@ -1,0 +1,690 @@
+import { NextRequest, NextResponse } from "next/server";
+import {
+    createPublicClient,
+    createWalletClient,
+    http,
+    isAddress,
+    getAddress,
+    type Address,
+    type Hex,
+} from "viem";
+import { privateKeyToAccount } from "viem/accounts";
+import { ADDRESSES } from "@/lib/constants";
+import { ORBS_TWAP_ABI } from "@/lib/abis/orbsTwap";
+import { ROUTER_ABI } from "@/lib/abis/dex";
+import {
+    CCTP_BUY_RECEIVER_ABI,
+    fetchAttestationDetailed,
+    mintRecipientFromMessage,
+} from "@/lib/cctp";
+import { buildOrbsBid, clearsFloor } from "@/lib/keeper/orbsRoute";
+import {
+    getActiveOrbsOrders,
+    upsertOrbsOrder,
+    markOrbsBid,
+    markOrbsFilled,
+    markOrbsClosed,
+    markOrbsError,
+    getOpenBridgeIntents,
+    markBridgeRelaying,
+    markBridgeRelayed,
+    markBridgeRetryOrFail,
+    markBridgeExpired,
+    insertKeeperEvent,
+    type KeeperOrbsOrder,
+} from "@/lib/keeperPersistence";
+import { isDbConfigured } from "@/lib/db";
+
+/**
+ * Unified keeper cron — one process settles three user features that
+ * otherwise never complete on testnet (and would not on mainnet either
+ * without a keeper):
+ *
+ *   Leg A — Orbs TWAP: bid + fill open order chunks. A single-chunk order
+ *           is a LIMIT order (fill only when price clears the floor); a
+ *           multi-chunk order is a DCA schedule (loose floor => every
+ *           chunk fills on its interval). Identical settlement code.
+ *   Leg B — CCTP bridge-and-buy: relay the attested message so the buy
+ *           auto-completes on Arc. Safe to relay from any wallet: the
+ *           receiver takes the beneficiary from the ATTESTED message.
+ *
+ * Signs with a DEDICATED keeper wallet (KEEPER_OPERATOR_PRIVATE_KEY),
+ * separate from the compounder operator so the two crons never collide
+ * on a shared nonce. Auth reuses COMPOUNDER_CRON_SECRET (the established
+ * shared-bearer precedent; the twitter cron already does this).
+ *
+ * Trigger: external HTTP POST (cron-job.org), same as the compounder.
+ */
+export const dynamic = "force-dynamic";
+export const maxDuration = 60;
+
+// Orbs bids/fills CANNOT be batched through Multicall3: TWAP records
+// msg.sender as the winning taker and ExchangeV2 gates on allowed[taker],
+// so every bid/fill must be a direct tx from the allowlisted keeper
+// wallet. They run sequentially (await receipt) to keep the nonce clean.
+// Capped so one slow tick cannot blow the 60s function ceiling: ~8 txs ×
+// ~5s = 40s, with slack for the reads + leg B.
+const MAX_ORBS_ACTIONS_PER_RUN = 8;
+const MAX_BRIDGE_RELAYS_PER_RUN = 5;
+
+// Discovery scan cap. On testnet the book is tiny; a cursor-based scan
+// backed by the indexer replaces this full pass at mainnet scale.
+const MAX_BOOK_SCAN = 200;
+
+// Keeper slippage tolerance between the bid-time quote and the fill-time
+// reserves, in Orbs PERCENT_BASE units (100000 = 100%). 1% absorbs the
+// drift over the bidDelay window so an honest chunk still fills.
+const SLIPPAGE_PERCENT = 1_000;
+
+// Taker fee in dstToken. 0 on testnet: the keeper subsidises its own gas
+// rather than skimming the maker's output. Mainnet can raise this (or use
+// the Taker fee-swap-to-gas helper) once economics matter.
+const DST_FEE = 0n;
+
+// Router deadline buffer for the swap encoded at bid time; must survive
+// until the fill tick (~1 minute later). 1h is ample.
+const SWAP_DEADLINE_SECS = 3_600n;
+
+// A bridge intent that keeps failing to relay is parked as 'failed' after
+// this many attempts so the keeper stops paying gas on a doomed message.
+const BRIDGE_MAX_ATTEMPTS = 6;
+
+// A pending intent whose burn never appears on Iris after this long is
+// expired, so a spammed/mistyped burn hash cannot occupy the poll budget
+// forever (CCTP fast-transfer attests in minutes; 24h is far past that).
+const BRIDGE_PENDING_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+const RPC_TIMEOUT_MS = 3_000;
+const MAX_FEE_PER_GAS_WEI = 100_000_000_000n; // 100 gwei
+const MIN_OPERATOR_BALANCE_WEI = 1_000_000n; // 1 USDC (6 decimals)
+
+const ARC_RPC_LIST: readonly string[] = (() => {
+    const out: string[] = [];
+    const dedicated = process.env.NEXT_PUBLIC_ARC_RPC_URL;
+    if (dedicated) out.push(dedicated);
+    out.push("https://rpc.testnet.arc.network");
+    out.push("https://5042002.rpc.thirdweb.com");
+    return out;
+})();
+
+const ARC_CHAIN = {
+    id: 5042002,
+    name: "Arc Testnet",
+    network: "arc-testnet",
+    nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 6 },
+    rpcUrls: {
+        default: { http: ARC_RPC_LIST },
+        public: { http: ARC_RPC_LIST },
+    },
+} as const;
+
+// Orbs status sentinels (TWAP.sol): 1 = canceled, 2 = completed; any
+// larger value is the order's deadline timestamp (open until now passes it).
+const STATUS_CANCELED = 1;
+const STATUS_COMPLETED = 2;
+
+async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | null> {
+    let cancel: ReturnType<typeof setTimeout> | undefined;
+    const timer = new Promise<null>((resolve) => {
+        cancel = setTimeout(() => resolve(null), ms);
+    });
+    try {
+        const v = await Promise.race([p, timer]);
+        if (cancel) clearTimeout(cancel);
+        return v;
+    } catch {
+        if (cancel) clearTimeout(cancel);
+        return null;
+    }
+}
+
+interface RunSummary {
+    orbs: { scanned: number; bid: number; filled: number; closed: number; skipped: number; failed: number };
+    cctp: { scanned: number; relayed: number; skipped: number; failed: number };
+    notes: string[];
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type PublicClient = ReturnType<typeof createPublicClient>;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type WalletClient = ReturnType<typeof createWalletClient>;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type OnchainOrder = any;
+
+export async function POST(req: NextRequest) {
+    const secret = process.env.COMPOUNDER_CRON_SECRET;
+    if (!secret) {
+        return NextResponse.json(
+            { error: "COMPOUNDER_CRON_SECRET not configured" },
+            { status: 500 },
+        );
+    }
+    const auth = req.headers.get("authorization");
+    const expected = `Bearer ${secret}`;
+    if (!auth || auth.length !== expected.length || auth !== expected) {
+        return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    if (!isDbConfigured()) {
+        return NextResponse.json(
+            { ran: false, reason: "Postgres not configured" },
+            { status: 200 },
+        );
+    }
+
+    const twap = ADDRESSES.orbsTwap as Address | undefined;
+    const exchange = ADDRESSES.orbsExchangeV2 as Address | undefined;
+    const router = ADDRESSES.router as Address | undefined;
+    const usdc = ADDRESSES.usdc as Address | undefined;
+    if (
+        !twap || !isAddress(twap) ||
+        !exchange || !isAddress(exchange) ||
+        !router || !isAddress(router) ||
+        !usdc || !isAddress(usdc)
+    ) {
+        return NextResponse.json(
+            { ran: false, reason: "Orbs/router/USDC addresses not configured" },
+            { status: 200 },
+        );
+    }
+
+    const keeperKey = process.env.KEEPER_OPERATOR_PRIVATE_KEY as Hex | undefined;
+    if (!keeperKey || !/^0x[0-9a-fA-F]{64}$/.test(keeperKey)) {
+        return NextResponse.json(
+            { ran: false, reason: "KEEPER_OPERATOR_PRIVATE_KEY missing or malformed" },
+            { status: 200 },
+        );
+    }
+
+    const account = privateKeyToAccount(keeperKey);
+    const publicClient = createPublicClient({ chain: ARC_CHAIN, transport: http() });
+    const walletClient = createWalletClient({ account, chain: ARC_CHAIN, transport: http() });
+
+    // Low-balance circuit breaker: the keeper pays Arc gas for every bid,
+    // fill and relay. Below the floor, bail with 503 so the cron caller
+    // surfaces the alarm instead of half-completing on an empty float.
+    const balance = await publicClient.getBalance({ address: account.address });
+    if (balance < MIN_OPERATOR_BALANCE_WEI) {
+        return NextResponse.json(
+            {
+                ran: false,
+                reason: "Keeper balance below threshold — refill USDC",
+                balance: balance.toString(),
+                threshold: MIN_OPERATOR_BALANCE_WEI.toString(),
+            },
+            { status: 503 },
+        );
+    }
+
+    // Use the chain's clock for every on-chain timing comparison so the
+    // keeper agrees with the contract's block.timestamp, not the server's.
+    const latestBlock = await publicClient.getBlock();
+    const now = Number(latestBlock.timestamp);
+
+    const summary: RunSummary = {
+        orbs: { scanned: 0, bid: 0, filled: 0, closed: 0, skipped: 0, failed: 0 },
+        cctp: { scanned: 0, relayed: 0, skipped: 0, failed: 0 },
+        notes: [],
+    };
+
+    // ---- Leg A: Orbs TWAP ----
+    try {
+        await runOrbsLeg(
+            { twap, exchange, router, usdc, now },
+            publicClient,
+            walletClient,
+            account.address,
+            summary,
+        );
+    } catch (err) {
+        summary.notes.push(`orbs-leg error=${errMsg(err)}`);
+    }
+
+    // ---- Leg B: CCTP bridge-and-buy relay ----
+    try {
+        await runCctpLeg(publicClient, walletClient, account.address, now, summary);
+    } catch (err) {
+        summary.notes.push(`cctp-leg error=${errMsg(err)}`);
+    }
+
+    return NextResponse.json({ ran: true, ...summary }, { status: 200 });
+}
+
+// ===================================================================
+// Leg A — Orbs TWAP settlement
+// ===================================================================
+
+interface OrbsCfg {
+    twap: Address;
+    exchange: Address;
+    router: Address;
+    usdc: Address;
+    now: number;
+}
+
+async function runOrbsLeg(
+    cfg: OrbsCfg,
+    publicClient: PublicClient,
+    walletClient: WalletClient,
+    keeper: Address,
+    summary: RunSummary,
+) {
+    // 1. Discover any new orders past the highest id we already track.
+    await discoverNewOrders(cfg, publicClient);
+
+    // 2. Process the active set. Each tick performs at most
+    //    MAX_ORBS_ACTIONS_PER_RUN direct txs (bids + fills combined).
+    const active = await getActiveOrbsOrders(64);
+    let actions = 0;
+
+    for (const tracked of active) {
+        if (actions >= MAX_ORBS_ACTIONS_PER_RUN) break;
+        summary.orbs.scanned++;
+
+        // Read the live order — the on-chain state is the source of truth.
+        const order = (await withTimeout(
+            publicClient.readContract({
+                address: cfg.twap,
+                abi: ORBS_TWAP_ABI,
+                functionName: "order",
+                args: [BigInt(tracked.orderId)],
+            }) as Promise<OnchainOrder>,
+            RPC_TIMEOUT_MS,
+        )) as OnchainOrder | null;
+        if (!order) {
+            summary.orbs.skipped++;
+            continue;
+        }
+
+        const statusField = Number(order.status);
+        // Terminal on-chain states.
+        if (statusField === STATUS_CANCELED) {
+            await markOrbsClosed(tracked.orderId, "canceled");
+            summary.orbs.closed++;
+            continue;
+        }
+        if (statusField === STATUS_COMPLETED) {
+            await markOrbsClosed(tracked.orderId, "completed");
+            summary.orbs.closed++;
+            continue;
+        }
+        // statusField is the deadline; expired orders are dead weight.
+        if (statusField <= cfg.now) {
+            await markOrbsClosed(tracked.orderId, "canceled");
+            summary.orbs.closed++;
+            continue;
+        }
+
+        const did = await settleOrbsOrder(
+            cfg,
+            tracked,
+            order,
+            publicClient,
+            walletClient,
+            keeper,
+            summary,
+        );
+        if (did) actions++;
+    }
+}
+
+/**
+ * Full-book discovery, capped. Reads length(), and for every id beyond
+ * what we already track reads the order and upserts the active ones.
+ * O(new orders) per tick. A cursor + indexer replaces this at scale.
+ */
+async function discoverNewOrders(cfg: OrbsCfg, publicClient: PublicClient) {
+    const length = (await withTimeout(
+        publicClient.readContract({
+            address: cfg.twap,
+            abi: ORBS_TWAP_ABI,
+            functionName: "length",
+        }) as Promise<bigint>,
+        RPC_TIMEOUT_MS,
+    )) as bigint | null;
+    if (length === null) return;
+
+    const total = Number(length);
+    const scanFrom = Math.max(0, total - MAX_BOOK_SCAN);
+    // Track which ids we already have so re-discovery is cheap. We only
+    // need to insert unseen ones; upsert is idempotent so re-inserting a
+    // known active order just refreshes its counters.
+    const known = new Set(
+        (await getActiveOrbsOrders(1024)).map((o) => o.orderId),
+    );
+
+    for (let id = scanFrom; id < total; id++) {
+        if (known.has(String(id))) continue;
+        const order = (await withTimeout(
+            publicClient.readContract({
+                address: cfg.twap,
+                abi: ORBS_TWAP_ABI,
+                functionName: "order",
+                args: [BigInt(id)],
+            }) as Promise<OnchainOrder>,
+            RPC_TIMEOUT_MS,
+        )) as OnchainOrder | null;
+        if (!order) continue;
+
+        const statusField = Number(order.status);
+        if (statusField === STATUS_CANCELED || statusField === STATUS_COMPLETED) continue;
+        if (statusField <= cfg.now) continue; // already expired
+
+        // Only track orders routed through OUR ExchangeV2 (or any-exchange,
+        // exchange == 0). Anything pinned to a different adapter we cannot
+        // fill (the keeper is only allowlisted on ours).
+        const askExchange = getAddr(order.ask.exchange);
+        if (
+            askExchange !== ZERO &&
+            askExchange.toLowerCase() !== cfg.exchange.toLowerCase()
+        ) {
+            continue;
+        }
+
+        const srcAmount = BigInt(order.ask.srcAmount);
+        const srcBidAmount = BigInt(order.ask.srcBidAmount);
+        const chunksTotal =
+            srcBidAmount > 0n ? Number((srcAmount + srcBidAmount - 1n) / srcBidAmount) : 1;
+        const srcFilled = BigInt(order.srcFilledAmount);
+        const chunksFilled =
+            srcBidAmount > 0n ? Number(srcFilled / srcBidAmount) : 0;
+
+        await upsertOrbsOrder({
+            orderId: String(id),
+            makerAddress: getAddr(order.maker),
+            srcToken: getAddr(order.ask.srcToken),
+            dstToken: getAddr(order.ask.dstToken),
+            kind: chunksTotal > 1 ? "dca" : "limit",
+            chunksTotal,
+            chunksFilled,
+            bidDelaySecs: Number(order.ask.bidDelay),
+        });
+    }
+}
+
+/**
+ * Decide and execute ONE action for an order: fill if we hold a matured
+ * winning bid, else bid if the price clears the floor. Returns true iff a
+ * tx was sent.
+ */
+async function settleOrbsOrder(
+    cfg: OrbsCfg,
+    tracked: KeeperOrbsOrder,
+    order: OnchainOrder,
+    publicClient: PublicClient,
+    walletClient: WalletClient,
+    keeper: Address,
+    summary: RunSummary,
+): Promise<boolean> {
+    const id = BigInt(tracked.orderId);
+    const srcAmount = BigInt(order.ask.srcAmount);
+    const srcBidAmount = BigInt(order.ask.srcBidAmount);
+    const srcFilled = BigInt(order.srcFilledAmount);
+    const chunkIn = bigMin(srcBidAmount, srcAmount - srcFilled);
+    if (chunkIn <= 0n) {
+        summary.orbs.skipped++;
+        return false;
+    }
+
+    const dstMinAmount = BigInt(order.ask.dstMinAmount);
+    // Per-chunk floor scales with the (possibly smaller) final chunk.
+    const chunkFloor =
+        srcBidAmount > 0n ? (dstMinAmount * chunkIn) / srcBidAmount : dstMinAmount;
+
+    const bidTaker = getAddr(order.bid.taker);
+    const bidTime = Number(order.bid.time);
+    const bidDelay = Number(order.ask.bidDelay);
+    const fillDelay = Number(order.ask.fillDelay);
+    const filledTime = Number(order.filledTime);
+    const srcToken = getAddr(order.ask.srcToken);
+    const dstToken = getAddr(order.ask.dstToken);
+
+    // --- Case 1: we hold the winning bid and it has matured => FILL ---
+    if (
+        bidTaker.toLowerCase() === keeper.toLowerCase() &&
+        cfg.now > bidTime + bidDelay
+    ) {
+        try {
+            const hash = await walletClient.writeContract({
+                address: cfg.twap,
+                abi: ORBS_TWAP_ABI,
+                functionName: "fill",
+                args: [id],
+                chain: ARC_CHAIN,
+                account: keeper,
+                maxFeePerGas: MAX_FEE_PER_GAS_WEI,
+            });
+            await publicClient.waitForTransactionReceipt({ hash });
+            const newFilled = srcFilled + chunkIn;
+            const chunksFilled =
+                srcBidAmount > 0n ? Number(newFilled / srcBidAmount) : 1;
+            await markOrbsFilled(tracked.orderId, chunksFilled);
+            await insertKeeperEvent({
+                leg: "orbs",
+                eventType: "fill",
+                refId: tracked.orderId,
+                txHash: hash,
+                detail: { chunkIn: chunkIn.toString(), chunkFloor: chunkFloor.toString() },
+            });
+            summary.orbs.filled++;
+            return true;
+        } catch (err) {
+            await markOrbsError(tracked.orderId, errMsg(err));
+            summary.orbs.failed++;
+            return true; // a tx attempt was spent
+        }
+    }
+
+    // If someone else holds a live (non-stale) winning bid, stand back.
+    const STALE_BID_SECONDS = 600;
+    if (
+        bidTaker !== ZERO &&
+        bidTaker.toLowerCase() !== keeper.toLowerCase() &&
+        cfg.now <= bidTime + STALE_BID_SECONDS
+    ) {
+        summary.orbs.skipped++;
+        return false;
+    }
+
+    // --- Case 2: biddable => quote and BID if it clears the floor ---
+    // Respect the inter-chunk fill delay (TWAP.verifyBid requires
+    // now > filledTime + fillDelay).
+    if (cfg.now <= filledTime + fillDelay) {
+        summary.orbs.skipped++;
+        return false;
+    }
+
+    // Direct src->dst V2 path (Arcade graduated pairs are USDC-quoted,
+    // paired directly). A pair with no route quotes 0 and is skipped.
+    const path = [srcToken, dstToken] as Address[];
+    const amounts = (await withTimeout(
+        publicClient.readContract({
+            address: cfg.router,
+            abi: ROUTER_ABI,
+            functionName: "getAmountsOut",
+            args: [chunkIn, path],
+        }) as Promise<readonly bigint[]>,
+        RPC_TIMEOUT_MS,
+    )) as readonly bigint[] | null;
+    if (!amounts || amounts.length < 2) {
+        summary.orbs.skipped++;
+        return false;
+    }
+    const quotedOut = amounts[amounts.length - 1];
+
+    if (
+        !clearsFloor({
+            quotedOut,
+            chunkFloor,
+            slippagePercent: SLIPPAGE_PERCENT,
+            dstFee: DST_FEE,
+        })
+    ) {
+        // Limit not met yet (or DCA floor set too tight). Not an error.
+        summary.orbs.skipped++;
+        return false;
+    }
+
+    let plan;
+    try {
+        plan = buildOrbsBid({
+            path,
+            chunkIn,
+            quotedOut,
+            chunkFloor,
+            exchange: cfg.exchange,
+            router: cfg.router,
+            slippagePercent: SLIPPAGE_PERCENT,
+            dstFee: DST_FEE,
+            deadline: BigInt(cfg.now) + SWAP_DEADLINE_SECS,
+        });
+    } catch {
+        summary.orbs.skipped++;
+        return false;
+    }
+
+    try {
+        const hash = await walletClient.writeContract({
+            address: cfg.twap,
+            abi: ORBS_TWAP_ABI,
+            functionName: "bid",
+            args: [id, cfg.exchange, plan.dstFee, plan.slippagePercent, plan.bidData],
+            chain: ARC_CHAIN,
+            account: keeper,
+            maxFeePerGas: MAX_FEE_PER_GAS_WEI,
+        });
+        await publicClient.waitForTransactionReceipt({ hash });
+        await markOrbsBid(tracked.orderId, hash);
+        await insertKeeperEvent({
+            leg: "orbs",
+            eventType: "bid",
+            refId: tracked.orderId,
+            txHash: hash,
+            detail: {
+                quotedOut: quotedOut.toString(),
+                chunkFloor: chunkFloor.toString(),
+                slippagePercent: SLIPPAGE_PERCENT,
+            },
+        });
+        summary.orbs.bid++;
+        return true;
+    } catch (err) {
+        await markOrbsError(tracked.orderId, errMsg(err));
+        summary.orbs.failed++;
+        return true;
+    }
+}
+
+// ===================================================================
+// Leg B — CCTP bridge-and-buy relay
+// ===================================================================
+
+async function runCctpLeg(
+    publicClient: PublicClient,
+    walletClient: WalletClient,
+    keeper: Address,
+    now: number,
+    summary: RunSummary,
+) {
+    const intents = await getOpenBridgeIntents(MAX_BRIDGE_RELAYS_PER_RUN * 3);
+    let relays = 0;
+
+    // The set of receivers we recognise (current + historical), so the
+    // keeper only ever calls one of ours.
+    const knownReceivers = new Set<string>();
+    const current = ADDRESSES.cctpBuyReceiver as string | undefined;
+    if (current && isAddress(current)) knownReceivers.add(current.toLowerCase());
+    for (const r of ADDRESSES.cctpBuyReceivers ?? []) {
+        const addr = typeof r === "string" ? r : r?.address;
+        if (addr && isAddress(addr)) knownReceivers.add(addr.toLowerCase());
+    }
+
+    for (const intent of intents) {
+        if (relays >= MAX_BRIDGE_RELAYS_PER_RUN) break;
+        summary.cctp.scanned++;
+
+        const res = await fetchAttestationDetailed(intent.srcDomain, intent.burnTxHash);
+        if (res.kind === "missing") {
+            // Burn not indexed. Expire it if it has been pending far longer
+            // than any real fast-transfer would take (anti-spam), else wait.
+            const ageMs = now * 1000 - new Date(intent.createdAt).getTime();
+            if (ageMs > BRIDGE_PENDING_MAX_AGE_MS) {
+                await markBridgeExpired(intent.id);
+            }
+            summary.cctp.skipped++;
+            continue;
+        }
+        if (res.kind === "pending" || res.kind === "transient") {
+            // Not ready yet (or Iris hiccup). Leave it pending for a later tick.
+            summary.cctp.skipped++;
+            continue;
+        }
+
+        // res.kind === "complete": we have the signed message + attestation.
+        const { message, attestation } = res.payload;
+        const receiver = mintRecipientFromMessage(message);
+        if (!receiver || !knownReceivers.has(receiver.toLowerCase())) {
+            // The message does not target a receiver we control — never relay.
+            await markBridgeRetryOrFail(
+                intent.id,
+                "message does not target a known receiver",
+                BRIDGE_MAX_ATTEMPTS,
+            );
+            summary.cctp.failed++;
+            continue;
+        }
+
+        await markBridgeRelaying(intent.id);
+        try {
+            const hash = await walletClient.writeContract({
+                address: receiver,
+                abi: CCTP_BUY_RECEIVER_ABI,
+                functionName: intent.intentKind === "forward" ? "receiveAndForward" : "receiveAndBuy",
+                args: [message, attestation],
+                chain: ARC_CHAIN,
+                account: keeper,
+                maxFeePerGas: MAX_FEE_PER_GAS_WEI,
+            });
+            await publicClient.waitForTransactionReceipt({ hash });
+            await markBridgeRelayed(intent.id, hash);
+            await insertKeeperEvent({
+                leg: "cctp",
+                eventType: "relay",
+                refId: intent.id,
+                txHash: hash,
+                detail: { srcDomain: intent.srcDomain, kind: intent.intentKind },
+            });
+            summary.cctp.relayed++;
+            relays++;
+        } catch (err) {
+            await markBridgeRetryOrFail(intent.id, errMsg(err), BRIDGE_MAX_ATTEMPTS);
+            summary.cctp.failed++;
+            relays++;
+        }
+    }
+
+    void keeper;
+    void now;
+}
+
+// ===================================================================
+// helpers
+// ===================================================================
+
+const ZERO = "0x0000000000000000000000000000000000000000";
+
+function getAddr(v: unknown): Address {
+    try {
+        return getAddress(String(v));
+    } catch {
+        return ZERO as Address;
+    }
+}
+
+function bigMin(a: bigint, b: bigint): bigint {
+    return a < b ? a : b;
+}
+
+function errMsg(err: unknown): string {
+    return err instanceof Error ? err.message : String(err);
+}
