@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import {
     createPublicClient,
@@ -229,13 +230,17 @@ export async function POST(req: NextRequest) {
         );
     }
     const auth = req.headers.get("authorization");
-    // Match against any configured secret; per-secret length guard keeps the
-    // comparison from short-circuiting on length alone.
+    // Constant-time match against any configured secret. The length check
+    // gates timingSafeEqual (which throws on unequal-length buffers) and is
+    // itself not secret-dependent (the "Bearer " prefix + a fixed-width hex
+    // secret), so it leaks nothing. Avoids the byte-by-byte short-circuit of
+    // `===` on a security-critical gate that signs on-chain txs.
     const ok =
         !!auth &&
         secrets.some((s) => {
             const expected = `Bearer ${s}`;
-            return auth.length === expected.length && auth === expected;
+            if (auth.length !== expected.length) return false;
+            return timingSafeEqual(Buffer.from(auth), Buffer.from(expected));
         });
     if (!ok) {
         return NextResponse.json({ error: "Unauthorized" }, { status: 401 });

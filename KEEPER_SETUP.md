@@ -64,6 +64,10 @@ testnet reference the old adapter).
      (`openssl rand -hex 32`), used ONLY by the keeper trigger. Preferred over
      reusing `COMPOUNDER_CRON_SECRET` so you never need to know/rotate the shared
      secret (which is write-only if set "Sensitive"). The route accepts either.
+     SECURITY: the route accepts EITHER secret, so a stale `COMPOUNDER_CRON_SECRET`
+     remains a valid keeper credential. If you ever want the keeper gated on the
+     dedicated secret ALONE, fully UNSET `COMPOUNDER_CRON_SECRET` (not just leave
+     an old value) once every cron that used it is migrated off it.
    - `DATABASE_URL` = existing Neon (already set)
    - (already set for the app) `NEXT_PUBLIC_ORBS_TWAP_ADDRESS`,
      `NEXT_PUBLIC_V2_ROUTER_ADDRESS`, `NEXT_PUBLIC_USDC_ADDRESS`,
