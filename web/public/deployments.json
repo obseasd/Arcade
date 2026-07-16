@@ -1,5 +1,5 @@
 {
-  "note": "Redeployed 2026-07-05: full stack with the batched security fixes (seed-gate migration, CLANKER_V3 anchor, identity fixes, EIP-170 size fit). Deployer/treasury/signer = 0x3a0Dd9 (testnet).",
+  "note": "Redeployed 2026-07-16: Safe-governed generation (pair-level fee, migrated router). Verified on-chain: launchpad.treasury / v2Factory.feeTo+feeToSetter / v3Locker.owner / autoCompounder.owner+feeRecipient all = the 2-of-3 Safe 0x0bDE09e3. Deployer/signer (broadcast + backend) = 0x3a0Dd9 (testnet).",
   "chain": {
     "name": "Arc Testnet",
     "chainId": 5042002,
@@ -10,7 +10,7 @@
   "addresses": {
     "USDC": "0x3600000000000000000000000000000000000000",
     "WETH": "0x9570EBA9eE39Aa4933f64d6add280faAB289a847",
-    "treasury": "0x3a0Dd90212838f32a953Acd4B32596b62859324A",
+    "treasury": "0x0bDE09e3Bfc9b2Ee7b94e56A6A06e0a14706195D",
     "v2Factory": "0x3a404154A7Ac320C93BB09A539BcF9B27Fc63067",
     "v2Router": "0xae744C9Acdc1E80F83B5895ba2C060dB921A6Aa5",
     "v2Zap": "0xE78d247a2d7984eC0519dbd93E015f8a4bfd9921",

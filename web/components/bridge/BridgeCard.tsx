@@ -24,6 +24,7 @@ import {
   fetchAttestation,
   fetchAttestationDetailed,
   getCctpChain,
+  isBridgeableChain,
   parseCctpV2Message,
   isSolanaBridgeId,
   SOLANA_BRIDGE_ID,
@@ -773,6 +774,15 @@ export function BridgeCard() {
 
   const doBurn = async () => {
     if (!account || amountRaw === 0n || sameChain) return;
+    // Refuse a misconfigured route (e.g. a mainnet flip while the Arc row is
+    // still a placeholder) BEFORE granting the infinite USDC approval below.
+    if (!isBridgeableChain(srcChain) || !isBridgeableChain(dstChain)) {
+      setStep({
+        kind: "error",
+        message: "This chain is not fully configured for bridging yet.",
+      });
+      return;
+    }
     try {
       if (chainId !== srcChain.id) {
         setStep({ kind: "approving" });

@@ -265,6 +265,21 @@ export function getCctpChain(chainId: number): CctpChainConfig | undefined {
   return CCTP_CHAINS.find((c) => c.id === chainId);
 }
 
+/**
+ * True iff a chain config is fully filled for a real burn/mint. Guards against a
+ * PLACEHOLDER row (e.g. the Arc mainnet entry before its Circle-assigned domain
+ * and mainnet USDC are known: cctpDomain -1, usdc 0x0). A -1 domain would throw
+ * in viem's uint32 encoding at burn time anyway, but this lets the UI refuse
+ * BEFORE granting the infinite USDC approval to the TokenMessenger.
+ */
+export function isBridgeableChain(chain: CctpChainConfig): boolean {
+  return (
+    chain.cctpDomain >= 0 &&
+    chain.usdc !== "0x0000000000000000000000000000000000000000" &&
+    chain.usdc.length === 42
+  );
+}
+
 // ============ ABIs ============
 
 export const TOKEN_MESSENGER_V2_ABI = [
