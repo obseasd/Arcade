@@ -1,5 +1,39 @@
 # Arcade charts — Goldsky subgraph setup
 
+## ✅ DEPLOYED (Arc testnet, 2026-07-16)
+- Project `Arcade`, subgraph `arcade-charts`, version `1.0.1`, tag `prod`.
+- **Stable GraphQL URL (use this in NEXT_PUBLIC_GOLDSKY_URL):**
+  `https://api.goldsky.com/api/public/project_cmrntot4nn29m01stbb661x1d/subgraphs/arcade-charts/prod/gn`
+- Goldsky accepted `network: arc-testnet` (no slug change needed). Indexing
+  healthy (`_meta.hasIndexingErrors=false`), backfilling from block 49467254.
+
+## Gotchas hit during the first deploy (read before redeploying)
+1. **Windows has no Goldsky binary.** `curl https://goldsky.com | sh` 404s the
+   win .exe and `@goldsky/cli` is not on npm. Run the CLI in **WSL** (Ubuntu):
+   `curl -fsSL https://cli.goldsky.com/latest/linux/goldsky -o ~/.local/bin/goldsky && chmod +x ~/.local/bin/goldsky`.
+   Build + deploy from a **native WSL dir** (not /mnt/c) so node_modules is
+   Linux-built and the compiled `subgraph.yaml` uses forward-slash paths (a
+   Windows `graph build` writes `Launchpad\Launchpad.wasm` which Goldsky-on-Linux
+   can't open). Calling `wsl.exe bash -lc '...$VAR...'` from Git Bash mangles
+   paths/vars — run a script FILE instead (`wsl.exe bash /path/script.sh` with
+   `MSYS_NO_PATHCONV=1`).
+2. **graph-node crashes on global constants that call functions.** A module-level
+   `const USDC = Address.fromString(...)` / `BigInt.fromString(...)` / `.pow(...)`
+   throws "Attempted to read past end of string content bytes chunk" at handler
+   time. Build them LOCALLY inside the functions (done in `src/mappings.ts`).
+
+## Redeploy / re-tag workflow
+```sh
+# in WSL, from a native copy of subgraph/:
+npm install && npm run codegen && npm run build
+goldsky subgraph deploy arcade-charts/<new-version> --path .
+goldsky subgraph tag create arcade-charts/<new-version> --tag prod   # move prod
+```
+The `prod` tag keeps NEXT_PUBLIC_GOLDSKY_URL stable across version bumps.
+
+---
+
+
 The price charts are backed by a **Goldsky-hosted subgraph** (`subgraph/`) that
 indexes launchpad Buy/Sell + every USDC-paired V3 pool Swap and serves complete
 USDC price/volume history over GraphQL. This replaces the self-hosted Ponder
