@@ -35,7 +35,7 @@ import {Script, console2} from "forge-std/Script.sol";
  *                            Set to a dedicated hot wallet on Vercel.
  *           FEE_RECIPIENT = protocol-fee sink (treasury multisig).
  *                            Defaults to deployer if unset.
- *           FEE_BPS       = protocol fee in basis points (max 500 = 5%).
+ *           FEE_BPS       = protocol fee in basis points (max 1000 = 10%).
  *                            Defaults to 100 (1%).
  *
  *         Usage:
