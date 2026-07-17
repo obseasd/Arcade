@@ -105,8 +105,8 @@ export const ARCADE_HOOK_ABI = [
     //
     // CurveState packs (virtualUsdcReserve, realUsdcReserve, tokensSold,
     // mode, status, creator, creator2, creator2Bps).
-    // FeeOwner packs (creator, creator2, creator2Bps, twitterEscrow,
-    // slotIndex).
+    // FeeOwner packs (creator, creator2, creator2Bps, feeTierBps,
+    // twitterEscrow, slotIndex).
     // ---------------------------------------------------------------
     {
         type: "function",
@@ -143,6 +143,7 @@ export const ARCADE_HOOK_ABI = [
                     { name: "creator", type: "address" },
                     { name: "creator2", type: "address" },
                     { name: "creator2Bps", type: "uint16" },
+                    { name: "feeTierBps", type: "uint16" },
                     { name: "twitterEscrow", type: "address" },
                     { name: "slotIndex", type: "uint8" },
                 ],
@@ -180,6 +181,65 @@ export const ARCADE_HOOK_ABI = [
         inputs: [{ name: "token", type: "address" }],
         outputs: [{ name: "", type: "uint256" }],
     },
+    {
+        // CSEC-001 pull-payment escape hatch. If a fee/anti-sniper recipient is
+        // ever blocklisted for USDC, its funds accrue here instead of bricking
+        // the swap; the recipient (or the escrow) pulls them later.
+        type: "function",
+        name: "pendingTokenWithdrawals",
+        stateMutability: "view",
+        inputs: [
+            { name: "token", type: "address" },
+            { name: "account", type: "address" },
+        ],
+        outputs: [{ name: "", type: "uint256" }],
+    },
+    {
+        type: "function",
+        name: "claimPendingToken",
+        stateMutability: "nonpayable",
+        inputs: [{ name: "token", type: "address" }],
+        outputs: [{ name: "amount", type: "uint256" }],
+    },
+    // ---------------------------------------------------------------
+    // Events the frontend + indexer subscribe to.
+    // ---------------------------------------------------------------
+    {
+        type: "event",
+        name: "FeeAttributedToHandle",
+        inputs: [
+            { name: "poolId", type: "bytes32", indexed: true },
+            { name: "escrow", type: "address", indexed: true },
+            { name: "handle", type: "string", indexed: false },
+        ],
+    },
+    {
+        type: "event",
+        name: "EscrowCreditFailed",
+        inputs: [
+            { name: "positionId", type: "uint256", indexed: true },
+            { name: "slot", type: "uint8", indexed: false },
+            { name: "amount", type: "uint256", indexed: false },
+        ],
+    },
+    {
+        type: "event",
+        name: "TokenCredited",
+        inputs: [
+            { name: "token", type: "address", indexed: true },
+            { name: "recipient", type: "address", indexed: true },
+            { name: "amount", type: "uint256", indexed: false },
+        ],
+    },
+    {
+        type: "event",
+        name: "TokenPendingClaimed",
+        inputs: [
+            { name: "token", type: "address", indexed: true },
+            { name: "recipient", type: "address", indexed: true },
+            { name: "amount", type: "uint256", indexed: false },
+        ],
+    },
 
     // ---------------------------------------------------------------
     // Writes — launch flow
@@ -203,6 +263,7 @@ export const ARCADE_HOOK_ABI = [
             { name: "snipeStartBps", type: "uint16" },
             { name: "snipeDecaySeconds", type: "uint32" },
             { name: "feeTier", type: "uint8" },
+            { name: "twitterHandle", type: "string" },
         ],
         outputs: [
             { name: "tokenAddr", type: "address" },

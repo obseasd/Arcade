@@ -100,6 +100,9 @@ function Inner() {
     const [creator2Pct, setCreator2Pct] = useState(0); // % (UI 0..100)
     // CLANKER fee tier: 1/2/3 = 1%/2%/3% fixed post-graduation fee. PUMP ignores it.
     const [feeTier, setFeeTier] = useState<1 | 2 | 3>(1);
+    // CLANKER: optional Twitter @handle that receives the creator fees (accrues
+    // in a handle-gated escrow, claimable by the verified owner). Empty = direct.
+    const [feeHandle, setFeeHandle] = useState("");
 
     // Snipe config. Both zero means no anti-sniper.
     const [snipeStartBps, setSnipeStartBps] = useState(0);
@@ -247,6 +250,10 @@ function Inner() {
                     // CLANKER: the creator-chosen fee tier (1/2/3 = 1%/2%/3%).
                     // PUMP ignores this and runs the mcap-decaying dynamic fee.
                     isClanker ? feeTier : 0,
+                    // CLANKER: optional Twitter @handle to receive the creator
+                    // fees (claimable by the verified handle owner). Empty =
+                    // fees go direct to the launcher. PUMP ignores it.
+                    isClanker ? feeHandle.trim().replace(/^@/, "") : "",
                 ],
             });
 
@@ -471,6 +478,23 @@ function Inner() {
                                 market cap grows.
                             </p>
                         </div>
+
+                        <label className="block border-t border-arc-border pt-3 text-sm">
+                            <span className="text-arc-text-muted">
+                                Send creator fees to a Twitter @ (optional)
+                            </span>
+                            <input
+                                value={feeHandle}
+                                onChange={(e) => setFeeHandle(e.target.value)}
+                                placeholder="@handle — leave empty to receive fees in your wallet"
+                                className="mt-1 w-full rounded-lg border border-arc-border bg-arc-bg px-3 py-2 text-sm focus:border-arc-cta-hover focus:outline-none"
+                            />
+                            <p className="mt-1 text-xs text-arc-text-faint">
+                                The creator fees accrue in a handle-gated escrow; the verified
+                                owner of the @ claims them after connecting a wallet. Useful when
+                                launching a token on behalf of someone who has not joined yet.
+                            </p>
+                        </label>
                     </div>
                 )}
 
