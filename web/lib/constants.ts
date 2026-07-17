@@ -66,13 +66,13 @@ export const ADDRESSES = {
    *  Registry has been re-configured to accept calls only from the
    *  Issuer. */
   identityIssuer: safeAddress(process.env.NEXT_PUBLIC_ARCADE_IDENTITY_ISSUER_ADDRESS),
-  // --- Uniswap V4 prototype (ArcadeV4Launchpad + ArcadeAntiSniperHook) ---
-  // Original 2-step (createLaunch then initializePool) flow, behind
-  // NEXT_PUBLIC_V4_ENABLED. Superseded by the ArcadeHook production stack
-  // below but kept for the existing /launchpad/v4 prototype pages.
+  // --- Uniswap V4 shared infra (serves the ArcadeHook production stack) ---
+  // The ArcadeV4Launchpad + ArcadeAntiSniperHook prototype was DELETED
+  // 2026-07-17 (it carried a CRITICAL, nothing deployed it, and ArcadeHook
+  // subsumes it). These remain because the production ArcadeHook + its swap
+  // router use them: PoolManager (pool host), StateView/Quoter (read-side),
+  // ArcadeV4SwapRouter (post-graduation swaps).
   v4PoolManager: safeAddress(process.env.NEXT_PUBLIC_V4_POOL_MANAGER_ADDRESS),
-  v4Launchpad: safeAddress(process.env.NEXT_PUBLIC_V4_LAUNCHPAD_ADDRESS),
-  v4Hook: safeAddress(process.env.NEXT_PUBLIC_V4_HOOK_ADDRESS),
   v4StateView: safeAddress(process.env.NEXT_PUBLIC_V4_STATE_VIEW_ADDRESS),
   v4Quoter: safeAddress(process.env.NEXT_PUBLIC_V4_QUOTER_ADDRESS),
   v4Router: safeAddress(process.env.NEXT_PUBLIC_V4_ROUTER_ADDRESS),
@@ -210,12 +210,6 @@ export const SYNTHRA_V3_FEES = [100, 500, 3_000, 10_000] as const;
 export const LIMIT_ORDERS_ENABLED: boolean =
   !!process.env.NEXT_PUBLIC_ORBS_TWAP_ADDRESS &&
   !!process.env.NEXT_PUBLIC_ORBS_EXCHANGE_V2_ADDRESS;
-
-/** True iff the V4 prototype stack is enabled in this env. Gates the
- *  /launchpad/v4 wizard pages. Independent of the ArcadeHook production
- *  flag below so the two surfaces can coexist during the migration window. */
-export const V4_ENABLED: boolean =
-  process.env.NEXT_PUBLIC_V4_ENABLED === "1" || process.env.NEXT_PUBLIC_V4_ENABLED === "true";
 
 /** True iff the ArcadeHook production stack is wired. Gates the new V4
  *  surfaces that target the unified ArcadeHook contract (atomic createLaunch

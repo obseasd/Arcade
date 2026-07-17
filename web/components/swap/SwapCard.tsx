@@ -30,7 +30,6 @@ import { TokenSelectModal, TokenOption } from "@/components/ui/TokenSelectModal"
 import { TxStatus, type TxState } from "@/components/ui/TxStatus";
 import { SwapConfirmModal } from "./SwapConfirmModal";
 import { SwapTabs, type SwapTab } from "./SwapTabs";
-import { V4RoutingNotice } from "./V4RoutingNotice";
 import { SwapRoutes } from "./SwapRoutes";
 import { useRouteQuotes } from "@/lib/routing/useRouteQuotes";
 import type { RouteQuote } from "@/lib/routing/types";
@@ -1577,10 +1576,6 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
               : "danger"
         }
       />
-
-      {/* V4 tokens trade on a separate pool the V2/V3 aggregator can't
-          reach yet - nudge the user to the V4 swap panel instead. */}
-      <V4RoutingNotice tokenIn={tokenIn.address} tokenOut={tokenOut?.address} />
 
       {/* Audit 2026-06-11 bug #5: PUMP-mode pre-grad tokens trade on the
           bonding curve only. Surface a CTA that takes the user to the

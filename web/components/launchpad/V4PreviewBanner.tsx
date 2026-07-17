@@ -1,7 +1,7 @@
 import { FlaskConical } from "lucide-react";
 
 /**
- * Shared "V4 is a preview" notice for every /launchpad/v4* page.
+ * Shared "V4 is a preview" notice for the ArcadeHook (/launchpad/v4hook/*) pages.
  *
  * The Uniswap V4 launchpad + hook stack is NOT live on Arc yet: it needs the
  * indexer and mainnet-only pieces (Cancun / EIP-1153) before it can work

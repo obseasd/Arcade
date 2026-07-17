@@ -10,7 +10,6 @@
 
 import { Address, createPublicClient, erc20Abi, formatUnits, http, isAddress, parseAbiItem } from "viem";
 import { LAUNCHPAD_ABI } from "@/lib/abis/launchpad";
-import { V4_LAUNCHPAD_ABI } from "@/lib/abis/v4Launchpad";
 import { ADDRESSES, USDC_DECIMALS } from "@/lib/constants";
 import { arcTestnet } from "@/lib/chains";
 import { fetchMetadata, resolveIpfs } from "@/lib/metadata";
@@ -145,51 +144,6 @@ export async function fetchV23TokenSeo(token: string): Promise<TokenSeoData | nu
     }
 }
 
-/**
- * Build SEO data for a V4 launchpad token. Same shape as V2/V3 but reads
- * from the V4 launchpad's `getLaunch(token)`.
- */
-export async function fetchV4TokenSeo(token: string): Promise<TokenSeoData | null> {
-    if (!isAddress(token)) return null;
-    if (ADDRESSES.v4Launchpad === "0x0000000000000000000000000000000000000000") return null;
-    const tokenAddr = token as Address;
-    try {
-        const [nameRes, symbolRes, launchRes] = await Promise.allSettled([
-            serverClient.readContract({
-                address: tokenAddr,
-                abi: erc20Abi,
-                functionName: "name",
-            }) as Promise<string>,
-            serverClient.readContract({
-                address: tokenAddr,
-                abi: erc20Abi,
-                functionName: "symbol",
-            }) as Promise<string>,
-            serverClient.readContract({
-                address: ADDRESSES.v4Launchpad,
-                abi: V4_LAUNCHPAD_ABI,
-                functionName: "getLaunch",
-                args: [tokenAddr],
-            }) as Promise<unknown>,
-        ]);
-
-        const name = nameRes.status === "fulfilled" ? nameRes.value : "V4 Launch";
-        const symbol = symbolRes.status === "fulfilled" ? symbolRes.value : "V4";
-
-        let imageUrl: string | undefined;
-        let creatorHandle: string | undefined;
-        if (launchRes.status === "fulfilled") {
-            // V4 launches don't carry metadataURI on the struct - only on the
-            // event. For SEO we accept the empty image case and fall back to
-            // the symbol initial in the OG renderer.
-            void launchRes;
-        }
-
-        return { name, symbol, imageUrl, creatorHandle, variant: "v4" };
-    } catch {
-        return null;
-    }
-}
 
 /**
  * Build the absolute OG image URL with query params encoded. Caller can

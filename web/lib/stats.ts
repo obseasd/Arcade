@@ -214,10 +214,8 @@ export async function getAggregateStats(): Promise<StatsSnapshot> {
         ADDRESSES.orbsLens,
         ADDRESSES.lockedVault,
         ...(ADDRESSES.twitterEscrow ? [ADDRESSES.twitterEscrow] : []),
-        ...(ADDRESSES.v4Launchpad ? [ADDRESSES.v4Launchpad] : []),
         ...(ADDRESSES.arcadeHook ? [ADDRESSES.arcadeHook] : []),
         ...(ADDRESSES.v4PoolManager ? [ADDRESSES.v4PoolManager] : []),
-        ...(ADDRESSES.v4Hook ? [ADDRESSES.v4Hook] : []),
         ...(ADDRESSES.v4StateView ? [ADDRESSES.v4StateView] : []),
         ...(ADDRESSES.v4Quoter ? [ADDRESSES.v4Quoter] : []),
         ...(ADDRESSES.v4Router ? [ADDRESSES.v4Router] : []),
@@ -328,9 +326,9 @@ export async function getAggregateStats(): Promise<StatsSnapshot> {
         v3.volume +
         v2.volume +
         hook.volume;
-    const v4TokensLaunched = ADDRESSES.v4Launchpad
-        ? await countLaunchpadEvents(client, ADDRESSES.v4Launchpad, fromBlock, head)
-        : 0;
+    // The V4 prototype launchpad was deleted 2026-07-17; its launches are gone.
+    // ArcadeHook launches are counted separately as v4HookLaunches below.
+    const v4TokensLaunched = 0;
     // ArcadeHook emits TokenLaunched(token, creator, mode, name, symbol,
     // metadataURI) on every createLaunch. Count via the well-known topic for
     // a precise number (the V2 fallback "count all logs" would also include

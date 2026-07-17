@@ -9,7 +9,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 import {ArcadeLaunchToken} from "../src/launchpad/ArcadeLaunchToken.sol";
 import {ArcadeV4Curve} from "./libraries/ArcadeV4Curve.sol";
-import {ILaunchpadSnipe} from "./interfaces/IArcadeV4Launchpad.sol";
+import {ILaunchpadSnipe} from "./interfaces/ILaunchpadSnipe.sol";
 
 /// @notice Minimal subset of the production ArcadeTwitterEscrowV3 surface the
 ///         hook calls from afterSwap to credit a Twitter-handle slot with

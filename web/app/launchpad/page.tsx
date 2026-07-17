@@ -4,18 +4,16 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import { ArrowRight, Search, Sparkles, Rocket } from "lucide-react";
 import { PlusIcon } from "@/components/ui/MaskIcon";
-import { FEATURED_TOKENS, LAUNCHPAD_CURVE_SUPPLY, LAUNCHPAD_GRADUATION_USDC, LAUNCHPAD_TOTAL_SUPPLY, V4_ENABLED, V4_HOOK_ENABLED } from "@/lib/constants";
+import { FEATURED_TOKENS, LAUNCHPAD_CURVE_SUPPLY, LAUNCHPAD_GRADUATION_USDC, LAUNCHPAD_TOTAL_SUPPLY, V4_HOOK_ENABLED } from "@/lib/constants";
 import { ARCADE_HOOK_STATUS } from "@/lib/abis/arcadeHook";
 import { useLaunchpadTokens, LaunchpadTokenInfo } from "@/lib/hooks/useLaunchpadTokens";
 import { getLaunchpadGenerations } from "@/lib/launchpadGenerations";
-import { useV4LaunchpadTokens } from "@/lib/hooks/useV4LaunchpadTokens";
 import { useArcadeHookTokens, type ArcadeHookTokenInfo } from "@/lib/hooks/useArcadeHookTokens";
 import { useClankerSortMcaps } from "@/lib/hooks/useClankerSortMcaps";
 import { useTokenImage } from "@/lib/hooks/useTokenImage";
 import { TokenIcon } from "@/components/ui/TokenIcon";
 import { parseInlineMetadata } from "@/lib/metadata";
 import { TokenCard } from "@/components/launchpad/TokenCard";
-import { V4LaunchCard } from "@/components/launchpad/V4LaunchCard";
 import { LaunchModeModal } from "@/components/launchpad/LaunchModeModal";
 import { SkeletonCard } from "@/components/ui/Skeleton";
 import { cn } from "@/lib/utils";
@@ -29,7 +27,6 @@ type Filter = "all" | "new" | "trending" | "migrating" | "migrated";
 
 export default function LaunchpadIndexPage() {
   const { tokens, isLoading } = useLaunchpadTokens();
-  const { tokens: v4Tokens } = useV4LaunchpadTokens();
   const { tokens: v4HookTokens } = useArcadeHookTokens();
   // Clankers have no bonding curve so their realUsdcReserve is 0 and they
   // sorted last even at a big mcap. This gives USDC-paired Clankers a real
@@ -40,15 +37,7 @@ export default function LaunchpadIndexPage() {
   const [launchOpen, setLaunchOpen] = useState(false);
   const nowSec = BigInt(Math.floor(Date.now() / 1000));
 
-  // Most-recent V4 launches first, capped at V4_PREVIEW_LIMIT. The
-  // dedicated /launchpad/v4/list page exposes the full set with filters.
-  const v4Preview = useMemo(() => {
-    if (!V4_ENABLED) return [];
-    const sorted = v4Tokens.toSorted((a, b) => Number(b.launchedAt - a.launchedAt));
-    return sorted.slice(0, V4_PREVIEW_LIMIT);
-  }, [v4Tokens]);
-
-  // ArcadeHook (V4 Phase 2) preview strip. Same cap as the prototype strip.
+  // ArcadeHook (V4 Phase 2) preview strip.
   // We don't have a per-token launchedAt yet in the hook surface (the
   // SnipeConfig.launchedAt is per-token but only populated when snipe is
   // configured), so we fall back to registry order (which is append-only).
@@ -174,35 +163,6 @@ export default function LaunchpadIndexPage() {
           </span>
         </button>
       </div>
-
-      {/* V4 strip above the V2/V3 grid - only renders when V4_ENABLED AND
-          at least one V4 launch exists. Keeps the existing UX clean for
-          users who aren't on a V4-active environment. */}
-      {V4_ENABLED && v4Preview.length > 0 && (
-        <div className="mb-8">
-          <div className="mb-3 flex items-center justify-between">
-            <h2 className="flex items-center gap-2 text-sm font-medium text-arc-text-muted">
-              <Sparkles className="h-4 w-4 text-arc-primary" />
-              <span className="text-arc-text">V4 launches</span>
-              <span className="rounded-md border border-arc-primary/40 bg-arc-primary/10 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-arc-primary">
-                beta
-              </span>
-            </h2>
-            <Link
-              href="/launchpad/v4/list"
-              className="flex items-center gap-1 text-xs text-arc-text-muted hover:text-arc-text"
-            >
-              View all
-              <ArrowRight className="h-3 w-3" />
-            </Link>
-          </div>
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {v4Preview.map((t) => (
-              <V4LaunchCard key={t.address} token={t} nowSec={nowSec} />
-            ))}
-          </div>
-        </div>
-      )}
 
       {/* ArcadeHook (V4 Phase 2) strip. Unified hook stack: 1-step
           createLaunch + atomic graduation + locked LP. Renders only when
