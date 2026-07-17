@@ -20,10 +20,26 @@ import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "v4-core/types/BeforeSwapD
 /// @notice Tiny ERC20 used as the test USDC. Mintable so the test can fund
 ///         the creator wallet.
 contract MockUSDC is ERC20 {
+    /// Simulates the real USDC blocklist: transfers TO a blocked address
+    /// revert. Needed to exercise the CSEC-002 path (a blocklisted treasury
+    /// must NOT be able to brick createLaunch, and a failed sweep must
+    /// restore the pot). Defaults to false for every address, so existing
+    /// tests are unaffected.
+    mapping(address => bool) public blocked;
+
     constructor() ERC20("USD Coin", "USDC") {}
 
     function mint(address to, uint256 amount) external {
         _mint(to, amount);
+    }
+
+    function setBlocked(address who, bool isBlocked) external {
+        blocked[who] = isBlocked;
+    }
+
+    function _update(address from, address to, uint256 value) internal override {
+        require(!blocked[to], "USDC: recipient blocked");
+        super._update(from, to, value);
     }
 
     function decimals() public pure override returns (uint8) {
@@ -149,6 +165,76 @@ contract ArcadeV4LaunchpadTest is Test {
 
     // --- createLaunch -----------------------------------------------------
 
+    // ===== CSEC-002: creation-fee pot / sweep / treasury rotation =====
+    // The audit fix (hold the fee, sweep later) shipped with NO coverage.
+    // These lock in every branch of it.
+
+    function test_sweepCreationFees_movesPotToTreasury() public {
+        vm.prank(CREATOR);
+        lp.createLaunch("T", "T", "u", 0, 0, 0);
+
+        uint256 treBefore = usdc.balanceOf(TREASURY);
+        lp.sweepCreationFees();
+
+        assertEq(usdc.balanceOf(TREASURY) - treBefore, lp.CREATION_FEE(), "treasury swept");
+        assertEq(lp.pendingCreationFees(), 0, "pot drained");
+        assertEq(usdc.balanceOf(address(lp)), 0, "launchpad holds nothing");
+    }
+
+    function test_sweepCreationFees_emptyPot_isNoop() public {
+        uint256 treBefore = usdc.balanceOf(TREASURY);
+        lp.sweepCreationFees(); // must not revert
+        assertEq(usdc.balanceOf(TREASURY), treBefore, "no movement");
+        assertEq(lp.pendingCreationFees(), 0);
+    }
+
+    function test_sweepCreationFees_afterRotation_paysNewTreasury() public {
+        vm.prank(CREATOR);
+        lp.createLaunch("T", "T", "u", 0, 0, 0);
+
+        address newTre = address(0xFEED);
+        vm.prank(address(this)); // this test contract is DEPLOYER
+        lp.setTreasury(newTre);
+        lp.sweepCreationFees();
+
+        assertEq(usdc.balanceOf(newTre), lp.CREATION_FEE(), "new treasury paid");
+        assertEq(usdc.balanceOf(TREASURY), 0, "old treasury not paid");
+    }
+
+    /// The whole point of CSEC-002: a blocklisted treasury must NOT brick
+    /// createLaunch, and a failed sweep must RESTORE the pot (never leak it).
+    function test_blocklistedTreasury_doesNotBrickCreate_andSweepRestoresPot() public {
+        usdc.setBlocked(TREASURY, true);
+
+        // createLaunch still works despite the treasury being blocked.
+        vm.prank(CREATOR);
+        lp.createLaunch("T", "T", "u", 0, 0, 0);
+        assertEq(lp.pendingCreationFees(), lp.CREATION_FEE(), "fee still collected");
+
+        // The sweep reverts, but the pot is restored for a later attempt.
+        vm.expectRevert(ArcadeV4Launchpad.TreasuryTransferFailed.selector);
+        lp.sweepCreationFees();
+        assertEq(lp.pendingCreationFees(), lp.CREATION_FEE(), "pot restored, not leaked");
+
+        // Rotate away from the blocked treasury -> sweep now succeeds.
+        address newTre = address(0xFEED);
+        lp.setTreasury(newTre);
+        lp.sweepCreationFees();
+        assertEq(usdc.balanceOf(newTre), lp.CREATION_FEE(), "recovered via rotation");
+        assertEq(lp.pendingCreationFees(), 0, "pot drained");
+    }
+
+    function test_setTreasury_onlyDeployer() public {
+        vm.prank(CREATOR);
+        vm.expectRevert(ArcadeV4Launchpad.NotDeployer.selector);
+        lp.setTreasury(address(0xFEED));
+    }
+
+    function test_unsafeSweep_revertsOnExternalCall() public {
+        vm.expectRevert(ArcadeV4Launchpad.NotSelfCall.selector);
+        lp.unsafeSweep(CREATOR, 1);
+    }
+
     function test_createLaunch_charges3Usdc_andDeploysToken() public {
         uint256 treBefore = usdc.balanceOf(TREASURY);
         uint256 creatorBefore = usdc.balanceOf(CREATOR);
@@ -156,8 +242,12 @@ contract ArcadeV4LaunchpadTest is Test {
         vm.prank(CREATOR);
         address token = lp.createLaunch("Test", "TEST", "ipfs://meta", 500, 30 minutes, 0);
 
-        // Treasury collected the 3 USDC fee; creator's balance dropped by it.
-        assertEq(usdc.balanceOf(TREASURY) - treBefore, lp.CREATION_FEE(), "treasury fee");
+        // CSEC-002: the fee is HELD by the launchpad (not sent straight to
+        // treasury, which a USDC blocklist could use to brick createLaunch).
+        // Treasury only gets it on sweepCreationFees().
+        assertEq(usdc.balanceOf(TREASURY) - treBefore, 0, "treasury not paid on create");
+        assertEq(lp.pendingCreationFees(), lp.CREATION_FEE(), "fee pot credited");
+        assertEq(usdc.balanceOf(address(lp)), lp.CREATION_FEE(), "launchpad holds fee");
         assertEq(creatorBefore - usdc.balanceOf(CREATOR), lp.CREATION_FEE(), "creator paid");
 
         // Token deployed with the canonical 1 B supply, sitting in the

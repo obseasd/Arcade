@@ -250,7 +250,11 @@ contract ArcadeV4Launchpad is ILaunchpadSnipe, IUnlockCallback, ReentrancyGuard 
     /**
      * @notice Deploy a new launch token and register its snipe config so the
      *         hook can read it on every swap. The caller pays a flat
-     *         `CREATION_FEE` in USDC, routed straight to the treasury.
+     *         `CREATION_FEE` in USDC, held in THIS contract as
+     *         `pendingCreationFees` and drained to the treasury by a later
+     *         `sweepCreationFees()` call (CSEC-002 -- see the rationale at
+     *         the transfer below; a direct transfer would let a blocklisted
+     *         treasury brick every launch).
      *
      *         The full 1 B supply is minted to this contract. The pool-init
      *         follow-up will transfer it into the V4 pool's accounting via
