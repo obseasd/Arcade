@@ -94,3 +94,51 @@ type Creator @entity(immutable: false) {
   firstSeenAt: Int!
   lastTradeAt: Int!
 }
+
+# ---------------------------------------------------------------------------
+# V4 ArcadeHook (new fee-model launchpad). V4 events key by PoolId (bytes32);
+# V4Pool maps a PoolId back to its token so curve trades feed the same Trade /
+# Token / Creator entities as V2/V3.
+# ---------------------------------------------------------------------------
+
+# Internal PoolId -> token map, written on LaunchCreated.
+type V4Pool @entity(immutable: false) {
+  # PoolId (bytes32 hex).
+  id: ID!
+  token: Bytes!
+  creator: Bytes!
+  mode: Int!
+}
+
+# A CLANKER launch that routed its creator fees to a Twitter handle. Powers the
+# /claim UI (which PoolId belongs to which @handle) and the backend attestation.
+type HandleAttribution @entity(immutable: false) {
+  # PoolId (bytes32 hex).
+  id: ID!
+  token: Bytes!
+  handle: String!
+  escrow: Bytes!
+  createdAt: Int!
+}
+
+# Per-(positionId, slot, token) escrow balance, tracked from Credited/Claimed so
+# the /claim UI can show a handle owner what is claimable without an RPC scan.
+type EscrowSlot @entity(immutable: false) {
+  # positionId(hex)-slotIndex-token(hex).
+  id: ID!
+  positionId: BigInt!
+  slotIndex: BigInt!
+  token: Bytes!
+  credited: BigDecimal!
+  claimed: BigDecimal!
+  balance: BigDecimal!
+  lastUpdate: Int!
+}
+
+# V4 post-graduation fee running totals (id = "v4"), for /stats revenue reads.
+type FeeStats @entity(immutable: false) {
+  id: ID!
+  creatorFeesUsdc: BigDecimal!
+  treasuryFeesUsdc: BigDecimal!
+  antiSnipeUsdc: BigDecimal!
+}

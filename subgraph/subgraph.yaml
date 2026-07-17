@@ -65,6 +65,67 @@ dataSources:
         - event: PoolCreated(indexed address,indexed address,indexed uint24,int24,address)
           handler: handlePoolCreated
       file: ./src/mappings.ts
+  - kind: ethereum
+    name: ArcadeHookV4
+    network: arc-testnet
+    source:
+      address: "0xB771579901EEF75EC7e61b644Ff4167Ab9eABECE"
+      abi: ArcadeHook
+      startBlock: 52343261
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.9
+      language: wasm/assemblyscript
+      entities:
+        - Trade
+        - Trader
+        - Token
+        - Creator
+        - Global
+        - V4Pool
+        - HandleAttribution
+        - FeeStats
+      abis:
+        - name: ArcadeHook
+          file: ./abis/ArcadeHook.json
+      eventHandlers:
+        - event: LaunchCreated(indexed bytes32,indexed address,address,uint8)
+          handler: handleLaunchCreatedV4
+        - event: CurveBuy(indexed bytes32,indexed address,uint256,uint256)
+          handler: handleCurveBuyV4
+        - event: CurveSell(indexed bytes32,indexed address,uint256,uint256)
+          handler: handleCurveSellV4
+        - event: Graduated(indexed bytes32,uint256,uint256)
+          handler: handleGraduatedV4
+        - event: RoyaltyPaid(indexed bytes32,indexed address,uint256,uint256)
+          handler: handleRoyaltyPaidV4
+        - event: AntiSnipeApplied(indexed bytes32,indexed address,uint256,uint16)
+          handler: handleAntiSnipeV4
+        - event: FeeAttributedToHandle(indexed bytes32,indexed address,string)
+          handler: handleFeeAttributedV4
+      file: ./src/mappings.ts
+  - kind: ethereum
+    name: TwitterEscrowV4
+    network: arc-testnet
+    source:
+      address: "0x8094fF2268F5b1D19CFB6B01c041A243828a09E1"
+      abi: ArcadeTwitterEscrowV4
+      startBlock: 52343261
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.9
+      language: wasm/assemblyscript
+      entities:
+        - EscrowSlot
+      abis:
+        - name: ArcadeTwitterEscrowV4
+          file: ./abis/ArcadeTwitterEscrowV4.json
+      eventHandlers:
+        - event: Credited(indexed uint256,indexed uint256,indexed address,uint256)
+          handler: handleEscrowCredited
+        - event: Claimed(indexed uint256,indexed uint256,indexed address,address,uint256)
+          handler: handleEscrowClaimed
+      file: ./src/mappings.ts
 templates:
   - kind: ethereum
     name: V3Pool
