@@ -1057,10 +1057,12 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
                 ) {
                     // credited to the handle slot
                 } catch {
-                    // Misconfig (hook not allow-listed as a crediter, escrow
-                    // paused) or the take pended: the USDC sits at the escrow
-                    // un-earmarked (rescuable by the escrow owner) or in this
-                    // hook's pending ledger. Never lost; surfaced for ops.
+                    // Misconfig (hook not allow-listed as a crediter) or the
+                    // take pended: the USDC sits at the escrow un-earmarked
+                    // (rescuable by the escrow owner) or in this hook's pending
+                    // ledger. Never lost; surfaced for ops via the event. (The
+                    // escrow's creditSlot is deliberately NOT pausable, so an
+                    // escrow pause never routes fees through this path.)
                     emit EscrowCreditFailed(positionId, fo.slotIndex, creatorCut);
                 }
             } else {

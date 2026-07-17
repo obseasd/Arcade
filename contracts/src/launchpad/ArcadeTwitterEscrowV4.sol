@@ -103,6 +103,11 @@ contract ArcadeTwitterEscrowV4 is Ownable2Step, Pausable, ReentrancyGuard {
 
     /// @notice Pull-payment ledger for forfeit payouts whose transfer reverted.
     mapping(address => mapping(address => uint256)) public pendingForfeit;
+    /// @notice Sum of `pendingForfeit[token][*]`. These tokens are earmarked for
+    ///         a pull-payment recipient (already debited from `creditedTotal`),
+    ///         so `rescue` must exclude them too or the owner could sweep funds
+    ///         owed to a forfeit recipient before they pull.
+    mapping(address => uint256) public pendingForfeitTotal;
 
     // ====================== Claim state ======================
 
@@ -381,6 +386,7 @@ contract ArcadeTwitterEscrowV4 is Ownable2Step, Pausable, ReentrancyGuard {
             emit Forfeited(positionId, slotIndex, to, token, amount);
         } catch {
             pendingForfeit[token][to] += amount;
+            pendingForfeitTotal[token] += amount; // keep it out of rescue's free window
             emit ForfeitTransferFailed(positionId, slotIndex, token, to, amount);
         }
     }
@@ -397,6 +403,7 @@ contract ArcadeTwitterEscrowV4 is Ownable2Step, Pausable, ReentrancyGuard {
         uint256 amount = pendingForfeit[token][msg.sender];
         if (amount == 0) revert NothingPending();
         pendingForfeit[token][msg.sender] = 0;
+        pendingForfeitTotal[token] -= amount;
         IERC20(token).safeTransfer(msg.sender, amount);
     }
 
@@ -410,7 +417,9 @@ contract ArcadeTwitterEscrowV4 is Ownable2Step, Pausable, ReentrancyGuard {
     function rescue(address token, address to, uint256 amount) external onlyOwner nonReentrant {
         if (to == address(0)) revert ZeroAddress();
         uint256 bal = IERC20(token).balanceOf(address(this));
-        uint256 free = bal - creditedTotal[token];
+        // Exclude BOTH slot-credited balances and pending-forfeit payouts so the
+        // owner can only ever sweep genuinely un-earmarked dust.
+        uint256 free = bal - creditedTotal[token] - pendingForfeitTotal[token];
         if (amount > free) revert ExceedsFreeBalance();
         IERC20(token).safeTransfer(to, amount);
         emit Rescued(token, to, amount);

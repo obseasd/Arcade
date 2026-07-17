@@ -275,6 +275,25 @@ contract ArcadeTwitterEscrowV4Test is Test {
         assertEq(bad.balanceOf(USER), 100e6, "recovered via pull");
     }
 
+    function test_rescue_cannotTouchPendingForfeit() public {
+        // A forfeit whose transfer reverts stashes to the pull-payment ledger.
+        // Those tokens are still owed to the recipient, so rescue must exclude
+        // them (audit LOW-1).
+        BlockingUSDC bad = new BlockingUSDC();
+        bad.mint(address(escrow), 100e6);
+        vm.prank(HOOK);
+        escrow.creditSlot(POS, SLOT, address(bad), 100e6);
+        bad.setBlocked(USER);
+        vm.warp(block.timestamp + escrow.FORFEIT_DELAY() + 1);
+        vm.prank(OWNER);
+        escrow.forfeitStaleClaim(POS, SLOT, USER); // stashes to pendingForfeit
+
+        // The 100e6 is now earmarked for USER's pull; rescue sees 0 free.
+        vm.prank(OWNER);
+        vm.expectRevert(ArcadeTwitterEscrowV4.ExceedsFreeBalance.selector);
+        escrow.rescue(address(bad), OWNER, 1);
+    }
+
     // ============ signer rotation (two-step) ============
 
     function test_signerRotation_twoStepWithDelay() public {
