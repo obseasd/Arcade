@@ -11,12 +11,13 @@ import {ArcadeLaunchToken} from "../src/launchpad/ArcadeLaunchToken.sol";
 import {ArcadeV4Curve} from "./libraries/ArcadeV4Curve.sol";
 import {ILaunchpadSnipe} from "./interfaces/ILaunchpadSnipe.sol";
 
-/// @notice Minimal subset of the production ArcadeTwitterEscrowV3 surface the
-///         hook calls from afterSwap to credit a Twitter-handle slot with
-///         creator fees. Kept in this file so the V4 stack does not import the
-///         full V3 escrow source.
+/// @notice Minimal subset of the ArcadeTwitterEscrowV4 surface the hook calls
+///         to credit a Twitter-handle slot with creator fees. Kept in this file
+///         so the V4 stack does not import the full escrow source. The `slot`
+///         is uint256 to match the escrow's ABI byte-for-byte (a uint8 here
+///         would compute a DIFFERENT selector and silently miss the call).
 interface IArcadeTwitterEscrowV3Min {
-    function creditSlot(uint256 positionId, uint8 slot, address token, uint256 amount) external;
+    function creditSlot(uint256 positionId, uint256 slot, address token, uint256 amount) external;
 }
 
 // v4-core upstream.
@@ -43,23 +44,16 @@ import {LiquidityAmounts} from "v4-periphery/libraries/LiquidityAmounts.sol";
  *         stack (Factory + Pair + Router + Launchpad + V3 Locker) into a
  *         single hook bound to one canonical PoolManager on Arc.
  *
- *         This is the foundation pass (Phase 2 Round 2 per `v4-migration-scoping.md`).
- *         Implements:
- *           - Frozen state layout (CurveState, FeeOwner, PositionInfo).
- *           - Frozen permission bitmap (0x3EEC).
- *           - Ownable2Step + Pausable + ReentrancyGuard plumbing.
- *           - Constructor with immutable wiring.
- *           - createLaunch: registers a token + deploys ArcadeLaunchToken,
- *             pulls creation fee in USDC, configures fee owners + snipe.
- *           - All 14 hook callbacks. The 4 unused (after-remove, both donates,
- *             after-remove-returns-delta) revert HookNotImplemented. The 10
- *             implemented ones return safe defaults (ZERO_DELTA + selector).
- *
- *         Actual curve math, graduation, royalty splits, and locked-LP minting
- *         are added in Rounds 3-5. The intent of this pass is to ship a
- *         compilable, testable, address-mineable contract that the deploy
- *         script can stand up on testnet today and that subsequent rounds
- *         can incrementally enrich without changing the surface.
+ *         The hook owns the full launch lifecycle:
+ *           - createLaunch: deploys ArcadeLaunchToken (1B minted here), pulls
+ *             the USDC creation fee, configures fee owners + optional CLANKER
+ *             fee tier, anti-sniper, and Twitter-handle fee attribution.
+ *           - Bonding curve (hook.buy/hook.sell) during Curving, then atomic
+ *             graduation into a locked full-range V4 LP.
+ *           - Post-graduation fee capture in before/afterSwap: the whole trading
+ *             fee, always in USDC, split 80/20 creator/treasury, with a
+ *             mcap-decaying PUMP fee / fixed CLANKER tier + anti-sniper auction.
+ *           - Permission bitmap 0x3ECE (10 bits); the 4 unused callbacks revert.
  *
  * @dev    Hook permission flags MUST match the address bits CREATE2-mined by
  *         `v4script/MineHookSalt.s.sol`. Set in `getHookPermissions()`:
@@ -181,14 +175,6 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
     ///         is in Curving status.
     uint24 internal constant TRADE_FEE_BPS = 100;
 
-    /// @notice Total post-graduation royalty applied to the USDC leg of every
-    ///         swap routed through the pool. Split per mode in afterSwap.
-    uint24 internal constant POST_GRAD_ROYALTY_BPS = 30; // 0.30%
-
-    /// @notice Mode-specific creator share of the post-graduation royalty.
-    ///         Indexed by `LaunchMode`.
-    uint16[3] internal MODE_CREATOR_BPS = [5_000, 7_000, 8_000];
-
     // --- New fee model (2026-07-17 redesign, replaces the 1% pool fee + 0.30%
     //     royalty). Pool LP fee set to 0; the hook captures the WHOLE trading
     //     fee in before/afterSwap, always in USDC, split creator/treasury.
@@ -290,6 +276,10 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
     // -------------------------------------------------------------------
 
     event LaunchCreated(PoolId indexed poolId, address indexed token, address creator, uint8 mode);
+    /// @notice Emitted when a CLANKER launch attributes its creator fees to a
+    ///         Twitter handle. The backend binds `poolId` <-> `handle` here; the
+    ///         handle is NOT stored on-chain (the escrow keys by poolId only).
+    event FeeAttributedToHandle(PoolId indexed poolId, address indexed escrow, string handle);
     event CurveBuy(PoolId indexed poolId, address indexed buyer, uint256 grossUsdcIn, uint256 tokensOut);
     event CurveSell(PoolId indexed poolId, address indexed seller, uint256 tokensIn, uint256 usdcOut);
     event Graduated(PoolId indexed poolId, uint256 finalUsdcReserve, uint256 tokensInLP);
@@ -392,6 +382,13 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
      * @param feeTier          CLANKER only: the fixed post-graduation trading
      *                          fee tier, 1 (1%), 2 (2%) or 3 (3%). IGNORED for
      *                          PUMP, which uses the mcap-decaying dynamic fee.
+     * @param twitterHandle    CLANKER only: pass a non-empty handle to route the
+     *                          launch's creator fees to a handle-gated escrow
+     *                          slot (claimable by the verified handle owner)
+     *                          instead of the launcher's wallet. Requires the
+     *                          hook to have a `twitterEscrow` wired. Emitted
+     *                          (not stored) so the backend binds poolId<->handle.
+     *                          Empty string (or PUMP) = fees go direct.
      */
     function createLaunch(
         string calldata name,
@@ -402,7 +399,8 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         uint16 creator2Bps,
         uint16 snipeStartBps,
         uint32 snipeDecaySeconds,
-        uint8 feeTier
+        uint8 feeTier,
+        string calldata twitterHandle
     ) external nonReentrant whenNotPaused returns (address tokenAddr, PoolId poolId) {
         if (bytes(name).length == 0 || bytes(symbol).length == 0) revert EmptyName();
         // Only PUMP(0) and CLANKER(1) are implemented. CLANKER_V3(2) has no
@@ -456,12 +454,25 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
             creator2Bps: creator2Bps
         });
 
+        // Optional Twitter-handle fee attribution (CLANKER only). A non-empty
+        // handle + a wired escrow routes this launch's CREATOR fees to a
+        // handle-gated escrow slot (positionId = poolId, slot 0) instead of the
+        // launcher's wallet. Only the hook's own OWNER-configured `twitterEscrow`
+        // is used -- a launcher cannot point fees at an arbitrary escrow.
+        address launchEscrow = address(0);
+        if (
+            bytes(twitterHandle).length > 0 && mode == uint8(LaunchMode.CLANKER)
+                && twitterEscrow != address(0)
+        ) {
+            launchEscrow = twitterEscrow;
+        }
+
         feeOwners[poolId] = FeeOwner({
             creator: msg.sender,
             creator2: creator2,
             creator2Bps: creator2Bps,
             feeTierBps: feeTierBps,
-            twitterEscrow: address(0), // wired separately when escrow is enabled per-launch
+            twitterEscrow: launchEscrow,
             slotIndex: 0
         });
 
@@ -487,6 +498,7 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
 
         emit TokenLaunched(tokenAddr, msg.sender, mode, name, symbol, metadataURI);
         emit LaunchCreated(poolId, tokenAddr, msg.sender, mode);
+        if (launchEscrow != address(0)) emit FeeAttributedToHandle(poolId, launchEscrow, twitterHandle);
 
         // NOTE: the V4 pool itself is NOT initialised here. During the Curving
         // phase the curve runs through hook.buy / hook.sell with no V4 swap
@@ -628,11 +640,20 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         // No LP during the bonding curve phase: LPs would extract value from
         // curve buyers. The post-grad pool is also locked after the
         // graduation seed.
+        //
+        // IMPORTANT: the graduation seed itself does NOT reach this callback.
+        // v4-core's Hooks.beforeModifyLiquidity carries `noSelfCall`, so when
+        // the hook calls POOL_MANAGER.modifyLiquidity on its OWN pool during
+        // _graduate/unlockCallback, this hook is skipped -- otherwise the
+        // GraduationStarted guard below would revert the seed and brick
+        // graduation. The seed LP's immutability therefore rests on (a) it being
+        // a v4 position OWNED BY THE HOOK (v4 keys positions by caller) and (b)
+        // the hook exposing no modifyLiquidity(negative delta) path -- NOT on
+        // the PositionInfo.locked bookkeeping, which noSelfCall leaves unset.
         if (state.status == uint8(Status.GraduationStarted)) revert GraduationInProgress();
         if (state.status == uint8(Status.Curving)) revert LiquidityNotPermitted();
-        // status == Graduated: only the hook itself can add LP (graduation
-        // seed or fee harvest with delta=0). Any external add is rejected so
-        // post-graduation LP stays as the locked seed forever.
+        // status == Graduated: only the hook itself can add LP. Any external add
+        // is rejected so post-graduation LP stays as the locked seed forever.
         if (sender != address(this)) revert LiquidityNotPermitted();
         return IHooks.beforeAddLiquidity.selector;
     }
@@ -824,7 +845,11 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         // Ship launch tokens to the buyer from the hook's balance.
         IERC20(token).safeTransfer(msg.sender, r.tokensOut);
 
-        // State update last (CEI).
+        // NOTE: the transfers above run BEFORE this state update (not CEI). This
+        // is safe ONLY because (a) `nonReentrant` guards buy(), and (b) USDC and
+        // ArcadeLaunchToken have no transfer callbacks, so no re-entrant read of
+        // the stale reserves is possible. Do NOT introduce a callback-bearing
+        // fee currency or launch token without moving these effects earlier.
         state.tokensSold += uint128(r.tokensOut);
         state.realUsdcReserve += uint128(r.actualGross - r.fee);
 
@@ -1015,17 +1040,27 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
             }
         }
 
-        // Route the creator cut. Twitter-escrow slot if wired, else direct.
+        // Route the creator cut. Twitter-escrow slot if the launch attributed
+        // fees to a handle, else direct to the creator.
         if (creatorCut > 0) {
             if (fo.twitterEscrow != address(0)) {
                 address feeTokenAddr = Currency.unwrap(feeCurrency);
                 uint256 positionId = _positionIdForEscrow(poolId);
+                // Deliver the USDC to the escrow FIRST, then credit the slot.
+                // The escrow verifies delivery with a balance-diff, so crediting
+                // before the transfer would always fail; delivering first means
+                // a credit can never book more than actually arrived (no
+                // books-exceed-balance drain across slots).
+                _safeTake(feeCurrency, fo.twitterEscrow, creatorCut);
                 try IArcadeTwitterEscrowV3Min(fo.twitterEscrow).creditSlot(
                     positionId, fo.slotIndex, feeTokenAddr, creatorCut
                 ) {
-                    _safeTake(feeCurrency, fo.twitterEscrow, creatorCut);
+                    // credited to the handle slot
                 } catch {
-                    _safeTake(feeCurrency, fo.creator, creatorCut);
+                    // Misconfig (hook not allow-listed as a crediter, escrow
+                    // paused) or the take pended: the USDC sits at the escrow
+                    // un-earmarked (rescuable by the escrow owner) or in this
+                    // hook's pending ledger. Never lost; surfaced for ops.
                     emit EscrowCreditFailed(positionId, fo.slotIndex, creatorCut);
                 }
             } else {

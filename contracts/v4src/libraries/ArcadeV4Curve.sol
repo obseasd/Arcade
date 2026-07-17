@@ -3,20 +3,20 @@ pragma solidity ^0.8.26;
 
 /**
  * @title ArcadeV4Curve
- * @notice Pure curve math for the V4 ArcadeHook. Replicates the production
- *         V2 launchpad bonding curve (`contracts/src/launchpad/ArcadeLaunchpad.sol`
- *         `_computeBuy` / `_computeSell`) bit-identically so the V4 hook can
- *         absorb the launchpad without changing the user-facing economics.
+ * @notice Pure curve math for the V4 ArcadeHook. Same constant-product shape as
+ *         the V2 launchpad bonding curve, but as of 2026-07-17 the V4 curve is
+ *         re-CALIBRATED and DIVERGES from V2 (see the constants block): it
+ *         graduates opening the AMM at ~$60k FDV with price continuity, where V2
+ *         keeps its 800M / ~$125k curve.
  *
  *         All values are integers, USDC has 6 decimals, launch tokens have 18.
  *         The library is stateless: callers pass in `tokensSold` and
  *         `realUsdcReserve`, the library returns the new state contribution and
  *         the caller persists it.
  *
- * @dev    Bit-identical with `contracts/test/fixtures/curve-vectors.json`.
- *         Any change to the math here MUST regenerate the fixture via
- *         `node contracts/test/fixtures/generate.mjs` AND update the V2
- *         launchpad. The fixture is the source of truth.
+ * @dev    Vectors are pinned INLINE in `v4test/ArcadeV4Curve.t.sol` (recomputed
+ *         on any recalibration), NOT read from `curve-vectors.json`, which stays
+ *         pinned to the V2 curve. Do not "sync" the two.
  *
  *         Rounding policy (from V4_HOOK_SPEC.md Section 4.3):
  *         - All `K / x` divisions floor by default.
@@ -33,17 +33,20 @@ library ArcadeV4Curve {
     // -------------------------------------------------------------------
 
     /// @notice Curve constants CALIBRATED 2026-07-17 for a graduation that opens
-    ///         the AMM at ~$60k FDV WITH PRICE CONTINUITY (no cliff) -- pump.fun's
+    ///         the AMM at ~$60k FDV with (near-)PRICE-CONTINUITY -- pump.fun's
     ///         method. The trick: VIRTUAL_TOKEN_RESERVE is set LARGER than
     ///         TOTAL_SUPPLY, so at graduation the virtual tokens remaining
     ///         (V_T - CURVE_SUPPLY = 329M) exceed the real tokens seeded into the
-    ///         LP (TOTAL - CURVE_SUPPLY = 194M) by exactly the amount that offsets
-    ///         the virtual USDC reserve. Seeding all 194M migration tokens with
-    ///         the real raise then lands EXACTLY on the curve's final marginal
-    ///         price -- the AMM opens where the curve ended, no discount for the
-    ///         first buyer. Verified: seed price == marginal price (0% cliff),
-    ///         open FDV $60k, start FDV $5k. This is a PURE constant calibration:
-    ///         no change to the graduation/seeding logic, no token burn.
+    ///         LP (TOTAL - CURVE_SUPPLY = 194M) by ~the amount that offsets the
+    ///         virtual USDC reserve. Seeding all 194M migration tokens with the
+    ///         real raise then lands on the curve's final marginal price to
+    ///         within ~0.76% -- and on the SAFE side (the AMM opens slightly
+    ///         BELOW marginal, so late curve buyers take a <1% markdown rather
+    ///         than the first AMM buyer getting a free profit). The residual is
+    ///         MIGRATION_FEE (2,500) overshooting exact continuity by ~90 USDC;
+    ///         negligible vs the ~43% cliff naive seeding had. Open FDV ~$60k,
+    ///         start FDV $5k. A PURE constant calibration: no graduation-logic
+    ///         change, no token burn.
     ///
     ///         The V4 curve DIVERGES from the V2 production launchpad (which keeps
     ///         its own 800M / $125k constants); the V4 hook is the successor.

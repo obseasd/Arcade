@@ -7,6 +7,7 @@ import {Vm} from "forge-std/Vm.sol";
 import {ArcadeHook} from "../v4src/ArcadeHook.sol";
 import {ArcadeV4Curve} from "../v4src/libraries/ArcadeV4Curve.sol";
 import {ArcadeV4SwapRouter} from "../v4src/ArcadeV4SwapRouter.sol";
+import {ArcadeTwitterEscrowV4} from "../src/launchpad/ArcadeTwitterEscrowV4.sol";
 
 import {PoolManager} from "v4-core/PoolManager.sol";
 import {IHooks} from "v4-core/interfaces/IHooks.sol";
@@ -97,14 +98,14 @@ contract ArcadeHookSwapTest is Test {
     /// @dev Spawn a launch in PUMP mode.
     function _launchPump() internal returns (address tokenAddr, PoolKey memory key) {
         vm.prank(CREATOR);
-        (tokenAddr,) = hook.createLaunch("PumpToken", "PUMP", "ipfs://demo", 0, address(0), 0, 0, 0, 0);
+        (tokenAddr,) = hook.createLaunch("PumpToken", "PUMP", "ipfs://demo", 0, address(0), 0, 0, 0, 0, "");
         key = _buildKey(tokenAddr);
     }
 
     /// @dev CLANKER variant with 70/30 split.
     function _launchClanker() internal returns (address tokenAddr, PoolKey memory key) {
         vm.prank(CREATOR);
-        (tokenAddr,) = hook.createLaunch("ClankerTok", "CLNK", "ipfs://demo", 1, address(0), 0, 0, 0, 1);
+        (tokenAddr,) = hook.createLaunch("ClankerTok", "CLNK", "ipfs://demo", 1, address(0), 0, 0, 0, 1, "");
         key = _buildKey(tokenAddr);
     }
 
@@ -318,7 +319,7 @@ contract ArcadeHookSwapTest is Test {
     {
         vm.prank(CREATOR);
         (tokenAddr,) =
-            hook.createLaunch("SnipePump", "SNP", "ipfs://demo", 0, address(0), 0, startBps, decaySeconds, 0);
+            hook.createLaunch("SnipePump", "SNP", "ipfs://demo", 0, address(0), 0, startBps, decaySeconds, 0, "");
         key = _buildKey(tokenAddr);
         vm.warp(block.timestamp + uint256(decaySeconds) + 3_600);
         usdc.mint(ALICE, 100_000e6);
@@ -456,7 +457,7 @@ contract ArcadeHookSwapTest is Test {
     function test_createLaunch_rejectsClankerV3Mode() public {
         vm.prank(CREATOR);
         vm.expectRevert(ArcadeHook.InvalidMode.selector);
-        hook.createLaunch("V3", "V3", "ipfs://x", 2, address(0), 0, 0, 0, 0);
+        hook.createLaunch("V3", "V3", "ipfs://x", 2, address(0), 0, 0, 0, 0, "");
     }
 
     function test_postGradFee_PUMP_splits80_20_inUsdcOnSell() public {
@@ -769,7 +770,7 @@ contract ArcadeHookSwapTest is Test {
 
     function _graduateClankerTier(uint8 tier) internal returns (address tokenAddr, PoolKey memory key) {
         vm.prank(CREATOR);
-        (tokenAddr,) = hook.createLaunch("ClkTier", "CLK", "ipfs://demo", 1, address(0), 0, 0, 0, tier);
+        (tokenAddr,) = hook.createLaunch("ClkTier", "CLK", "ipfs://demo", 1, address(0), 0, 0, 0, tier, "");
         key = _buildKey(tokenAddr);
         vm.prank(ALICE);
         hook.buy(tokenAddr, 30_000e6, 0);
@@ -809,11 +810,11 @@ contract ArcadeHookSwapTest is Test {
     function test_createLaunch_revertsOnInvalidClankerTier() public {
         vm.prank(CREATOR);
         vm.expectRevert(ArcadeHook.InvalidFeeTier.selector);
-        hook.createLaunch("X", "X", "ipfs://x", 1, address(0), 0, 0, 0, 0);
+        hook.createLaunch("X", "X", "ipfs://x", 1, address(0), 0, 0, 0, 0, "");
 
         vm.prank(CREATOR);
         vm.expectRevert(ArcadeHook.InvalidFeeTier.selector);
-        hook.createLaunch("Y", "Y", "ipfs://y", 1, address(0), 0, 0, 0, 4);
+        hook.createLaunch("Y", "Y", "ipfs://y", 1, address(0), 0, 0, 0, 4, "");
     }
 
     /// PUMP ignores the fee-tier argument entirely: its fee is the mcap-decaying
@@ -821,11 +822,67 @@ contract ArcadeHookSwapTest is Test {
     /// are NOT creator-customisable (only CLANKER's are).
     function test_createLaunch_pumpIgnoresFeeTier() public {
         vm.prank(CREATOR);
-        (address token,) = hook.createLaunch("P", "P", "ipfs://p", 0, address(0), 0, 0, 0, 3);
+        (address token,) = hook.createLaunch("P", "P", "ipfs://p", 0, address(0), 0, 0, 0, 3, "");
         vm.prank(ALICE);
         hook.buy(token, 30_000e6, 0);
         // Dynamic fee starts at 1% at graduation, NOT tier 3's 3%.
         assertEq(hook.currentFeeBps(token), 100, "PUMP uses dynamic fee, tier arg ignored");
+    }
+
+    // -------------------------------------------------------------------
+    // Twitter-handle fee attribution: a CLANKER launch with a handle routes
+    // its post-grad CREATOR cut to a handle-gated escrow slot instead of the
+    // launcher's wallet. Inherited by the currency0 subclass -> covered in both
+    // orderings.
+    // -------------------------------------------------------------------
+
+    function _wireEscrow() internal returns (ArcadeTwitterEscrowV4 escrow) {
+        escrow = new ArcadeTwitterEscrowV4(address(0x519E5), OWNER); // (signer, owner)
+        vm.startPrank(OWNER);
+        hook.setTwitterEscrow(address(escrow));
+        escrow.setCrediter(address(hook), true);
+        vm.stopPrank();
+    }
+
+    function test_escrow_clankerFeesRouteToHandleSlot() public {
+        ArcadeTwitterEscrowV4 escrow = _wireEscrow();
+
+        // CLANKER launch attributing fees to a handle.
+        vm.prank(CREATOR);
+        (address token,) = hook.createLaunch("Clk", "CLK", "ipfs://x", 1, address(0), 0, 0, 0, 1, "arcade");
+        PoolKey memory key = _buildKey(token);
+        vm.prank(ALICE);
+        hook.buy(token, 30_000e6, 0); // graduate
+
+        uint256 poolId = uint256(PoolId.unwrap(key.toId()));
+        uint256 creatorBefore = usdc.balanceOf(CREATOR);
+        uint256 treasuryBefore = usdc.balanceOf(TREASURY);
+
+        _sellViaV4(key, token, ALICE, 100_000e18);
+
+        // Creator is NOT paid directly; the 80% cut sits in the escrow slot.
+        assertEq(usdc.balanceOf(CREATOR), creatorBefore, "creator not paid directly");
+        uint256 slotBal = escrow.balances(poolId, 0, address(usdc));
+        uint256 treasuryGot = usdc.balanceOf(TREASURY) - treasuryBefore;
+        assertGt(slotBal, 0, "escrow slot credited");
+        assertGt(treasuryGot, 0, "treasury still paid");
+        // 80/20: the escrow slot holds ~4x the treasury cut.
+        assertApproxEqRel(slotBal, treasuryGot * 4, 0.02e18, "80/20 into escrow vs treasury");
+    }
+
+    /// PUMP ignores the handle: fees go direct to the creator even if a handle
+    /// is passed (Twitter attribution is CLANKER-only).
+    function test_escrow_pumpIgnoresHandle() public {
+        _wireEscrow();
+        vm.prank(CREATOR);
+        (address token,) = hook.createLaunch("P", "P", "ipfs://p", 0, address(0), 0, 0, 0, 0, "arcade");
+        PoolKey memory key = _buildKey(token);
+        vm.prank(ALICE);
+        hook.buy(token, 30_000e6, 0);
+
+        uint256 creatorBefore = usdc.balanceOf(CREATOR);
+        _sellViaV4(key, token, ALICE, 100_000e18);
+        assertGt(usdc.balanceOf(CREATOR), creatorBefore, "PUMP pays creator directly, ignores handle");
     }
 
     /// Manipulation resistance: multiple swaps within the SAME block timestamp

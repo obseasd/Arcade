@@ -142,7 +142,7 @@ contract ArcadeHookTest is Test {
         usdc.approve(address(hook), type(uint256).max);
         uint256 treasuryBefore = usdc.balanceOf(TREASURY);
         (address tokenAddr,) = hook.createLaunch(
-            "Demo", "DEMO", "ipfs://demo", 0, address(0), 0, 0, 0, 0
+            "Demo", "DEMO", "ipfs://demo", 0, address(0), 0, 0, 0, 0, ""
         );
         vm.stopPrank();
 
@@ -159,11 +159,11 @@ contract ArcadeHookTest is Test {
 
         vm.prank(ALICE);
         vm.expectRevert(ArcadeHook.EmptyName.selector);
-        hook.createLaunch("", "DEMO", "ipfs://demo", 0, address(0), 0, 0, 0, 0);
+        hook.createLaunch("", "DEMO", "ipfs://demo", 0, address(0), 0, 0, 0, 0, "");
 
         vm.prank(ALICE);
         vm.expectRevert(ArcadeHook.EmptyName.selector);
-        hook.createLaunch("Demo", "", "ipfs://demo", 0, address(0), 0, 0, 0, 0);
+        hook.createLaunch("Demo", "", "ipfs://demo", 0, address(0), 0, 0, 0, 0, "");
     }
 
     function test_createLaunch_revertsOnInvalidMode() public {
@@ -171,7 +171,7 @@ contract ArcadeHookTest is Test {
         vm.startPrank(ALICE);
         usdc.approve(address(hook), type(uint256).max);
         vm.expectRevert(ArcadeHook.InvalidMode.selector);
-        hook.createLaunch("Demo", "DEMO", "ipfs://demo", 3, address(0), 0, 0, 0, 0);
+        hook.createLaunch("Demo", "DEMO", "ipfs://demo", 3, address(0), 0, 0, 0, 0, "");
         vm.stopPrank();
     }
 
@@ -181,7 +181,7 @@ contract ArcadeHookTest is Test {
         usdc.approve(address(hook), type(uint256).max);
         vm.expectRevert(ArcadeHook.InvalidSnipeBps.selector);
         // 6000 bps > MAX_SNIPE_START_BPS (5000)
-        hook.createLaunch("Demo", "DEMO", "ipfs://demo", 0, address(0), 0, 6_000, 600, 0);
+        hook.createLaunch("Demo", "DEMO", "ipfs://demo", 0, address(0), 0, 6_000, 600, 0, "");
         vm.stopPrank();
     }
 
@@ -190,7 +190,7 @@ contract ArcadeHookTest is Test {
         vm.startPrank(ALICE);
         usdc.approve(address(hook), type(uint256).max);
         vm.expectRevert(ArcadeHook.InvalidDecaySeconds.selector);
-        hook.createLaunch("Demo", "DEMO", "ipfs://demo", 0, address(0), 0, 500, 0, 0);
+        hook.createLaunch("Demo", "DEMO", "ipfs://demo", 0, address(0), 0, 500, 0, 0, "");
         vm.stopPrank();
     }
 
@@ -202,7 +202,7 @@ contract ArcadeHookTest is Test {
         vm.startPrank(ALICE);
         usdc.approve(address(hook), type(uint256).max);
         vm.expectRevert(); // Pausable.EnforcedPause
-        hook.createLaunch("Demo", "DEMO", "ipfs://demo", 0, address(0), 0, 0, 0, 0);
+        hook.createLaunch("Demo", "DEMO", "ipfs://demo", 0, address(0), 0, 0, 0, 0, "");
         vm.stopPrank();
     }
 
@@ -211,7 +211,7 @@ contract ArcadeHookTest is Test {
         vm.startPrank(ALICE);
         usdc.approve(address(hook), type(uint256).max);
         (address tokenAddr,) = hook.createLaunch(
-            "Demo", "DEMO", "ipfs://demo", 0, address(0), 0, 1_000, 600, 0
+            "Demo", "DEMO", "ipfs://demo", 0, address(0), 0, 1_000, 600, 0, ""
         );
         vm.stopPrank();
 
@@ -237,7 +237,7 @@ contract ArcadeHookTest is Test {
         vm.startPrank(ALICE);
         usdc.approve(address(hook), type(uint256).max);
         (address tokenAddr,) = hook.createLaunch(
-            "Demo", "DEMO", "ipfs://demo", 0, address(0), 0, 2_000, 1_000, 0
+            "Demo", "DEMO", "ipfs://demo", 0, address(0), 0, 2_000, 1_000, 0, ""
         );
         vm.stopPrank();
 

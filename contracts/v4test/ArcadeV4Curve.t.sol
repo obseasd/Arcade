@@ -26,11 +26,11 @@ contract ArcadeV4CurveTest is Test {
     // Constants surfaced for read-back assertions
     // -------------------------------------------------------------------
 
-    /// V4 curve constants. NOTE: the V4 curve DIVERGES from the V2 production
-    /// launchpad as of 2026-07-17 -- CURVE_SUPPLY dropped 800M -> 711M so the
-    /// token graduates at ~$60k FDV instead of ~$125k. VIRTUAL_USDC/TOKEN/K are
-    /// unchanged, so every non-cap buy/sell is bit-identical; only the
-    /// graduation cap moved earlier (start FDV still ~$5k, a ~12x curve).
+    /// V4 curve constants. The V4 curve DIVERGES from the V2 launchpad as of
+    /// 2026-07-17: re-calibrated (VIRTUAL_USDC 5.8k, VIRTUAL_TOKEN 1.135B > 1B
+    /// supply, CURVE_SUPPLY 806M) so the AMM OPENS at ~$60k FDV with price
+    /// continuity (was $125k). VIRTUAL_USDC/TOKEN/K all changed vs the prior
+    /// build, so every vector was recomputed. Start FDV ~$5k (a 12x curve).
     function test_constants_v4Curve() public pure {
         assertEq(ArcadeV4Curve.VIRTUAL_USDC_RESERVE, 5_800e6, "virtual usdc");
         // VIRTUAL_TOKEN_RESERVE is LARGER than TOTAL_SUPPLY (1B) on purpose:
@@ -245,12 +245,13 @@ contract ArcadeV4CurveTest is Test {
     }
 
     /// The whole point of the 2026-07-17 calibration: the AMM seeds at the
-    /// curve's FINAL MARGINAL PRICE, so the pool opens exactly where the curve
-    /// ended -- zero graduation cliff, no free discount for the first buyer.
-    /// This works because VIRTUAL_TOKEN_RESERVE > TOTAL_SUPPLY (pump.fun's
-    /// method): seeding all MIGRATION_LP_TOKENS with the real raise lands on the
-    /// marginal price. If someone "rounds" VIRTUAL_TOKEN_RESERVE back to 1B this
-    /// test fails, guarding the invariant.
+    /// curve's FINAL MARGINAL PRICE (to within ~0.76%, on the safe side -- see
+    /// the ArcadeV4Curve constants NatSpec), so the pool opens ~where the curve
+    /// ended instead of the naive seeding's ~43% below. At the spotPrice unit
+    /// (microUSDC per 1e18 token) both round to 60, so seed == marginal here;
+    /// the sub-unit residual is the migration fee. This works because
+    /// VIRTUAL_TOKEN_RESERVE > TOTAL_SUPPLY (pump.fun's method). If someone
+    /// "rounds" VIRTUAL_TOKEN_RESERVE back to 1B this test fails, guarding it.
     function test_graduation_seedPriceEqualsMarginal_noCliff() public pure {
         uint256 realAtGrad = _reserveAt(ArcadeV4Curve.CURVE_SUPPLY);
         uint256 marginal = ArcadeV4Curve.spotPrice(ArcadeV4Curve.CURVE_SUPPLY, realAtGrad);
