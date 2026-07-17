@@ -218,9 +218,9 @@ contract ArcadeHookSwapTest is Test {
 
         // Alice received the full CURVE_SUPPLY (cap path delivers maxOut).
         assertEq(tokensOut, ArcadeV4Curve.CURVE_SUPPLY, "alice gets full curve supply");
-        // Retuned curve (711M): a cap-path buy from an empty curve consumes
-        // actualGross = 12_425_290_973 USDC (raise ~12.3k + 1% fee headroom).
-        assertEq(actualGross, 12_425_290_973, "matches retuned cap actualGross");
+        // Calibrated curve (806M): a cap-path buy from an empty curve consumes
+        // actualGross = 14_352_644_992 USDC (raise ~14.2k + 1% fee headroom).
+        assertEq(actualGross, 14_352_644_992, "matches calibrated cap actualGross");
         // Refund stays with alice automatically (we only transferFrom actualGross).
         assertEq(aliceUsdcBefore - usdc.balanceOf(ALICE), actualGross, "alice only paid actualGross");
 

@@ -32,26 +32,37 @@ library ArcadeV4Curve {
     // Constants (mirror src/launchpad/ArcadeLaunchpad.sol)
     // -------------------------------------------------------------------
 
-    uint256 internal constant VIRTUAL_USDC_RESERVE = 5_000e6;
-    uint256 internal constant VIRTUAL_TOKEN_RESERVE = 1_000_000_000e18;
-    /// @notice Tokens sold on the curve before graduation. Retuned 2026-07-17
-    ///         to graduate at ~$60k FDV (was 800M / ~$125k). The V4 curve now
-    ///         DIVERGES from the V2 production launchpad, which keeps 800M; the
-    ///         V4 hook is the successor launchpad. Only CURVE_SUPPLY moved --
-    ///         VIRTUAL_USDC/VIRTUAL_TOKEN/K are unchanged, so every non-cap
-    ///         buy/sell is bit-identical to before; only the graduation cap
-    ///         moved earlier. Start FDV stays ~$5k, giving a ~12x curve.
-    uint256 internal constant CURVE_SUPPLY = 711_000_000e18;
+    /// @notice Curve constants CALIBRATED 2026-07-17 for a graduation that opens
+    ///         the AMM at ~$60k FDV WITH PRICE CONTINUITY (no cliff) -- pump.fun's
+    ///         method. The trick: VIRTUAL_TOKEN_RESERVE is set LARGER than
+    ///         TOTAL_SUPPLY, so at graduation the virtual tokens remaining
+    ///         (V_T - CURVE_SUPPLY = 329M) exceed the real tokens seeded into the
+    ///         LP (TOTAL - CURVE_SUPPLY = 194M) by exactly the amount that offsets
+    ///         the virtual USDC reserve. Seeding all 194M migration tokens with
+    ///         the real raise then lands EXACTLY on the curve's final marginal
+    ///         price -- the AMM opens where the curve ended, no discount for the
+    ///         first buyer. Verified: seed price == marginal price (0% cliff),
+    ///         open FDV $60k, start FDV $5k. This is a PURE constant calibration:
+    ///         no change to the graduation/seeding logic, no token burn.
+    ///
+    ///         The V4 curve DIVERGES from the V2 production launchpad (which keeps
+    ///         its own 800M / $125k constants); the V4 hook is the successor.
+    ///         Only ~194M + 806M = 1B tokens are ever minted; the 135M excess in
+    ///         VIRTUAL_TOKEN_RESERVE is a formula-only virtual reserve, never
+    ///         minted (exactly like pump.fun's ~270M virtual tokens).
+    uint256 internal constant VIRTUAL_USDC_RESERVE = 5_800e6;
+    uint256 internal constant VIRTUAL_TOKEN_RESERVE = 1_135_000_000e18;
+    uint256 internal constant CURVE_SUPPLY = 806_000_000e18;
     uint256 internal constant TOTAL_SUPPLY = 1_000_000_000e18;
-    uint256 internal constant MIGRATION_LP_TOKENS = TOTAL_SUPPLY - CURVE_SUPPLY; // 289M
+    uint256 internal constant MIGRATION_LP_TOKENS = TOTAL_SUPPLY - CURVE_SUPPLY; // 194M
     uint256 internal constant K_CONSTANT = VIRTUAL_USDC_RESERVE * VIRTUAL_TOKEN_RESERVE;
     uint256 internal constant TRADE_FEE_BPS = 100; // 1%
     uint256 internal constant FEE_DENOMINATOR = 10_000;
     uint256 internal constant MIGRATION_FEE = 2_500e6; // 2,500 USDC
     /// @notice The realUsdcReserve value (approx) at graduation. Informational:
     ///         graduation is triggered by tokensSold >= CURVE_SUPPLY, not by
-    ///         this. At CURVE_SUPPLY = 711M the curve raises ~12,301 USDC.
-    uint256 internal constant GRADUATION_USDC = 12_301e6;
+    ///         this. At CURVE_SUPPLY = 806M the curve raises ~14,209 USDC.
+    uint256 internal constant GRADUATION_USDC = 14_209e6;
 
     // -------------------------------------------------------------------
     // Return structs
