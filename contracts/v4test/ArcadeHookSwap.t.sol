@@ -60,9 +60,16 @@ contract ArcadeHookSwapTest is Test {
 
     uint160 internal constant TARGET_FLAGS = uint160(0x3ECE);
 
+    /// @dev USDC deployment, overridable so a subclass can force the currency
+    ///      ordering. Default places USDC at a normal (high) address -> USDC
+    ///      sorts as currency1 vs the hook-CREATE'd launch tokens.
+    function _makeUsdc() internal virtual returns (TestERC20) {
+        return new TestERC20(0);
+    }
+
     function setUp() public {
         pm = new PoolManager(address(this));
-        usdc = new TestERC20(0);
+        usdc = _makeUsdc();
 
         address hookAddr = address(uint160(0xBEEF0000 | TARGET_FLAGS));
         deployCodeTo(
@@ -841,5 +848,30 @@ contract ArcadeHookSwapTest is Test {
 
         assertEq(fBefore, fMid, "no EMA move intra-block (buy)");
         assertEq(fMid, fAfter, "no EMA move intra-block (sell)");
+    }
+}
+
+/**
+ * @title ArcadeHookSwapUsdcCurrency0Test
+ * @notice Re-runs the ENTIRE swap/fee suite with USDC forced to sort as
+ *         currency0 -- the ARC MAINNET ordering. On mainnet USDC is
+ *         0x3600...0000 (a near-minimal address), so every CREATE-deployed
+ *         launch token sorts ABOVE it and USDC is currency0 for essentially
+ *         every real launch. The base suite exercises USDC-as-currency1 only;
+ *         this subclass covers the dominant, production `usdcIsCurrency0 == true`
+ *         branch (the mcap-tick sign flip in _mcapTick, the capture side in
+ *         before/afterSwap, the anti-sniper direction) before an immutable
+ *         mainnet deploy. It inherits every test unchanged -- the helpers derive
+ *         swap direction from the key, so they adapt automatically.
+ */
+contract ArcadeHookSwapUsdcCurrency0Test is ArcadeHookSwapTest {
+    /// Place USDC at a low address so it sorts below the launch tokens. Uses
+    /// deployCodeTo so the ERC20 constructor runs at the target (storage set
+    /// there), unlike a bare etch. 0x7770 is above the precompile range and far
+    /// below any keccak-derived CREATE address.
+    function _makeUsdc() internal override returns (TestERC20) {
+        address lowUsdc = address(0x7770);
+        deployCodeTo("TestERC20.sol:TestERC20", abi.encode(uint256(0)), lowUsdc);
+        return TestERC20(lowUsdc);
     }
 }
