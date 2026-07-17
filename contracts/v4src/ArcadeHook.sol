@@ -22,6 +22,7 @@ interface IArcadeTwitterEscrowV3Min {
 // v4-core upstream.
 import {IHooks} from "v4-core/interfaces/IHooks.sol";
 import {IPoolManager} from "v4-core/interfaces/IPoolManager.sol";
+import {StateLibrary} from "v4-core/libraries/StateLibrary.sol";
 import {IUnlockCallback} from "v4-core/interfaces/callback/IUnlockCallback.sol";
 import {FullMath} from "v4-core/libraries/FullMath.sol";
 import {Hooks} from "v4-core/libraries/Hooks.sol";
@@ -83,6 +84,7 @@ import {LiquidityAmounts} from "v4-periphery/libraries/LiquidityAmounts.sol";
 contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, ReentrancyGuard, ILaunchpadSnipe {
     using SafeERC20 for IERC20;
     using PoolIdLibrary for PoolKey;
+    using StateLibrary for IPoolManager;
 
     // -------------------------------------------------------------------
     // Launch mode (matches V2 ArcadeLaunchpad.LaunchMode)
@@ -127,6 +129,19 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         uint16 startBps; // 0 means anti-sniper disabled for this token
         uint32 decaySeconds; // linear decay window
         uint64 launchedAt; // 0 until graduation; then block.timestamp of graduation (decay anchor)
+    }
+
+    /// @notice Manipulation-resistant price oracle feeding the PUMP dynamic
+    ///         fee. Tracks an EMA of the pool's "mcap tick" (the slot0 tick
+    ///         sign-normalised so it always RISES with market cap regardless of
+    ///         USDC's currency ordering). Seeded at graduation; updated at most
+    ///         once per block timestamp in afterSwap, never on the swap that
+    ///         reads it, so a swap can never move the fee it itself pays.
+    struct FeeObs {
+        int64 emaTickE3; // EMA of the mcap tick, scaled x1e3 for sub-tick precision
+        int24 gradMcapTick; // mcap tick captured at graduation (fee-decay reference)
+        uint32 lastTs; // timestamp of the last EMA update
+        bool init; // true once seeded at graduation
     }
 
     enum Status {
@@ -190,6 +205,19 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
     ///         decays with market cap down to 0.30% for a mature token.
     uint16 internal constant PUMP_FEE_MAX_BPS = 100; // 1% at graduation
     uint16 internal constant PUMP_FEE_MIN_BPS = 30; // 0.30% mature floor
+    /// @notice Market-cap growth (measured in EMA ticks above the graduation
+    ///         tick) at which the PUMP fee reaches its 0.30% floor. Ticks are
+    ///         log-price, so a fixed tick span is a fixed MCAP MULTIPLE:
+    ///         23_026 ticks = ln(10)/ln(1.0001) ~= 10x market cap. The PUMP fee
+    ///         decays LINEARLY IN LOG-MCAP from 1% at graduation to 0.30% once
+    ///         the token has ~10x'd. Retunable without touching the math.
+    int256 internal constant PUMP_FEE_FLOOR_TICKS = 23_026;
+    /// @notice Smoothing time-constant (seconds) for the price EMA that feeds
+    ///         the PUMP dynamic fee. A single update moves the EMA at most
+    ///         dt/(dt+TAU) toward spot, capped at 50% (dt clamped to TAU), so a
+    ///         one-block price spike can never swing the fee: the oracle only
+    ///         updates once per timestamp and never on the swap that reads it.
+    uint256 internal constant EMA_TAU_SECONDS = 3_600; // 1 hour
     /// @notice Hard safety cap on the TOTAL afterSwap take (fee + anti-sniper).
     ///         v4-core bricks a swap when the take exceeds 100% of the
     ///         unspecified side; we clamp well below. Max legit = 50% snipe +
@@ -215,6 +243,8 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
     mapping(address => bool) public registeredLaunches;
     /// @notice Anti-sniper config per launch token.
     mapping(address => SnipeConfig) public snipeConfigs;
+    /// @notice Price EMA per graduated pool, feeding the PUMP dynamic fee.
+    mapping(PoolId => FeeObs) public feeObs;
     /// @notice Launch token => PoolId so `currentSnipeBps` callers (the hook
     ///         itself + indexers) can look up the curve state from a token addr.
     mapping(address => PoolId) public poolIdOf;
@@ -466,6 +496,18 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         uint256 elapsed = block.timestamp - cfg.launchedAt;
         if (elapsed >= cfg.decaySeconds) return 0;
         return (uint256(cfg.startBps) * (cfg.decaySeconds - elapsed)) / cfg.decaySeconds;
+    }
+
+    /// @notice The live trading fee (bps) a GRADUATED pool currently charges.
+    ///         PUMP pools decay from 1% at graduation toward the 0.30% floor as
+    ///         market cap grows (driven by the manipulation-resistant price
+    ///         EMA); CLANKER pools return their fixed tier. Returns 0 for a
+    ///         token that has not graduated. For UI display + off-chain quoting.
+    function currentFeeBps(address token) external view returns (uint256) {
+        PoolId poolId = poolIdOf[token];
+        CurveState memory state = curveStates[poolId];
+        if (state.status != uint8(Status.Graduated)) return 0;
+        return _feeBps(state.mode, poolId);
     }
 
     // -------------------------------------------------------------------
@@ -860,18 +902,25 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         // is in token for USDC -> token buys and in USDC for token -> USDC
         // sells. Creators / treasury auto-convert on the token side via the
         // MultiSwap aggregator when needed.
+        bool usdcIsCurrency0 = Currency.unwrap(key.currency0) == Currency.unwrap(USDC);
+
         bool specifiedTokenIs0 = (params.amountSpecified < 0 == params.zeroForOne);
         (Currency feeCurrency, int128 swapAmount) =
             specifiedTokenIs0 ? (key.currency1, delta.amount1()) : (key.currency0, delta.amount0());
         if (swapAmount < 0) swapAmount = -swapAmount;
-        if (swapAmount == 0) return (IHooks.afterSwap.selector, int128(0));
+        if (swapAmount == 0) {
+            _updateFeeObs(poolId, usdcIsCurrency0); // keep the oracle live
+            return (IHooks.afterSwap.selector, int128(0));
+        }
 
         // Always-USDC fee guarantee. afterSwap can only take on the UNSPECIFIED
         // side, so it takes iff USDC is the unspecified currency (buy exact-out
         // = spend USDC input; sell exact-in = receive USDC output). When USDC
         // is the specified side, beforeSwap already took the fee. Exactly one
-        // path fires per swap, so the fee is never double-charged.
+        // path fires per swap, so the fee is never double-charged. Either way we
+        // still advance the price oracle so the dynamic fee keeps tracking mcap.
         if (Currency.unwrap(feeCurrency) != Currency.unwrap(USDC)) {
+            _updateFeeObs(poolId, usdcIsCurrency0);
             return (IHooks.afterSwap.selector, int128(0));
         }
 
@@ -910,6 +959,10 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         }
 
         _distributeFee(poolId, feeCurrency, fee, state.mode);
+
+        // Advance the price oracle AFTER taking the fee, so this swap's own
+        // price impact never influences the fee it just paid.
+        _updateFeeObs(poolId, usdcIsCurrency0);
 
         // Return the total taken on the unspecified side so the swapper pays.
         uint256 totalTaken = fee + snipeSkim;
@@ -962,12 +1015,59 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
     }
 
     /// @dev The trading-fee rate (bps) for a graduated pool, by mode. PUMP uses
-    ///      an mcap-decaying dynamic fee (slice 2 wires the real curve; for now
-    ///      the graduation-max); CLANKER uses the creator-chosen tier stored at
-    ///      launch (slice 3 wires selection; for now tier 1 = 1%).
-    function _feeBps(uint8 mode, PoolId /*poolId*/ ) internal pure returns (uint256) {
-        if (mode == uint8(LaunchMode.PUMP)) return PUMP_FEE_MAX_BPS;
-        return FEE_TIER_1;
+    ///      an mcap-decaying dynamic fee driven by the price EMA; CLANKER uses
+    ///      the creator-chosen tier stored at launch (slice 3 wires selection;
+    ///      for now tier 1 = 1%). Reads ONLY stored oracle state, never the
+    ///      current swap's price, so a swap can't move the fee it itself pays.
+    function _feeBps(uint8 mode, PoolId poolId) internal view returns (uint256) {
+        if (mode != uint8(LaunchMode.PUMP)) return FEE_TIER_1;
+
+        FeeObs storage o = feeObs[poolId];
+        // Un-seeded (shouldn't happen post-graduation) -> charge the max.
+        if (!o.init) return PUMP_FEE_MAX_BPS;
+
+        int256 emaTick = int256(o.emaTickE3) / 1_000;
+        int256 growth = emaTick - int256(o.gradMcapTick); // ticks of mcap growth
+        if (growth <= 0) return PUMP_FEE_MAX_BPS; // at/below graduation mcap
+        if (growth >= PUMP_FEE_FLOOR_TICKS) return PUMP_FEE_MIN_BPS; // matured
+
+        // Linear decay in log-mcap from MAX at graduation to MIN at the floor.
+        uint256 drop =
+            (uint256(PUMP_FEE_MAX_BPS - PUMP_FEE_MIN_BPS) * uint256(growth)) / uint256(PUMP_FEE_FLOOR_TICKS);
+        return uint256(PUMP_FEE_MAX_BPS) - drop;
+    }
+
+    /// @dev The pool's current "mcap tick": the slot0 tick sign-normalised so it
+    ///      RISES with market cap regardless of whether USDC is currency0 or
+    ///      currency1. slot0.tick is log-price of currency1 per currency0; when
+    ///      USDC is currency0 that price FALLS as the token appreciates, so we
+    ///      negate it. Reads live pool state (post-swap when called in afterSwap).
+    function _mcapTick(PoolId poolId, bool usdcIsCurrency0) internal view returns (int24) {
+        (, int24 tick,,) = POOL_MANAGER.getSlot0(poolId);
+        return usdcIsCurrency0 ? -tick : tick;
+    }
+
+    /// @dev Advance the price EMA toward the current mcap tick. Manipulation
+    ///      resistance: (1) at most one update per block timestamp (dt==0 skips),
+    ///      so an intra-block spike + revert never moves the oracle; (2) the
+    ///      per-update weight is capped at 50% (dt clamped to TAU) so even a long
+    ///      quiet gap can't snap the EMA to a single manipulated print; (3) the
+    ///      FEE always reads the PRE-update EMA (callers update AFTER taking the
+    ///      fee), so a swap never influences the fee it itself pays.
+    function _updateFeeObs(PoolId poolId, bool usdcIsCurrency0) internal {
+        FeeObs storage o = feeObs[poolId];
+        if (!o.init) return; // only graduated pools carry an oracle
+        uint32 nowTs = uint32(block.timestamp);
+        uint256 dt = nowTs > o.lastTs ? uint256(nowTs - o.lastTs) : 0;
+        if (dt == 0) return; // one update per timestamp
+
+        int256 spotE3 = int256(_mcapTick(poolId, usdcIsCurrency0)) * 1_000;
+        int256 ema = int256(o.emaTickE3);
+        uint256 wdt = dt > EMA_TAU_SECONDS ? EMA_TAU_SECONDS : dt; // cap weight at 50%
+        // ema += (spot - ema) * wdt / (wdt + TAU)
+        ema += ((spotE3 - ema) * int256(wdt)) / int256(wdt + EMA_TAU_SECONDS);
+        o.emaTickE3 = int64(ema);
+        o.lastTs = nowTs;
     }
 
     /// @dev True iff the swap routes USDC -> launch token (a buy).
@@ -1111,7 +1211,20 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
             snipeConfigs[token].launchedAt = uint64(block.timestamp);
         }
 
-        emit Graduated(key.toId(), totalUsdc, lpTokens);
+        // Seed the PUMP fee oracle at the graduation price. The pool is now
+        // initialised + seeded, so slot0 reads the graduation tick. The EMA
+        // starts AT the graduation mcap tick, so the very first post-grad swaps
+        // pay PUMP_FEE_MAX (1%); the fee only decays as the EMA climbs.
+        PoolId pid = key.toId();
+        int24 gmt = _mcapTick(pid, usdcIsCurrency0);
+        feeObs[pid] = FeeObs({
+            emaTickE3: int64(int256(gmt) * 1_000),
+            gradMcapTick: gmt,
+            lastTs: uint32(block.timestamp),
+            init: true
+        });
+
+        emit Graduated(pid, totalUsdc, lpTokens);
     }
 
     /// @inheritdoc IUnlockCallback

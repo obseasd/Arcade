@@ -677,4 +677,70 @@ contract ArcadeHookSwapTest is Test {
             ""
         );
     }
+
+    // -------------------------------------------------------------------
+    // PUMP dynamic fee: 1% at graduation, decaying toward 0.30% as market
+    // cap grows, driven by a manipulation-resistant price EMA.
+    // -------------------------------------------------------------------
+
+    /// A fresh graduate charges the 1% ceiling: the EMA starts AT the
+    /// graduation mcap tick so there is zero growth yet.
+    function test_pumpFee_startsAtMax() public {
+        (address token,) = _graduatePump();
+        assertEq(hook.currentFeeBps(token), 100, "1% at graduation");
+    }
+
+    /// Drive the price up with repeated buys spaced over time; the EMA climbs
+    /// and the PUMP fee must fall below 1% but never under the 0.30% floor.
+    function test_pumpFee_decaysAsMarketCapGrows() public {
+        (address token, PoolKey memory key) = _graduatePump();
+        usdc.mint(ALICE, 5_000_000e6);
+        uint256 f0 = hook.currentFeeBps(token);
+        assertEq(f0, 100, "starts at 1%");
+
+        for (uint256 i = 0; i < 10; i++) {
+            vm.warp(block.timestamp + 3 hours);
+            _buyViaV4(key, ALICE, 200_000e6);
+        }
+
+        uint256 f1 = hook.currentFeeBps(token);
+        assertLt(f1, f0, "fee decayed as mcap grew");
+        assertGe(f1, 30, "never under the 0.30% floor");
+    }
+
+    /// Push the market cap far past the floor threshold (10x+) over time: the
+    /// fee must clamp exactly at the 0.30% floor and stay there.
+    function test_pumpFee_floorsAt30bps() public {
+        (address token, PoolKey memory key) = _graduatePump();
+        usdc.mint(ALICE, 50_000_000e6);
+
+        for (uint256 i = 0; i < 20; i++) {
+            vm.warp(block.timestamp + 6 hours);
+            _buyViaV4(key, ALICE, 1_000_000e6);
+        }
+
+        assertEq(hook.currentFeeBps(token), 30, "clamped at 0.30% floor");
+    }
+
+    /// Manipulation resistance: multiple swaps within the SAME block timestamp
+    /// must not move the oracle at all (dt == 0 guard), so a flash spike +
+    /// revert in one tx cannot swing the fee anyone pays.
+    function test_pumpFee_intraBlockSpikeDoesNotMoveFee() public {
+        (address token, PoolKey memory key) = _graduatePump();
+        usdc.mint(ALICE, 5_000_000e6);
+
+        // Advance the EMA to a mid value first.
+        vm.warp(block.timestamp + 3 hours);
+        _buyViaV4(key, ALICE, 100_000e6);
+        uint256 fBefore = hook.currentFeeBps(token);
+
+        // Two more swaps in the SAME block (no warp): oracle frozen.
+        _buyViaV4(key, ALICE, 500_000e6);
+        uint256 fMid = hook.currentFeeBps(token);
+        _sellViaV4(key, token, ALICE, 1_000_000e18);
+        uint256 fAfter = hook.currentFeeBps(token);
+
+        assertEq(fBefore, fMid, "no EMA move intra-block (buy)");
+        assertEq(fMid, fAfter, "no EMA move intra-block (sell)");
+    }
 }
