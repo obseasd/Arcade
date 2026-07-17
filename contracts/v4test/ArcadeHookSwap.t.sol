@@ -6,6 +6,7 @@ import {Vm} from "forge-std/Vm.sol";
 
 import {ArcadeHook} from "../v4src/ArcadeHook.sol";
 import {ArcadeV4Curve} from "../v4src/libraries/ArcadeV4Curve.sol";
+import {ArcadeV4SwapRouter} from "../v4src/ArcadeV4SwapRouter.sol";
 
 import {PoolManager} from "v4-core/PoolManager.sol";
 import {IHooks} from "v4-core/interfaces/IHooks.sol";
@@ -372,6 +373,50 @@ contract ArcadeHookSwapTest is Test {
         vm.recordLogs();
         _sellViaV4(key, tokenAddr, ALICE, 1_000e18);
         assertFalse(_sawAntiSnipe(), "sells are never snipe-taxed");
+    }
+
+    // ------------------------------------------------------------------
+    // ArcadeV4SwapRouter against the REAL PoolManager. The router's own
+    // ArcadeV4SwapRouter.t.sol uses a mock whose swap() ignores the price
+    // limit, so it never exercised the sqrtPriceLimitX96=0 fix nor the
+    // IncompleteOutput guard. These do, on an actually-graduated pool.
+    // ------------------------------------------------------------------
+
+    /// The core fix: sqrtPriceLimitX96 == 0 used to revert every swap. It must
+    /// now resolve to the full tick range and complete an exact-input buy.
+    function test_router_zeroLimitExactInputBuy_realPM() public {
+        (address tokenAddr, PoolKey memory key) = _graduatePump();
+        ArcadeV4SwapRouter router = new ArcadeV4SwapRouter(IPoolManager(address(pm)));
+
+        bool zeroForOne = Currency.unwrap(key.currency0) == address(usdc); // USDC -> token
+        address buyer = address(0xB0B);
+        usdc.mint(buyer, 1_000e6);
+        vm.startPrank(buyer);
+        usdc.approve(address(router), type(uint256).max);
+        uint256 out = router.exactInputSingle(key, zeroForOne, 1_000e6, 0, buyer, 0); // 0 = no limit
+        vm.stopPrank();
+
+        assertGt(out, 0, "0-limit exact-input must swap, not revert");
+        assertEq(IERC20(tokenAddr).balanceOf(buyer), out, "recipient received the realised output");
+    }
+
+    /// Exact-output with 0 limit must deliver EXACTLY the requested output and
+    /// must NOT false-trigger IncompleteOutput on a normal (non-partial) fill.
+    function test_router_zeroLimitExactOutput_deliversExactly_realPM() public {
+        (address tokenAddr, PoolKey memory key) = _graduatePump();
+        ArcadeV4SwapRouter router = new ArcadeV4SwapRouter(IPoolManager(address(pm)));
+
+        bool zeroForOne = Currency.unwrap(key.currency0) == address(usdc);
+        address buyer = address(0xB0B2);
+        usdc.mint(buyer, 100_000e6);
+        uint256 wantTokens = 1_000e18;
+        vm.startPrank(buyer);
+        usdc.approve(address(router), type(uint256).max);
+        uint256 paid = router.exactOutputSingle(key, zeroForOne, wantTokens, type(uint256).max, buyer, 0);
+        vm.stopPrank();
+
+        assertEq(IERC20(tokenAddr).balanceOf(buyer), wantTokens, "recipient got exactly the requested output");
+        assertGt(paid, 0, "input was paid");
     }
 
     /// The unimplemented CLANKER_V3 mode must be rejected at the door, not mint

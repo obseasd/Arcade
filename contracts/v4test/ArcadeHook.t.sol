@@ -247,8 +247,8 @@ contract ArcadeHookTest is Test {
         // launch-anchored clock had already decayed to 0 by the time the AMM
         // pool existed. The decay MATH once anchored (full value at graduation,
         // linear to 0) is exercised end-to-end in
-        // ArcadeHookSwap.t.sol:test_antisniper_taxesPostGraduationBuy, which
-        // needs a real graduated pool.
+        // ArcadeHookSwap.t.sol:test_antisniper_taxesPostGradBuy_afterLongCurve,
+        // which needs a real graduated pool.
         assertEq(hook.currentSnipeBps(tokenAddr), 0, "t=0 curve, dormant");
         vm.warp(block.timestamp + 500);
         assertEq(hook.currentSnipeBps(tokenAddr), 0, "mid curve");
