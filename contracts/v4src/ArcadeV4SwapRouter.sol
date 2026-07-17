@@ -11,6 +11,7 @@ import {Currency} from "v4-core/types/Currency.sol";
 import {PoolKey} from "v4-core/types/PoolKey.sol";
 import {BalanceDelta} from "v4-core/types/BalanceDelta.sol";
 import {SwapParams} from "v4-core/types/PoolOperation.sol";
+import {TickMath} from "v4-core/libraries/TickMath.sol";
 
 /**
  * @title ArcadeV4SwapRouter
@@ -46,6 +47,10 @@ contract ArcadeV4SwapRouter is IUnlockCallback, ReentrancyGuard {
     error SlippageExceeded(uint256 actual, uint256 limit);
     error ZeroAmount();
     error SwapFailed();
+    /// Exact-output swap did not deliver the full requested output (a binding
+    /// price limit produced a partial fill, or a hook skimmed the output). We
+    /// refuse to silently under-deliver on an exact-output request.
+    error IncompleteOutput(uint256 delivered, uint256 requested);
 
     event SwapExecuted(
         address indexed payer,
@@ -84,7 +89,10 @@ contract ArcadeV4SwapRouter is IUnlockCallback, ReentrancyGuard {
      * @param amountIn        Exact input amount the caller sends.
      * @param minAmountOut    Slippage floor on the output the recipient gets.
      * @param recipient       Destination of the output currency.
-     * @param sqrtPriceLimitX96 Price limit (0 = unlimited within tick range).
+     * @param sqrtPriceLimitX96 Price limit. Pass 0 for "no limit" -- it is
+     *        resolved to the full tick range in `unlockCallback` (a raw 0 is
+     *        rejected by v4-core's `Pool.swap` on both directions, so callers
+     *        MUST rely on this sentinel rather than passing 0 through).
      * @return amountOut      Realised output the recipient received.
      */
     function exactInputSingle(
@@ -113,15 +121,20 @@ contract ArcadeV4SwapRouter is IUnlockCallback, ReentrancyGuard {
                 })
             )
         );
-        amountOut = abi.decode(result, (uint256));
-        if (amountOut < minAmountOut) revert SlippageExceeded(amountOut, minAmountOut);
+        (uint256 realisedIn, uint256 realisedOut) = abi.decode(result, (uint256, uint256));
+        if (realisedOut < minAmountOut) revert SlippageExceeded(realisedOut, minAmountOut);
+        amountOut = realisedOut;
 
-        emit SwapExecuted(msg.sender, recipient, inputCurrency, outputCurrency, amountIn, amountOut, zeroForOne);
+        // Emit the REALISED amounts (indexers derive volume from this event).
+        emit SwapExecuted(msg.sender, recipient, inputCurrency, outputCurrency, realisedIn, realisedOut, zeroForOne);
     }
 
     /**
      * @notice Swap as much input as needed to receive an exact output amount,
-     *         reverting if the input required exceeds `maxAmountIn`.
+     *         reverting if the input required exceeds `maxAmountIn` OR if the
+     *         pool cannot deliver the full `amountOut` (partial fill / hook
+     *         skim -> `IncompleteOutput`). Pass `sqrtPriceLimitX96 = 0` for
+     *         no limit (resolved to the full tick range in `unlockCallback`).
      */
     function exactOutputSingle(
         PoolKey calldata key,
@@ -149,10 +162,16 @@ contract ArcadeV4SwapRouter is IUnlockCallback, ReentrancyGuard {
                 })
             )
         );
-        amountIn = abi.decode(result, (uint256));
-        if (amountIn > maxAmountIn) revert SlippageExceeded(amountIn, maxAmountIn);
+        (uint256 realisedIn, uint256 realisedOut) = abi.decode(result, (uint256, uint256));
+        // Exact-output must actually deliver the full output. A binding price
+        // limit or an output-skimming hook can leave realisedOut < amountOut;
+        // refuse rather than silently under-deliver (the recipient asked for a
+        // precise amount). Use exact-INPUT against a skimming pool.
+        if (realisedOut < amountOut) revert IncompleteOutput(realisedOut, amountOut);
+        if (realisedIn > maxAmountIn) revert SlippageExceeded(realisedIn, maxAmountIn);
+        amountIn = realisedIn;
 
-        emit SwapExecuted(msg.sender, recipient, inputCurrency, outputCurrency, amountIn, amountOut, zeroForOne);
+        emit SwapExecuted(msg.sender, recipient, inputCurrency, outputCurrency, realisedIn, realisedOut, zeroForOne);
     }
 
     // -----------------------------------------------------------------
@@ -167,6 +186,14 @@ contract ArcadeV4SwapRouter is IUnlockCallback, ReentrancyGuard {
         if (msg.sender != address(POOL_MANAGER)) revert NotPoolManager();
         SwapCallbackData memory cb = abi.decode(data, (SwapCallbackData));
 
+        // Resolve the "no limit" sentinel. v4-core's Pool.swap REJECTS a raw 0
+        // on both directions (zeroForOne: 0 <= MIN_SQRT_PRICE; !zeroForOne:
+        // 0 <= current price), so 0 means "swap the full tick range", encoded
+        // as the min/max sqrt price +/-1 (the widest bound Pool.swap accepts).
+        uint160 limit = cb.sqrtPriceLimitX96 == 0
+            ? (cb.zeroForOne ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1)
+            : cb.sqrtPriceLimitX96;
+
         // Run the swap. BalanceDelta is from the SWAP'S perspective:
         //   negative on the side the pool RECEIVED from us (we owe it)
         //   positive on the side the pool PAID to us (we're owed)
@@ -175,7 +202,7 @@ contract ArcadeV4SwapRouter is IUnlockCallback, ReentrancyGuard {
             SwapParams({
                 zeroForOne: cb.zeroForOne,
                 amountSpecified: cb.amountSpecified,
-                sqrtPriceLimitX96: cb.sqrtPriceLimitX96
+                sqrtPriceLimitX96: limit
             }),
             ""
         );
@@ -201,9 +228,10 @@ contract ArcadeV4SwapRouter is IUnlockCallback, ReentrancyGuard {
         // Take the output credit to the recipient.
         POOL_MANAGER.take(outputCurrency, cb.recipient, amountOut);
 
-        // For exact-input swaps the caller knows amountIn; for exact-output
-        // they know amountOut. Return the "other" one so they can enforce
-        // slippage.
-        return abi.encode(cb.amountSpecified < 0 ? amountOut : amountIn);
+        // Return BOTH realised legs so each entry point can enforce its own
+        // invariant (exact-in: output floor; exact-out: input ceiling AND full
+        // output delivery). Returning only one leg is what let exact-output
+        // silently under-deliver.
+        return abi.encode(amountIn, amountOut);
     }
 }

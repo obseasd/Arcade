@@ -84,6 +84,11 @@ contract DeployV4 is Script {
         | Hooks.AFTER_SWAP_RETURNS_DELTA_FLAG | Hooks.AFTER_ADD_LIQUIDITY_RETURNS_DELTA_FLAG;
     uint256 internal constant MAX_ATTEMPTS = 500_000;
 
+    /// @notice Arc mainnet. On this chain a canonical Uniswap V4 PoolManager
+    ///         already exists; deploying our own would fragment liquidity and
+    ///         be invisible to Uniswap's interface + aggregators.
+    uint256 internal constant ARC_MAINNET_CHAINID = 5042;
+
     /// @notice Foundry routes `new Contract{salt: s}(...)` through this
     ///         canonical deterministic deployer rather than msg.sender. We
     ///         must use this address (not vm.addr(pk)) when predicting the
@@ -113,13 +118,23 @@ contract DeployV4 is Script {
         vm.startBroadcast(pk);
 
         // 2. PoolManager: reuse if provided, otherwise deploy fresh. Arc
-        //    mainnet will likely host a canonical PoolManager; this script
-        //    accepts that via the POOL_MANAGER env var.
+        //    MAINNET hosts a CANONICAL PoolManager
+        //    (0x8366a39cc670b4001a1121b8f6a443a643e40951); deploying our own
+        //    there would produce a private pool invisible to Uniswap's
+        //    interface and every aggregator, with fragmented liquidity. Guard
+        //    against forgetting the env var on mainnet.
         PoolManager pm;
         if (existingPM == address(0)) {
+            require(
+                block.chainid != ARC_MAINNET_CHAINID,
+                "POOL_MANAGER env required on Arc mainnet (use the canonical PoolManager, do not deploy a private one)"
+            );
             pm = new PoolManager(owner);
             console2.log("PoolManager (new):", address(pm));
         } else {
+            // A typo'd address would deploy a hook wired to nothing. Refuse a
+            // codeless "PoolManager".
+            require(existingPM.code.length > 0, "POOL_MANAGER has no code");
             pm = PoolManager(existingPM);
             console2.log("PoolManager (existing):", address(pm));
         }
@@ -172,6 +187,15 @@ contract DeployV4 is Script {
             IPoolManager(poolManager), Currency.wrap(usdc), address(vault), treasury, twitterEscrow, owner
         );
         require(address(hook) == predicted, "deployed hook != predicted");
+        // REAL drift guard (the `TARGET_FLAGS == 0x3ECE` require above is a
+        // tautology). ArcadeHook skips Hooks.validateHookAddress, so nothing
+        // ELSE enforces that the mined address bits equal the permissions the
+        // hook actually declares. Assert both here so a getHookPermissions()
+        // edit that isn't mirrored into TARGET_FLAGS fails the deploy instead
+        // of silently shipping a hook the PoolManager mis-dispatches (a missing
+        // *_RETURNS_DELTA bit = the fee/skim silently does nothing).
+        require(hook.getHookPermissions() == TARGET_FLAGS, "hook perms != TARGET_FLAGS");
+        require(uint160(address(hook)) & PERM_MASK == TARGET_FLAGS, "hook addr bits != TARGET_FLAGS");
 
         // 6. Lens contracts. StateView + V4Quoter are the read-side primitives
         //    the frontend and the ArcLens Ponder schema use. They are stateless

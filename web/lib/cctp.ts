@@ -212,13 +212,30 @@ export const CCTP_CHAINS_MAINNET: CctpChainConfig[] = [
     confirmations: 3,
   },
   {
-    // PLACEHOLDER — Arc mainnet not live. VERIFY chainId, cctpDomain (Circle-
-    // assigned), usdc, rpc, explorer against the Arc mainnet docs before use.
-    id: 0,
+    // Arc mainnet. Every field below was VERIFIED ON-CHAIN 2026-07-17 (this was
+    // a `cctpDomain: -1` placeholder until then, which isBridgeableChain()
+    // refuses by design, blocking the Arc destination leg):
+    //   - chainId 5042: eth_chainId returns 0x13b2; native currency is USDC.
+    //   - cctpDomain 26: read straight off the deployed CCTP V2
+    //     MessageTransmitter's `localDomain()` on Arc mainnet (cross-checked --
+    //     TokenMessenger.localMessageTransmitter() names that same transmitter,
+    //     and version() == 1 == CCTP V2). Same number as Arc testnet: Circle
+    //     keeps a chain's domain stable across environments (Ethereum is 0 on
+    //     both mainnet and Sepolia). NOTE: you never need to wait on Circle's
+    //     docs for a domain -- read localDomain() off the transmitter.
+    //   - usdc 0x3600...0000: symbol() == "USDC", decimals() == 6 (SAME address
+    //     as Arc testnet).
+    // UNVERIFIED, deliberately left blank: the Arc MAINNET block explorer URL.
+    // `arcscan.app` and `explorer.arc.network` were both probed and do NOT
+    // resolve (only `testnet.arcscan.app` does), so guessing one would ship a
+    // dead tx link. An empty explorer is handled gracefully (BridgeHistory
+    // only renders the link when `src?.explorer` is truthy). Fill it in once
+    // the real mainnet explorer is known.
+    id: 5_042,
     name: "Arc",
-    cctpDomain: -1,
-    usdc: "0x0000000000000000000000000000000000000000",
-    rpc: "",
+    cctpDomain: 26,
+    usdc: "0x3600000000000000000000000000000000000000",
+    rpc: "https://5042.rpc.thirdweb.com",
     explorer: "",
     confirmations: 3,
   },
@@ -275,12 +292,18 @@ export function getCctpChain(chainId: number): CctpChainConfig | undefined {
 export function cctpDomainLabel(domain: number): string {
   const hit =
     [...CCTP_CHAINS_TESTNET, ...CCTP_CHAINS_MAINNET].find(
-      (c) => c.cctpDomain === domain && c.id !== 5_042_002,
+      (c) => c.cctpDomain === domain && !ARC_CHAIN_IDS.has(c.id),
     ) ??
     (SOLANA_PSEUDO_CHAIN.cctpDomain === domain ? SOLANA_PSEUDO_CHAIN : undefined);
   if (!hit) return `Domain ${domain}`;
   return hit.name.replace(/\s+(Sepolia|Fuji|Devnet|Testnet)$/i, "").trim();
 }
+
+/** Every Arc chain id (mainnet + testnet). Arc is the bridge DESTINATION, so it
+ *  must never be resolved as a source-route label. Keyed on the id set rather
+ *  than a single id: the mainnet entry (5042) was filled in 2026-07-17 and a
+ *  testnet-only exclusion silently started labelling domain 26 as "Arc". */
+const ARC_CHAIN_IDS: ReadonlySet<number> = new Set([5_042, 5_042_002]);
 
 /**
  * True iff a chain config is fully filled for a real burn/mint. Guards against a
