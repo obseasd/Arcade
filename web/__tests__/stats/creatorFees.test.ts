@@ -4,8 +4,9 @@ import { cctpDomainLabel } from "../../lib/cctp";
 
 const URL = "https://goldsky.example/graphql";
 
+// Declares the (url, init) params so tests can assert on the request body.
 function mockCreators(creators: unknown) {
-    return vi.fn(async () => ({
+    return vi.fn(async (_url?: unknown, _init?: { body?: string }) => ({
         ok: true,
         json: async () => ({ data: { creators } }),
     }) as unknown as Response);
@@ -84,7 +85,7 @@ describe("getGoldskyCreatorFees", () => {
         const fetchMock = mockCreators([]);
         vi.stubGlobal("fetch", fetchMock);
         await getGoldskyCreatorFees(Number.NaN);
-        const body = String((fetchMock.mock.calls[0]?.[1] as { body?: string })?.body ?? "");
+        const body = String(fetchMock.mock.calls[0]?.[1]?.body ?? "");
         expect(body).toContain("first: 10");
         expect(body).not.toContain("NaN");
     });
