@@ -7,6 +7,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ArcadeHook} from "../v4src/ArcadeHook.sol";
 import {ArcadeV4SwapRouter} from "../v4src/ArcadeV4SwapRouter.sol";
 import {LockedVault} from "../v4src/LockedVault.sol";
+import {ArcadeTwitterEscrowV4} from "../src/launchpad/ArcadeTwitterEscrowV4.sol";
 
 // Upstream v4-core.
 import {PoolManager} from "v4-core/PoolManager.sol";
@@ -62,14 +63,21 @@ import {V4Quoter} from "v4-periphery/lens/V4Quoter.sol";
  *           forge script v4script/DeployV4.s.sol \
  *               --rpc-url arc_testnet --broadcast
  *
+ *         Optional env (Twitter-handle CLANKER fee attribution):
+ *           TWITTER_ESCROW_ADDRESS reuse an existing ArcadeTwitterEscrowV4
+ *           TWITTER_SIGNER_ADDRESS backend EIP-712 signer; deploys a fresh
+ *                                  escrow when TWITTER_ESCROW_ADDRESS is unset
+ *
  *         Post-deploy checklist (manual):
- *           - Verify the hook on the block explorer with the constructor args
- *             printed below.
- *           - Wire frontend `ADDRESSES.arcadeHook` and `ADDRESSES.lockedVault`.
- *           - If TWITTER_ESCROW_ADDRESS was zero, call escrow.authorise(hook)
- *             when the escrow is deployed and `hook.setTwitterEscrow(escrow)`
- *             on the hook side.
- *           - Update DeployV4 frontend log: `web/lib/constants.ts`.
+ *           - Verify the hook + escrow on the block explorer with the printed
+ *             constructor args.
+ *           - Wire frontend addresses (arcadeHook, lockedVault, lenses,
+ *             swapRouter, escrow) into `web/lib/constants.ts` +
+ *             `web/public/deployments.json`.
+ *           - If the escrow was NOT wired in-script (owner is the Safe), run the
+ *             Safe tx `escrow.setCrediter(hook, true)` so CLANKER handle fees can
+ *             be credited. The hook already bakes in the escrow (constructor
+ *             arg); no setTwitterEscrow needed unless repointing later.
  */
 contract DeployV4 is Script {
     // Permission bitmap mining: search the salt space for a CREATE2 address
@@ -107,6 +115,9 @@ contract DeployV4 is Script {
         address owner = vm.envOr("OWNER_ADDRESS", deployer);
         address existingPM = vm.envOr("POOL_MANAGER", address(0));
         address existingVault = vm.envOr("LOCKED_VAULT", address(0));
+        // The escrow's EIP-712 backend signer (the single Vercel key). Required
+        // only when deploying a fresh escrow (TWITTER_ESCROW_ADDRESS unset).
+        address twitterSigner = vm.envOr("TWITTER_SIGNER_ADDRESS", address(0));
 
         require(usdc != address(0), "ARC_USDC_ADDRESS required");
 
@@ -150,6 +161,20 @@ contract DeployV4 is Script {
         } else {
             vault = LockedVault(existingVault);
             console2.log("LockedVault (existing):", address(vault));
+        }
+
+        // 3b. Twitter escrow (handle-gated CLANKER creator fees). Reuse if
+        //     TWITTER_ESCROW_ADDRESS is set; otherwise deploy a fresh
+        //     ArcadeTwitterEscrowV4 (requires TWITTER_SIGNER_ADDRESS). The hook
+        //     bakes this address in as its initial `twitterEscrow`, and the
+        //     escrow must later allow-list the hook as a crediter (step 5b).
+        if (twitterEscrow == address(0) && twitterSigner != address(0)) {
+            ArcadeTwitterEscrowV4 escrow = new ArcadeTwitterEscrowV4(twitterSigner, owner);
+            twitterEscrow = address(escrow);
+            console2.log("ArcadeTwitterEscrowV4 (new):", twitterEscrow);
+        } else if (twitterEscrow != address(0)) {
+            require(twitterEscrow.code.length > 0, "TWITTER_ESCROW_ADDRESS has no code");
+            console2.log("ArcadeTwitterEscrowV4 (existing):", twitterEscrow);
         }
 
         // 4. Mine a CREATE2 salt so the deployed hook address encodes the
@@ -197,6 +222,18 @@ contract DeployV4 is Script {
         require(hook.getHookPermissions() == TARGET_FLAGS, "hook perms != TARGET_FLAGS");
         require(uint160(address(hook)) & PERM_MASK == TARGET_FLAGS, "hook addr bits != TARGET_FLAGS");
 
+        // 5b. Allow-list the hook as an escrow crediter. Only possible in-script
+        //     when the deployer owns the escrow (testnet). On mainnet the escrow
+        //     owner is the Safe, so this MUST be done as a separate Safe tx
+        //     (printed in the checklist). A fresh escrow (owner == deployer,
+        //     i.e. OWNER_ADDRESS unset) is wired here so testnet is turnkey.
+        bool escrowWired = false;
+        if (twitterEscrow != address(0) && owner == deployer) {
+            ArcadeTwitterEscrowV4(twitterEscrow).setCrediter(address(hook), true);
+            escrowWired = true;
+            console2.log("escrow.setCrediter(hook, true): done (deployer is owner)");
+        }
+
         // 6. Lens contracts. StateView + V4Quoter are the read-side primitives
         //    the frontend and the ArcLens Ponder schema use. They are stateless
         //    and depend only on the PoolManager address, so one set of lenses
@@ -224,6 +261,7 @@ contract DeployV4 is Script {
         console2.log("PoolManager:        ", poolManager);
         console2.log("LockedVault:        ", address(vault));
         console2.log("ArcadeHook:         ", address(hook));
+        console2.log("TwitterEscrowV4:    ", twitterEscrow);
         console2.log("StateView (lens):   ", address(stateView));
         console2.log("V4Quoter (lens):    ", address(quoter));
         console2.log("V4SwapRouter:       ", address(swapRouter));
@@ -238,6 +276,15 @@ contract DeployV4 is Script {
         console2.log("  ADDRESSES.v4StateView  =", address(stateView));
         console2.log("  ADDRESSES.v4Quoter     =", address(quoter));
         console2.log("  ADDRESSES.v4SwapRouter =", address(swapRouter));
+        if (twitterEscrow != address(0)) {
+            console2.log("  ADDRESSES.twitterEscrow=", twitterEscrow);
+        }
         console2.log("=========================================");
+        if (twitterEscrow != address(0) && !escrowWired) {
+            console2.log("ACTION REQUIRED (Safe): escrow.setCrediter(hook, true)");
+            console2.log("  escrow:", twitterEscrow);
+            console2.log("  hook:  ", address(hook));
+            console2.log("=========================================");
+        }
     }
 }
