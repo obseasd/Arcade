@@ -106,7 +106,7 @@ contract ArcadeHookSwapTest is Test {
         (Currency c0, Currency c1) = usdcAddr < token
             ? (Currency.wrap(usdcAddr), Currency.wrap(token))
             : (Currency.wrap(token), Currency.wrap(usdcAddr));
-        return PoolKey({currency0: c0, currency1: c1, fee: 10_000, tickSpacing: 200, hooks: IHooks(address(hook))});
+        return PoolKey({currency0: c0, currency1: c1, fee: 0, tickSpacing: 200, hooks: IHooks(address(hook))});
     }
 
     // -------------------------------------------------------------------
@@ -427,7 +427,7 @@ contract ArcadeHookSwapTest is Test {
         hook.createLaunch("V3", "V3", "ipfs://x", 2, address(0), 0, 0, 0);
     }
 
-    function test_postGradRoyalty_PUMP_splits50_50_inUsdcOnSell() public {
+    function test_postGradFee_PUMP_splits80_20_inUsdcOnSell() public {
         (address tokenAddr, PoolKey memory key) = _graduatePump();
 
         uint256 treasuryBefore = usdc.balanceOf(TREASURY);
@@ -437,14 +437,16 @@ contract ArcadeHookSwapTest is Test {
 
         uint256 treasuryGot = usdc.balanceOf(TREASURY) - treasuryBefore;
         uint256 creatorGot = usdc.balanceOf(CREATOR) - creatorBefore;
-        uint256 totalRoyalty = treasuryGot + creatorGot;
-        // 0.30% royalty on a non-trivial sell must be measurable.
-        assertGt(totalRoyalty, 0, "royalty paid");
-        // PUMP = 50/50 with no creator2. Allow 1 wei drift from integer math.
-        assertApproxEqAbs(treasuryGot, creatorGot, 1, "50/50 split (PUMP)");
+        uint256 total = treasuryGot + creatorGot;
+        // New model: the hook captures the whole trading fee on a non-trivial
+        // sell, so it must be measurable.
+        assertGt(total, 0, "fee paid");
+        // Post-grad split is 80/20 creator/treasury for every mode.
+        assertApproxEqRel(creatorGot, (total * 80) / 100, 0.01e18, "creator 80% (PUMP)");
+        assertApproxEqRel(treasuryGot, (total * 20) / 100, 0.01e18, "treasury 20% (PUMP)");
     }
 
-    function test_postGradRoyalty_CLANKER_creator70_treasury30() public {
+    function test_postGradFee_CLANKER_splits80_20() public {
         (address tokenAddr, PoolKey memory key) = _graduateClanker();
 
         uint256 treasuryBefore = usdc.balanceOf(TREASURY);
@@ -456,9 +458,105 @@ contract ArcadeHookSwapTest is Test {
         uint256 creatorGot = usdc.balanceOf(CREATOR) - creatorBefore;
         uint256 total = treasuryGot + creatorGot;
 
-        // CLANKER post-grad: creator 70%, treasury 30%.
-        assertApproxEqRel(creatorGot, (total * 70) / 100, 0.01e18, "creator 70%");
-        assertApproxEqRel(treasuryGot, (total * 30) / 100, 0.01e18, "treasury 30%");
+        // CLANKER post-grad: creator 80%, treasury 20%.
+        assertApproxEqRel(creatorGot, (total * 80) / 100, 0.01e18, "creator 80%");
+        assertApproxEqRel(treasuryGot, (total * 20) / 100, 0.01e18, "treasury 20%");
+    }
+
+    // -------------------------------------------------------------------
+    // Always-USDC fee capture: the fee lands in USDC on ALL FOUR swap
+    // cases (buy/sell x exact-in/exact-out), never in the launch token.
+    // beforeSwap covers the USDC-specified cases (buy exact-in, sell
+    // exact-out); afterSwap covers the USDC-unspecified cases. Exactly one
+    // side fires per swap so the fee is never double-charged.
+    // -------------------------------------------------------------------
+
+    /// Snapshot fee-recipient balances, run `body`, then assert the ENTIRE fee
+    /// arrived in USDC (never in the launch token) and split 80/20.
+    function _assertUsdcOnlyFee(
+        address tokenAddr,
+        uint256 cUsdc0,
+        uint256 tUsdc0,
+        uint256 cTok0,
+        uint256 tTok0
+    ) internal {
+        uint256 cUsdc = usdc.balanceOf(CREATOR) - cUsdc0;
+        uint256 tUsdc = usdc.balanceOf(TREASURY) - tUsdc0;
+        uint256 cTok = IERC20(tokenAddr).balanceOf(CREATOR) - cTok0;
+        uint256 tTok = IERC20(tokenAddr).balanceOf(TREASURY) - tTok0;
+        uint256 total = cUsdc + tUsdc;
+        assertGt(total, 0, "fee paid in USDC");
+        // The launch token must NEVER be handed to a fee recipient.
+        assertEq(cTok, 0, "creator got no token fee");
+        assertEq(tTok, 0, "treasury got no token fee");
+        assertApproxEqRel(cUsdc, (total * 80) / 100, 0.01e18, "creator 80%");
+        assertApproxEqRel(tUsdc, (total * 20) / 100, 0.01e18, "treasury 20%");
+    }
+
+    /// buy exact-in: spend exact USDC (USDC specified) -> beforeSwap path.
+    function test_alwaysUsdc_buyExactIn() public {
+        (address tokenAddr, PoolKey memory key) = _graduatePump();
+        uint256 cU = usdc.balanceOf(CREATOR);
+        uint256 tU = usdc.balanceOf(TREASURY);
+        uint256 cT = IERC20(tokenAddr).balanceOf(CREATOR);
+        uint256 tT = IERC20(tokenAddr).balanceOf(TREASURY);
+        _buyViaV4(key, ALICE, 5_000e6);
+        _assertUsdcOnlyFee(tokenAddr, cU, tU, cT, tT);
+    }
+
+    /// sell exact-in: sell exact token, receive USDC (USDC unspecified) -> afterSwap.
+    function test_alwaysUsdc_sellExactIn() public {
+        (address tokenAddr, PoolKey memory key) = _graduatePump();
+        uint256 cU = usdc.balanceOf(CREATOR);
+        uint256 tU = usdc.balanceOf(TREASURY);
+        uint256 cT = IERC20(tokenAddr).balanceOf(CREATOR);
+        uint256 tT = IERC20(tokenAddr).balanceOf(TREASURY);
+        _sellViaV4(key, tokenAddr, ALICE, 100_000e18);
+        _assertUsdcOnlyFee(tokenAddr, cU, tU, cT, tT);
+    }
+
+    /// buy exact-out: want exact token, pay USDC (token specified, USDC
+    /// unspecified) -> afterSwap path.
+    function test_alwaysUsdc_buyExactOut() public {
+        (address tokenAddr, PoolKey memory key) = _graduatePump();
+        uint256 cU = usdc.balanceOf(CREATOR);
+        uint256 tU = usdc.balanceOf(TREASURY);
+        uint256 cT = IERC20(tokenAddr).balanceOf(CREATOR);
+        uint256 tT = IERC20(tokenAddr).balanceOf(TREASURY);
+        vm.startPrank(ALICE);
+        bool zeroForOne = Currency.unwrap(key.currency0) == address(usdc); // USDC -> token
+        uint160 lim = zeroForOne ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1;
+        swapRouter.swap(
+            key,
+            SwapParams({zeroForOne: zeroForOne, amountSpecified: int256(500_000e18), sqrtPriceLimitX96: lim}),
+            PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}),
+            ""
+        );
+        vm.stopPrank();
+        _assertUsdcOnlyFee(tokenAddr, cU, tU, cT, tT);
+    }
+
+    /// sell exact-out: want exact USDC out, pay token (USDC specified) ->
+    /// beforeSwap path. The critical new case: a SELL whose fee is taken in
+    /// beforeSwap, still in USDC.
+    function test_alwaysUsdc_sellExactOut() public {
+        (address tokenAddr, PoolKey memory key) = _graduatePump();
+        uint256 cU = usdc.balanceOf(CREATOR);
+        uint256 tU = usdc.balanceOf(TREASURY);
+        uint256 cT = IERC20(tokenAddr).balanceOf(CREATOR);
+        uint256 tT = IERC20(tokenAddr).balanceOf(TREASURY);
+        vm.startPrank(ALICE);
+        IERC20(tokenAddr).approve(address(swapRouter), type(uint256).max);
+        bool zeroForOne = Currency.unwrap(key.currency0) != address(usdc); // token -> USDC
+        uint160 lim = zeroForOne ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1;
+        swapRouter.swap(
+            key,
+            SwapParams({zeroForOne: zeroForOne, amountSpecified: int256(100e6), sqrtPriceLimitX96: lim}),
+            PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}),
+            ""
+        );
+        vm.stopPrank();
+        _assertUsdcOnlyFee(tokenAddr, cU, tU, cT, tT);
     }
 
     // -------------------------------------------------------------------

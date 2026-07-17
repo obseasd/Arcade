@@ -340,7 +340,7 @@ contract ArcadeHookTest is Test {
         PoolKey memory key = PoolKey({
             currency0: Currency.wrap(address(0x1)),
             currency1: Currency.wrap(address(0x2)),
-            fee: 10_000,
+            fee: 0,
             tickSpacing: 200,
             hooks: IHooks(address(hook))
         });
@@ -354,7 +354,7 @@ contract ArcadeHookTest is Test {
         PoolKey memory key = PoolKey({
             currency0: Currency.wrap(address(usdc) < address(0x1) ? address(usdc) : address(0x1)),
             currency1: Currency.wrap(address(usdc) < address(0x1) ? address(0x1) : address(usdc)),
-            fee: 10_000,
+            fee: 0,
             tickSpacing: 200,
             hooks: IHooks(address(hook))
         });
@@ -371,7 +371,7 @@ contract ArcadeHookTest is Test {
         return PoolKey({
             currency0: Currency.wrap(address(usdc)),
             currency1: Currency.wrap(address(0x1)),
-            fee: 10_000,
+            fee: 0,
             tickSpacing: 200,
             hooks: IHooks(address(hook))
         });

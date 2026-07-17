@@ -31,7 +31,7 @@ import {Currency} from "v4-core/types/Currency.sol";
 import {PoolId, PoolIdLibrary} from "v4-core/types/PoolId.sol";
 import {PoolKey} from "v4-core/types/PoolKey.sol";
 import {BalanceDelta, BalanceDeltaLibrary} from "v4-core/types/BalanceDelta.sol";
-import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "v4-core/types/BeforeSwapDelta.sol";
+import {BeforeSwapDelta, BeforeSwapDeltaLibrary, toBeforeSwapDelta} from "v4-core/types/BeforeSwapDelta.sol";
 import {SwapParams, ModifyLiquidityParams} from "v4-core/types/PoolOperation.sol";
 
 import {LiquidityAmounts} from "v4-periphery/libraries/LiquidityAmounts.sol";
@@ -172,6 +172,29 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
     /// @notice Mode-specific creator share of the post-graduation royalty.
     ///         Indexed by `LaunchMode`.
     uint16[3] internal MODE_CREATOR_BPS = [5_000, 7_000, 8_000];
+
+    // --- New fee model (2026-07-17 redesign, replaces the 1% pool fee + 0.30%
+    //     royalty). Pool LP fee set to 0; the hook captures the WHOLE trading
+    //     fee in before/afterSwap, always in USDC, split creator/treasury.
+    //     Being wired in slices: capture -> PUMP dynamic mcap fee -> CLANKER
+    //     tier -> mode merge. See project_arcade_v4_analysis memory. ---
+    /// @notice Creator's share of the post-graduation trading fee (80%);
+    ///         treasury takes the remaining 20%.
+    uint16 internal constant POST_GRAD_CREATOR_BPS = 8_000;
+    /// @notice CLANKER-mode selectable fee tiers (creator picks one at launch).
+    ///         PUMP mode ignores this and uses the mcap-decaying dynamic fee.
+    uint16 internal constant FEE_TIER_1 = 100; // 1%
+    uint16 internal constant FEE_TIER_2 = 200; // 2%
+    uint16 internal constant FEE_TIER_3 = 300; // 3%
+    /// @notice PUMP dynamic-fee bounds: starts at ~1% for a fresh graduate and
+    ///         decays with market cap down to 0.30% for a mature token.
+    uint16 internal constant PUMP_FEE_MAX_BPS = 100; // 1% at graduation
+    uint16 internal constant PUMP_FEE_MIN_BPS = 30; // 0.30% mature floor
+    /// @notice Hard safety cap on the TOTAL afterSwap take (fee + anti-sniper).
+    ///         v4-core bricks a swap when the take exceeds 100% of the
+    ///         unspecified side; we clamp well below. Max legit = 50% snipe +
+    ///         3% fee = 53%, so 60% leaves margin while staying < 100%.
+    uint16 internal constant MAX_TOTAL_TAKE_BPS = 6_000; // 60%, hard brick guard
 
     /// @notice Max allowed anti-sniper starting tax (50%). Decays linearly to 0.
     uint16 internal constant MAX_SNIPE_START_BPS = 5_000;
@@ -607,11 +630,11 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
     function beforeSwap(
         address, /*sender*/
         PoolKey calldata key,
-        SwapParams calldata, /*params*/
+        SwapParams calldata params,
         bytes calldata /*hookData*/
-    ) external view override onlyPoolManager returns (bytes4, BeforeSwapDelta, uint24) {
+    ) external override onlyPoolManager returns (bytes4, BeforeSwapDelta, uint24) {
         PoolId poolId = key.toId();
-        CurveState storage state = curveStates[poolId];
+        CurveState memory state = curveStates[poolId];
 
         // GraduationStarted: every concurrent swap during graduation reverts so
         // there is exactly one tx that observes the transition. Round 4 sets
@@ -625,11 +648,67 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         // ERC20 transferFrom, matching the V2 production launchpad's pattern.
         if (state.status == uint8(Status.Curving)) revert LiquidityNotPermitted();
 
-        // Graduated: swaps go through the canonical AMM plus the post-grad
-        // royalty (Round 5). For the Round 3 pass the swap falls through to
-        // canonical with no hook contribution. Anti-sniper application is
-        // wired in Round 5 alongside the royalty path.
-        return (IHooks.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
+        // Only graduated pools take a trading fee here.
+        if (state.status != uint8(Status.Graduated)) {
+            return (IHooks.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
+        }
+
+        // Always-USDC fee guarantee. The fee is ALWAYS charged in USDC. We can
+        // only cleanly take on the SPECIFIED side here (beforeSwap deltas act
+        // on the specified currency); afterSwap covers the UNSPECIFIED side.
+        // So beforeSwap takes iff USDC is the specified currency (buy exact-in
+        // = spend exact USDC; sell exact-out = receive exact USDC). When USDC
+        // is unspecified, afterSwap takes instead. Exactly one path fires per
+        // swap, so the fee is never double-charged.
+        bool specifiedIs0 = (params.amountSpecified < 0 == params.zeroForOne);
+        Currency specifiedCurrency = specifiedIs0 ? key.currency0 : key.currency1;
+        if (Currency.unwrap(specifiedCurrency) != Currency.unwrap(USDC)) {
+            return (IHooks.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
+        }
+
+        // Fee is on the specified USDC magnitude.
+        uint256 amount = params.amountSpecified < 0
+            ? uint256(-params.amountSpecified)
+            : uint256(params.amountSpecified);
+        if (amount == 0) return (IHooks.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
+
+        uint256 feeBps = _feeBps(state.mode, poolId);
+        if (feeBps > MAX_TOTAL_TAKE_BPS) feeBps = MAX_TOTAL_TAKE_BPS;
+        uint256 fee = (amount * feeBps) / 10_000;
+
+        // Anti-sniper skim on BUYS only. A buy with USDC specified is
+        // buy-exact-in (spending exact USDC). USDC specified on a SELL is
+        // sell-exact-out (receiving exact USDC), not a buy, so no skim there.
+        uint256 snipeSkim = 0;
+        if (_isUsdcToTokenSwap(key, params, USDC)) {
+            address launchToken = Currency.unwrap(key.currency0) == Currency.unwrap(USDC)
+                ? Currency.unwrap(key.currency1)
+                : Currency.unwrap(key.currency0);
+            uint256 bps = _currentSnipeBps(launchToken);
+            if (bps > 0) snipeSkim = (amount * bps) / 10_000;
+        }
+
+        // Combined hard cap: fee + snipe <= MAX_TOTAL_TAKE_BPS of the swap.
+        // Clamp the snipe first (fee is the creator's core revenue); never
+        // revert (a reverting hook bricks every swap on an immutable pool).
+        uint256 maxTake = (amount * MAX_TOTAL_TAKE_BPS) / 10_000;
+        if (fee > maxTake) fee = maxTake;
+        if (fee + snipeSkim > maxTake) snipeSkim = maxTake - fee;
+
+        if (snipeSkim > 0) {
+            _safeTake(USDC, TREASURY, snipeSkim);
+            emit AntiSnipeApplied(poolId, msg.sender, snipeSkim, uint16((snipeSkim * 10_000) / amount));
+        }
+        _distributeFee(poolId, USDC, fee, state.mode);
+
+        // Positive specified delta = the hook takes this many USDC units off
+        // the specified side, so the swapper pays for everything taken above.
+        uint256 totalTaken = fee + snipeSkim;
+        return (
+            IHooks.beforeSwap.selector,
+            toBeforeSwapDelta(int128(int256(totalTaken)), int128(0)),
+            0
+        );
     }
 
     // -------------------------------------------------------------------
@@ -787,86 +866,108 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         if (swapAmount < 0) swapAmount = -swapAmount;
         if (swapAmount == 0) return (IHooks.afterSwap.selector, int128(0));
 
+        // Always-USDC fee guarantee. afterSwap can only take on the UNSPECIFIED
+        // side, so it takes iff USDC is the unspecified currency (buy exact-out
+        // = spend USDC input; sell exact-in = receive USDC output). When USDC
+        // is the specified side, beforeSwap already took the fee. Exactly one
+        // path fires per swap, so the fee is never double-charged.
+        if (Currency.unwrap(feeCurrency) != Currency.unwrap(USDC)) {
+            return (IHooks.afterSwap.selector, int128(0));
+        }
+
         uint256 amount = uint256(uint128(swapAmount));
-        uint256 totalRoyalty = (amount * POST_GRAD_ROYALTY_BPS) / 10_000;
+
+        // The hook captures the WHOLE trading fee (the pool LP fee is 0), split
+        // 80/20 creator/treasury. feeBps is mode-driven (PUMP: mcap-decaying;
+        // CLANKER: the creator-chosen tier). Hard-clamped for immutable safety.
+        uint256 feeBps = _feeBps(state.mode, poolId);
+        if (feeBps > MAX_TOTAL_TAKE_BPS) feeBps = MAX_TOTAL_TAKE_BPS;
+        uint256 fee = (amount * feeBps) / 10_000;
 
         // Anti-sniper top-up: during the decay window post-grad, BUYS pay an
-        // additional skim straight to TREASURY. Only USDC -> token swaps
-        // count as buys for this purpose. The skim sits ALONGSIDE the
-        // royalty: both are taken from the unspecified side.
-        Currency usdcCurrency = USDC;
-        bool isBuy = _isUsdcToTokenSwap(key, params, usdcCurrency);
+        // additional skim to TREASURY. Only USDC -> token swaps count as buys.
+        // Sits ALONGSIDE the fee, same unspecified USDC side.
         uint256 snipeSkim = 0;
-        if (isBuy) {
+        if (_isUsdcToTokenSwap(key, params, USDC)) {
             address launchToken =
-                Currency.unwrap(key.currency0) == Currency.unwrap(usdcCurrency)
+                Currency.unwrap(key.currency0) == Currency.unwrap(USDC)
                     ? Currency.unwrap(key.currency1)
                     : Currency.unwrap(key.currency0);
             uint256 bps = _currentSnipeBps(launchToken);
-            if (bps > 0) {
-                snipeSkim = (amount * bps) / 10_000;
-                if (snipeSkim > 0) {
-                    _safeTake(feeCurrency, TREASURY, snipeSkim);
-                    emit AntiSnipeApplied(poolId, msg.sender, snipeSkim, uint16(bps));
-                }
-            }
+            if (bps > 0) snipeSkim = (amount * bps) / 10_000;
         }
 
-        // Split the royalty per mode (PUMP 50/50, CLANKER 70/30 creator/treasury,
-        // CLANKER_V3 80/20). MODE_CREATOR_BPS pinned at construction.
-        FeeOwner memory fo = feeOwners[poolId];
-        uint256 creatorCut = 0;
-        uint256 treasuryCut = 0;
-        if (totalRoyalty > 0) {
-            uint16 creatorBps = MODE_CREATOR_BPS[state.mode];
-            creatorCut = (totalRoyalty * creatorBps) / 10_000;
-            treasuryCut = totalRoyalty - creatorCut;
-
-            // Optional creator2 split. Only active when the launch was opened
-            // in CLANKER mode WITH a creator2 + bps configured.
-            if (
-                fo.creator2 != address(0) && fo.creator2Bps > 0
-                    && state.mode == uint8(LaunchMode.CLANKER)
-            ) {
-                uint256 creator2Cut = (creatorCut * fo.creator2Bps) / 10_000;
-                if (creator2Cut > 0) {
-                    _safeTake(feeCurrency, fo.creator2, creator2Cut);
-                    creatorCut -= creator2Cut;
-                }
-            }
-
-            // Route the creator cut. When the launch wired a Twitter escrow
-            // slot, try to credit the slot. If the escrow is paused, missing,
-            // or reverts for any reason, fall back to a direct take to the
-            // creator and emit EscrowCreditFailed so an indexer can surface
-            // it. Escrow downtime MUST NOT block swaps. Every take goes
-            // through _safeTake so a blocked recipient credits a pending
-            // pull instead of reverting the swap (CSEC-001).
-            if (creatorCut > 0) {
-                if (fo.twitterEscrow != address(0)) {
-                    address feeTokenAddr = Currency.unwrap(feeCurrency);
-                    uint256 positionId = _positionIdForEscrow(poolId);
-                    try IArcadeTwitterEscrowV3Min(fo.twitterEscrow).creditSlot(
-                        positionId, fo.slotIndex, feeTokenAddr, creatorCut
-                    ) {
-                        _safeTake(feeCurrency, fo.twitterEscrow, creatorCut);
-                    } catch {
-                        _safeTake(feeCurrency, fo.creator, creatorCut);
-                        emit EscrowCreditFailed(positionId, fo.slotIndex, creatorCut);
-                    }
-                } else {
-                    _safeTake(feeCurrency, fo.creator, creatorCut);
-                }
-            }
-            if (treasuryCut > 0) _safeTake(feeCurrency, TREASURY, treasuryCut);
-
-            emit RoyaltyPaid(poolId, fo.creator, creatorCut, treasuryCut);
+        // Combined hard cap: fee + snipe can never exceed MAX_TOTAL_TAKE_BPS of
+        // the swap (v4-core bricks the swap at 100%). Clamp the SNIPE down first
+        // (the fee is the creator's core revenue), never revert -- a reverting
+        // afterSwap would brick every swap on an immutable pool.
+        uint256 maxTake = (amount * MAX_TOTAL_TAKE_BPS) / 10_000;
+        if (fee > maxTake) fee = maxTake;
+        if (fee + snipeSkim > maxTake) snipeSkim = maxTake - fee;
+        if (snipeSkim > 0) {
+            _safeTake(feeCurrency, TREASURY, snipeSkim);
+            emit AntiSnipeApplied(poolId, msg.sender, snipeSkim, uint16((snipeSkim * 10_000) / amount));
         }
 
-        // Return the total taken on the unspecified side so the user pays
-        // for everything we took above.
-        uint256 totalTaken = totalRoyalty + snipeSkim;
+        _distributeFee(poolId, feeCurrency, fee, state.mode);
+
+        // Return the total taken on the unspecified side so the swapper pays.
+        uint256 totalTaken = fee + snipeSkim;
         return (IHooks.afterSwap.selector, int128(int256(totalTaken)));
+    }
+
+    /// @dev Split `fee` (already computed, in `feeCurrency`) 80/20
+    ///      creator/treasury and route it via _safeTake. The creator cut
+    ///      flows through the optional creator2 split (CLANKER only) and the
+    ///      Twitter-escrow slot when wired, falling back to a direct creator
+    ///      take if the escrow reverts. Every take is blocklist-safe so a
+    ///      hostile recipient credits a pending pull instead of bricking the
+    ///      swap (CSEC-001). Shared by before/afterSwap so the split is
+    ///      identical no matter which side USDC lands on.
+    function _distributeFee(PoolId poolId, Currency feeCurrency, uint256 fee, uint8 mode) internal {
+        if (fee == 0) return;
+        FeeOwner memory fo = feeOwners[poolId];
+        uint256 creatorCut = (fee * POST_GRAD_CREATOR_BPS) / 10_000;
+        uint256 treasuryCut = fee - creatorCut;
+
+        // Optional creator2 split (CLANKER only, when configured).
+        if (fo.creator2 != address(0) && fo.creator2Bps > 0 && mode == uint8(LaunchMode.CLANKER)) {
+            uint256 creator2Cut = (creatorCut * fo.creator2Bps) / 10_000;
+            if (creator2Cut > 0) {
+                _safeTake(feeCurrency, fo.creator2, creator2Cut);
+                creatorCut -= creator2Cut;
+            }
+        }
+
+        // Route the creator cut. Twitter-escrow slot if wired, else direct.
+        if (creatorCut > 0) {
+            if (fo.twitterEscrow != address(0)) {
+                address feeTokenAddr = Currency.unwrap(feeCurrency);
+                uint256 positionId = _positionIdForEscrow(poolId);
+                try IArcadeTwitterEscrowV3Min(fo.twitterEscrow).creditSlot(
+                    positionId, fo.slotIndex, feeTokenAddr, creatorCut
+                ) {
+                    _safeTake(feeCurrency, fo.twitterEscrow, creatorCut);
+                } catch {
+                    _safeTake(feeCurrency, fo.creator, creatorCut);
+                    emit EscrowCreditFailed(positionId, fo.slotIndex, creatorCut);
+                }
+            } else {
+                _safeTake(feeCurrency, fo.creator, creatorCut);
+            }
+        }
+        if (treasuryCut > 0) _safeTake(feeCurrency, TREASURY, treasuryCut);
+
+        emit RoyaltyPaid(poolId, fo.creator, creatorCut, treasuryCut);
+    }
+
+    /// @dev The trading-fee rate (bps) for a graduated pool, by mode. PUMP uses
+    ///      an mcap-decaying dynamic fee (slice 2 wires the real curve; for now
+    ///      the graduation-max); CLANKER uses the creator-chosen tier stored at
+    ///      launch (slice 3 wires selection; for now tier 1 = 1%).
+    function _feeBps(uint8 mode, PoolId /*poolId*/ ) internal pure returns (uint256) {
+        if (mode == uint8(LaunchMode.PUMP)) return PUMP_FEE_MAX_BPS;
+        return FEE_TIER_1;
     }
 
     /// @dev True iff the swap routes USDC -> launch token (a buy).
@@ -1096,15 +1197,19 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
 
     /// @dev Canonical PoolKey for a launch. Sorts the currencies by address
     ///      so currency0 < currency1 (v4 invariant), then sets the hook to
-    ///      this contract. POOL_FEE / TICK_SPACING are constants because
-    ///      every Arcade pool uses the same 1% / 200 layout (parity with the
-    ///      production V3 high-fee tier).
+    ///      this contract.
+    ///      POOL FEE = 0: the pool itself charges NOTHING. The hook captures
+    ///      the entire trading fee in before/afterSwap (always in USDC, split
+    ///      80/20 creator/treasury). A nonzero pool LP fee would accrue into
+    ///      the hook's locked position with no collect surface (dead value);
+    ///      taking it in the hook pays the creator per-swap instead. tickSpacing
+    ///      200 unchanged.
     function _buildPoolKey(address launchToken) internal view returns (PoolKey memory key) {
         address usdcAddr = Currency.unwrap(USDC);
         (Currency c0, Currency c1) = usdcAddr < launchToken
             ? (USDC, Currency.wrap(launchToken))
             : (Currency.wrap(launchToken), USDC);
-        key = PoolKey({currency0: c0, currency1: c1, fee: 10_000, tickSpacing: 200, hooks: IHooks(address(this))});
+        key = PoolKey({currency0: c0, currency1: c1, fee: 0, tickSpacing: 200, hooks: IHooks(address(this))});
     }
 
     /// @dev Mode-driven curve fee split. PUMP = 50/50, CLANKER = 70/30,
