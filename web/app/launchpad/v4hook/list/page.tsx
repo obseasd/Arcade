@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 
 import { ARCADE_HOOK_STATUS } from "@/lib/abis/arcadeHook";
-import { LAUNCHPAD_CURVE_SUPPLY, LAUNCHPAD_GRADUATION_USDC, V4_HOOK_ENABLED } from "@/lib/constants";
+import { V4_HOOK_CURVE_SUPPLY as LAUNCHPAD_CURVE_SUPPLY, V4_HOOK_GRADUATION_USDC as LAUNCHPAD_GRADUATION_USDC, V4_HOOK_ENABLED } from "@/lib/constants";
 import { useArcadeHookTokens, type ArcadeHookTokenInfo } from "@/lib/hooks/useArcadeHookTokens";
 import { useTokenImage } from "@/lib/hooks/useTokenImage";
 import { TokenIcon } from "@/components/ui/TokenIcon";

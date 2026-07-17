@@ -301,8 +301,9 @@ function Inner() {
                     <h1 className="text-2xl font-semibold">Launch on V4 (ArcadeHook)</h1>
                     <p className="mt-1 text-sm text-arc-text-muted">
                         Atomic createLaunch on the unified V4 hook. Curve trades go through
-                        hook.buy / hook.sell during the 20k USDC raise, then graduate
-                        automatically into a locked full-range V4 LP.
+                        hook.buy / hook.sell during the bonding-curve raise (starts ~$5k mcap,
+                        graduates near ~$60k), then graduate automatically into a locked
+                        full-range V4 LP.
                     </p>
                 </div>
             </div>
@@ -392,15 +393,15 @@ function Inner() {
                             active={mode === ARCADE_HOOK_MODE.PUMP}
                             onClick={() => setMode(ARCADE_HOOK_MODE.PUMP)}
                             title="PUMP"
-                            subtitle="50% Arcade / 50% creator"
-                            description="Balanced split, fair-launch default."
+                            subtitle="Dynamic fee 1% -> 0.30%"
+                            description="Post-grad swap fee decays with market cap, pump.fun-style. 80% you / 20% protocol."
                         />
                         <ModeButton
                             active={mode === ARCADE_HOOK_MODE.CLANKER}
                             onClick={() => setMode(ARCADE_HOOK_MODE.CLANKER)}
                             title="CLANKER"
-                            subtitle="70% Arcade / 30% creator (curve)"
-                            description="Post-grad flips to 70% creator (royalty 0.30%)."
+                            subtitle="Fixed fee tier 1/2/3%"
+                            description="You pick the post-grad swap fee. 80% you / 20% protocol. Optional 2nd fee recipient."
                         />
                     </div>
                     <p className="text-xs text-arc-text-faint">

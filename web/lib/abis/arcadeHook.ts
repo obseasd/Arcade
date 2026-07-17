@@ -184,9 +184,10 @@ export const ARCADE_HOOK_ABI = [
     // ---------------------------------------------------------------
     // Writes — launch flow
     //
-    // mode: 0 = PUMP (50/50 split), 1 = CLANKER (70 platform / 30 creator
-    // during curving, swapped post-grad), 2 = CLANKER_V3 (not yet enabled
-    // in production).
+    // mode: 0 = PUMP (post-grad dynamic fee decaying 1% -> 0.30% with market
+    // cap), 1 = CLANKER (creator picks a fixed post-grad tier 1/2/3% via the
+    // feeTier arg), 2 = CLANKER_V3 (not yet enabled). Post-grad fee splits
+    // 80% creator / 20% protocol for both live modes.
     // ---------------------------------------------------------------
     {
         type: "function",
