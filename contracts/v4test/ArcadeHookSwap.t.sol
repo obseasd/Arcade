@@ -218,9 +218,9 @@ contract ArcadeHookSwapTest is Test {
 
         // Alice received the full CURVE_SUPPLY (cap path delivers maxOut).
         assertEq(tokensOut, ArcadeV4Curve.CURVE_SUPPLY, "alice gets full curve supply");
-        // Per Round 1 fixture: cap-path buy from empty curve consumes
-        // actualGross = 20_202_020_203 USDC.
-        assertEq(actualGross, 20_202_020_203, "matches fixture actualGross");
+        // Retuned curve (711M): a cap-path buy from an empty curve consumes
+        // actualGross = 12_425_290_973 USDC (raise ~12.3k + 1% fee headroom).
+        assertEq(actualGross, 12_425_290_973, "matches retuned cap actualGross");
         // Refund stays with alice automatically (we only transferFrom actualGross).
         assertEq(aliceUsdcBefore - usdc.balanceOf(ALICE), actualGross, "alice only paid actualGross");
 
@@ -694,13 +694,16 @@ contract ArcadeHookSwapTest is Test {
     /// and the PUMP fee must fall below 1% but never under the 0.30% floor.
     function test_pumpFee_decaysAsMarketCapGrows() public {
         (address token, PoolKey memory key) = _graduatePump();
-        usdc.mint(ALICE, 5_000_000e6);
+        usdc.mint(ALICE, 100_000e6);
         uint256 f0 = hook.currentFeeBps(token);
         assertEq(f0, 100, "starts at 1%");
 
-        for (uint256 i = 0; i < 10; i++) {
-            vm.warp(block.timestamp + 3 hours);
-            _buyViaV4(key, ALICE, 200_000e6);
+        // Modest buys spaced over time push the price up and climb the EMA.
+        uint256 t = block.timestamp;
+        for (uint256 i = 0; i < 12; i++) {
+            t += 3 hours;
+            vm.warp(t);
+            _buyViaV4(key, ALICE, 1_000e6);
         }
 
         uint256 f1 = hook.currentFeeBps(token);
@@ -712,11 +715,16 @@ contract ArcadeHookSwapTest is Test {
     /// fee must clamp exactly at the 0.30% floor and stay there.
     function test_pumpFee_floorsAt30bps() public {
         (address token, PoolKey memory key) = _graduatePump();
-        usdc.mint(ALICE, 50_000_000e6);
+        usdc.mint(ALICE, 100_000e6);
 
-        for (uint256 i = 0; i < 20; i++) {
-            vm.warp(block.timestamp + 6 hours);
-            _buyViaV4(key, ALICE, 1_000_000e6);
+        // Sustained buying over time pushes market cap well past the 10x floor
+        // threshold; the EMA converges and the fee clamps at 0.30%. Track time
+        // in a local so each iteration genuinely advances the oracle clock.
+        uint256 t = block.timestamp;
+        for (uint256 i = 0; i < 30; i++) {
+            t += 6 hours;
+            vm.warp(t);
+            _buyViaV4(key, ALICE, 1_500e6);
         }
 
         assertEq(hook.currentFeeBps(token), 30, "clamped at 0.30% floor");
@@ -754,10 +762,12 @@ contract ArcadeHookSwapTest is Test {
     /// leaves a CLANKER tier untouched.
     function test_clankerFee_staysStaticAcrossMcapGrowth() public {
         (address token, PoolKey memory key) = _graduateClankerTier(3);
-        usdc.mint(ALICE, 5_000_000e6);
+        usdc.mint(ALICE, 100_000e6);
+        uint256 t = block.timestamp;
         for (uint256 i = 0; i < 10; i++) {
-            vm.warp(block.timestamp + 3 hours);
-            _buyViaV4(key, ALICE, 200_000e6);
+            t += 3 hours;
+            vm.warp(t);
+            _buyViaV4(key, ALICE, 1_000e6);
         }
         assertEq(hook.currentFeeBps(token), 300, "CLANKER tier is static, not mcap-decaying");
     }

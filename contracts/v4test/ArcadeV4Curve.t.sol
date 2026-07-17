@@ -28,15 +28,20 @@ contract ArcadeV4CurveTest is Test {
     // Constants surfaced for read-back assertions
     // -------------------------------------------------------------------
 
-    function test_constants_matchV2Production() public pure {
+    /// V4 curve constants. NOTE: the V4 curve DIVERGES from the V2 production
+    /// launchpad as of 2026-07-17 -- CURVE_SUPPLY dropped 800M -> 711M so the
+    /// token graduates at ~$60k FDV instead of ~$125k. VIRTUAL_USDC/TOKEN/K are
+    /// unchanged, so every non-cap buy/sell is bit-identical; only the
+    /// graduation cap moved earlier (start FDV still ~$5k, a ~12x curve).
+    function test_constants_v4Curve() public pure {
         assertEq(ArcadeV4Curve.VIRTUAL_USDC_RESERVE, 5_000e6, "virtual usdc");
         assertEq(ArcadeV4Curve.VIRTUAL_TOKEN_RESERVE, 1_000_000_000e18, "virtual tokens");
-        assertEq(ArcadeV4Curve.CURVE_SUPPLY, 800_000_000e18, "curve supply");
-        assertEq(ArcadeV4Curve.MIGRATION_LP_TOKENS, 200_000_000e18, "lp supply");
+        assertEq(ArcadeV4Curve.CURVE_SUPPLY, 711_000_000e18, "curve supply (retuned)");
+        assertEq(ArcadeV4Curve.MIGRATION_LP_TOKENS, 289_000_000e18, "lp supply");
         assertEq(ArcadeV4Curve.K_CONSTANT, 5_000_000_000_000_000_000_000_000_000_000_000_000, "K");
         assertEq(ArcadeV4Curve.TRADE_FEE_BPS, 100, "trade fee");
         assertEq(ArcadeV4Curve.MIGRATION_FEE, 2_500e6, "migration fee");
-        assertEq(ArcadeV4Curve.GRADUATION_USDC, 20_000e6, "graduation usdc");
+        assertEq(ArcadeV4Curve.GRADUATION_USDC, 12_301e6, "graduation usdc (retuned)");
     }
 
     // -------------------------------------------------------------------
@@ -79,37 +84,42 @@ contract ArcadeV4CurveTest is Test {
     }
 
     function test_buy_nearGraduation() public pure {
+        // 700M sold. Real reserve at 700M = K/(1e27-700e24) - V_u =
+        // 5e36/3e26 - 5e9 = 11_666_666_666. A 100 USDC buy stays under the cap
+        // (11M tokens remain), so it's a normal buy, not a cap path.
         ArcadeV4Curve.BuyResult memory r = ArcadeV4Curve.simulateBuy(
-            700_000_000_000_000_000_000_000_000, 16_666_666_666, 100_000_000
+            700_000_000_000_000_000_000_000_000, 11_666_666_666, 100_000_000
         );
-        assertEq(r.tokensOut, 70_280_411_037_881_691_686_842_633, "tokensOut");
+        assertEq(r.tokensOut, 1_771_477_412_242_140_780_254_972, "tokensOut");
         assertEq(r.actualGross, 100_000_000, "actualGross");
         assertEq(r.refund, 0, "refund");
         assertEq(r.actualGross - r.fee, 99_000_000, "net to reserve");
     }
 
     function test_buy_exactGraduation() public pure {
-        // Cap path: this buy exactly fills the curve, with refund.
+        // Cap path: this buy exactly fills the curve to 711M, with refund.
+        // 710M sold, real reserve = 5e36/(1e27-710e24) - 5e9 = 12_241_379_310.
         ArcadeV4Curve.BuyResult memory r = ArcadeV4Curve.simulateBuy(
-            750_000_000_000_000_000_000_000_000, 18_750_000_000, 5_000_000_000
+            710_000_000_000_000_000_000_000_000, 12_241_379_310, 5_000_000_000
         );
-        assertEq(r.tokensOut, 50_000_000_000_000_000_000_000_000, "tokensOut");
-        assertEq(r.actualGross, 1_262_626_263, "actualGross");
-        assertEq(r.refund, 3_737_373_737, "refund");
+        assertEq(r.tokensOut, 1_000_000_000_000_000_000_000_000, "tokensOut");
+        assertEq(r.actualGross, 60_261_367, "actualGross");
+        assertEq(r.refund, 4_939_738_633, "refund");
         // The curve graduates exactly. tokensSoldAfter = CURVE_SUPPLY.
         assertEq(
-            r.tokensOut + 750_000_000_000_000_000_000_000_000,
+            r.tokensOut + 710_000_000_000_000_000_000_000_000,
             ArcadeV4Curve.CURVE_SUPPLY,
             "exact graduation"
         );
+        assertEq(r.actualGross + r.refund, 5_000_000_000, "gross sums");
     }
 
     function test_buy_capHitMassive() public pure {
-        // Cap path from empty curve: user wants to spend 30k USDC, gets all 800M.
+        // Cap path from empty curve: user wants to spend 30k USDC, gets all 711M.
         ArcadeV4Curve.BuyResult memory r = ArcadeV4Curve.simulateBuy(0, 0, 30_000_000_000);
-        assertEq(r.tokensOut, 800_000_000_000_000_000_000_000_000, "tokensOut == CURVE_SUPPLY");
-        assertEq(r.actualGross, 20_202_020_203, "actualGross");
-        assertEq(r.refund, 9_797_979_797, "refund");
+        assertEq(r.tokensOut, 711_000_000_000_000_000_000_000_000, "tokensOut == CURVE_SUPPLY");
+        assertEq(r.actualGross, 12_425_290_973, "actualGross");
+        assertEq(r.refund, 17_574_709_027, "refund");
         // Sanity: actualGross + refund == grossUsdcIn
         assertEq(r.actualGross + r.refund, 30_000_000_000, "gross sums");
     }
@@ -213,8 +223,9 @@ contract ArcadeV4CurveTest is Test {
     function test_spotPrice_atGraduation_isHigher() public pure {
         uint256 pStart = ArcadeV4Curve.spotPrice(0, 0);
         uint256 pEnd = ArcadeV4Curve.spotPrice(ArcadeV4Curve.CURVE_SUPPLY, ArcadeV4Curve.GRADUATION_USDC);
-        // Price at the end of the curve is much higher than at the start.
-        assertGt(pEnd, pStart * 20, "graduation price > 20x start price");
+        // Price at graduation is much higher than at the start. The retuned
+        // curve is ~12x start->graduation (was ~25x), so assert > 10x.
+        assertGt(pEnd, pStart * 10, "graduation price > 10x start price");
     }
 
     function test_isGraduated_atCap() public pure {
