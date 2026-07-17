@@ -362,6 +362,31 @@ contract ArcadeHookSwapTest is Test {
         assertTrue(_sawAntiSnipe(), "post-grad buy must be snipe-taxed");
     }
 
+    /// Anti-sniper auction proceeds go to the CREATOR, not the protocol. A
+    /// taxed post-grad buy must credit the creator with the whole snipe skim
+    /// (on top of its 80% fee cut); the treasury only ever sees the 20% fee
+    /// cut, never the snipe. Catches a regression that routes the skim to
+    /// TREASURY (the pre-2026-07-17 behaviour).
+    function test_antisniper_proceedsGoToCreator() public {
+        (address tokenAddr, PoolKey memory key) = _graduatePumpWithSnipe(2_000, 600);
+        assertGt(hook.currentSnipeBps(tokenAddr), 1_900, "snipe active");
+
+        uint256 creatorBefore = usdc.balanceOf(CREATOR);
+        uint256 treasuryBefore = usdc.balanceOf(TREASURY);
+
+        _buyViaV4(key, ALICE, 5_000e6);
+
+        uint256 creatorGot = usdc.balanceOf(CREATOR) - creatorBefore;
+        uint256 treasuryGot = usdc.balanceOf(TREASURY) - treasuryBefore;
+
+        // Buy 5000 USDC: fee 1% = 50 (creator 40 / treasury 10), snipe ~20% =
+        // ~1000 -> all to creator. So the creator (~1040) dwarfs the treasury
+        // (~10, its fee cut only); the treasury never sees the ~1000 snipe.
+        assertGt(creatorGot, 500e6, "creator receives the anti-sniper proceeds");
+        assertLt(treasuryGot, 50e6, "treasury only gets its fee cut, not the snipe");
+        assertGt(creatorGot, treasuryGot * 5, "proceeds routed to creator, not treasury");
+    }
+
     /// DIRECTION. Only USDC -> token buys are snipes. A SELL must NOT trigger
     /// the anti-sniper. This is the test that catches an inverted
     /// _isUsdcToTokenSwap (the round-4 "snipers free, holders taxed" HIGH):

@@ -733,7 +733,7 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         if (feeBps > MAX_TOTAL_TAKE_BPS) feeBps = MAX_TOTAL_TAKE_BPS;
         uint256 fee = (amount * feeBps) / 10_000;
 
-        // Anti-sniper skim on BUYS only. A buy with USDC specified is
+        // Anti-sniper auction skim on BUYS only. A buy with USDC specified is
         // buy-exact-in (spending exact USDC). USDC specified on a SELL is
         // sell-exact-out (receiving exact USDC), not a buy, so no skim there.
         uint256 snipeSkim = 0;
@@ -752,10 +752,7 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         if (fee > maxTake) fee = maxTake;
         if (fee + snipeSkim > maxTake) snipeSkim = maxTake - fee;
 
-        if (snipeSkim > 0) {
-            _safeTake(USDC, TREASURY, snipeSkim);
-            emit AntiSnipeApplied(poolId, msg.sender, snipeSkim, uint16((snipeSkim * 10_000) / amount));
-        }
+        _payAntiSnipe(poolId, USDC, snipeSkim, amount);
         _distributeFee(poolId, USDC, fee, state.mode);
 
         // Positive specified delta = the hook takes this many USDC units off
@@ -948,9 +945,9 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         if (feeBps > MAX_TOTAL_TAKE_BPS) feeBps = MAX_TOTAL_TAKE_BPS;
         uint256 fee = (amount * feeBps) / 10_000;
 
-        // Anti-sniper top-up: during the decay window post-grad, BUYS pay an
-        // additional skim to TREASURY. Only USDC -> token swaps count as buys.
-        // Sits ALONGSIDE the fee, same unspecified USDC side.
+        // Anti-sniper auction top-up: during the decay window post-grad, BUYS
+        // pay an additional skim that goes to the CREATOR. Only USDC -> token
+        // swaps count as buys. Sits ALONGSIDE the fee, same unspecified USDC side.
         uint256 snipeSkim = 0;
         if (_isUsdcToTokenSwap(key, params, USDC)) {
             address launchToken =
@@ -968,10 +965,7 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         uint256 maxTake = (amount * MAX_TOTAL_TAKE_BPS) / 10_000;
         if (fee > maxTake) fee = maxTake;
         if (fee + snipeSkim > maxTake) snipeSkim = maxTake - fee;
-        if (snipeSkim > 0) {
-            _safeTake(feeCurrency, TREASURY, snipeSkim);
-            emit AntiSnipeApplied(poolId, msg.sender, snipeSkim, uint16((snipeSkim * 10_000) / amount));
-        }
+        _payAntiSnipe(poolId, feeCurrency, snipeSkim, amount);
 
         _distributeFee(poolId, feeCurrency, fee, state.mode);
 
@@ -982,6 +976,20 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         // Return the total taken on the unspecified side so the swapper pays.
         uint256 totalTaken = fee + snipeSkim;
         return (IHooks.afterSwap.selector, int128(int256(totalTaken)));
+    }
+
+    /// @dev Route anti-sniper auction proceeds to the launch CREATOR. The
+    ///      anti-sniper is a descending-tax dutch auction on the first
+    ///      post-graduation buys; the premium a sniper pays for early access
+    ///      accrues to the creator/community (Clanker's model), not the
+    ///      protocol -- it turns extractable sniping into creator revenue and
+    ///      removes any protocol incentive to keep the tax high. Blocklist-safe
+    ///      (a hostile creator recipient credits a pending pull, never bricks
+    ///      the swap). No-op when the skim is zero.
+    function _payAntiSnipe(PoolId poolId, Currency currency, uint256 snipeSkim, uint256 amount) internal {
+        if (snipeSkim == 0) return;
+        _safeTake(currency, feeOwners[poolId].creator, snipeSkim);
+        emit AntiSnipeApplied(poolId, msg.sender, snipeSkim, uint16((snipeSkim * 10_000) / amount));
     }
 
     /// @dev Split `fee` (already computed, in `feeCurrency`) 80/20
