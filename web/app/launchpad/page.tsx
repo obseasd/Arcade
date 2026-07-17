@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { ArrowRight, Search, Sparkles, Rocket } from "lucide-react";
+import { ArrowRight, Search, Rocket } from "lucide-react";
 import { PlusIcon } from "@/components/ui/MaskIcon";
 import { FEATURED_TOKENS, LAUNCHPAD_CURVE_SUPPLY, LAUNCHPAD_GRADUATION_USDC, LAUNCHPAD_TOTAL_SUPPLY, V4_HOOK_ENABLED } from "@/lib/constants";
 import { ARCADE_HOOK_STATUS } from "@/lib/abis/arcadeHook";
@@ -18,9 +18,8 @@ import { LaunchModeModal } from "@/components/launchpad/LaunchModeModal";
 import { SkeletonCard } from "@/components/ui/Skeleton";
 import { cn } from "@/lib/utils";
 
-// How many V4 launches to surface in the top strip on /launchpad before the
-// user needs to click "View all" to see the dedicated V4 list. Six fits in
-// one row on lg breakpoint, three on sm.
+// How many ArcadeHook launches to surface in the top preview strip on
+// /launchpad. Six fits one row on lg, three on sm.
 const V4_PREVIEW_LIMIT = 6;
 
 type Filter = "all" | "new" | "trending" | "migrating" | "migrated";
@@ -35,7 +34,6 @@ export default function LaunchpadIndexPage() {
   const [filter, setFilter] = useState<Filter>("all");
   const [q, setQ] = useState("");
   const [launchOpen, setLaunchOpen] = useState(false);
-  const nowSec = BigInt(Math.floor(Date.now() / 1000));
 
   // ArcadeHook (V4 Phase 2) preview strip.
   // We don't have a per-token launchedAt yet in the hook surface (the
