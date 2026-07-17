@@ -98,6 +98,8 @@ function Inner() {
     // CLANKER-only fields (only relevant when mode == CLANKER).
     const [creator2, setCreator2] = useState("");
     const [creator2Pct, setCreator2Pct] = useState(0); // % (UI 0..100)
+    // CLANKER fee tier: 1/2/3 = 1%/2%/3% fixed post-graduation fee. PUMP ignores it.
+    const [feeTier, setFeeTier] = useState<1 | 2 | 3>(1);
 
     // Snipe config. Both zero means no anti-sniper.
     const [snipeStartBps, setSnipeStartBps] = useState(0);
@@ -242,6 +244,9 @@ function Inner() {
                     creator2Bps,
                     snipeStartBps,
                     snipeDecaySeconds,
+                    // CLANKER: the creator-chosen fee tier (1/2/3 = 1%/2%/3%).
+                    // PUMP ignores this and runs the mcap-decaying dynamic fee.
+                    isClanker ? feeTier : 0,
                 ],
             });
 
@@ -438,6 +443,33 @@ function Inner() {
                             Only active in CLANKER mode. Leave empty to route the full creator
                             cut to the launcher.
                         </p>
+
+                        <div className="border-t border-arc-border pt-3">
+                            <span className="text-sm text-arc-text-muted">
+                                Post-graduation fee tier
+                            </span>
+                            <div className="mt-2 flex gap-2">
+                                {([1, 2, 3] as const).map((t) => (
+                                    <button
+                                        key={t}
+                                        type="button"
+                                        onClick={() => setFeeTier(t)}
+                                        className={`flex-1 rounded-lg border px-3 py-2 text-sm tabular-nums transition ${
+                                            feeTier === t
+                                                ? "border-arc-cta-hover bg-arc-cta/10 text-arc-text"
+                                                : "border-arc-border bg-arc-bg text-arc-text-muted hover:border-arc-cta-hover"
+                                        }`}
+                                    >
+                                        {t}%
+                                    </button>
+                                ))}
+                            </div>
+                            <p className="mt-2 text-xs text-arc-text-faint">
+                                Fixed swap fee once the token graduates to the AMM. 80% to you,
+                                20% to the protocol. PUMP mode instead decays from 1% to 0.30% as
+                                market cap grows.
+                            </p>
+                        </div>
                     </div>
                 )}
 

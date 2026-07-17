@@ -90,14 +90,14 @@ contract ArcadeHookSwapTest is Test {
     /// @dev Spawn a launch in PUMP mode.
     function _launchPump() internal returns (address tokenAddr, PoolKey memory key) {
         vm.prank(CREATOR);
-        (tokenAddr,) = hook.createLaunch("PumpToken", "PUMP", "ipfs://demo", 0, address(0), 0, 0, 0);
+        (tokenAddr,) = hook.createLaunch("PumpToken", "PUMP", "ipfs://demo", 0, address(0), 0, 0, 0, 0);
         key = _buildKey(tokenAddr);
     }
 
     /// @dev CLANKER variant with 70/30 split.
     function _launchClanker() internal returns (address tokenAddr, PoolKey memory key) {
         vm.prank(CREATOR);
-        (tokenAddr,) = hook.createLaunch("ClankerTok", "CLNK", "ipfs://demo", 1, address(0), 0, 0, 0);
+        (tokenAddr,) = hook.createLaunch("ClankerTok", "CLNK", "ipfs://demo", 1, address(0), 0, 0, 0, 1);
         key = _buildKey(tokenAddr);
     }
 
@@ -311,7 +311,7 @@ contract ArcadeHookSwapTest is Test {
     {
         vm.prank(CREATOR);
         (tokenAddr,) =
-            hook.createLaunch("SnipePump", "SNP", "ipfs://demo", 0, address(0), 0, startBps, decaySeconds);
+            hook.createLaunch("SnipePump", "SNP", "ipfs://demo", 0, address(0), 0, startBps, decaySeconds, 0);
         key = _buildKey(tokenAddr);
         vm.warp(block.timestamp + uint256(decaySeconds) + 3_600);
         usdc.mint(ALICE, 100_000e6);
@@ -424,7 +424,7 @@ contract ArcadeHookSwapTest is Test {
     function test_createLaunch_rejectsClankerV3Mode() public {
         vm.prank(CREATOR);
         vm.expectRevert(ArcadeHook.InvalidMode.selector);
-        hook.createLaunch("V3", "V3", "ipfs://x", 2, address(0), 0, 0, 0);
+        hook.createLaunch("V3", "V3", "ipfs://x", 2, address(0), 0, 0, 0, 0);
     }
 
     function test_postGradFee_PUMP_splits80_20_inUsdcOnSell() public {
@@ -720,6 +720,70 @@ contract ArcadeHookSwapTest is Test {
         }
 
         assertEq(hook.currentFeeBps(token), 30, "clamped at 0.30% floor");
+    }
+
+    // -------------------------------------------------------------------
+    // CLANKER static fee tiers: the creator picks 1/2/3% at launch and it
+    // never changes (unlike PUMP's mcap decay).
+    // -------------------------------------------------------------------
+
+    function _graduateClankerTier(uint8 tier) internal returns (address tokenAddr, PoolKey memory key) {
+        vm.prank(CREATOR);
+        (tokenAddr,) = hook.createLaunch("ClkTier", "CLK", "ipfs://demo", 1, address(0), 0, 0, 0, tier);
+        key = _buildKey(tokenAddr);
+        vm.prank(ALICE);
+        hook.buy(tokenAddr, 30_000e6, 0);
+    }
+
+    function test_clankerFee_tier1_is1pct() public {
+        (address token,) = _graduateClankerTier(1);
+        assertEq(hook.currentFeeBps(token), 100, "tier 1 = 1%");
+    }
+
+    function test_clankerFee_tier2_is2pct() public {
+        (address token,) = _graduateClankerTier(2);
+        assertEq(hook.currentFeeBps(token), 200, "tier 2 = 2%");
+    }
+
+    function test_clankerFee_tier3_is3pct() public {
+        (address token,) = _graduateClankerTier(3);
+        assertEq(hook.currentFeeBps(token), 300, "tier 3 = 3%");
+    }
+
+    /// CLANKER tiers are STATIC: market-cap growth that would decay a PUMP fee
+    /// leaves a CLANKER tier untouched.
+    function test_clankerFee_staysStaticAcrossMcapGrowth() public {
+        (address token, PoolKey memory key) = _graduateClankerTier(3);
+        usdc.mint(ALICE, 5_000_000e6);
+        for (uint256 i = 0; i < 10; i++) {
+            vm.warp(block.timestamp + 3 hours);
+            _buyViaV4(key, ALICE, 200_000e6);
+        }
+        assertEq(hook.currentFeeBps(token), 300, "CLANKER tier is static, not mcap-decaying");
+    }
+
+    /// A CLANKER launch MUST pick a valid tier (1/2/3). Zero or out-of-range
+    /// reverts before any USDC is pulled.
+    function test_createLaunch_revertsOnInvalidClankerTier() public {
+        vm.prank(CREATOR);
+        vm.expectRevert(ArcadeHook.InvalidFeeTier.selector);
+        hook.createLaunch("X", "X", "ipfs://x", 1, address(0), 0, 0, 0, 0);
+
+        vm.prank(CREATOR);
+        vm.expectRevert(ArcadeHook.InvalidFeeTier.selector);
+        hook.createLaunch("Y", "Y", "ipfs://y", 1, address(0), 0, 0, 0, 4);
+    }
+
+    /// PUMP ignores the fee-tier argument entirely: its fee is the mcap-decaying
+    /// dynamic curve regardless of what tier value is passed. Proves PUMP fees
+    /// are NOT creator-customisable (only CLANKER's are).
+    function test_createLaunch_pumpIgnoresFeeTier() public {
+        vm.prank(CREATOR);
+        (address token,) = hook.createLaunch("P", "P", "ipfs://p", 0, address(0), 0, 0, 0, 3);
+        vm.prank(ALICE);
+        hook.buy(token, 30_000e6, 0);
+        // Dynamic fee starts at 1% at graduation, NOT tier 3's 3%.
+        assertEq(hook.currentFeeBps(token), 100, "PUMP uses dynamic fee, tier arg ignored");
     }
 
     /// Manipulation resistance: multiple swaps within the SAME block timestamp

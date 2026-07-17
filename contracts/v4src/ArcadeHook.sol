@@ -115,6 +115,7 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         address creator;
         address creator2;
         uint16 creator2Bps;
+        uint16 feeTierBps; // CLANKER: creator-chosen fee tier (100/200/300). 0 for PUMP (dynamic).
         address twitterEscrow; // zero = direct transfer; non-zero = creditSlot
         uint8 slotIndex; // 0..3, used when twitterEscrow != address(0)
     }
@@ -274,6 +275,7 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
     error HookNotImplemented();
     error ZeroAmount();
     error InvalidMode();
+    error InvalidFeeTier();
     error InvalidFeeOwner();
     error InvariantBroken();
     error ZeroAddress();
@@ -387,6 +389,9 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
      *                          Pass 0 to disable anti-sniper for this token.
      * @param snipeDecaySeconds linear decay window for the anti-sniper tax.
      *                          Required > 0 when snipeStartBps > 0.
+     * @param feeTier          CLANKER only: the fixed post-graduation trading
+     *                          fee tier, 1 (1%), 2 (2%) or 3 (3%). IGNORED for
+     *                          PUMP, which uses the mcap-decaying dynamic fee.
      */
     function createLaunch(
         string calldata name,
@@ -396,7 +401,8 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         address creator2,
         uint16 creator2Bps,
         uint16 snipeStartBps,
-        uint32 snipeDecaySeconds
+        uint32 snipeDecaySeconds,
+        uint8 feeTier
     ) external nonReentrant whenNotPaused returns (address tokenAddr, PoolId poolId) {
         if (bytes(name).length == 0 || bytes(symbol).length == 0) revert EmptyName();
         // Only PUMP(0) and CLANKER(1) are implemented. CLANKER_V3(2) has no
@@ -408,6 +414,14 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         if (creator2Bps > 10_000) revert InvalidFeeOwner();
         if (snipeStartBps > MAX_SNIPE_START_BPS) revert InvalidSnipeBps();
         if (snipeStartBps > 0 && snipeDecaySeconds == 0) revert InvalidDecaySeconds();
+
+        // CLANKER creators pick a fixed fee tier (1/2/3 = 1%/2%/3%). PUMP
+        // ignores the tier and runs the mcap-decaying dynamic fee, so its
+        // stored tier stays 0.
+        uint16 feeTierBps = 0;
+        if (mode == uint8(LaunchMode.CLANKER)) {
+            feeTierBps = _resolveFeeTierBps(feeTier);
+        }
 
         // Pull the creation fee first. If the user is short on USDC or hasn't
         // approved we revert before deploying a token nobody can use.
@@ -446,6 +460,7 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
             creator: msg.sender,
             creator2: creator2,
             creator2Bps: creator2Bps,
+            feeTierBps: feeTierBps,
             twitterEscrow: address(0), // wired separately when escrow is enabled per-launch
             slotIndex: 0
         });
@@ -1020,7 +1035,12 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
     ///      for now tier 1 = 1%). Reads ONLY stored oracle state, never the
     ///      current swap's price, so a swap can't move the fee it itself pays.
     function _feeBps(uint8 mode, PoolId poolId) internal view returns (uint256) {
-        if (mode != uint8(LaunchMode.PUMP)) return FEE_TIER_1;
+        if (mode != uint8(LaunchMode.PUMP)) {
+            // CLANKER: the creator's chosen static tier. Fall back to tier 1 if
+            // somehow unset (defensive; createLaunch always sets it for CLANKER).
+            uint16 tier = feeOwners[poolId].feeTierBps;
+            return tier == 0 ? FEE_TIER_1 : tier;
+        }
 
         FeeObs storage o = feeObs[poolId];
         // Un-seeded (shouldn't happen post-graduation) -> charge the max.
@@ -1035,6 +1055,16 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         uint256 drop =
             (uint256(PUMP_FEE_MAX_BPS - PUMP_FEE_MIN_BPS) * uint256(growth)) / uint256(PUMP_FEE_FLOOR_TICKS);
         return uint256(PUMP_FEE_MAX_BPS) - drop;
+    }
+
+    /// @dev Map a CLANKER fee-tier selector (1/2/3) to its bps (100/200/300).
+    ///      Reverts on any other value so a launch can't be created with an
+    ///      out-of-range or zero tier.
+    function _resolveFeeTierBps(uint8 tier) internal pure returns (uint16) {
+        if (tier == 1) return FEE_TIER_1;
+        if (tier == 2) return FEE_TIER_2;
+        if (tier == 3) return FEE_TIER_3;
+        revert InvalidFeeTier();
     }
 
     /// @dev The pool's current "mcap tick": the slot0 tick sign-normalised so it

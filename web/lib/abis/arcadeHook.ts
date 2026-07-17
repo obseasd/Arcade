@@ -171,6 +171,15 @@ export const ARCADE_HOOK_ABI = [
         inputs: [{ name: "token", type: "address" }],
         outputs: [{ name: "", type: "uint256" }],
     },
+    {
+        // Live post-graduation trading fee (bps): PUMP decays 1% -> 0.30% with
+        // market cap; CLANKER returns its fixed tier. 0 before graduation.
+        type: "function",
+        name: "currentFeeBps",
+        stateMutability: "view",
+        inputs: [{ name: "token", type: "address" }],
+        outputs: [{ name: "", type: "uint256" }],
+    },
 
     // ---------------------------------------------------------------
     // Writes — launch flow
@@ -192,6 +201,7 @@ export const ARCADE_HOOK_ABI = [
             { name: "creator2Bps", type: "uint16" },
             { name: "snipeStartBps", type: "uint16" },
             { name: "snipeDecaySeconds", type: "uint32" },
+            { name: "feeTier", type: "uint8" },
         ],
         outputs: [
             { name: "tokenAddr", type: "address" },
