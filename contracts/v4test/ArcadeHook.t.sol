@@ -215,18 +215,24 @@ contract ArcadeHookTest is Test {
         );
         vm.stopPrank();
 
-        // Just-launched: tax is at its start value, modulo a tiny drift if
-        // block.timestamp advanced.
-        uint256 bps = hook.currentSnipeBps(tokenAddr);
-        assertGt(bps, 990, "snipe just below start");
-        assertLe(bps, 1_000, "snipe never above start");
+        // The config is stored...
+        (uint16 startBps, uint32 decaySeconds, uint64 launchedAt) = hook.snipeConfigs(tokenAddr);
+        assertEq(startBps, 1_000, "startBps stored");
+        assertEq(decaySeconds, 600, "decaySeconds stored");
+        // ...but the decay clock is NOT started at createLaunch. The anti-sniper
+        // tax only applies in afterSwap on a GRADUATED pool, so anchoring the
+        // decay at launch let the window elapse during the (hours/days) curve
+        // phase -> tax always 0 by graduation (the round-4 "snipers free" HIGH).
+        // launchedAt stays 0 and currentSnipeBps reads 0 through the whole curve.
+        assertEq(launchedAt, 0, "clock not started until graduation");
+        assertEq(hook.currentSnipeBps(tokenAddr), 0, "no snipe tax during curve");
     }
 
     // -------------------------------------------------------------------
     // currentSnipeBps decay
     // -------------------------------------------------------------------
 
-    function test_snipeBps_decaysLinearlyToZero() public {
+    function test_snipeBps_zeroThroughoutCurvePhase() public {
         usdc.mint(ALICE, 100e6);
         vm.startPrank(ALICE);
         usdc.approve(address(hook), type(uint256).max);
@@ -235,20 +241,19 @@ contract ArcadeHookTest is Test {
         );
         vm.stopPrank();
 
-        // Start
-        assertEq(hook.currentSnipeBps(tokenAddr), 2_000, "at t=0");
-
-        // Half-way: 1000 bps remaining
+        // The anti-sniper is DORMANT for the entire curve phase: warping time
+        // does NOT start the decay, because the clock anchors at graduation
+        // (not launch). This is the fix for the round-4 HIGH, where a
+        // launch-anchored clock had already decayed to 0 by the time the AMM
+        // pool existed. The decay MATH once anchored (full value at graduation,
+        // linear to 0) is exercised end-to-end in
+        // ArcadeHookSwap.t.sol:test_antisniper_taxesPostGraduationBuy, which
+        // needs a real graduated pool.
+        assertEq(hook.currentSnipeBps(tokenAddr), 0, "t=0 curve, dormant");
         vm.warp(block.timestamp + 500);
-        assertEq(hook.currentSnipeBps(tokenAddr), 1_000, "half decay");
-
-        // Right before window ends
-        vm.warp(block.timestamp + 499);
-        assertEq(hook.currentSnipeBps(tokenAddr), 2, "near zero");
-
-        // Past the window
-        vm.warp(block.timestamp + 100);
-        assertEq(hook.currentSnipeBps(tokenAddr), 0, "decayed to zero");
+        assertEq(hook.currentSnipeBps(tokenAddr), 0, "mid curve");
+        vm.warp(block.timestamp + 100_000);
+        assertEq(hook.currentSnipeBps(tokenAddr), 0, "long curve, still dormant");
     }
 
     function test_snipeBps_returnsZeroForUnknownToken() public view {

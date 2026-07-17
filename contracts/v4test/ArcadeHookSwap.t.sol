@@ -2,6 +2,7 @@
 pragma solidity ^0.8.26;
 
 import {Test, console2} from "forge-std/Test.sol";
+import {Vm} from "forge-std/Vm.sol";
 
 import {ArcadeHook} from "../v4src/ArcadeHook.sol";
 import {ArcadeV4Curve} from "../v4src/libraries/ArcadeV4Curve.sol";
@@ -291,6 +292,94 @@ contract ArcadeHookSwapTest is Test {
             ""
         );
         vm.stopPrank();
+    }
+
+    // ------------------------------------------------------------------
+    // Anti-sniper: the coverage the round-4 HIGH + the clock bug slipped
+    // through (no test ever did a post-graduation BUY with a snipe config).
+    // ------------------------------------------------------------------
+
+    /// Graduate a PUMP launch that HAS an anti-sniper config, having let more
+    /// than the whole decay window pass BEFORE graduating (a realistic curve
+    /// fills over hours/days). A launch-anchored decay clock -- the pre-fix bug
+    /// -- would already read 0 by graduation; a graduation-anchored clock (the
+    /// fix) starts fresh here.
+    function _graduatePumpWithSnipe(uint16 startBps, uint32 decaySeconds)
+        internal
+        returns (address tokenAddr, PoolKey memory key)
+    {
+        vm.prank(CREATOR);
+        (tokenAddr,) =
+            hook.createLaunch("SnipePump", "SNP", "ipfs://demo", 0, address(0), 0, startBps, decaySeconds);
+        key = _buildKey(tokenAddr);
+        vm.warp(block.timestamp + uint256(decaySeconds) + 3_600);
+        usdc.mint(ALICE, 100_000e6);
+        vm.prank(ALICE);
+        hook.buy(tokenAddr, 30_000e6, 0); // graduates
+    }
+
+    /// A post-graduation BUY: USDC -> token via the real V4 swap router.
+    function _buyViaV4(PoolKey memory key, address trader, uint256 usdcAmount)
+        internal
+        returns (BalanceDelta delta)
+    {
+        vm.startPrank(trader);
+        usdc.approve(address(swapRouter), type(uint256).max);
+        bool zeroForOne = Currency.unwrap(key.currency0) == address(usdc); // USDC -> token
+        uint160 priceLimit = zeroForOne ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1;
+        delta = swapRouter.swap(
+            key,
+            SwapParams({zeroForOne: zeroForOne, amountSpecified: -int256(usdcAmount), sqrtPriceLimitX96: priceLimit}),
+            PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}),
+            ""
+        );
+        vm.stopPrank();
+    }
+
+    /// True iff an AntiSnipeApplied event was emitted since the last recordLogs.
+    function _sawAntiSnipe() internal returns (bool) {
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        bytes32 sig = keccak256("AntiSnipeApplied(bytes32,address,uint256,uint16)");
+        for (uint256 i = 0; i < logs.length; i++) {
+            if (logs[i].topics.length > 0 && logs[i].topics[0] == sig) return true;
+        }
+        return false;
+    }
+
+    /// CLOCK FIX + tax-is-applied. Under the pre-fix launch-anchored clock this
+    /// buy would pay NO skim (window already elapsed during the curve). This
+    /// test fails if the decay clock regresses to createLaunch OR if the buy
+    /// side stops being taxed.
+    function test_antisniper_taxesPostGradBuy_afterLongCurve() public {
+        (address tokenAddr, PoolKey memory key) = _graduatePumpWithSnipe(2_000, 600);
+
+        // Snipe is at (near) full strength AT graduation, despite the long curve.
+        assertGt(hook.currentSnipeBps(tokenAddr), 1_900, "snipe active at graduation");
+
+        vm.recordLogs();
+        _buyViaV4(key, ALICE, 1_000e6);
+        assertTrue(_sawAntiSnipe(), "post-grad buy must be snipe-taxed");
+    }
+
+    /// DIRECTION. Only USDC -> token buys are snipes. A SELL must NOT trigger
+    /// the anti-sniper. This is the test that catches an inverted
+    /// _isUsdcToTokenSwap (the round-4 "snipers free, holders taxed" HIGH):
+    /// invert it and this sell wrongly fires AntiSnipeApplied.
+    function test_antisniper_doesNotTaxSells() public {
+        (address tokenAddr, PoolKey memory key) = _graduatePumpWithSnipe(2_000, 600);
+        assertGt(hook.currentSnipeBps(tokenAddr), 1_900, "snipe active");
+
+        vm.recordLogs();
+        _sellViaV4(key, tokenAddr, ALICE, 1_000e18);
+        assertFalse(_sawAntiSnipe(), "sells are never snipe-taxed");
+    }
+
+    /// The unimplemented CLANKER_V3 mode must be rejected at the door, not mint
+    /// 1B supply into the immutable hook and strand it (the audit MEDIUM-1).
+    function test_createLaunch_rejectsClankerV3Mode() public {
+        vm.prank(CREATOR);
+        vm.expectRevert(ArcadeHook.InvalidMode.selector);
+        hook.createLaunch("V3", "V3", "ipfs://x", 2, address(0), 0, 0, 0);
     }
 
     function test_postGradRoyalty_PUMP_splits50_50_inUsdcOnSell() public {

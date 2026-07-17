@@ -126,7 +126,7 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
     struct SnipeConfig {
         uint16 startBps; // 0 means anti-sniper disabled for this token
         uint32 decaySeconds; // linear decay window
-        uint64 launchedAt; // block.timestamp at launch
+        uint64 launchedAt; // 0 until graduation; then block.timestamp of graduation (decay anchor)
     }
 
     enum Status {
@@ -346,7 +346,12 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         uint32 snipeDecaySeconds
     ) external nonReentrant whenNotPaused returns (address tokenAddr, PoolId poolId) {
         if (bytes(name).length == 0 || bytes(symbol).length == 0) revert EmptyName();
-        if (mode > uint8(LaunchMode.CLANKER_V3)) revert InvalidMode();
+        // Only PUMP(0) and CLANKER(1) are implemented. CLANKER_V3(2) has no
+        // curve path -- buy()/sell() revert InvalidMode for it and no pool is
+        // ever initialized, so a mode-2 createLaunch would mint the 1B supply
+        // to this (immutable) hook and strand it FOREVER with no rescue. Reject
+        // it at the door until the CLANKER_V3 single-sided path is built.
+        if (mode >= uint8(LaunchMode.CLANKER_V3)) revert InvalidMode();
         if (creator2Bps > 10_000) revert InvalidFeeOwner();
         if (snipeStartBps > MAX_SNIPE_START_BPS) revert InvalidSnipeBps();
         if (snipeStartBps > 0 && snipeDecaySeconds == 0) revert InvalidDecaySeconds();
@@ -394,11 +399,20 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
 
         // Snipe config keyed by token addr so currentSnipeBps reads cheaply
         // from anti-sniper checks in beforeSwap / afterSwap.
+        //
+        // launchedAt = 0 here ON PURPOSE: the anti-sniper tax only ever applies
+        // in afterSwap on a GRADUATED pool (the AMM pool does not exist during
+        // the curve), so the decay clock must start at GRADUATION, not now.
+        // Starting it here made the window elapse during the (hours/days-long)
+        // curve phase, so by graduation the tax was always 0 -- snipers free,
+        // the exact outcome of the round-4 HIGH. _graduate stamps the real
+        // start time. _currentSnipeBps treats launchedAt==0 as "not started"
+        // (returns 0), which is correct for the whole curve phase.
         if (snipeStartBps > 0) {
             snipeConfigs[tokenAddr] = SnipeConfig({
                 startBps: snipeStartBps,
                 decaySeconds: snipeDecaySeconds,
-                launchedAt: uint64(block.timestamp)
+                launchedAt: 0
             });
             emit SnipeConfigured(tokenAddr, snipeStartBps, snipeDecaySeconds);
         }
@@ -987,6 +1001,15 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         POOL_MANAGER.unlock(abi.encode(token, amount0, amount1));
 
         state.status = uint8(Status.Graduated);
+
+        // Start the anti-sniper decay clock NOW: the AMM pool goes live at
+        // graduation, so this is the first moment afterSwap can tax a buy.
+        // (createLaunch deliberately left launchedAt == 0.) Only touch it if a
+        // config exists (startBps > 0); an unconfigured token stays untaxed.
+        if (snipeConfigs[token].startBps > 0) {
+            snipeConfigs[token].launchedAt = uint64(block.timestamp);
+        }
+
         emit Graduated(key.toId(), totalUsdc, lpTokens);
     }
 
