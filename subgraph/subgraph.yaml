@@ -69,9 +69,9 @@ dataSources:
     name: ArcadeHookV4
     network: arc-testnet
     source:
-      address: "0xFf21cCB4c44F79757fFc676E89fAf55367a2bEce"
+      address: "0x6c307D994ECf5babeab76B0e50c9d0a5FcFABece"
       abi: ArcadeHook
-      startBlock: 52424692
+      startBlock: 52470498
     mapping:
       kind: ethereum/events
       apiVersion: 0.0.9
@@ -110,9 +110,9 @@ dataSources:
     name: TwitterEscrowV4
     network: arc-testnet
     source:
-      address: "0x8094fF2268F5b1D19CFB6B01c041A243828a09E1"
+      address: "0x41B0341dd65d3B7c350225b551c9826787325901"
       abi: ArcadeTwitterEscrowV4
-      startBlock: 52343261
+      startBlock: 52470498
     mapping:
       kind: ethereum/events
       apiVersion: 0.0.9
@@ -141,7 +141,7 @@ dataSources:
     source:
       address: "0x71CCed1c397EC974E74C350eBA6DBa98DE8e8e25"
       abi: PoolManagerV4
-      startBlock: 52424692
+      startBlock: 52470498
     mapping:
       kind: ethereum/events
       apiVersion: 0.0.9
