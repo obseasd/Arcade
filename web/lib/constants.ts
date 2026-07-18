@@ -1,4 +1,11 @@
 import { Address, isAddress, zeroAddress } from "viem";
+import deploymentsJson from "../public/deployments.json";
+
+// Committed source of truth for deployed addresses. Used as a FALLBACK when the
+// matching NEXT_PUBLIC_* env var is unset, so the app works even if a Vercel env
+// wasn't set (or a rebuild is pending) -- the deployment is baked into the build.
+const DEPLOYMENTS = (deploymentsJson as unknown as { addresses?: Record<string, string | undefined> })
+  .addresses ?? {};
 
 function safeAddress(v: string | undefined): Address {
   // Trim whitespace + drop strict EIP-55 checksum validation. Without
@@ -72,10 +79,10 @@ export const ADDRESSES = {
   // subsumes it). These remain because the production ArcadeHook + its swap
   // router use them: PoolManager (pool host), StateView/Quoter (read-side),
   // ArcadeV4SwapRouter (post-graduation swaps).
-  v4PoolManager: safeAddress(process.env.NEXT_PUBLIC_V4_POOL_MANAGER_ADDRESS),
-  v4StateView: safeAddress(process.env.NEXT_PUBLIC_V4_STATE_VIEW_ADDRESS),
-  v4Quoter: safeAddress(process.env.NEXT_PUBLIC_V4_QUOTER_ADDRESS),
-  v4Router: safeAddress(process.env.NEXT_PUBLIC_V4_ROUTER_ADDRESS),
+  v4PoolManager: safeAddress(process.env.NEXT_PUBLIC_V4_POOL_MANAGER_ADDRESS ?? DEPLOYMENTS.v4PoolManager),
+  v4StateView: safeAddress(process.env.NEXT_PUBLIC_V4_STATE_VIEW_ADDRESS ?? DEPLOYMENTS.v4StateView),
+  v4Quoter: safeAddress(process.env.NEXT_PUBLIC_V4_QUOTER_ADDRESS ?? DEPLOYMENTS.v4Quoter),
+  v4Router: safeAddress(process.env.NEXT_PUBLIC_V4_ROUTER_ADDRESS ?? DEPLOYMENTS.v4Router),
   /** CCTP V2 "bridge and buy" landing contract on Arc (ArcadeCctpBuyReceiver).
    *  Curve -> AMM (frontend-chosen venue: V2 router OR V3 router+fee for ETH)
    *  -> refund. Also skims the fast-transfer bridge fee: it pins the ALL-IN
@@ -141,9 +148,13 @@ export const ADDRESSES = {
   // Unified hook subsuming launchpad + V2 stack + V3 locker. Uses atomic
   // createLaunch + direct hook.buy/hook.sell during Curving phase.
   /** ArcadeHook: production V4 hook for the bonding-curve launchpad. */
-  arcadeHook: safeAddress(process.env.NEXT_PUBLIC_ARCADE_HOOK_ADDRESS),
+  arcadeHook: safeAddress(process.env.NEXT_PUBLIC_ARCADE_HOOK_ADDRESS ?? DEPLOYMENTS.arcadeHook),
   /** LockedVault: immutable holder of ERC-6909 graduation-seed LP receipts. */
-  lockedVault: safeAddress(process.env.NEXT_PUBLIC_LOCKED_VAULT_ADDRESS),
+  lockedVault: safeAddress(process.env.NEXT_PUBLIC_LOCKED_VAULT_ADDRESS ?? DEPLOYMENTS.lockedVault),
+  /** CreatorSplitter factory (transferable multi-recipient creator fees). */
+  splitterFactory: safeAddress(process.env.NEXT_PUBLIC_SPLITTER_FACTORY_ADDRESS ?? DEPLOYMENTS.splitterFactory),
+  /** Holder airdrop-as-a-service distributor. */
+  airdropDistributor: safeAddress(process.env.NEXT_PUBLIC_AIRDROP_DISTRIBUTOR_ADDRESS ?? DEPLOYMENTS.airdropDistributor),
   // --- Orbs TWAP / dLIMIT stack (limit orders, Arc testnet) ---
   /** TWAP main contract. Receives ask() calls, holds the order book. */
   orbsTwap: safeAddress(process.env.NEXT_PUBLIC_ORBS_TWAP_ADDRESS),
@@ -215,9 +226,11 @@ export const LIMIT_ORDERS_ENABLED: boolean =
  *  surfaces that target the unified ArcadeHook contract (atomic createLaunch
  *  + hook.buy / hook.sell). Requires both the hook address AND the locked
  *  vault to be set, since the deploy script always provisions them as a pair. */
+// Enabled whenever both addresses RESOLVE (env var OR deployments.json fallback),
+// so a missing Vercel env doesn't brick the launcher -- the committed deployment
+// is always available at build time.
 export const V4_HOOK_ENABLED: boolean =
-  !!process.env.NEXT_PUBLIC_ARCADE_HOOK_ADDRESS &&
-  !!process.env.NEXT_PUBLIC_LOCKED_VAULT_ADDRESS;
+  ADDRESSES.arcadeHook !== zeroAddress && ADDRESSES.lockedVault !== zeroAddress;
 
 /** V4 pool params used for every Arcade launch (1% fee tier). */
 export const V4_TICK_SPACING = 200;
