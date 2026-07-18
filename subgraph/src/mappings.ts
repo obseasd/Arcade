@@ -3,7 +3,30 @@ import { Buy, Sell, TokenCreated, Migrated } from "../generated/Launchpad/Launch
 import { PoolCreated } from "../generated/V3Factory/V3Factory";
 import { Swap } from "../generated/templates/V3Pool/V3Pool";
 import { V3Pool } from "../generated/templates";
-import { Trade, Pool, Trader, Token, Global, Creator } from "../generated/schema";
+import {
+  LaunchCreated,
+  CurveBuy,
+  CurveSell,
+  Graduated,
+  RoyaltyPaid,
+  AntiSnipeApplied,
+  FeeAttributedToHandle,
+  FeeHarvested,
+} from "../generated/ArcadeHookV4/ArcadeHook";
+import { Credited, Claimed } from "../generated/TwitterEscrowV4/ArcadeTwitterEscrowV4";
+import { Swap as V4Swap } from "../generated/PoolManagerV4/PoolManagerV4";
+import {
+  Trade,
+  Pool,
+  Trader,
+  Token,
+  Global,
+  Creator,
+  V4Pool,
+  HandleAttribution,
+  EscrowSlot,
+  FeeStats,
+} from "../generated/schema";
 
 /**
  * Charts + stats + referral mappings. Price math is a VERBATIM port of the
@@ -290,4 +313,236 @@ export function handleSwap(event: Swap): void {
     usdcVolume(usdcRaw),
     usdcRaw.gt(BigInt.fromI32(0)),
   );
+}
+
+// ===========================================================================
+// V4 ArcadeHook (new fee-model launchpad). Events key by PoolId; V4Pool maps
+// a PoolId back to its token so curve trades feed the same Trade/Token/Creator
+// entities as V2/V3. Price is USDC(6dp)-per-token(18dp): raw6 * 1e12 / raw18.
+// ===========================================================================
+
+function priceV4(usdcRaw: BigInt, tokenRaw: BigInt): BigDecimal {
+  if (tokenRaw.isZero()) return BigDecimal.fromString("0");
+  const scale = BigDecimal.fromString("1000000000000"); // 1e12 (18dp - 6dp)
+  return usdcRaw.toBigDecimal().times(scale).div(tokenRaw.toBigDecimal());
+}
+
+/// V4 orders currencies by numeric address, so USDC is currency0 iff its address
+/// sorts below the launch token's. Both are 20-byte big-endian; compare from the
+/// most-significant byte. (No string `<` in AssemblyScript, so compare bytes.)
+function usdcIsCurrency0(token: Bytes): boolean {
+  const u = usdcAddress();
+  for (let i = 0; i < 20; i++) {
+    const a = u[i];
+    const b = token[i];
+    if (a != b) return a < b;
+  }
+  return false; // equal addresses are impossible (token is never USDC)
+}
+
+/// Trades on a V4 pool AFTER it leaves the curve: PUMP post-graduation and every
+/// CLANKER swap (CLANKER is a V4 pool from birth). The PoolManager is shared, so
+/// skip any pool not in our V4Pool registry. The emitted amounts are the
+/// SWAPPER's balance delta (v4-core emits `pool.swap`'s delta, NOT the pool's
+/// despite the NatSpec): a negative USDC delta means the trader paid USDC = BUY.
+/// Price comes from sqrtPriceX96 and is direction-independent.
+export function handleV4Swap(event: V4Swap): void {
+  const pool = V4Pool.load(event.params.id.toHexString());
+  if (pool == null) return; // not one of our launches
+
+  const usdcC0 = usdcIsCurrency0(pool.token);
+  const usdcRaw = usdcC0 ? event.params.amount0 : event.params.amount1;
+  recordTrade(
+    event,
+    pool.token,
+    event.params.sender,
+    "v4",
+    event.address,
+    priceFromSqrtX96(event.params.sqrtPriceX96, usdcC0),
+    usdcVolume(usdcRaw), // abs
+    usdcRaw.lt(BigInt.fromI32(0)), // trader paid USDC in = buy
+  );
+}
+
+function loadFeeStats(): FeeStats {
+  let f = FeeStats.load("v4");
+  if (f == null) {
+    f = new FeeStats("v4");
+    f.creatorFeesUsdc = BigDecimal.fromString("0");
+    f.treasuryFeesUsdc = BigDecimal.fromString("0");
+    f.antiSnipeUsdc = BigDecimal.fromString("0");
+    f.clankerHarvests = BigInt.fromI32(0);
+  }
+  return f;
+}
+
+export function handleLaunchCreatedV4(event: LaunchCreated): void {
+  const poolIdHex = event.params.poolId.toHexString();
+  const token = event.params.token;
+  const creator = event.params.creator;
+  const mode = event.params.mode;
+
+  // PoolId -> token map for the curve/graduation/handle handlers.
+  let p = V4Pool.load(poolIdHex);
+  if (p == null) p = new V4Pool(poolIdHex);
+  p.token = token;
+  p.creator = creator;
+  p.mode = mode;
+  p.save();
+
+  // Token lifecycle row (shared with V2/V3 stats).
+  const tid = token.toHexString();
+  let tok = Token.load(tid);
+  if (tok == null) {
+    tok = new Token(tid);
+    tok.creator = creator;
+    tok.mode = mode;
+    tok.createdAt = event.block.timestamp.toI32();
+    tok.migrated = false;
+    tok.save();
+
+    const g = loadGlobal();
+    g.tokenCount = g.tokenCount + 1;
+    g.save();
+
+    const cid = creator.toHexString();
+    let c = Creator.load(cid);
+    if (c == null) {
+      c = new Creator(cid);
+      c.tokenCount = 0;
+      c.tradeCount = 0;
+      c.totalVolumeUsdc = BigDecimal.fromString("0");
+      c.graduatedVolumeUsdc = BigDecimal.fromString("0");
+      c.firstSeenAt = event.block.timestamp.toI32();
+      c.lastTradeAt = event.block.timestamp.toI32();
+    }
+    c.tokenCount = c.tokenCount + 1;
+    c.save();
+  }
+}
+
+export function handleCurveBuyV4(event: CurveBuy): void {
+  const p = V4Pool.load(event.params.poolId.toHexString());
+  if (p == null) return;
+  recordTrade(
+    event,
+    p.token,
+    event.params.buyer,
+    "v4curve",
+    null,
+    priceV4(event.params.grossUsdcIn, event.params.tokensOut),
+    usdcVolume(event.params.grossUsdcIn),
+    true,
+  );
+}
+
+export function handleCurveSellV4(event: CurveSell): void {
+  const p = V4Pool.load(event.params.poolId.toHexString());
+  if (p == null) return;
+  recordTrade(
+    event,
+    p.token,
+    event.params.seller,
+    "v4curve",
+    null,
+    priceV4(event.params.usdcOut, event.params.tokensIn),
+    usdcVolume(event.params.usdcOut),
+    false,
+  );
+}
+
+export function handleGraduatedV4(event: Graduated): void {
+  const p = V4Pool.load(event.params.poolId.toHexString());
+  if (p == null) return;
+  const tok = Token.load(p.token.toHexString());
+  if (tok == null) return;
+  if (!tok.migrated) {
+    tok.migrated = true;
+    tok.migratedAt = event.block.timestamp.toI32();
+    tok.save();
+    const g = loadGlobal();
+    g.graduatedCount = g.graduatedCount + 1;
+    g.save();
+  }
+}
+
+export function handleRoyaltyPaidV4(event: RoyaltyPaid): void {
+  // A CLANKER harvest emits RoyaltyPaid for BOTH currencies; the token side
+  // carries an 18dp launch-token amount that would corrupt the 6dp USDC tally.
+  // Only fold the USDC side into the fee stats.
+  if (!event.params.currency.equals(usdcAddress())) return;
+  const f = loadFeeStats();
+  f.creatorFeesUsdc = f.creatorFeesUsdc.plus(usdcVolume(event.params.creatorAmount));
+  f.treasuryFeesUsdc = f.treasuryFeesUsdc.plus(usdcVolume(event.params.treasuryAmount));
+  f.save();
+}
+
+export function handleFeeHarvestedV4(event: FeeHarvested): void {
+  // A CLANKER collectFees ran; the USDC value is captured via the paired
+  // RoyaltyPaid (USDC side). Record the harvest count for ops visibility.
+  const f = loadFeeStats();
+  f.clankerHarvests = f.clankerHarvests.plus(BigInt.fromI32(1));
+  f.save();
+}
+
+export function handleAntiSnipeV4(event: AntiSnipeApplied): void {
+  const f = loadFeeStats();
+  f.antiSnipeUsdc = f.antiSnipeUsdc.plus(usdcVolume(event.params.amount));
+  f.save();
+}
+
+export function handleFeeAttributedV4(event: FeeAttributedToHandle): void {
+  const poolIdHex = event.params.poolId.toHexString();
+  let h = HandleAttribution.load(poolIdHex);
+  if (h == null) h = new HandleAttribution(poolIdHex);
+  const p = V4Pool.load(poolIdHex);
+  h.token = p == null ? Address.zero() : p.token;
+  h.handle = event.params.handle;
+  h.escrow = event.params.escrow;
+  h.createdAt = event.block.timestamp.toI32();
+  h.save();
+}
+
+// ---- Twitter escrow: per-slot claimable balance ----
+
+function escrowSlotId(positionId: BigInt, slotIndex: BigInt, token: Address): string {
+  return positionId.toHexString() + "-" + slotIndex.toString() + "-" + token.toHexString();
+}
+
+export function handleEscrowCredited(event: Credited): void {
+  const id = escrowSlotId(event.params.positionId, event.params.slotIndex, event.params.token);
+  let s = EscrowSlot.load(id);
+  if (s == null) {
+    s = new EscrowSlot(id);
+    s.positionId = event.params.positionId;
+    s.slotIndex = event.params.slotIndex;
+    s.token = event.params.token;
+    s.credited = BigDecimal.fromString("0");
+    s.claimed = BigDecimal.fromString("0");
+    s.balance = BigDecimal.fromString("0");
+  }
+  const amt = usdcVolume(event.params.amount);
+  s.credited = s.credited.plus(amt);
+  s.balance = s.balance.plus(amt);
+  s.lastUpdate = event.block.timestamp.toI32();
+  s.save();
+}
+
+export function handleEscrowClaimed(event: Claimed): void {
+  const id = escrowSlotId(event.params.positionId, event.params.slotIndex, event.params.token);
+  let s = EscrowSlot.load(id);
+  if (s == null) {
+    s = new EscrowSlot(id);
+    s.positionId = event.params.positionId;
+    s.slotIndex = event.params.slotIndex;
+    s.token = event.params.token;
+    s.credited = BigDecimal.fromString("0");
+    s.claimed = BigDecimal.fromString("0");
+    s.balance = BigDecimal.fromString("0");
+  }
+  // A claim sweeps the whole slot balance to zero.
+  s.claimed = s.claimed.plus(usdcVolume(event.params.amount));
+  s.balance = BigDecimal.fromString("0");
+  s.lastUpdate = event.block.timestamp.toI32();
+  s.save();
 }

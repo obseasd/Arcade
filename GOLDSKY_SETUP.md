@@ -119,3 +119,23 @@ Same subgraph. Before deploying to mainnet:
 - The `indexer/` Ponder project is SUPERSEDED by this subgraph. It still builds
   and its `price.ts` is the parity reference for `web/__tests__/indexer/price.test.ts`;
   delete it once the subgraph is live in production if you want.
+
+## Update 2026-07-18 — V4 fee-model hook + escrow indexed (version 1.1.0)
+Added two data sources to the subgraph for the reworked V4 stack:
+- **ArcadeHookV4** `0xB771579901EEF75EC7e61b644Ff4167Ab9eABECE` (startBlock 52343261):
+  LaunchCreated -> Token + V4Pool(poolId->token); CurveBuy/CurveSell -> Trade
+  (source "v4curve", price = usdc6*1e12/token18) feeding the same Trade/Trader/
+  Creator/Global entities as V2/V3; Graduated -> Token.migrated; RoyaltyPaid +
+  AntiSnipeApplied -> FeeStats("v4"); FeeAttributedToHandle -> HandleAttribution.
+- **TwitterEscrowV4** `0x8094fF2268F5b1D19CFB6B01c041A243828a09E1`: Credited/
+  Claimed -> EscrowSlot (per positionId/slot/token claimable balance) for the
+  /claim UI.
+New entities: V4Pool, HandleAttribution, EscrowSlot, FeeStats. Event-only ABIs
+in abis/ArcadeHook.json + abis/ArcadeTwitterEscrowV4.json.
+
+Deployed `arcade-charts/1.1.0` (healthy, hasIndexingErrors=false). Freed a slot
+by deleting the superseded 1.0.1 (project cap = 3 versions; prod=1.0.4 untouched).
+**To go live: `goldsky subgraph tag create arcade-charts/1.1.0 --tag prod`** once
+1.1.0 is 100% synced (keeps NEXT_PUBLIC_GOLDSKY_URL stable).
+MAINNET: redeploy the subgraph with the mainnet hook/escrow addresses +
+`network: arc-mainnet` and flip the USDC address in src/mappings.ts usdcAddress().

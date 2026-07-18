@@ -13,7 +13,7 @@ import {
     ARCADE_HOOK_MODE,
     ARCADE_HOOK_STATUS,
 } from "@/lib/abis/arcadeHook";
-import { ADDRESSES, LAUNCHPAD_CURVE_SUPPLY, LAUNCHPAD_GRADUATION_USDC, LAUNCHPAD_TOKEN_DECIMALS, USDC_DECIMALS, V4_HOOK_ENABLED } from "@/lib/constants";
+import { ADDRESSES, V4_HOOK_CURVE_SUPPLY as LAUNCHPAD_CURVE_SUPPLY, V4_HOOK_GRADUATION_USDC as LAUNCHPAD_GRADUATION_USDC, LAUNCHPAD_TOKEN_DECIMALS, USDC_DECIMALS, V4_HOOK_ENABLED } from "@/lib/constants";
 import { useApproveIfNeeded } from "@/lib/hooks/useApproveIfNeeded";
 import { useArcadeHookCurveState } from "@/lib/hooks/useArcadeHookTokens";
 import { useTokenImage, useTokenMetadata } from "@/lib/hooks/useTokenImage";

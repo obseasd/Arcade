@@ -4,9 +4,9 @@ import { V4PreviewBanner } from "@/components/launchpad/V4PreviewBanner";
 import { ArrowLeft, Lock, Image as ImageIcon, Upload } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { useState } from "react";
-import { Address, decodeEventLog, isAddress, zeroAddress } from "viem";
+import { useRouter, useSearchParams } from "next/navigation";
+import { useState, Suspense } from "react";
+import { Address, decodeEventLog, isAddress, parseUnits, zeroAddress } from "viem";
 import { useAccount, usePublicClient, useWriteContract } from "wagmi";
 
 import {
@@ -26,6 +26,11 @@ const MAX_SYMBOL = 12;
 const MAX_DESCRIPTION = 280;
 const MAX_SNIPE_BPS = 5_000;
 const MAX_SNIPE_DECAY_MINUTES = 60;
+// CLANKER direct-launch start market cap (FDV in USDC). Mirrors the hook's
+// CLANKER_DEFAULT/MIN/MAX_START_MCAP constants.
+const CLANKER_DEFAULT_START_MCAP = 35_000;
+const CLANKER_MIN_START_MCAP = 1_000;
+const CLANKER_MAX_START_MCAP = 10_000_000;
 
 /** Fallback inline-encode the image as a downscaled JPEG data URL when Pinata
  * is not reachable. Mirrors the V2 launchpad's encodeInlineDataUrl so the V4
@@ -78,13 +83,27 @@ export default function ArcadeHookCreatePage() {
             </div>
         );
     }
-    return <Inner />;
+    // Inner reads useSearchParams (?mode=), which Next 15 requires under a
+    // Suspense boundary or the static prerender of this route fails.
+    return (
+        <Suspense fallback={null}>
+            <Inner />
+        </Suspense>
+    );
 }
 
 function Inner() {
     const router = useRouter();
+    const searchParams = useSearchParams();
     const publicClient = usePublicClient();
     const { address: account, isConnected } = useAccount();
+
+    // Mode can be preselected from the launch picker (?mode=0 PUMP, 1 CLANKER).
+    const modeParam = Number(searchParams.get("mode"));
+    const initialMode: ArcadeHookMode =
+        modeParam === ARCADE_HOOK_MODE.CLANKER
+            ? ARCADE_HOOK_MODE.CLANKER
+            : ARCADE_HOOK_MODE.PUMP;
 
     // --- Form state ---------------------------------------------------------
     const [name, setName] = useState("");
@@ -93,11 +112,18 @@ function Inner() {
     const [image, setImage] = useState("");
     const [imagePreview, setImagePreview] = useState("");
     const [imageUploading, setImageUploading] = useState(false);
-    const [mode, setMode] = useState<ArcadeHookMode>(ARCADE_HOOK_MODE.PUMP);
+    const [mode, setMode] = useState<ArcadeHookMode>(initialMode);
 
     // CLANKER-only fields (only relevant when mode == CLANKER).
     const [creator2, setCreator2] = useState("");
     const [creator2Pct, setCreator2Pct] = useState(0); // % (UI 0..100)
+    // CLANKER fee tier: 1/2/3 = 1%/2%/3% fixed post-graduation fee. PUMP ignores it.
+    const [feeTier, setFeeTier] = useState<1 | 2 | 3>(1);
+    // CLANKER: optional Twitter @handle that receives the creator fees (accrues
+    // in a handle-gated escrow, claimable by the verified owner). Empty = direct.
+    const [feeHandle, setFeeHandle] = useState("");
+    // CLANKER: start market cap (FDV in USDC) the single-sided LP is seeded at.
+    const [startMcap, setStartMcap] = useState(CLANKER_DEFAULT_START_MCAP);
 
     // Snipe config. Both zero means no anti-sniper.
     const [snipeStartBps, setSnipeStartBps] = useState(0);
@@ -115,6 +141,12 @@ function Inner() {
             : (zeroAddress as Address);
     const creator2Bps = isClanker && creator2Addr !== zeroAddress ? creator2Pct * 100 : 0;
 
+    const startMcapValid =
+        !isClanker ||
+        (Number.isFinite(startMcap) &&
+            startMcap >= CLANKER_MIN_START_MCAP &&
+            startMcap <= CLANKER_MAX_START_MCAP);
+
     const formValid =
         name.trim().length > 0 &&
         symbol.trim().length > 0 &&
@@ -124,6 +156,7 @@ function Inner() {
         (!isClanker || creator2.trim().length === 0 || isAddress(creator2.trim())) &&
         creator2Pct >= 0 &&
         creator2Pct <= 100 &&
+        startMcapValid &&
         !imageUploading;
 
     /**
@@ -215,7 +248,11 @@ function Inner() {
             await ensureAllowance(CREATION_FEE_USDC);
 
             setTxState({ status: "pending", message: "Submitting createLaunch..." });
-            const snipeDecaySeconds = snipeStartBps > 0 ? snipeDecayMinutes * 60 : 0;
+            // Anti-sniper rides the hook fee-take, which a CLANKER single-sided
+            // pool cannot support; the hook reverts a snipe config on CLANKER, so
+            // never send one. PUMP keeps the configured skim.
+            const effectiveSnipeStartBps = isClanker ? 0 : snipeStartBps;
+            const snipeDecaySeconds = effectiveSnipeStartBps > 0 ? snipeDecayMinutes * 60 : 0;
             // Build the on-chain metadataURI. encodeMetadataDataUri yields a
             // data:application/json;base64 URI that bundles name/symbol/image/
             // description in a single calldata blob, mirroring the V2 launch
@@ -240,8 +277,19 @@ function Inner() {
                     mode,
                     creator2Addr,
                     creator2Bps,
-                    snipeStartBps,
+                    effectiveSnipeStartBps,
                     snipeDecaySeconds,
+                    // CLANKER: the creator-chosen fee tier (1/2/3 = 1%/2%/3%).
+                    // PUMP ignores this and runs the mcap-decaying dynamic fee.
+                    isClanker ? feeTier : 0,
+                    // CLANKER: optional Twitter @handle to receive the creator
+                    // fees (claimable by the verified handle owner). Empty =
+                    // fees go direct to the launcher. PUMP ignores it.
+                    isClanker ? feeHandle.trim().replace(/^@/, "") : "",
+                    // CLANKER: start market cap (FDV) the single-sided LP is
+                    // seeded at, in USDC micro-units. PUMP ignores it (bonding
+                    // curve sets its own start price).
+                    isClanker ? parseUnits(String(startMcap), 6) : 0n,
                 ],
             });
 
@@ -295,9 +343,11 @@ function Inner() {
                 <div className="flex-1">
                     <h1 className="text-2xl font-semibold">Launch on V4 (ArcadeHook)</h1>
                     <p className="mt-1 text-sm text-arc-text-muted">
-                        Atomic createLaunch on the unified V4 hook. Curve trades go through
-                        hook.buy / hook.sell during the 20k USDC raise, then graduate
-                        automatically into a locked full-range V4 LP.
+                        Atomic createLaunch on the unified V4 hook. PUMP runs a bonding curve
+                        (starts ~$5k mcap, graduates near ~$60k into a locked full-range V4 LP).
+                        CLANKER launches directly: the full supply is seeded single-sided in a
+                        locked V4 LP at your chosen start market cap, tradable immediately with a
+                        fixed fee tier.
                     </p>
                 </div>
             </div>
@@ -387,22 +437,49 @@ function Inner() {
                             active={mode === ARCADE_HOOK_MODE.PUMP}
                             onClick={() => setMode(ARCADE_HOOK_MODE.PUMP)}
                             title="PUMP"
-                            subtitle="50% Arcade / 50% creator"
-                            description="Balanced split, fair-launch default."
+                            subtitle="Dynamic fee 1% -> 0.30%"
+                            description="Post-grad swap fee decays with market cap, pump.fun-style. 80% you / 20% protocol."
                         />
                         <ModeButton
                             active={mode === ARCADE_HOOK_MODE.CLANKER}
                             onClick={() => setMode(ARCADE_HOOK_MODE.CLANKER)}
                             title="CLANKER"
-                            subtitle="70% Arcade / 30% creator (curve)"
-                            description="Post-grad flips to 70% creator (royalty 0.30%)."
+                            subtitle="Direct launch, fixed fee 1/2/3%"
+                            description="No curve: full supply seeded single-sided in a locked V4 LP, tradable at once. Fixed swap fee, 80% you / 20% protocol."
                         />
                     </div>
-                    <p className="text-xs text-arc-text-faint">
-                        CLANKER V3 mode (single-sided locked V4 LP at create) is reserved for
-                        a follow-up release.
-                    </p>
                 </div>
+
+                {/* Start market cap (CLANKER only) --------------------------- */}
+                {isClanker && (
+                    <div className="space-y-3 rounded-xl border border-arc-border bg-arc-bg-elevated p-4">
+                        <span className="text-sm font-medium text-arc-text">Start market cap</span>
+                        <label className="block text-sm">
+                            <span className="text-arc-text-muted">FDV in USDC</span>
+                            <input
+                                type="number"
+                                min={CLANKER_MIN_START_MCAP}
+                                max={CLANKER_MAX_START_MCAP}
+                                step={1_000}
+                                value={startMcap}
+                                onChange={(e) => setStartMcap(Number(e.target.value))}
+                                placeholder={String(CLANKER_DEFAULT_START_MCAP)}
+                                className={cn(
+                                    "mt-1 w-full rounded-lg border bg-arc-bg px-3 py-2 text-sm tabular-nums focus:outline-none",
+                                    startMcapValid
+                                        ? "border-arc-border focus:border-arc-cta-hover"
+                                        : "border-red-500/60 focus:border-red-500",
+                                )}
+                            />
+                        </label>
+                        <p className="text-xs text-arc-text-faint">
+                            The full supply is seeded single-sided at this fully-diluted valuation
+                            (${CLANKER_MIN_START_MCAP.toLocaleString()} to $
+                            {CLANKER_MAX_START_MCAP.toLocaleString()}). The price only moves as
+                            people buy. Default ${CLANKER_DEFAULT_START_MCAP.toLocaleString()}.
+                        </p>
+                    </div>
+                )}
 
                 {/* Creator2 (CLANKER only) ----------------------------------- */}
                 {isClanker && (
@@ -438,10 +515,59 @@ function Inner() {
                             Only active in CLANKER mode. Leave empty to route the full creator
                             cut to the launcher.
                         </p>
+
+                        <div className="border-t border-arc-border pt-3">
+                            <span className="text-sm text-arc-text-muted">
+                                Post-graduation fee tier
+                            </span>
+                            <div className="mt-2 flex gap-2">
+                                {([1, 2, 3] as const).map((t) => (
+                                    <button
+                                        key={t}
+                                        type="button"
+                                        onClick={() => setFeeTier(t)}
+                                        className={`flex-1 rounded-lg border px-3 py-2 text-sm tabular-nums transition ${
+                                            feeTier === t
+                                                ? "border-arc-cta-hover bg-arc-cta/10 text-arc-text"
+                                                : "border-arc-border bg-arc-bg text-arc-text-muted hover:border-arc-cta-hover"
+                                        }`}
+                                    >
+                                        {t}%
+                                    </button>
+                                ))}
+                            </div>
+                            <p className="mt-2 text-xs text-arc-text-faint">
+                                Fixed swap fee once the token graduates to the AMM. 80% to you,
+                                20% to the protocol. PUMP mode instead decays from 1% to 0.30% as
+                                market cap grows.
+                            </p>
+                        </div>
+
+                        <label className="block border-t border-arc-border pt-3 text-sm">
+                            <span className="text-arc-text-muted">
+                                Send creator fees to a Twitter @ (optional)
+                            </span>
+                            <input
+                                value={feeHandle}
+                                onChange={(e) => setFeeHandle(e.target.value)}
+                                placeholder="@handle — leave empty to receive fees in your wallet"
+                                className="mt-1 w-full rounded-lg border border-arc-border bg-arc-bg px-3 py-2 text-sm focus:border-arc-cta-hover focus:outline-none"
+                            />
+                            <p className="mt-1 text-xs text-arc-text-faint">
+                                The creator fees accrue in a handle-gated escrow; the verified
+                                owner of the @ claims them after connecting a wallet. Useful when
+                                launching a token on behalf of someone who has not joined yet.
+                            </p>
+                        </label>
                     </div>
                 )}
 
-                {/* Anti-sniper -------------------------------------------- */}
+                {/* Anti-sniper (PUMP only) -------------------------------- */}
+                {/* CLANKER's single-sided pool can't carry the hook fee-take the
+                    anti-sniper skim rides on; the hook rejects a snipe config on
+                    CLANKER, so the control is hidden there (the tier LP fee is
+                    CLANKER's only friction). */}
+                {!isClanker && (
                 <div className="space-y-3 rounded-xl border border-arc-border bg-arc-bg-elevated p-4">
                     <span className="text-sm font-medium text-arc-text">
                         Anti-sniper tax (optional)
@@ -480,6 +606,7 @@ function Inner() {
                         post-graduation BUYs through the V4 router.
                     </p>
                 </div>
+                )}
 
                 {/* Fee summary --------------------------------------------- */}
                 <div className="flex items-center justify-between rounded-lg border border-arc-border bg-arc-bg-elevated px-3 py-2 text-sm">

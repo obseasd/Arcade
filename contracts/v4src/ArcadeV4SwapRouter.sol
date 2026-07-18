@@ -43,6 +43,22 @@ contract ArcadeV4SwapRouter is IUnlockCallback, ReentrancyGuard {
 
     IPoolManager public immutable POOL_MANAGER;
 
+    /// @notice Owner controls the referral surcharge rate. Set to a Safe on
+    ///         mainnet; the deployer on testnet.
+    address public owner;
+
+    /// @notice Referral surcharge in bps, taken ON TOP of the pool/hook fee and
+    ///         paid to the `referrer` passed to the `*Referred` entry points.
+    ///         0 = referral disabled (the referrer is paid nothing even if set).
+    ///         Only the `*Referred` entry points apply it; the plain entry
+    ///         points are always surcharge-free.
+    uint16 public referralFeeBps;
+
+    /// @notice Hard cap on the referral surcharge (1%). The owner can never set
+    ///         a rate above this, so the surcharge can never meaningfully harm a
+    ///         trader's execution price.
+    uint16 public constant MAX_REFERRAL_BPS = 100;
+
     error NotPoolManager();
     error SlippageExceeded(uint256 actual, uint256 limit);
     error ZeroAmount();
@@ -51,6 +67,9 @@ contract ArcadeV4SwapRouter is IUnlockCallback, ReentrancyGuard {
     /// price limit produced a partial fill, or a hook skimmed the output). We
     /// refuse to silently under-deliver on an exact-output request.
     error IncompleteOutput(uint256 delivered, uint256 requested);
+    error NotOwner();
+    error ReferralTooHigh();
+    error ZeroAddress();
 
     event SwapExecuted(
         address indexed payer,
@@ -61,6 +80,9 @@ contract ArcadeV4SwapRouter is IUnlockCallback, ReentrancyGuard {
         uint256 amountOut,
         bool zeroForOne
     );
+    event ReferralFeePaid(address indexed referrer, Currency indexed currency, uint256 amount);
+    event ReferralFeeBpsSet(uint16 bps);
+    event OwnershipTransferred(address indexed from, address indexed to);
 
     /// @dev Encoded payload pushed through `poolManager.unlock` and decoded
     ///      in `unlockCallback`.
@@ -71,10 +93,38 @@ contract ArcadeV4SwapRouter is IUnlockCallback, ReentrancyGuard {
         bool zeroForOne;
         int256 amountSpecified; // negative = exact-in, positive = exact-out
         uint160 sqrtPriceLimitX96;
+        // Referral surcharge (0 addr / 0 bps => none). `bps` is SNAPSHOTTED at
+        // entry so an owner rate change mid-call cannot alter this swap.
+        address referrer;
+        uint16 referralBps;
     }
 
     constructor(IPoolManager poolManager_) {
         POOL_MANAGER = poolManager_;
+        owner = msg.sender;
+        emit OwnershipTransferred(address(0), msg.sender);
+    }
+
+    // -----------------------------------------------------------------
+    // Owner: referral surcharge rate
+    // -----------------------------------------------------------------
+
+    modifier onlyOwner() {
+        if (msg.sender != owner) revert NotOwner();
+        _;
+    }
+
+    /// @notice Set the referral surcharge (bps, <= MAX_REFERRAL_BPS).
+    function setReferralFeeBps(uint16 bps) external onlyOwner {
+        if (bps > MAX_REFERRAL_BPS) revert ReferralTooHigh();
+        referralFeeBps = bps;
+        emit ReferralFeeBpsSet(bps);
+    }
+
+    function transferOwnership(address newOwner) external onlyOwner {
+        if (newOwner == address(0)) revert ZeroAddress();
+        emit OwnershipTransferred(owner, newOwner);
+        owner = newOwner;
     }
 
     // -----------------------------------------------------------------
@@ -103,6 +153,36 @@ contract ArcadeV4SwapRouter is IUnlockCallback, ReentrancyGuard {
         address recipient,
         uint160 sqrtPriceLimitX96
     ) external nonReentrant returns (uint256 amountOut) {
+        return _exactInput(key, zeroForOne, amountIn, minAmountOut, recipient, sqrtPriceLimitX96, address(0));
+    }
+
+    /// @notice `exactInputSingle` that pays a `referrer` the current
+    ///         `referralFeeBps` surcharge, taken from the OUTPUT. `minAmountOut`
+    ///         is enforced on the NET output the recipient actually receives, so
+    ///         the surcharge can never push the trader below their slippage
+    ///         floor. Referrer 0 or rate 0 => behaves exactly like the plain
+    ///         entry point (no surcharge).
+    function exactInputSingleReferred(
+        PoolKey calldata key,
+        bool zeroForOne,
+        uint256 amountIn,
+        uint256 minAmountOut,
+        address recipient,
+        uint160 sqrtPriceLimitX96,
+        address referrer
+    ) external nonReentrant returns (uint256 amountOut) {
+        return _exactInput(key, zeroForOne, amountIn, minAmountOut, recipient, sqrtPriceLimitX96, referrer);
+    }
+
+    function _exactInput(
+        PoolKey calldata key,
+        bool zeroForOne,
+        uint256 amountIn,
+        uint256 minAmountOut,
+        address recipient,
+        uint160 sqrtPriceLimitX96,
+        address referrer
+    ) internal returns (uint256 amountOut) {
         if (amountIn == 0) revert ZeroAmount();
 
         Currency inputCurrency = zeroForOne ? key.currency0 : key.currency1;
@@ -117,11 +197,14 @@ contract ArcadeV4SwapRouter is IUnlockCallback, ReentrancyGuard {
                     zeroForOne: zeroForOne,
                     // V4 convention: NEGATIVE = exact-input.
                     amountSpecified: -int256(amountIn),
-                    sqrtPriceLimitX96: sqrtPriceLimitX96
+                    sqrtPriceLimitX96: sqrtPriceLimitX96,
+                    referrer: referrer,
+                    referralBps: referrer == address(0) ? 0 : referralFeeBps
                 })
             )
         );
         (uint256 realisedIn, uint256 realisedOut) = abi.decode(result, (uint256, uint256));
+        // realisedOut is NET of the referral surcharge (what the recipient got).
         if (realisedOut < minAmountOut) revert SlippageExceeded(realisedOut, minAmountOut);
         amountOut = realisedOut;
 
@@ -144,6 +227,35 @@ contract ArcadeV4SwapRouter is IUnlockCallback, ReentrancyGuard {
         address recipient,
         uint160 sqrtPriceLimitX96
     ) external nonReentrant returns (uint256 amountIn) {
+        return _exactOutput(key, zeroForOne, amountOut, maxAmountIn, recipient, sqrtPriceLimitX96, address(0));
+    }
+
+    /// @notice `exactOutputSingle` that pays a `referrer` the current
+    ///         `referralFeeBps` surcharge, taken from the INPUT (on top of the
+    ///         swap input, so the recipient still gets EXACTLY `amountOut`).
+    ///         `maxAmountIn` bounds the TOTAL the payer spends (swap input +
+    ///         surcharge), so the trader's ceiling is fully respected.
+    function exactOutputSingleReferred(
+        PoolKey calldata key,
+        bool zeroForOne,
+        uint256 amountOut,
+        uint256 maxAmountIn,
+        address recipient,
+        uint160 sqrtPriceLimitX96,
+        address referrer
+    ) external nonReentrant returns (uint256 amountIn) {
+        return _exactOutput(key, zeroForOne, amountOut, maxAmountIn, recipient, sqrtPriceLimitX96, referrer);
+    }
+
+    function _exactOutput(
+        PoolKey calldata key,
+        bool zeroForOne,
+        uint256 amountOut,
+        uint256 maxAmountIn,
+        address recipient,
+        uint160 sqrtPriceLimitX96,
+        address referrer
+    ) internal returns (uint256 amountIn) {
         if (amountOut == 0) revert ZeroAmount();
 
         Currency inputCurrency = zeroForOne ? key.currency0 : key.currency1;
@@ -158,7 +270,9 @@ contract ArcadeV4SwapRouter is IUnlockCallback, ReentrancyGuard {
                     zeroForOne: zeroForOne,
                     // V4 convention: POSITIVE = exact-output.
                     amountSpecified: int256(amountOut),
-                    sqrtPriceLimitX96: sqrtPriceLimitX96
+                    sqrtPriceLimitX96: sqrtPriceLimitX96,
+                    referrer: referrer,
+                    referralBps: referrer == address(0) ? 0 : referralFeeBps
                 })
             )
         );
@@ -168,6 +282,7 @@ contract ArcadeV4SwapRouter is IUnlockCallback, ReentrancyGuard {
         // refuse rather than silently under-deliver (the recipient asked for a
         // precise amount). Use exact-INPUT against a skimming pool.
         if (realisedOut < amountOut) revert IncompleteOutput(realisedOut, amountOut);
+        // realisedIn is GROSS (swap input + referral surcharge).
         if (realisedIn > maxAmountIn) revert SlippageExceeded(realisedIn, maxAmountIn);
         amountIn = realisedIn;
 
@@ -225,13 +340,41 @@ contract ArcadeV4SwapRouter is IUnlockCallback, ReentrancyGuard {
         IERC20(Currency.unwrap(inputCurrency)).safeTransferFrom(cb.payer, address(POOL_MANAGER), amountIn);
         POOL_MANAGER.settle();
 
-        // Take the output credit to the recipient.
-        POOL_MANAGER.take(outputCurrency, cb.recipient, amountOut);
+        // Referral surcharge (on top of the pool/hook fee). Exact-in takes it
+        // from the OUTPUT (recipient gets net); exact-out takes it from the
+        // INPUT (recipient still gets the exact output). Rounds down, so a
+        // sub-1-unit fee is simply skipped.
+        bool exactIn = cb.amountSpecified < 0;
+        uint256 refFee = 0;
+        if (cb.referrer != address(0) && cb.referralBps > 0) {
+            if (exactIn) {
+                refFee = (amountOut * cb.referralBps) / 10_000;
+                if (refFee > 0) {
+                    POOL_MANAGER.take(outputCurrency, cb.referrer, refFee);
+                    emit ReferralFeePaid(cb.referrer, outputCurrency, refFee);
+                }
+            } else {
+                refFee = (amountIn * cb.referralBps) / 10_000;
+                if (refFee > 0) {
+                    // Pull the surcharge directly payer -> referrer (does not
+                    // touch pool deltas).
+                    IERC20(Currency.unwrap(inputCurrency)).safeTransferFrom(cb.payer, cb.referrer, refFee);
+                    emit ReferralFeePaid(cb.referrer, inputCurrency, refFee);
+                }
+            }
+        }
+
+        // Deliver the output. Exact-in nets the surcharge off the recipient's
+        // output; exact-out delivers the full requested output.
+        uint256 outToRecipient = exactIn ? amountOut - refFee : amountOut;
+        POOL_MANAGER.take(outputCurrency, cb.recipient, outToRecipient);
 
         // Return BOTH realised legs so each entry point can enforce its own
-        // invariant (exact-in: output floor; exact-out: input ceiling AND full
-        // output delivery). Returning only one leg is what let exact-output
-        // silently under-deliver.
-        return abi.encode(amountIn, amountOut);
+        // invariant. Exact-in: realisedOut is NET of the surcharge (output floor
+        // checks what the recipient actually got). Exact-out: realisedIn is
+        // GROSS incl. the surcharge (input ceiling bounds total spend).
+        uint256 realisedIn = exactIn ? amountIn : amountIn + refFee;
+        uint256 realisedOut = exactIn ? outToRecipient : amountOut;
+        return abi.encode(realisedIn, realisedOut);
     }
 }

@@ -256,6 +256,17 @@ export const CREATION_FEE_USDC = 3_000_000n; // 3 USDC (6 decimals)
 export const LAUNCHPAD_CURVE_SUPPLY = 800_000_000n * 10n ** BigInt(LAUNCHPAD_TOKEN_DECIMALS);
 export const LAUNCHPAD_GRADUATION_USDC = 20_000n * 10n ** BigInt(USDC_DECIMALS);
 
+/**
+ * V4-HOOK curve constants. The V4 ArcadeHook curve DIVERGES from the live V2/V3
+ * launchpad as of 2026-07-17: it is calibrated so a launch graduates opening the
+ * AMM at ~$60k FDV with price continuity (no cliff), vs the V2 800M / ~$125k.
+ * V4-hook pages MUST use these, not the V2/V3 constants above, or the graduation
+ * progress bar reads wrong. Mirror of
+ * `contracts/v4src/libraries/ArcadeV4Curve.sol` (CURVE_SUPPLY / GRADUATION_USDC).
+ */
+export const V4_HOOK_CURVE_SUPPLY = 806_000_000n * 10n ** BigInt(LAUNCHPAD_TOKEN_DECIMALS);
+export const V4_HOOK_GRADUATION_USDC = 14_209n * 10n ** BigInt(USDC_DECIMALS);
+
 /** Featured token addresses surfaced at the top of the launchpad list. Set via
  * `NEXT_PUBLIC_FEATURED_TOKENS` (comma-separated lowercase addresses). Empty by
  * default — admin-curated promotion only. */
