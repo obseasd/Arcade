@@ -5,7 +5,7 @@ import { ArrowLeft, Lock, Image as ImageIcon, Upload } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useState } from "react";
+import { useState, Suspense } from "react";
 import { Address, decodeEventLog, isAddress, parseUnits, zeroAddress } from "viem";
 import { useAccount, usePublicClient, useWriteContract } from "wagmi";
 
@@ -83,7 +83,13 @@ export default function ArcadeHookCreatePage() {
             </div>
         );
     }
-    return <Inner />;
+    // Inner reads useSearchParams (?mode=), which Next 15 requires under a
+    // Suspense boundary or the static prerender of this route fails.
+    return (
+        <Suspense fallback={null}>
+            <Inner />
+        </Suspense>
+    );
 }
 
 function Inner() {
