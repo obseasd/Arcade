@@ -436,6 +436,11 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         if (creator2Bps > 10_000) revert InvalidFeeOwner();
         if (snipeStartBps > MAX_SNIPE_START_BPS) revert InvalidSnipeBps();
         if (snipeStartBps > 0 && snipeDecaySeconds == 0) revert InvalidDecaySeconds();
+        // Anti-sniper rides the hook fee-take, which CLANKER's single-sided pool
+        // cannot support (no USDC reserve to take). Reject a snipe config on
+        // CLANKER instead of silently accepting a no-op the creator pays for --
+        // the tier LP fee is CLANKER's only friction. (Audit 2026-07-18.)
+        if (mode == uint8(LaunchMode.CLANKER) && snipeStartBps > 0) revert InvalidSnipeBps();
 
         // CLANKER creators pick a fixed fee tier (1/2/3 = 1%/2%/3%) and a
         // starting market cap for the single-sided seed. PUMP ignores both and
@@ -1347,13 +1352,21 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         int24 startTick = TickMath.getTickAtSqrtPrice(startSqrt);
         int24 aligned = (startTick / spacing) * spacing; // trunc toward zero
         if (usdcIsCurrency0) {
-            // FLOOR: for a negative non-aligned tick, trunc rounds toward zero
-            // (up), so step down one spacing.
+            // token = currency1: upper edge must be <= currentTick so the whole
+            // position is currency1 (all token). tick >= tickUpper => all
+            // currency1, so aligned == currentTick is already single-sided; only
+            // step DOWN a truncated-up (negative) tick.
             if (startTick < 0 && startTick % spacing != 0) aligned -= spacing;
         } else {
-            // CEIL: for a positive non-aligned tick, trunc rounds down, so step
-            // up one spacing.
-            if (startTick > 0 && startTick % spacing != 0) aligned += spacing;
+            // token = currency0: lower edge must be STRICTLY above currentTick so
+            // the position is entirely currency0 (all token). If aligned lands
+            // ON the current tick the position is IN-RANGE and would need USDC
+            // the hook doesn't hold -> step up whenever aligned <= currentTick
+            // (covers positive boundary + positive/negative non-boundary). Audit
+            // 2026-07-18 MEDIUM: the old `> 0 && % != 0` guard missed the
+            // on-boundary case -> a boundary startMcap ($1232, $1475, ...) made
+            // the seed straddle and drain/revert.
+            if (aligned <= startTick) aligned += spacing;
         }
 
         // Record the exact position range so collectFees can address it later
@@ -1597,29 +1610,27 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         return uint24(tierBps) * 100;
     }
 
-    /// @dev Mode-driven curve fee split. PUMP = 50/50, CLANKER = 70/30,
-    ///      CLANKER_V3 = n/a (no curve, swap reverts earlier).
-    ///      Transfers happen synchronously in USDC out of the hook's own
-    ///      balance, NOT via pm.take, because curve fees are bookkept in the
-    ///      hook's accumulating realUsdcReserve balance. Each payout goes
-    ///      through `_safePayUsdc` so a USDC-blocked recipient credits a
-    ///      pending balance instead of reverting the whole curve trade.
+    /// @dev PUMP curve fee split = 50/50 platform/creator. Only PUMP reaches
+    ///      here: CLANKER launches are Graduated (buy/sell revert
+    ///      LiquidityNotPermitted) and CLANKER_V3 is rejected at createLaunch,
+    ///      so `mode` is always PUMP and the split is unconditional. Transfers
+    ///      happen synchronously in USDC out of the hook's own balance, NOT via
+    ///      pm.take, because curve fees are bookkept in the hook's accumulating
+    ///      realUsdcReserve balance. Each payout goes through `_safePayUsdc` so
+    ///      a USDC-blocked recipient credits a pending balance instead of
+    ///      reverting the whole curve trade.
     function _distributeCurveFee(uint8 mode, uint256 fee, address creator, address creator2, uint16 creator2Bps)
         internal
     {
         if (fee == 0) return;
+        // Silence unused-param warnings; the args are kept for call-site
+        // symmetry with the post-grad path but PUMP has no creator2 curve cut.
+        mode;
+        creator2;
+        creator2Bps;
 
-        uint256 platformBps = mode == uint8(LaunchMode.CLANKER) ? 7_000 : 5_000;
-        uint256 platformCut = (fee * platformBps) / 10_000;
+        uint256 platformCut = fee / 2; // 50/50
         uint256 creatorCut = fee - platformCut;
-
-        if (creator2 != address(0) && creator2Bps > 0 && mode == uint8(LaunchMode.CLANKER)) {
-            uint256 c2Cut = (creatorCut * creator2Bps) / 10_000;
-            if (c2Cut > 0) {
-                _safePayUsdc(creator2, c2Cut);
-                creatorCut -= c2Cut;
-            }
-        }
 
         if (platformCut > 0) _safePayUsdc(TREASURY, platformCut);
         if (creatorCut > 0) _safePayUsdc(creator, creatorCut);

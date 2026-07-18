@@ -796,6 +796,55 @@ contract ArcadeHookSwapTest is Test {
         assertGt(IERC20(token).balanceOf(ALICE), 0, "ALICE bought directly");
     }
 
+    /// Audit 2026-07-18 MEDIUM: a startMcap whose aligned tick lands on a
+    /// tickSpacing boundary must NOT make the single-sided seed in-range (which
+    /// would pull USDC the hook doesn't hold -> revert, or silently drain the
+    /// hook's shared USDC into the locked LP). Fund the hook with USDC (as PUMP
+    /// curve reserves would) and assert no startMcap pulls any of it.
+    function test_clankerDirect_boundaryStartMcap_noStraddleNoDrain() public {
+        usdc.mint(address(hook), 1_000e6);
+        uint256 hookUsdcBefore = usdc.balanceOf(address(hook));
+        uint256[6] memory mcaps =
+            [uint256(1_232e6), 1_475e6, 1_630e6, 1_663e6, 1_875e6, 100_000e6];
+        for (uint256 i = 0; i < mcaps.length; i++) {
+            vm.prank(CREATOR);
+            hook.createLaunch("B", "B", "ipfs://b", 1, address(0), 0, 0, 0, 1, "", mcaps[i]);
+            // Single-sided: the seed pulled NO USDC out of the hook.
+            assertEq(usdc.balanceOf(address(hook)), hookUsdcBefore, "no USDC pulled into CLANKER LP");
+        }
+    }
+
+    /// collectFees harvests the token-side LP fee (accrued on SELLS) and pays
+    /// the creator DIRECT (allowEscrow=false; the escrow pins USDC per slot).
+    function test_clankerDirect_collectHarvestsTokenSideToCreator() public {
+        (address token, PoolKey memory key) = _launchClanker();
+        _buyViaV4(key, ALICE, 5_000e6); // ALICE gets tokens; USDC-side fee accrues
+        _sellViaV4(key, token, ALICE, 10_000_000e18); // token-side fee accrues
+
+        uint256 creatorTokBefore = IERC20(token).balanceOf(CREATOR);
+        uint256 creatorUsdcBefore = usdc.balanceOf(CREATOR);
+        hook.collectFees(token);
+        assertGt(IERC20(token).balanceOf(CREATOR) - creatorTokBefore, 0, "creator got token-side fee direct");
+        assertGt(usdc.balanceOf(CREATOR) - creatorUsdcBefore, 0, "creator got USDC-side fee");
+    }
+
+    function test_createLaunch_clankerRevertsInvalidStartMcap() public {
+        vm.prank(CREATOR);
+        vm.expectRevert(ArcadeHook.InvalidStartMcap.selector);
+        hook.createLaunch("X", "X", "ipfs://x", 1, address(0), 0, 0, 0, 1, "", 999e6); // below $1k
+        vm.prank(CREATOR);
+        vm.expectRevert(ArcadeHook.InvalidStartMcap.selector);
+        hook.createLaunch("Y", "Y", "ipfs://y", 1, address(0), 0, 0, 0, 1, "", 10_000_001e6); // above $10M
+    }
+
+    /// Anti-sniper cannot work on the single-sided CLANKER pool -> a snipe config
+    /// on CLANKER is rejected (not silently accepted as a paid no-op).
+    function test_createLaunch_clankerRejectsSnipeConfig() public {
+        vm.prank(CREATOR);
+        vm.expectRevert(ArcadeHook.InvalidSnipeBps.selector);
+        hook.createLaunch("S", "S", "ipfs://s", 1, address(0), 0, 1_000, 600, 1, "", 0);
+    }
+
     function test_clankerFee_tier1_is1pct() public {
         (address token,) = _graduateClankerTier(1);
         assertEq(hook.currentFeeBps(token), 100, "tier 1 = 1%");
