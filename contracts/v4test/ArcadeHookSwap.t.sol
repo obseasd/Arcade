@@ -845,6 +845,14 @@ contract ArcadeHookSwapTest is Test {
         hook.createLaunch("S", "S", "ipfs://s", 1, address(0), 0, 1_000, 600, 1, "", 0);
     }
 
+    /// creator2 is a CLANKER-only split; PUMP would ignore it everywhere, so a
+    /// creator2 config on PUMP is rejected rather than silently dropped.
+    function test_createLaunch_pumpRejectsCreator2() public {
+        vm.prank(CREATOR);
+        vm.expectRevert(ArcadeHook.InvalidFeeOwner.selector);
+        hook.createLaunch("P", "P", "ipfs://p", 0, address(0xBEEF), 2_000, 0, 0, 0, "", 0);
+    }
+
     function test_clankerFee_tier1_is1pct() public {
         (address token,) = _graduateClankerTier(1);
         assertEq(hook.currentFeeBps(token), 100, "tier 1 = 1%");

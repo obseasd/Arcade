@@ -441,6 +441,13 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         // CLANKER instead of silently accepting a no-op the creator pays for --
         // the tier LP fee is CLANKER's only friction. (Audit 2026-07-18.)
         if (mode == uint8(LaunchMode.CLANKER) && snipeStartBps > 0) revert InvalidSnipeBps();
+        // The secondary fee recipient is a CLANKER-only feature (PUMP routes its
+        // whole creator cut to the launcher in both the curve and post-grad
+        // paths). Reject a creator2 config on PUMP rather than silently ignoring
+        // funds the caller meant to split. (Audit 2026-07-18.)
+        if (mode == uint8(LaunchMode.PUMP) && (creator2 != address(0) || creator2Bps > 0)) {
+            revert InvalidFeeOwner();
+        }
 
         // CLANKER creators pick a fixed fee tier (1/2/3 = 1%/2%/3%) and a
         // starting market cap for the single-sided seed. PUMP ignores both and
