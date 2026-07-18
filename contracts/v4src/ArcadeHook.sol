@@ -205,6 +205,14 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
     ///         one-block price spike can never swing the fee: the oracle only
     ///         updates once per timestamp and never on the swap that reads it.
     uint256 internal constant EMA_TAU_SECONDS = 3_600; // 1 hour
+
+    /// @notice CLANKER (direct) launch: default + bounds for the starting market
+    ///         cap when the creator passes 0. The full supply is seeded
+    ///         single-sided in the V4 pool at this FDV; buyers push the price up
+    ///         from here (no bonding curve). Mirrors V2 CLANKER_V3's ~$35k start.
+    uint256 internal constant CLANKER_DEFAULT_START_MCAP = 35_000e6; // $35k
+    uint256 internal constant CLANKER_MIN_START_MCAP = 1_000e6; // $1k
+    uint256 internal constant CLANKER_MAX_START_MCAP = 10_000_000e6; // $10M
     /// @notice Hard safety cap on the TOTAL afterSwap take (fee + anti-sniper).
     ///         v4-core bricks a swap when the take exceeds 100% of the
     ///         unspecified side; we clamp well below. Max legit = 50% snipe +
@@ -232,6 +240,22 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
     mapping(address => SnipeConfig) public snipeConfigs;
     /// @notice Price EMA per graduated pool, feeding the PUMP dynamic fee.
     mapping(PoolId => FeeObs) public feeObs;
+    /// @notice Static V4 LP fee baked into each launch's PoolKey. PUMP = 0 (the
+    ///         hook captures the fee in before/afterSwap); CLANKER = its tier
+    ///         (1%/2%/3% -> 10000/20000/30000) charged natively by the pool and
+    ///         accrued to the hook-owned locked LP, harvested via collectFees.
+    ///         Read by _buildPoolKey so the PoolId is consistent everywhere; MUST
+    ///         be set before the first _buildPoolKey call for a token.
+    mapping(address => uint24) public poolFeeOf;
+
+    /// @notice CLANKER single-sided locked-LP position range per token, so
+    ///         collectFees can address it (modifyLiquidity keys by tick range).
+    struct ClankerPos {
+        int24 tickLower;
+        int24 tickUpper;
+        bool seeded;
+    }
+    mapping(address => ClankerPos) public clankerPos;
     /// @notice Launch token => PoolId so `currentSnipeBps` callers (the hook
     ///         itself + indexers) can look up the curve state from a token addr.
     mapping(address => PoolId) public poolIdOf;
@@ -262,6 +286,7 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
     error ZeroAmount();
     error InvalidMode();
     error InvalidFeeTier();
+    error InvalidStartMcap();
     error InvalidFeeOwner();
     error InvariantBroken();
     error ZeroAddress();
@@ -400,25 +425,29 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         uint16 snipeStartBps,
         uint32 snipeDecaySeconds,
         uint8 feeTier,
-        string calldata twitterHandle
+        string calldata twitterHandle,
+        uint256 startMcapUsdc
     ) external nonReentrant whenNotPaused returns (address tokenAddr, PoolId poolId) {
         if (bytes(name).length == 0 || bytes(symbol).length == 0) revert EmptyName();
-        // Only PUMP(0) and CLANKER(1) are implemented. CLANKER_V3(2) has no
-        // curve path -- buy()/sell() revert InvalidMode for it and no pool is
-        // ever initialized, so a mode-2 createLaunch would mint the 1B supply
-        // to this (immutable) hook and strand it FOREVER with no rescue. Reject
-        // it at the door until the CLANKER_V3 single-sided path is built.
+        // Two modes: PUMP(0) = bonding curve -> graduate; CLANKER(1) = DIRECT
+        // single-sided locked-LP launch (no curve, tier fee from the first swap).
+        // CLANKER_V3(2)+ rejected.
         if (mode >= uint8(LaunchMode.CLANKER_V3)) revert InvalidMode();
         if (creator2Bps > 10_000) revert InvalidFeeOwner();
         if (snipeStartBps > MAX_SNIPE_START_BPS) revert InvalidSnipeBps();
         if (snipeStartBps > 0 && snipeDecaySeconds == 0) revert InvalidDecaySeconds();
 
-        // CLANKER creators pick a fixed fee tier (1/2/3 = 1%/2%/3%). PUMP
-        // ignores the tier and runs the mcap-decaying dynamic fee, so its
-        // stored tier stays 0.
+        // CLANKER creators pick a fixed fee tier (1/2/3 = 1%/2%/3%) and a
+        // starting market cap for the single-sided seed. PUMP ignores both and
+        // runs the bonding curve + mcap-decaying dynamic fee.
         uint16 feeTierBps = 0;
+        uint256 startMcap = 0;
         if (mode == uint8(LaunchMode.CLANKER)) {
             feeTierBps = _resolveFeeTierBps(feeTier);
+            startMcap = startMcapUsdc == 0 ? CLANKER_DEFAULT_START_MCAP : startMcapUsdc;
+            if (startMcap < CLANKER_MIN_START_MCAP || startMcap > CLANKER_MAX_START_MCAP) {
+                revert InvalidStartMcap();
+            }
         }
 
         // Pull the creation fee first. If the user is short on USDC or hasn't
@@ -435,6 +464,11 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         registeredLaunches[tokenAddr] = true;
         allTokens.push(tokenAddr);
 
+        // Pool fee: PUMP = 0 (the hook captures the fee in before/afterSwap);
+        // CLANKER = its tier as a native V4 LP fee. MUST be set BEFORE the first
+        // _buildPoolKey so the PoolId encodes the correct fee everywhere.
+        poolFeeOf[tokenAddr] = mode == uint8(LaunchMode.CLANKER) ? _tierToV4Fee(feeTierBps) : 0;
+
         // Build the canonical PoolKey for this launch and persist EVERYTHING
         // beforeInitialize / afterInitialize / beforeSwap will need, BEFORE
         // calling pm.initialize. This way the lifecycle callbacks find a
@@ -443,12 +477,14 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         poolId = key.toId();
         poolIdOf[tokenAddr] = poolId;
 
+        // PUMP starts in the Curving phase; CLANKER is seeded directly into the
+        // AMM below and is Graduated (fee-capturing) from the first swap.
         curveStates[poolId] = CurveState({
             virtualUsdcReserve: uint128(ArcadeV4Curve.VIRTUAL_USDC_RESERVE),
             realUsdcReserve: 0,
             tokensSold: 0,
             mode: mode,
-            status: uint8(Status.Curving),
+            status: mode == uint8(LaunchMode.PUMP) ? uint8(Status.Curving) : uint8(Status.Graduated),
             creator: msg.sender,
             creator2: creator2,
             creator2Bps: creator2Bps
@@ -479,19 +515,16 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         // Snipe config keyed by token addr so currentSnipeBps reads cheaply
         // from anti-sniper checks in beforeSwap / afterSwap.
         //
-        // launchedAt = 0 here ON PURPOSE: the anti-sniper tax only ever applies
-        // in afterSwap on a GRADUATED pool (the AMM pool does not exist during
-        // the curve), so the decay clock must start at GRADUATION, not now.
-        // Starting it here made the window elapse during the (hours/days-long)
-        // curve phase, so by graduation the tax was always 0 -- snipers free,
-        // the exact outcome of the round-4 HIGH. _graduate stamps the real
-        // start time. _currentSnipeBps treats launchedAt==0 as "not started"
-        // (returns 0), which is correct for the whole curve phase.
+        // Anti-sniper decay clock: the tax applies in afterSwap on a live AMM
+        // pool. For PUMP the pool only exists AFTER graduation, so launchedAt
+        // stays 0 here and _graduate stamps it (starting it now would let the
+        // window elapse during the hours/days curve -> snipers free, the round-4
+        // HIGH). For CLANKER the pool is live at creation, so stamp it NOW.
         if (snipeStartBps > 0) {
             snipeConfigs[tokenAddr] = SnipeConfig({
                 startBps: snipeStartBps,
                 decaySeconds: snipeDecaySeconds,
-                launchedAt: 0
+                launchedAt: mode == uint8(LaunchMode.PUMP) ? 0 : uint64(block.timestamp)
             });
             emit SnipeConfigured(tokenAddr, snipeStartBps, snipeDecaySeconds);
         }
@@ -499,6 +532,12 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         emit TokenLaunched(tokenAddr, msg.sender, mode, name, symbol, metadataURI);
         emit LaunchCreated(poolId, tokenAddr, msg.sender, mode);
         if (launchEscrow != address(0)) emit FeeAttributedToHandle(poolId, launchEscrow, twitterHandle);
+
+        // CLANKER: seed the full supply single-sided into a locked V4 LP at the
+        // starting market cap. No bonding curve -- the pool is live immediately.
+        if (mode == uint8(LaunchMode.CLANKER)) {
+            _launchDirect(tokenAddr, key, poolId, startMcap);
+        }
 
         // NOTE: the V4 pool itself is NOT initialised here. During the Curving
         // phase the curve runs through hook.buy / hook.sell with no V4 swap
@@ -535,6 +574,18 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         CurveState memory state = curveStates[poolId];
         if (state.status != uint8(Status.Graduated)) return 0;
         return _feeBps(state.mode, poolId);
+    }
+
+    /// @notice Harvest a CLANKER launch's accrued pool LP fees from its locked
+    ///         position and distribute them 80/20 (creator/treasury; the USDC
+    ///         creator cut routes to the handle escrow when the launch attributed
+    ///         to a Twitter handle, the token cut goes direct to the creator).
+    ///         Permissionless: anyone can trigger a harvest; funds always follow
+    ///         the fixed split. Only CLANKER direct launches (which use the
+    ///         native pool fee) have a position to harvest.
+    function collectFees(address token) external nonReentrant whenNotPaused {
+        if (!clankerPos[token].seeded) revert InvalidMode();
+        POOL_MANAGER.unlock(abi.encode(uint8(2), token, uint256(0), uint256(0), int24(0)));
     }
 
     // -------------------------------------------------------------------
@@ -731,6 +782,15 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
             return (IHooks.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
         }
 
+        // CLANKER charges its fee via the pool's NATIVE static LP fee (the tier),
+        // which accrues to the hook-owned locked LP and is harvested by
+        // collectFees. The hook takes NOTHING here -- a hook take would try to
+        // pull USDC the single-sided pool doesn't hold. Only PUMP (fee-0 pool)
+        // captures in the hook.
+        if (state.mode == uint8(LaunchMode.CLANKER)) {
+            return (IHooks.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
+        }
+
         // Always-USDC fee guarantee. The fee is ALWAYS charged in USDC. We can
         // only cleanly take on the SPECIFIED side here (beforeSwap deltas act
         // on the specified currency); afterSwap covers the UNSPECIFIED side.
@@ -774,7 +834,7 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         if (fee + snipeSkim > maxTake) snipeSkim = maxTake - fee;
 
         _payAntiSnipe(poolId, USDC, snipeSkim, amount);
-        _distributeFee(poolId, USDC, fee, state.mode);
+        _distributeFee(poolId, USDC, fee, state.mode, true);
 
         // Positive specified delta = the hook takes this many USDC units off
         // the specified side, so the swapper pays for everything taken above.
@@ -933,6 +993,12 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
             return (IHooks.afterSwap.selector, int128(0));
         }
 
+        // CLANKER: fee is the pool's native LP fee (no hook take, no PUMP
+        // oracle). Nothing to do here.
+        if (state.mode == uint8(LaunchMode.CLANKER)) {
+            return (IHooks.afterSwap.selector, int128(0));
+        }
+
         // Identify the unspecified currency and the magnitude swapped through
         // it. Matches the V4 FeeTakingHook pattern: fee taken on the side
         // V4 hook deltas can affect cleanly. For Arcade this means royalty
@@ -992,7 +1058,7 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         if (fee + snipeSkim > maxTake) snipeSkim = maxTake - fee;
         _payAntiSnipe(poolId, feeCurrency, snipeSkim, amount);
 
-        _distributeFee(poolId, feeCurrency, fee, state.mode);
+        _distributeFee(poolId, feeCurrency, fee, state.mode, true);
 
         // Advance the price oracle AFTER taking the fee, so this swap's own
         // price impact never influences the fee it just paid.
@@ -1025,7 +1091,12 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
     ///      hostile recipient credits a pending pull instead of bricking the
     ///      swap (CSEC-001). Shared by before/afterSwap so the split is
     ///      identical no matter which side USDC lands on.
-    function _distributeFee(PoolId poolId, Currency feeCurrency, uint256 fee, uint8 mode) internal {
+    ///      `allowEscrow` gates the Twitter-escrow route: true for USDC fees
+    ///      (the escrow pins one token per slot = USDC); false for a CLANKER
+    ///      collect's TOKEN-side fee, which always goes direct to the creator.
+    function _distributeFee(PoolId poolId, Currency feeCurrency, uint256 fee, uint8 mode, bool allowEscrow)
+        internal
+    {
         if (fee == 0) return;
         FeeOwner memory fo = feeOwners[poolId];
         uint256 creatorCut = (fee * POST_GRAD_CREATOR_BPS) / 10_000;
@@ -1041,9 +1112,9 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         }
 
         // Route the creator cut. Twitter-escrow slot if the launch attributed
-        // fees to a handle, else direct to the creator.
+        // fees to a handle (USDC only), else direct to the creator.
         if (creatorCut > 0) {
-            if (fo.twitterEscrow != address(0)) {
+            if (allowEscrow && fo.twitterEscrow != address(0)) {
                 address feeTokenAddr = Currency.unwrap(feeCurrency);
                 uint256 positionId = _positionIdForEscrow(poolId);
                 // Deliver the USDC to the escrow FIRST, then credit the slot.
@@ -1246,6 +1317,62 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
     ///        5. Unlock the manager and add full-range LP via `unlockCallback`.
     ///        6. Status flip to Graduated. The buy that triggered graduation
     ///           returns normally to the caller after this completes.
+    /// @dev CLANKER direct launch: initialise the V4 pool at the starting market
+    ///      cap and seed the FULL supply as a SINGLE-SIDED locked position (all
+    ///      token, 0 USDC). No bonding curve -- buyers push the price up from the
+    ///      start FDV. The hook owns the position (locked like the graduation
+    ///      seed). The pool is Graduated (fee-capturing) from the first swap.
+    ///      Single-sided orientation: the launch token sits entirely on its side
+    ///      of the current tick so it is released (sold for USDC) only as the
+    ///      price rises -- token=currency0 -> position [startTick, maxTick];
+    ///      token=currency1 -> position [minTick, startTick].
+    function _launchDirect(address token, PoolKey memory key, PoolId poolId, uint256 startMcap) internal {
+        bool usdcIsCurrency0 = Currency.unwrap(key.currency0) == Currency.unwrap(USDC);
+        uint256 supply = ArcadeV4Curve.TOTAL_SUPPLY;
+
+        // Start price = FDV `startMcap` over the full supply. Same amount->price
+        // convention as _graduate (USDC amount in the USDC currency slot).
+        (uint256 amount0, uint256 amount1) =
+            usdcIsCurrency0 ? (startMcap, supply) : (supply, startMcap);
+        uint160 startSqrt = _sqrtPriceX96FromAmounts(amount0, amount1);
+        POOL_MANAGER.initialize(key, startSqrt);
+
+        // Align the start tick to the spacing so the position never straddles
+        // the current price (which would need USDC the hook doesn't have).
+        //   token=currency1 -> [minTick, edge], edge must be <= currentTick (all
+        //                       currency1) -> FLOOR the tick.
+        //   token=currency0 -> [edge, maxTick], edge must be >= currentTick (all
+        //                       currency0) -> CEIL the tick.
+        int24 spacing = key.tickSpacing;
+        int24 startTick = TickMath.getTickAtSqrtPrice(startSqrt);
+        int24 aligned = (startTick / spacing) * spacing; // trunc toward zero
+        if (usdcIsCurrency0) {
+            // FLOOR: for a negative non-aligned tick, trunc rounds toward zero
+            // (up), so step down one spacing.
+            if (startTick < 0 && startTick % spacing != 0) aligned -= spacing;
+        } else {
+            // CEIL: for a positive non-aligned tick, trunc rounds down, so step
+            // up one spacing.
+            if (startTick > 0 && startTick % spacing != 0) aligned += spacing;
+        }
+
+        // Record the exact position range so collectFees can address it later
+        // (modifyLiquidity keys the position by its tick range).
+        if (usdcIsCurrency0) {
+            clankerPos[token] =
+                ClankerPos({tickLower: TickMath.minUsableTick(spacing), tickUpper: aligned, seeded: true});
+        } else {
+            clankerPos[token] =
+                ClankerPos({tickLower: aligned, tickUpper: TickMath.maxUsableTick(spacing), seeded: true});
+        }
+
+        POOL_MANAGER.unlock(abi.encode(uint8(1), token, supply, uint256(0), aligned));
+
+        // CLANKER uses the native pool LP fee (no PUMP oracle). Anti-sniper clock
+        // was stamped at createLaunch (the pool is live now).
+        emit Graduated(poolId, 0, supply);
+    }
+
     function _graduate(address token, CurveState storage state) internal {
         state.status = uint8(Status.GraduationStarted);
 
@@ -1270,11 +1397,10 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         POOL_MANAGER.initialize(key, sqrtPriceX96);
 
         // Hand off to the unlock callback which adds the LP + settles both
-        // sides. The hook owns the LP position; beforeRemoveLiquidity guards
-        // it from withdrawal in Round 5. For Round 4 the LP is effectively
-        // locked because no external surface can call modifyLiquidity with
-        // negative delta on a hook-owned position (yet).
-        POOL_MANAGER.unlock(abi.encode(token, amount0, amount1));
+        // sides (kind 0 = graduation, full-range two-sided). The hook owns the
+        // LP position; no external surface can remove it (beforeRemoveLiquidity
+        // + noSelfCall), so it is permanently locked.
+        POOL_MANAGER.unlock(abi.encode(uint8(0), token, amount0, amount1, int24(0)));
 
         state.status = uint8(Status.Graduated);
 
@@ -1305,24 +1431,89 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
     /// @inheritdoc IUnlockCallback
     function unlockCallback(bytes calldata data) external override returns (bytes memory) {
         if (msg.sender != address(POOL_MANAGER)) revert NotPoolManager();
-        (address token, uint256 amount0, uint256 amount1) = abi.decode(data, (address, uint256, uint256));
+        (uint8 kind, address token, uint256 amount0, uint256 amount1, int24 startTick) =
+            abi.decode(data, (uint8, address, uint256, uint256, int24));
 
         PoolKey memory key = _buildPoolKey(token);
+        int24 spacing = key.tickSpacing;
 
-        // Full-range single position. Tick spacing is constant 200 so the
-        // usable bounds align cleanly.
-        int24 tickLower = TickMath.minUsableTick(key.tickSpacing);
-        int24 tickUpper = TickMath.maxUsableTick(key.tickSpacing);
-        uint160 sqrtPriceAX96 = TickMath.getSqrtPriceAtTick(tickLower);
-        uint160 sqrtPriceBX96 = TickMath.getSqrtPriceAtTick(tickUpper);
+        // kind 2 = CLANKER fee harvest. modifyLiquidity with delta=0 realises the
+        // LP fees accrued to the locked position (returned as `feesAccrued`,
+        // positive to the hook). Split each currency 80/20: USDC via the
+        // escrow-aware path, the launch token direct to the creator.
+        if (kind == 2) {
+            ClankerPos memory pos = clankerPos[token];
+            (, BalanceDelta feesAccrued) = POOL_MANAGER.modifyLiquidity(
+                key,
+                ModifyLiquidityParams({
+                    tickLower: pos.tickLower,
+                    tickUpper: pos.tickUpper,
+                    liquidityDelta: 0,
+                    salt: bytes32(0)
+                }),
+                ""
+            );
+            PoolId poolId = key.toId();
+            uint8 mode = curveStates[poolId].mode;
+            bool usdcIsCurrency0 = Currency.unwrap(key.currency0) == Currency.unwrap(USDC);
+            uint256 fee0 = feesAccrued.amount0() > 0 ? uint256(uint128(feesAccrued.amount0())) : 0;
+            uint256 fee1 = feesAccrued.amount1() > 0 ? uint256(uint128(feesAccrued.amount1())) : 0;
+            // USDC side -> escrow-aware; token side -> creator-direct (escrow
+            // pins one token per slot = USDC).
+            if (usdcIsCurrency0) {
+                _distributeFee(poolId, key.currency0, fee0, mode, true); // USDC
+                _distributeFee(poolId, key.currency1, fee1, mode, false); // token
+            } else {
+                _distributeFee(poolId, key.currency0, fee0, mode, false); // token
+                _distributeFee(poolId, key.currency1, fee1, mode, true); // USDC
+            }
+            emit FeeHarvested(PoolId.unwrap(poolId), fee0, fee1);
+            return "";
+        }
 
-        // Re-derive the init sqrtPrice from amounts so we don't rely on the
-        // caller to plumb it through. Mirrors what _graduate did.
-        uint160 sqrtPriceX96 = _sqrtPriceX96FromAmounts(amount0, amount1);
+        int24 tickLower;
+        int24 tickUpper;
+        uint128 liquidity;
 
-        uint128 liquidity = LiquidityAmounts.getLiquidityForAmounts(
-            sqrtPriceX96, sqrtPriceAX96, sqrtPriceBX96, amount0, amount1
-        );
+        if (kind == 0) {
+            // Graduation: full-range two-sided position at the reserve ratio.
+            tickLower = TickMath.minUsableTick(spacing);
+            tickUpper = TickMath.maxUsableTick(spacing);
+            uint160 sqrtPriceX96 = _sqrtPriceX96FromAmounts(amount0, amount1);
+            liquidity = LiquidityAmounts.getLiquidityForAmounts(
+                sqrtPriceX96,
+                TickMath.getSqrtPriceAtTick(tickLower),
+                TickMath.getSqrtPriceAtTick(tickUpper),
+                amount0,
+                amount1
+            );
+        } else {
+            // CLANKER direct: SINGLE-SIDED position of the full supply (amount0),
+            // all on the launch token's side of `startTick`, so no USDC is
+            // needed. token=currency0 -> [startTick, maxTick] (all currency0);
+            // token=currency1 -> [minTick, startTick] (all currency1).
+            bool usdcIsCurrency0 = Currency.unwrap(key.currency0) == Currency.unwrap(USDC);
+            uint256 supply = amount0;
+            if (usdcIsCurrency0) {
+                // launch token = currency1: position below the start.
+                tickLower = TickMath.minUsableTick(spacing);
+                tickUpper = startTick;
+                liquidity = LiquidityAmounts.getLiquidityForAmount1(
+                    TickMath.getSqrtPriceAtTick(tickLower),
+                    TickMath.getSqrtPriceAtTick(tickUpper),
+                    supply
+                );
+            } else {
+                // launch token = currency0: position above the start.
+                tickLower = startTick;
+                tickUpper = TickMath.maxUsableTick(spacing);
+                liquidity = LiquidityAmounts.getLiquidityForAmount0(
+                    TickMath.getSqrtPriceAtTick(tickLower),
+                    TickMath.getSqrtPriceAtTick(tickUpper),
+                    supply
+                );
+            }
+        }
 
         (BalanceDelta callerDelta,) = POOL_MANAGER.modifyLiquidity(
             key,
@@ -1335,19 +1526,13 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
             ""
         );
 
-        // callerDelta carries the EXACT amounts the position cost the hook
-        // (negative on each side the hook owes). Settling against this rather
-        // than against the off-chain estimates lets us absorb the V4 amount
-        // rounding that happens inside getLiquidityForAmounts.
+        // Settle each side the hook owes (negative delta). For the direct seed
+        // only the token side is owed (USDC delta is 0), so this naturally
+        // settles single-sided.
         int128 d0 = callerDelta.amount0();
         int128 d1 = callerDelta.amount1();
         if (d0 < 0) _settleSide(key.currency0, uint256(uint128(-d0)));
         if (d1 < 0) _settleSide(key.currency1, uint256(uint128(-d1)));
-
-        // amount0/amount1 args are documented inputs; if liquidity rounding
-        // left a residual on either side we keep it in the hook (it's at most
-        // a few wei and gets folded into the next graduation's reserve).
-        (amount0, amount1);
 
         return "";
     }
@@ -1397,7 +1582,19 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         (Currency c0, Currency c1) = usdcAddr < launchToken
             ? (USDC, Currency.wrap(launchToken))
             : (Currency.wrap(launchToken), USDC);
-        key = PoolKey({currency0: c0, currency1: c1, fee: 0, tickSpacing: 200, hooks: IHooks(address(this))});
+        key = PoolKey({
+            currency0: c0,
+            currency1: c1,
+            fee: poolFeeOf[launchToken], // 0 for PUMP (hook captures), tier for CLANKER
+            tickSpacing: 200,
+            hooks: IHooks(address(this))
+        });
+    }
+
+    /// @dev CLANKER fee tier (bps) -> V4 static LP fee units (1e6 = 100%).
+    ///      100bps(1%)->10000, 200->20000, 300->30000.
+    function _tierToV4Fee(uint16 tierBps) internal pure returns (uint24) {
+        return uint24(tierBps) * 100;
     }
 
     /// @dev Mode-driven curve fee split. PUMP = 50/50, CLANKER = 70/30,

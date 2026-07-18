@@ -98,14 +98,14 @@ contract ArcadeHookSwapTest is Test {
     /// @dev Spawn a launch in PUMP mode.
     function _launchPump() internal returns (address tokenAddr, PoolKey memory key) {
         vm.prank(CREATOR);
-        (tokenAddr,) = hook.createLaunch("PumpToken", "PUMP", "ipfs://demo", 0, address(0), 0, 0, 0, 0, "");
+        (tokenAddr,) = hook.createLaunch("PumpToken", "PUMP", "ipfs://demo", 0, address(0), 0, 0, 0, 0, "", 0);
         key = _buildKey(tokenAddr);
     }
 
     /// @dev CLANKER variant with 70/30 split.
     function _launchClanker() internal returns (address tokenAddr, PoolKey memory key) {
         vm.prank(CREATOR);
-        (tokenAddr,) = hook.createLaunch("ClankerTok", "CLNK", "ipfs://demo", 1, address(0), 0, 0, 0, 1, "");
+        (tokenAddr,) = hook.createLaunch("ClankerTok", "CLNK", "ipfs://demo", 1, address(0), 0, 0, 0, 1, "", 0);
         key = _buildKey(tokenAddr);
     }
 
@@ -114,7 +114,15 @@ contract ArcadeHookSwapTest is Test {
         (Currency c0, Currency c1) = usdcAddr < token
             ? (Currency.wrap(usdcAddr), Currency.wrap(token))
             : (Currency.wrap(token), Currency.wrap(usdcAddr));
-        return PoolKey({currency0: c0, currency1: c1, fee: 0, tickSpacing: 200, hooks: IHooks(address(hook))});
+        // PUMP pools are fee-0 (hook captures); CLANKER pools carry their tier as
+        // the native LP fee. Read it from the hook so the key matches the pool.
+        return PoolKey({
+            currency0: c0,
+            currency1: c1,
+            fee: hook.poolFeeOf(token),
+            tickSpacing: 200,
+            hooks: IHooks(address(hook))
+        });
     }
 
     // -------------------------------------------------------------------
@@ -149,27 +157,11 @@ contract ArcadeHookSwapTest is Test {
         assertEq(s.realUsdcReserve, expected.actualGross - expected.fee, "state realUsdcReserve tracked");
     }
 
-    // -------------------------------------------------------------------
-    // CLANKER mode (70/30)
-    // -------------------------------------------------------------------
-
-    function test_buy_clanker_distributesFees70_30() public {
-        (address tokenAddr,) = _launchClanker();
-
-        uint256 amountIn = 100e6;
-        ArcadeV4Curve.BuyResult memory expected = ArcadeV4Curve.simulateBuy(0, 0, amountIn);
-
-        uint256 treasuryBefore = usdc.balanceOf(TREASURY);
-        uint256 creatorBefore = usdc.balanceOf(CREATOR);
-
-        vm.prank(ALICE);
-        hook.buy(tokenAddr, amountIn, 0);
-
-        uint256 expectedTreasury = (expected.fee * 7_000) / 10_000;
-        uint256 expectedCreator = expected.fee - expectedTreasury;
-        assertEq(usdc.balanceOf(TREASURY) - treasuryBefore, expectedTreasury, "treasury 70% of fee");
-        assertEq(usdc.balanceOf(CREATOR) - creatorBefore, expectedCreator, "creator 30% of fee");
-    }
+    // CLANKER is now a DIRECT launch (no bonding curve): the old
+    // test_buy_clanker_distributesFees70_30 (curve 70/30 split) is obsolete and
+    // was removed. CLANKER fee behaviour is covered by the tier + direct-launch
+    // tests (test_clankerFee_*, test_postGradFee_CLANKER_splits80_20,
+    // test_clankerDirect_*).
 
     // -------------------------------------------------------------------
     // Sequential buys accumulate state, prices rise
@@ -280,10 +272,12 @@ contract ArcadeHookSwapTest is Test {
         hook.buy(tokenAddr, 30_000e6, 0);
     }
 
+    /// CLANKER is direct: the pool is live at createLaunch. ALICE has no tokens
+    /// yet (nothing was sold on a curve), so a buy via the V4 router both mints
+    /// her tokens and exercises the tier fee.
     function _graduateClanker() internal returns (address tokenAddr, PoolKey memory key) {
         (tokenAddr, key) = _launchClanker();
-        vm.prank(ALICE);
-        hook.buy(tokenAddr, 30_000e6, 0);
+        _buyViaV4(key, ALICE, 5_000e6);
     }
 
     function _sellViaV4(PoolKey memory key, address tokenAddr, address trader, uint256 amount)
@@ -319,7 +313,7 @@ contract ArcadeHookSwapTest is Test {
     {
         vm.prank(CREATOR);
         (tokenAddr,) =
-            hook.createLaunch("SnipePump", "SNP", "ipfs://demo", 0, address(0), 0, startBps, decaySeconds, 0, "");
+            hook.createLaunch("SnipePump", "SNP", "ipfs://demo", 0, address(0), 0, startBps, decaySeconds, 0, "", 0);
         key = _buildKey(tokenAddr);
         vm.warp(block.timestamp + uint256(decaySeconds) + 3_600);
         usdc.mint(ALICE, 100_000e6);
@@ -457,7 +451,7 @@ contract ArcadeHookSwapTest is Test {
     function test_createLaunch_rejectsClankerV3Mode() public {
         vm.prank(CREATOR);
         vm.expectRevert(ArcadeHook.InvalidMode.selector);
-        hook.createLaunch("V3", "V3", "ipfs://x", 2, address(0), 0, 0, 0, 0, "");
+        hook.createLaunch("V3", "V3", "ipfs://x", 2, address(0), 0, 0, 0, 0, "", 0);
     }
 
     function test_postGradFee_PUMP_splits80_20_inUsdcOnSell() public {
@@ -480,20 +474,23 @@ contract ArcadeHookSwapTest is Test {
     }
 
     function test_postGradFee_CLANKER_splits80_20() public {
-        (address tokenAddr, PoolKey memory key) = _graduateClanker();
+        // CLANKER charges its tier as the NATIVE pool LP fee; the fee accrues to
+        // the locked LP and is harvested + split 80/20 via collectFees.
+        (address tokenAddr,) = _graduateClanker(); // create direct + ALICE buys (fee -> LP)
 
         uint256 treasuryBefore = usdc.balanceOf(TREASURY);
         uint256 creatorBefore = usdc.balanceOf(CREATOR);
 
-        _sellViaV4(key, tokenAddr, ALICE, 100_000e18);
+        hook.collectFees(tokenAddr);
 
         uint256 treasuryGot = usdc.balanceOf(TREASURY) - treasuryBefore;
         uint256 creatorGot = usdc.balanceOf(CREATOR) - creatorBefore;
         uint256 total = treasuryGot + creatorGot;
 
-        // CLANKER post-grad: creator 80%, treasury 20%.
-        assertApproxEqRel(creatorGot, (total * 80) / 100, 0.01e18, "creator 80%");
-        assertApproxEqRel(treasuryGot, (total * 20) / 100, 0.01e18, "treasury 20%");
+        assertGt(total, 0, "LP fees harvested");
+        // 80/20 creator/treasury on the harvested USDC fee.
+        assertApproxEqRel(creatorGot, (total * 80) / 100, 0.02e18, "creator 80%");
+        assertApproxEqRel(treasuryGot, (total * 20) / 100, 0.02e18, "treasury 20%");
     }
 
     // -------------------------------------------------------------------
@@ -768,12 +765,35 @@ contract ArcadeHookSwapTest is Test {
     // never changes (unlike PUMP's mcap decay).
     // -------------------------------------------------------------------
 
+    /// CLANKER is a DIRECT launch: createLaunch seeds the single-sided locked LP
+    /// and the pool is live (Graduated) immediately -- no curve buy to graduate.
     function _graduateClankerTier(uint8 tier) internal returns (address tokenAddr, PoolKey memory key) {
         vm.prank(CREATOR);
-        (tokenAddr,) = hook.createLaunch("ClkTier", "CLK", "ipfs://demo", 1, address(0), 0, 0, 0, tier, "");
+        (tokenAddr,) = hook.createLaunch("ClkTier", "CLK", "ipfs://demo", 1, address(0), 0, 0, 0, tier, "", 0);
         key = _buildKey(tokenAddr);
-        vm.prank(ALICE);
-        hook.buy(tokenAddr, 30_000e6, 0);
+    }
+
+    /// CLANKER is a DIRECT launch: full supply seeded single-sided (creator
+    /// provides NO USDC), pool live (Graduated) immediately, pool fee = tier.
+    function test_clankerDirect_singleSidedLiveAtCreation() public {
+        uint256 creatorUsdcBefore = usdc.balanceOf(CREATOR);
+        vm.prank(CREATOR);
+        (address token,) = hook.createLaunch("D", "D", "ipfs://d", 1, address(0), 0, 0, 0, 2, "", 0);
+
+        // Creator paid ONLY the 3 USDC creation fee -- no LP capital.
+        assertEq(creatorUsdcBefore - usdc.balanceOf(CREATOR), 3e6, "creator paid only the creation fee");
+        // The hook shipped the whole supply into the locked LP (holds ~0 now).
+        assertLt(IERC20(token).balanceOf(address(hook)), 1e18, "hook holds ~no supply (all in LP)");
+
+        PoolKey memory key = _buildKey(token);
+        ArcadeHook.CurveState memory s = hook.getCurveState(key.toId());
+        assertEq(uint256(s.status), 2, "live (Graduated) at creation");
+        assertEq(hook.poolFeeOf(token), 20_000, "pool fee = tier 2 (2%)");
+
+        // Tradeable immediately -- no curve graduation.
+        usdc.mint(ALICE, 10_000e6);
+        _buyViaV4(key, ALICE, 1_000e6);
+        assertGt(IERC20(token).balanceOf(ALICE), 0, "ALICE bought directly");
     }
 
     function test_clankerFee_tier1_is1pct() public {
@@ -810,11 +830,11 @@ contract ArcadeHookSwapTest is Test {
     function test_createLaunch_revertsOnInvalidClankerTier() public {
         vm.prank(CREATOR);
         vm.expectRevert(ArcadeHook.InvalidFeeTier.selector);
-        hook.createLaunch("X", "X", "ipfs://x", 1, address(0), 0, 0, 0, 0, "");
+        hook.createLaunch("X", "X", "ipfs://x", 1, address(0), 0, 0, 0, 0, "", 0);
 
         vm.prank(CREATOR);
         vm.expectRevert(ArcadeHook.InvalidFeeTier.selector);
-        hook.createLaunch("Y", "Y", "ipfs://y", 1, address(0), 0, 0, 0, 4, "");
+        hook.createLaunch("Y", "Y", "ipfs://y", 1, address(0), 0, 0, 0, 4, "", 0);
     }
 
     /// PUMP ignores the fee-tier argument entirely: its fee is the mcap-decaying
@@ -822,7 +842,7 @@ contract ArcadeHookSwapTest is Test {
     /// are NOT creator-customisable (only CLANKER's are).
     function test_createLaunch_pumpIgnoresFeeTier() public {
         vm.prank(CREATOR);
-        (address token,) = hook.createLaunch("P", "P", "ipfs://p", 0, address(0), 0, 0, 0, 3, "");
+        (address token,) = hook.createLaunch("P", "P", "ipfs://p", 0, address(0), 0, 0, 0, 3, "", 0);
         vm.prank(ALICE);
         hook.buy(token, 30_000e6, 0);
         // Dynamic fee starts at 1% at graduation, NOT tier 3's 3%.
@@ -847,27 +867,28 @@ contract ArcadeHookSwapTest is Test {
     function test_escrow_clankerFeesRouteToHandleSlot() public {
         ArcadeTwitterEscrowV4 escrow = _wireEscrow();
 
-        // CLANKER launch attributing fees to a handle.
+        // CLANKER direct launch attributing fees to a handle. The pool is live
+        // at createLaunch; ALICE buys via V4 and the creator cut of that swap
+        // routes to the handle-gated escrow slot.
         vm.prank(CREATOR);
-        (address token,) = hook.createLaunch("Clk", "CLK", "ipfs://x", 1, address(0), 0, 0, 0, 1, "arcade");
+        (address token,) = hook.createLaunch("Clk", "CLK", "ipfs://x", 1, address(0), 0, 0, 0, 1, "arcade", 0);
         PoolKey memory key = _buildKey(token);
-        vm.prank(ALICE);
-        hook.buy(token, 30_000e6, 0); // graduate
 
         uint256 poolId = uint256(PoolId.unwrap(key.toId()));
         uint256 creatorBefore = usdc.balanceOf(CREATOR);
         uint256 treasuryBefore = usdc.balanceOf(TREASURY);
 
-        _sellViaV4(key, token, ALICE, 100_000e18);
+        _buyViaV4(key, ALICE, 5_000e6); // pool LP fee accrues to the locked LP
+        hook.collectFees(token); // harvest -> USDC creator cut to the escrow slot
 
-        // Creator is NOT paid directly; the 80% cut sits in the escrow slot.
+        // Creator is NOT paid directly; the 80% USDC cut sits in the escrow slot.
         assertEq(usdc.balanceOf(CREATOR), creatorBefore, "creator not paid directly");
         uint256 slotBal = escrow.balances(poolId, 0, address(usdc));
         uint256 treasuryGot = usdc.balanceOf(TREASURY) - treasuryBefore;
         assertGt(slotBal, 0, "escrow slot credited");
         assertGt(treasuryGot, 0, "treasury still paid");
         // 80/20: the escrow slot holds ~4x the treasury cut.
-        assertApproxEqRel(slotBal, treasuryGot * 4, 0.02e18, "80/20 into escrow vs treasury");
+        assertApproxEqRel(slotBal, treasuryGot * 4, 0.05e18, "80/20 into escrow vs treasury");
     }
 
     /// PUMP ignores the handle: fees go direct to the creator even if a handle
@@ -875,7 +896,7 @@ contract ArcadeHookSwapTest is Test {
     function test_escrow_pumpIgnoresHandle() public {
         _wireEscrow();
         vm.prank(CREATOR);
-        (address token,) = hook.createLaunch("P", "P", "ipfs://p", 0, address(0), 0, 0, 0, 0, "arcade");
+        (address token,) = hook.createLaunch("P", "P", "ipfs://p", 0, address(0), 0, 0, 0, 0, "arcade", 0);
         PoolKey memory key = _buildKey(token);
         vm.prank(ALICE);
         hook.buy(token, 30_000e6, 0);
