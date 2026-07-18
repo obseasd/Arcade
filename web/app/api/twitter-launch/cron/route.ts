@@ -108,7 +108,12 @@ async function fetchLaunchMentions(bearer: string): Promise<Mention[]> {
 }
 
 export async function POST(req: NextRequest) {
-    const secret = process.env.KEEPER_CRON_SECRET ?? process.env.COMPOUNDER_CRON_SECRET;
+    // Dedicated secret first (so you can set a fresh TWEET_LAUNCH_CRON_SECRET
+    // you control without touching the keeper/compounder crons), then fallbacks.
+    const secret =
+        process.env.TWEET_LAUNCH_CRON_SECRET ??
+        process.env.KEEPER_CRON_SECRET ??
+        process.env.COMPOUNDER_CRON_SECRET;
     if (!secret) return NextResponse.json({ error: "cron secret not configured" }, { status: 500 });
     if (req.headers.get("authorization") !== `Bearer ${secret}`) {
         return NextResponse.json({ error: "unauthorized" }, { status: 401 });
