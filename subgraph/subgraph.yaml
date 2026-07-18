@@ -97,12 +97,14 @@ dataSources:
           handler: handleCurveSellV4
         - event: Graduated(indexed bytes32,uint256,uint256)
           handler: handleGraduatedV4
-        - event: RoyaltyPaid(indexed bytes32,indexed address,uint256,uint256)
+        - event: RoyaltyPaid(indexed bytes32,indexed address,uint256,uint256,address)
           handler: handleRoyaltyPaidV4
         - event: AntiSnipeApplied(indexed bytes32,indexed address,uint256,uint16)
           handler: handleAntiSnipeV4
         - event: FeeAttributedToHandle(indexed bytes32,indexed address,string)
           handler: handleFeeAttributedV4
+        - event: FeeHarvested(indexed bytes32,uint256,uint256)
+          handler: handleFeeHarvestedV4
       file: ./src/mappings.ts
   - kind: ethereum
     name: TwitterEscrowV4

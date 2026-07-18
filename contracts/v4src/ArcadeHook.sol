@@ -308,7 +308,17 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
     event CurveBuy(PoolId indexed poolId, address indexed buyer, uint256 grossUsdcIn, uint256 tokensOut);
     event CurveSell(PoolId indexed poolId, address indexed seller, uint256 tokensIn, uint256 usdcOut);
     event Graduated(PoolId indexed poolId, uint256 finalUsdcReserve, uint256 tokensInLP);
-    event RoyaltyPaid(PoolId indexed poolId, address indexed creator, uint256 creatorAmount, uint256 treasuryAmount);
+    // `currency` disambiguates the fee token: post-grad PUMP + graduation fees
+    // are always USDC, but a CLANKER harvest emits RoyaltyPaid for BOTH the USDC
+    // and the launch-token side. Indexers must key USDC fee stats off currency
+    // == USDC, or a token-denominated (18dp) amount pollutes the 6dp USDC tally.
+    event RoyaltyPaid(
+        PoolId indexed poolId,
+        address indexed creator,
+        uint256 creatorAmount,
+        uint256 treasuryAmount,
+        address currency
+    );
     event AntiSnipeApplied(PoolId indexed poolId, address indexed sniper, uint256 amount, uint16 bps);
     event EscrowCreditFailed(uint256 indexed positionId, uint8 slot, uint256 amount);
     event PositionLocked(bytes32 indexed positionKey, address indexed owner, uint128 liquidity);
@@ -1154,7 +1164,7 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         }
         if (treasuryCut > 0) _safeTake(feeCurrency, TREASURY, treasuryCut);
 
-        emit RoyaltyPaid(poolId, fo.creator, creatorCut, treasuryCut);
+        emit RoyaltyPaid(poolId, fo.creator, creatorCut, treasuryCut, Currency.unwrap(feeCurrency));
     }
 
     /// @dev The trading-fee rate (bps) for a graduated pool, by mode. PUMP uses

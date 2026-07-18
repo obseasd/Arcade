@@ -11,6 +11,7 @@ import {
   RoyaltyPaid,
   AntiSnipeApplied,
   FeeAttributedToHandle,
+  FeeHarvested,
 } from "../generated/ArcadeHookV4/ArcadeHook";
 import { Credited, Claimed } from "../generated/TwitterEscrowV4/ArcadeTwitterEscrowV4";
 import {
@@ -332,6 +333,7 @@ function loadFeeStats(): FeeStats {
     f.creatorFeesUsdc = BigDecimal.fromString("0");
     f.treasuryFeesUsdc = BigDecimal.fromString("0");
     f.antiSnipeUsdc = BigDecimal.fromString("0");
+    f.clankerHarvests = BigInt.fromI32(0);
   }
   return f;
 }
@@ -427,9 +429,21 @@ export function handleGraduatedV4(event: Graduated): void {
 }
 
 export function handleRoyaltyPaidV4(event: RoyaltyPaid): void {
+  // A CLANKER harvest emits RoyaltyPaid for BOTH currencies; the token side
+  // carries an 18dp launch-token amount that would corrupt the 6dp USDC tally.
+  // Only fold the USDC side into the fee stats.
+  if (!event.params.currency.equals(usdcAddress())) return;
   const f = loadFeeStats();
   f.creatorFeesUsdc = f.creatorFeesUsdc.plus(usdcVolume(event.params.creatorAmount));
   f.treasuryFeesUsdc = f.treasuryFeesUsdc.plus(usdcVolume(event.params.treasuryAmount));
+  f.save();
+}
+
+export function handleFeeHarvestedV4(event: FeeHarvested): void {
+  // A CLANKER collectFees ran; the USDC value is captured via the paired
+  // RoyaltyPaid (USDC side). Record the harvest count for ops visibility.
+  const f = loadFeeStats();
+  f.clankerHarvests = f.clankerHarvests.plus(BigInt.fromI32(1));
   f.save();
 }
 

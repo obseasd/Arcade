@@ -141,4 +141,7 @@ type FeeStats @entity(immutable: false) {
   creatorFeesUsdc: BigDecimal!
   treasuryFeesUsdc: BigDecimal!
   antiSnipeUsdc: BigDecimal!
+  # Count of CLANKER collectFees harvests. The USDC value harvested is folded
+  # into creatorFeesUsdc/treasuryFeesUsdc via RoyaltyPaid (USDC side only).
+  clankerHarvests: BigInt!
 }

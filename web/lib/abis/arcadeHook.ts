@@ -435,6 +435,9 @@ export const ARCADE_HOOK_ABI = [
             { name: "creator", type: "address", indexed: true },
             { name: "creatorAmount", type: "uint256", indexed: false },
             { name: "treasuryAmount", type: "uint256", indexed: false },
+            // The fee token: USDC for PUMP/graduation, or the launch token for a
+            // CLANKER harvest's token-side. Key USDC stats off this == USDC.
+            { name: "currency", type: "address", indexed: false },
         ],
         anonymous: false,
     },
