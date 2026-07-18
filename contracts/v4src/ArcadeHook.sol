@@ -25,10 +25,8 @@ import {IHooks} from "v4-core/interfaces/IHooks.sol";
 import {IPoolManager} from "v4-core/interfaces/IPoolManager.sol";
 import {StateLibrary} from "v4-core/libraries/StateLibrary.sol";
 import {IUnlockCallback} from "v4-core/interfaces/callback/IUnlockCallback.sol";
-import {FullMath} from "v4-core/libraries/FullMath.sol";
 import {Hooks} from "v4-core/libraries/Hooks.sol";
 import {LPFeeLibrary} from "v4-core/libraries/LPFeeLibrary.sol";
-import {TickMath} from "v4-core/libraries/TickMath.sol";
 import {Currency} from "v4-core/types/Currency.sol";
 import {PoolId, PoolIdLibrary} from "v4-core/types/PoolId.sol";
 import {PoolKey} from "v4-core/types/PoolKey.sol";
@@ -36,7 +34,7 @@ import {BalanceDelta, BalanceDeltaLibrary} from "v4-core/types/BalanceDelta.sol"
 import {BeforeSwapDelta, BeforeSwapDeltaLibrary, toBeforeSwapDelta} from "v4-core/types/BeforeSwapDelta.sol";
 import {SwapParams, ModifyLiquidityParams} from "v4-core/types/PoolOperation.sol";
 
-import {LiquidityAmounts} from "v4-periphery/libraries/LiquidityAmounts.sol";
+import {ArcadeV4Math} from "./libraries/ArcadeV4Math.sol";
 
 /**
  * @title ArcadeHook
@@ -1356,44 +1354,23 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         // convention as _graduate (USDC amount in the USDC currency slot).
         (uint256 amount0, uint256 amount1) =
             usdcIsCurrency0 ? (startMcap, supply) : (supply, startMcap);
-        uint160 startSqrt = _sqrtPriceX96FromAmounts(amount0, amount1);
+        uint160 startSqrt = ArcadeV4Math.sqrtPriceX96FromAmounts(amount0, amount1);
         POOL_MANAGER.initialize(key, startSqrt);
 
-        // Align the start tick to the spacing so the position never straddles
-        // the current price (which would need USDC the hook doesn't have).
-        //   token=currency1 -> [minTick, edge], edge must be <= currentTick (all
-        //                       currency1) -> FLOOR the tick.
-        //   token=currency0 -> [edge, maxTick], edge must be >= currentTick (all
-        //                       currency0) -> CEIL the tick.
+        // Align the start tick so the full-supply position sits ENTIRELY on the
+        // launch token's side of the current price (never straddling, which
+        // would need USDC the hook doesn't hold). token=currency1 -> [minTick,
+        // edge]; token=currency0 -> [edge, maxTick]. (See ArcadeV4Math.)
         int24 spacing = key.tickSpacing;
-        int24 startTick = TickMath.getTickAtSqrtPrice(startSqrt);
-        int24 aligned = (startTick / spacing) * spacing; // trunc toward zero
-        if (usdcIsCurrency0) {
-            // token = currency1: upper edge must be <= currentTick so the whole
-            // position is currency1 (all token). tick >= tickUpper => all
-            // currency1, so aligned == currentTick is already single-sided; only
-            // step DOWN a truncated-up (negative) tick.
-            if (startTick < 0 && startTick % spacing != 0) aligned -= spacing;
-        } else {
-            // token = currency0: lower edge must be STRICTLY above currentTick so
-            // the position is entirely currency0 (all token). If aligned lands
-            // ON the current tick the position is IN-RANGE and would need USDC
-            // the hook doesn't hold -> step up whenever aligned <= currentTick
-            // (covers positive boundary + positive/negative non-boundary). Audit
-            // 2026-07-18 MEDIUM: the old `> 0 && % != 0` guard missed the
-            // on-boundary case -> a boundary startMcap ($1232, $1475, ...) made
-            // the seed straddle and drain/revert.
-            if (aligned <= startTick) aligned += spacing;
-        }
+        int24 aligned = ArcadeV4Math.seedEdgeTick(startSqrt, spacing, usdcIsCurrency0);
+        (int24 minT, int24 maxT) = ArcadeV4Math.fullRange(spacing);
 
         // Record the exact position range so collectFees can address it later
         // (modifyLiquidity keys the position by its tick range).
         if (usdcIsCurrency0) {
-            clankerPos[token] =
-                ClankerPos({tickLower: TickMath.minUsableTick(spacing), tickUpper: aligned, seeded: true});
+            clankerPos[token] = ClankerPos({tickLower: minT, tickUpper: aligned, seeded: true});
         } else {
-            clankerPos[token] =
-                ClankerPos({tickLower: aligned, tickUpper: TickMath.maxUsableTick(spacing), seeded: true});
+            clankerPos[token] = ClankerPos({tickLower: aligned, tickUpper: maxT, seeded: true});
         }
 
         POOL_MANAGER.unlock(abi.encode(uint8(1), token, supply, uint256(0), aligned));
@@ -1423,7 +1400,7 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
 
         // The V4 init price MUST match the reserve ratio or the AMM will
         // start in an arb-able state and our LP gets one-sided.
-        uint160 sqrtPriceX96 = _sqrtPriceX96FromAmounts(amount0, amount1);
+        uint160 sqrtPriceX96 = ArcadeV4Math.sqrtPriceX96FromAmounts(amount0, amount1);
         POOL_MANAGER.initialize(key, sqrtPriceX96);
 
         // Hand off to the unlock callback which adds the LP + settles both
@@ -1507,16 +1484,9 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
 
         if (kind == 0) {
             // Graduation: full-range two-sided position at the reserve ratio.
-            tickLower = TickMath.minUsableTick(spacing);
-            tickUpper = TickMath.maxUsableTick(spacing);
-            uint160 sqrtPriceX96 = _sqrtPriceX96FromAmounts(amount0, amount1);
-            liquidity = LiquidityAmounts.getLiquidityForAmounts(
-                sqrtPriceX96,
-                TickMath.getSqrtPriceAtTick(tickLower),
-                TickMath.getSqrtPriceAtTick(tickUpper),
-                amount0,
-                amount1
-            );
+            (tickLower, tickUpper) = ArcadeV4Math.fullRange(spacing);
+            uint160 sqrtPriceX96 = ArcadeV4Math.sqrtPriceX96FromAmounts(amount0, amount1);
+            liquidity = ArcadeV4Math.liquidityForAmounts(sqrtPriceX96, tickLower, tickUpper, amount0, amount1);
         } else {
             // CLANKER direct: SINGLE-SIDED position of the full supply (amount0),
             // all on the launch token's side of `startTick`, so no USDC is
@@ -1524,24 +1494,17 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
             // token=currency1 -> [minTick, startTick] (all currency1).
             bool usdcIsCurrency0 = Currency.unwrap(key.currency0) == Currency.unwrap(USDC);
             uint256 supply = amount0;
+            (int24 minT, int24 maxT) = ArcadeV4Math.fullRange(spacing);
             if (usdcIsCurrency0) {
                 // launch token = currency1: position below the start.
-                tickLower = TickMath.minUsableTick(spacing);
+                tickLower = minT;
                 tickUpper = startTick;
-                liquidity = LiquidityAmounts.getLiquidityForAmount1(
-                    TickMath.getSqrtPriceAtTick(tickLower),
-                    TickMath.getSqrtPriceAtTick(tickUpper),
-                    supply
-                );
+                liquidity = ArcadeV4Math.liquidityForAmount1(tickLower, tickUpper, supply);
             } else {
                 // launch token = currency0: position above the start.
                 tickLower = startTick;
-                tickUpper = TickMath.maxUsableTick(spacing);
-                liquidity = LiquidityAmounts.getLiquidityForAmount0(
-                    TickMath.getSqrtPriceAtTick(tickLower),
-                    TickMath.getSqrtPriceAtTick(tickUpper),
-                    supply
-                );
+                tickUpper = maxT;
+                liquidity = ArcadeV4Math.liquidityForAmount0(tickLower, tickUpper, supply);
             }
         }
 
@@ -1574,28 +1537,6 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         POOL_MANAGER.sync(currency);
         IERC20(Currency.unwrap(currency)).safeTransfer(address(POOL_MANAGER), amount);
         POOL_MANAGER.settle();
-    }
-
-    /// @dev sqrtPriceX96 from raw token amounts. price = amount1 / amount0.
-    ///      Uses FullMath for the 512-bit multiply, then Babylonian sqrt.
-    function _sqrtPriceX96FromAmounts(uint256 amount0, uint256 amount1) internal pure returns (uint160) {
-        if (amount0 == 0) revert ZeroAmount();
-        uint256 ratioX192 = FullMath.mulDiv(amount1, 1 << 192, amount0);
-        uint256 root = _sqrt(ratioX192);
-        if (root > type(uint160).max) revert InvariantBroken();
-        return uint160(root);
-    }
-
-    /// @dev Integer square root via Babylonian iteration. Suitable for the
-    ///      one-shot graduation call (gas not measured, ran at testnet cost).
-    function _sqrt(uint256 x) internal pure returns (uint256 y) {
-        if (x == 0) return 0;
-        uint256 z = (x + 1) >> 1;
-        y = x;
-        while (z < y) {
-            y = z;
-            z = (x / z + z) >> 1;
-        }
     }
 
     /// @dev Canonical PoolKey for a launch. Sorts the currencies by address
