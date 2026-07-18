@@ -222,6 +222,92 @@ contract ArcadeV4SwapRouterTest is Test {
 
     // --- access control --------------------------------------------------
 
+    // -----------------------------------------------------------------
+    // Referral surcharge
+    // -----------------------------------------------------------------
+
+    function _setBuyDelta() internal returns (bool zeroForOne) {
+        zeroForOne = usdcIsCurrency0; // BUY = USDC -> TOKEN
+        if (zeroForOne) {
+            pm.setNextSwapDelta(int128(-int256(1_000e6)), int128(50e18));
+        } else {
+            pm.setNextSwapDelta(int128(50e18), int128(-int256(1_000e6)));
+        }
+    }
+
+    function test_setReferralFeeBps_ownerAndCap() public {
+        assertEq(router.referralFeeBps(), 0, "default 0");
+        router.setReferralFeeBps(50);
+        assertEq(router.referralFeeBps(), 50, "set");
+        // above the 1% cap reverts
+        vm.expectRevert(ArcadeV4SwapRouter.ReferralTooHigh.selector);
+        router.setReferralFeeBps(101);
+        // non-owner cannot set
+        vm.prank(USER);
+        vm.expectRevert(ArcadeV4SwapRouter.NotOwner.selector);
+        router.setReferralFeeBps(10);
+    }
+
+    function test_referral_exactInput_paysReferrerFromOutput() public {
+        router.setReferralFeeBps(100); // 1%
+        address referrer = address(0xF00D);
+        bool zeroForOne = _setBuyDelta();
+
+        uint256 userUsdcBefore = usdc.balanceOf(USER);
+        vm.prank(USER);
+        uint256 amountOut = router.exactInputSingleReferred(key, zeroForOne, 1_000e6, 1e18, RECIPIENT, 0, referrer);
+
+        // 1% of 50e18 output = 0.5e18 to referrer, 49.5e18 net to recipient.
+        assertEq(amountOut, 49.5e18, "net output returned");
+        assertEq(token.balanceOf(referrer), 0.5e18, "referrer got 1% of output");
+        assertEq(token.balanceOf(RECIPIENT), 49.5e18, "recipient got net");
+        // Exact-in never surcharges the INPUT.
+        assertEq(userUsdcBefore - usdc.balanceOf(USER), 1_000e6, "user paid only swap input");
+    }
+
+    function test_referral_exactInput_slippageCheckedOnNet() public {
+        router.setReferralFeeBps(100); // 1%
+        address referrer = address(0xF00D);
+        bool zeroForOne = _setBuyDelta();
+        // Net output is 49.5e18; a floor above net must revert (proves the check
+        // is on the post-surcharge amount, not the gross 50e18).
+        vm.prank(USER);
+        vm.expectRevert(abi.encodeWithSelector(ArcadeV4SwapRouter.SlippageExceeded.selector, 49.5e18, 49.6e18));
+        router.exactInputSingleReferred(key, zeroForOne, 1_000e6, 49.6e18, RECIPIENT, 0, referrer);
+    }
+
+    function test_referral_exactOutput_paysReferrerFromInput() public {
+        router.setReferralFeeBps(100); // 1%
+        address referrer = address(0xF00D);
+        // exact-output buy: want 50e18 TOKEN, mock quotes 1_000e6 USDC in.
+        bool zeroForOne = usdcIsCurrency0;
+        if (zeroForOne) {
+            pm.setNextSwapDelta(int128(-int256(1_000e6)), int128(50e18));
+        } else {
+            pm.setNextSwapDelta(int128(50e18), int128(-int256(1_000e6)));
+        }
+
+        uint256 userUsdcBefore = usdc.balanceOf(USER);
+        vm.prank(USER);
+        uint256 amountIn = router.exactOutputSingleReferred(key, zeroForOne, 50e18, 2_000e6, RECIPIENT, 0, referrer);
+
+        // 1% of 1_000e6 input = 10e6 to referrer; recipient still gets EXACT 50e18.
+        assertEq(amountIn, 1_010e6, "gross input returned (swap + surcharge)");
+        assertEq(usdc.balanceOf(referrer), 10e6, "referrer got 1% of input");
+        assertEq(token.balanceOf(RECIPIENT), 50e18, "recipient got exact output");
+        assertEq(userUsdcBefore - usdc.balanceOf(USER), 1_010e6, "user paid swap input + surcharge");
+    }
+
+    function test_referral_zeroReferrer_noSurcharge() public {
+        router.setReferralFeeBps(100); // 1% set, but referrer omitted
+        bool zeroForOne = _setBuyDelta();
+        vm.prank(USER);
+        // plain entry point => no surcharge even with a nonzero rate.
+        uint256 amountOut = router.exactInputSingle(key, zeroForOne, 1_000e6, 1e18, RECIPIENT, 0);
+        assertEq(amountOut, 50e18, "full output, no surcharge");
+        assertEq(token.balanceOf(RECIPIENT), 50e18, "recipient got full output");
+    }
+
     function test_unlockCallback_onlyPoolManager() public {
         ArcadeV4SwapRouter.SwapCallbackData memory cb = ArcadeV4SwapRouter.SwapCallbackData({
             payer: USER,
@@ -229,7 +315,9 @@ contract ArcadeV4SwapRouterTest is Test {
             key: key,
             zeroForOne: true,
             amountSpecified: -int256(1_000e6),
-            sqrtPriceLimitX96: 0
+            sqrtPriceLimitX96: 0,
+            referrer: address(0),
+            referralBps: 0
         });
         vm.expectRevert(ArcadeV4SwapRouter.NotPoolManager.selector);
         router.unlockCallback(abi.encode(cb));
