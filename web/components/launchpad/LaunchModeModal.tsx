@@ -1,10 +1,10 @@
 "use client";
 
-import { Rocket } from "lucide-react";
 import { CrossIcon } from "@/components/ui/MaskIcon";
 import { useRouter } from "next/navigation";
 import { Modal } from "@/components/ui/Modal";
 import { LaunchMode, V4_HOOK_ENABLED } from "@/lib/constants";
+import { ARCADE_HOOK_MODE } from "@/lib/abis/arcadeHook";
 import { cn } from "@/lib/utils";
 
 interface Props {
@@ -14,13 +14,34 @@ interface Props {
 
 interface ModeOption {
   label: string;
-  mode: LaunchMode;
+  /** V4 ArcadeHook mode (0 = PUMP curve, 1 = CLANKER direct). */
+  mode: number;
+  /** One-line pitch shown under the card name. */
+  blurb: string;
   /** Per-card token illustration (1448×1086, 4:3 - shown as the card cover). */
   bg: string;
 }
 
-// Display names only - the underlying contract modes are unchanged.
+// The two launch modes, both on the unified V4 ArcadeHook:
+//   Pump   = bonding curve, graduates ~$60k into a locked LP.
+//   Clanker = direct single-sided locked-LP launch at a chosen start mcap.
 const MODES: ModeOption[] = [
+  {
+    label: "Pump",
+    mode: ARCADE_HOOK_MODE.PUMP,
+    blurb: "Bonding curve, graduates to a locked LP",
+    bg: "/pumpfuntoken.png",
+  },
+  {
+    label: "Clanker",
+    mode: ARCADE_HOOK_MODE.CLANKER,
+    blurb: "Direct launch, single-sided locked LP",
+    bg: "/clankertoken.png",
+  },
+];
+
+// Legacy V2/V3 launchpad modes (used only when the V4 hook is not configured).
+const LEGACY_MODES: { label: string; mode: LaunchMode; bg: string }[] = [
   { label: "Pump", mode: LaunchMode.PUMP, bg: "/pumpfuntoken.png" },
   { label: "Arcade", mode: LaunchMode.CLANKER, bg: "/arctoken.png" },
   { label: "Clanker", mode: LaunchMode.CLANKER_V3, bg: "/clankertoken.png" },
@@ -34,7 +55,13 @@ const MODES: ModeOption[] = [
 export function LaunchModeModal({ open, onClose }: Props) {
   const router = useRouter();
 
-  const pick = (mode: LaunchMode) => {
+  // V4 hook: two modes on one create page (mode preselected via ?mode=).
+  const pickV4 = (mode: number) => {
+    onClose();
+    router.push(`/launchpad/v4hook/create?mode=${mode}`);
+  };
+  // Legacy V2/V3 launchpad (only when the V4 hook is not configured).
+  const pickLegacy = (mode: LaunchMode) => {
     onClose();
     router.push(`/launchpad/create?mode=${mode}`);
   };
@@ -53,55 +80,51 @@ export function LaunchModeModal({ open, onClose }: Props) {
           <CrossIcon size={20} />
         </button>
       </div>
-      <div
-        className={cn(
-          "grid grid-cols-1 gap-4 p-6",
-          // 3 base modes + the optional ArcadeHook card.
-          V4_HOOK_ENABLED ? "sm:grid-cols-4" : "sm:grid-cols-3",
-        )}
-      >
-        {MODES.map((m) => (
-          <button type="button"
-            key={m.label}
-            onClick={() => pick(m.mode)}
-            className={cn(
-              "group relative flex h-44 items-end overflow-hidden rounded-2xl border border-arc-border bg-arc-surface-2/40 bg-cover bg-center p-4 text-left transition-all",
-              "hover:border-arc-cta-hover hover:shadow-arc-nav-glow active:scale-[0.98]",
-            )}
-            style={{ backgroundImage: `url('${m.bg}')` }}
-          >
-            {/* Readability overlay (keeps the name visible over any background). */}
-            <span className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/70 via-black/20 to-transparent" />
-            <span className="relative text-xl font-semibold text-white drop-shadow-[0_1px_3px_rgba(0,0,0,0.9)]">
-              {m.label}
-            </span>
-          </button>
-        ))}
-        {V4_HOOK_ENABLED && (
-          <button type="button"
-            onClick={() => {
-              onClose();
-              router.push("/launchpad/v4hook/create");
-            }}
-            className={cn(
-              "group relative flex h-44 items-end overflow-hidden rounded-2xl border border-arc-cta-hover/40 p-4 text-left transition-all",
-              "bg-gradient-to-br from-arc-cta/20 via-arc-surface-2/40 to-arc-cta-hover/10",
-              "hover:border-arc-cta-hover hover:shadow-arc-nav-glow active:scale-[0.98]",
-            )}
-          >
-            <span className="absolute right-3 top-3 rounded-md border border-arc-cta-hover/40 bg-arc-cta-hover/10 px-2 py-0.5 text-[10px] uppercase tracking-wider text-arc-cta-hover">
-              v4 hook
-            </span>
-            <Rocket className="absolute right-4 top-12 h-12 w-12 text-arc-cta-hover/30 transition-transform group-hover:scale-110" />
-            <div className="relative">
-              <div className="text-xl font-semibold text-white">ArcadeHook</div>
-              <div className="mt-1 text-xs text-arc-text-muted">
-                Unified V4 hook. Atomic graduation, locked LP, royalty splits.
-              </div>
-            </div>
-          </button>
-        )}
-      </div>
+      {V4_HOOK_ENABLED ? (
+        <div className="grid grid-cols-1 gap-4 p-6 sm:grid-cols-2">
+          {MODES.map((m) => (
+            <button
+              type="button"
+              key={m.label}
+              onClick={() => pickV4(m.mode)}
+              className={cn(
+                "group relative flex h-48 flex-col justify-end overflow-hidden rounded-2xl border border-arc-border bg-arc-surface-2/40 bg-cover bg-center p-4 text-left transition-all",
+                "hover:border-arc-cta-hover hover:shadow-arc-nav-glow active:scale-[0.98]",
+              )}
+              style={{ backgroundImage: `url('${m.bg}')` }}
+            >
+              {/* Readability overlay (keeps text visible over any background). */}
+              <span className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/80 via-black/25 to-transparent" />
+              <span className="relative text-xl font-semibold text-white drop-shadow-[0_1px_3px_rgba(0,0,0,0.9)]">
+                {m.label}
+              </span>
+              <span className="relative mt-1 text-xs text-white/80 drop-shadow-[0_1px_2px_rgba(0,0,0,0.9)]">
+                {m.blurb}
+              </span>
+            </button>
+          ))}
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 gap-4 p-6 sm:grid-cols-3">
+          {LEGACY_MODES.map((m) => (
+            <button
+              type="button"
+              key={m.label}
+              onClick={() => pickLegacy(m.mode)}
+              className={cn(
+                "group relative flex h-44 items-end overflow-hidden rounded-2xl border border-arc-border bg-arc-surface-2/40 bg-cover bg-center p-4 text-left transition-all",
+                "hover:border-arc-cta-hover hover:shadow-arc-nav-glow active:scale-[0.98]",
+              )}
+              style={{ backgroundImage: `url('${m.bg}')` }}
+            >
+              <span className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/70 via-black/20 to-transparent" />
+              <span className="relative text-xl font-semibold text-white drop-shadow-[0_1px_3px_rgba(0,0,0,0.9)]">
+                {m.label}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
     </Modal>
   );
 }

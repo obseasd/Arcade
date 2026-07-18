@@ -182,6 +182,39 @@ export const ARCADE_HOOK_ABI = [
         outputs: [{ name: "", type: "uint256" }],
     },
     {
+        // The V4 pool fee (in hundredths of a bip, 1e6 = 100%) for a launch's
+        // pool. PUMP = 0 (hook captures the whole fee); CLANKER = the tier
+        // (10000/20000/30000 for 1/2/3%). Needed to rebuild the PoolKey.
+        type: "function",
+        name: "poolFeeOf",
+        stateMutability: "view",
+        inputs: [{ name: "", type: "address" }],
+        outputs: [{ name: "", type: "uint24" }],
+    },
+    {
+        // CLANKER single-sided locked-LP position range per token. `seeded`
+        // true means a direct launch was seeded and collectFees can run.
+        type: "function",
+        name: "clankerPos",
+        stateMutability: "view",
+        inputs: [{ name: "", type: "address" }],
+        outputs: [
+            { name: "tickLower", type: "int24" },
+            { name: "tickUpper", type: "int24" },
+            { name: "seeded", type: "bool" },
+        ],
+    },
+    {
+        // Harvest the CLANKER locked position's accrued LP fees (both currencies)
+        // and split 80/20 creator(or escrow)/treasury. Anyone may call; funds
+        // only ever route to the configured recipients. Reverts unless seeded.
+        type: "function",
+        name: "collectFees",
+        stateMutability: "nonpayable",
+        inputs: [{ name: "token", type: "address" }],
+        outputs: [],
+    },
+    {
         // CSEC-001 pull-payment escape hatch. If a fee/anti-sniper recipient is
         // ever blocklisted for USDC, its funds accrue here instead of bricking
         // the swap; the recipient (or the escrow) pulls them later.
@@ -244,10 +277,12 @@ export const ARCADE_HOOK_ABI = [
     // ---------------------------------------------------------------
     // Writes — launch flow
     //
-    // mode: 0 = PUMP (post-grad dynamic fee decaying 1% -> 0.30% with market
-    // cap), 1 = CLANKER (creator picks a fixed post-grad tier 1/2/3% via the
-    // feeTier arg), 2 = CLANKER_V3 (not yet enabled). Post-grad fee splits
-    // 80% creator / 20% protocol for both live modes.
+    // mode: 0 = PUMP (bonding curve -> graduates ~$60k; post-grad dynamic fee
+    // decaying 1% -> 0.30% with market cap), 1 = CLANKER (DIRECT single-sided
+    // locked-LP launch at startMcapUsdc, no curve; fixed native pool LP fee tier
+    // 1/2/3% via feeTier, harvested by collectFees). 2 = CLANKER_V3 is rejected.
+    // Fees split 80% creator / 20% protocol for both live modes.
+    // startMcapUsdc: CLANKER only (the launch FDV in USDC, 1e6); PUMP ignores it.
     // ---------------------------------------------------------------
     {
         type: "function",
@@ -264,6 +299,7 @@ export const ARCADE_HOOK_ABI = [
             { name: "snipeDecaySeconds", type: "uint32" },
             { name: "feeTier", type: "uint8" },
             { name: "twitterHandle", type: "string" },
+            { name: "startMcapUsdc", type: "uint256" },
         ],
         outputs: [
             { name: "tokenAddr", type: "address" },
@@ -399,6 +435,19 @@ export const ARCADE_HOOK_ABI = [
             { name: "creator", type: "address", indexed: true },
             { name: "creatorAmount", type: "uint256", indexed: false },
             { name: "treasuryAmount", type: "uint256", indexed: false },
+        ],
+        anonymous: false,
+    },
+    {
+        // Emitted by collectFees when a CLANKER locked position's accrued LP
+        // fees are harvested. positionKey = the pool id; amounts are the raw
+        // fees pulled (currency0, currency1) before the 80/20 split.
+        type: "event",
+        name: "FeeHarvested",
+        inputs: [
+            { name: "positionKey", type: "bytes32", indexed: true },
+            { name: "amount0", type: "uint256", indexed: false },
+            { name: "amount1", type: "uint256", indexed: false },
         ],
         anonymous: false,
     },
