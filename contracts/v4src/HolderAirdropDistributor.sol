@@ -58,6 +58,7 @@ contract HolderAirdropDistributor {
     error ZeroAmount();
     error InsufficientFunding(uint256 have, uint256 need);
     error AlreadyClaimed();
+    error ClaimWindowClosed();
     error InvalidProof();
     error NotEnded();
     error AlreadySwept();
@@ -195,11 +196,25 @@ contract HolderAirdropDistributor {
     ) external {
         if (isClaimed(launchToken, epoch, index)) revert AlreadyClaimed();
         Distribution storage d = distributions[launchToken][epoch];
-        bytes32 leaf = keccak256(bytes.concat(keccak256(abi.encode(index, account, amount))));
+        // Claims only within the live window: after the deadline the remainder
+        // may be swept to treasury, so a post-deadline / post-sweep claim would
+        // double-pay from the shared reward-token pool (CRITICAL-1 fix).
+        if (d.swept) revert AlreadySwept();
+        if (block.timestamp > d.deadline) revert ClaimWindowClosed();
+        // Never pay out more than this epoch's own collateral, so an
+        // oversubscribed root can't drain other campaigns sharing the reward
+        // token (CRITICAL-2 fix).
+        uint256 newClaimed = d.claimed + amount;
+        if (newClaimed > d.total) revert InsufficientFunding(d.total - d.claimed, amount);
+
+        // Leaf is domain-separated by launchToken + epoch so a reused root can
+        // never be replayed across epochs/campaigns (L-1 hardening).
+        bytes32 leaf =
+            keccak256(bytes.concat(keccak256(abi.encode(launchToken, epoch, index, account, amount))));
         if (!MerkleProof.verify(proof, d.merkleRoot, leaf)) revert InvalidProof();
 
         _setClaimed(launchToken, epoch, index);
-        d.claimed += amount;
+        d.claimed = newClaimed;
         IERC20(d.rewardToken).safeTransfer(account, amount);
         emit Claimed(launchToken, epoch, index, account, amount);
     }

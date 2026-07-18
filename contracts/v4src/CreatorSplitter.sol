@@ -3,6 +3,7 @@ pragma solidity ^0.8.26;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 /// @dev Minimal view into ArcadeHook.createLaunch. Returning the PoolId as
 ///      bytes32 avoids pulling v4-core into this contract (PoolId is a
@@ -38,7 +39,7 @@ interface IArcadeHookLaunch {
  *         This contract never enters the hook's swap path, so a bug here can only
  *         misroute this launch's already-earned fees -- never brick a swap.
  */
-contract CreatorSplitter {
+contract CreatorSplitter is ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     address public immutable FACTORY;
@@ -54,6 +55,10 @@ contract CreatorSplitter {
 
     /// token => account => amount owed after a failed push (pull fallback).
     mapping(address => mapping(address => uint256)) public pending;
+    /// token => total currently owed via `pending`. Excluded from the
+    /// distributable balance so a repeat `distribute()` can't re-hand-out funds
+    /// already earmarked to a blocked recipient (HIGH fix, audit 2026-07-18).
+    mapping(address => uint256) public totalPending;
 
     bool public launched;
     address public launchToken;
@@ -132,8 +137,11 @@ contract CreatorSplitter {
     ///         recipients per weight. Works for USDC (curve + post-grad fees) and
     ///         the launch token (CLANKER token-side harvest). Rounding dust goes
     ///         to the last recipient; a reverting recipient credits `pending`.
-    function distribute(address token) external {
-        uint256 bal = IERC20(token).balanceOf(address(this));
+    function distribute(address token) external nonReentrant {
+        // Exclude balances already earmarked to pending pull-payments, so a
+        // repeat call with no fresh fees is a no-op (never re-distributes a
+        // blocked recipient's owed funds).
+        uint256 bal = IERC20(token).balanceOf(address(this)) - totalPending[token];
         if (bal == 0) return;
         uint256 n = recipients.length;
         uint256 distributed;
@@ -152,13 +160,15 @@ contract CreatorSplitter {
             if (ok) return;
         } catch {}
         pending[token][to] += amount;
+        totalPending[token] += amount;
         emit PendingCredited(token, to, amount);
     }
 
-    function claimPending(address token) external returns (uint256 amount) {
+    function claimPending(address token) external nonReentrant returns (uint256 amount) {
         amount = pending[token][msg.sender];
         if (amount == 0) return 0;
         pending[token][msg.sender] = 0;
+        totalPending[token] -= amount;
         IERC20(token).safeTransfer(msg.sender, amount);
         emit PendingClaimed(token, msg.sender, amount);
     }

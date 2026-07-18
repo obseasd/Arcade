@@ -40,9 +40,10 @@ contract HolderAirdropDistributorTest is Test {
         vm.prank(FUNDER);
         usdc.approve(address(dist), type(uint256).max);
 
-        // Distribution: index0 A=70, index1 B=30. OZ double-hashed leaves.
-        leafA = keccak256(bytes.concat(keccak256(abi.encode(uint256(0), A, uint256(70e6)))));
-        leafB = keccak256(bytes.concat(keccak256(abi.encode(uint256(1), B, uint256(30e6)))));
+        // Distribution: index0 A=70, index1 B=30. OZ double-hashed leaves,
+        // domain-separated by (launchToken, epoch=0).
+        leafA = keccak256(bytes.concat(keccak256(abi.encode(LAUNCH, uint256(0), uint256(0), A, uint256(70e6)))));
+        leafB = keccak256(bytes.concat(keccak256(abi.encode(LAUNCH, uint256(0), uint256(1), B, uint256(30e6)))));
         root = _hashPair(leafA, leafB);
     }
 
@@ -113,6 +114,39 @@ contract HolderAirdropDistributorTest is Test {
         _fundAndPost(100e6, 100e6, 30 days);
         vm.expectRevert(HolderAirdropDistributor.InvalidProof.selector);
         dist.claim(LAUNCH, 0, 0, A, 99e6, _proofFor(leafB));
+    }
+
+    function test_claim_afterDeadlineReverts() public {
+        _fundAndPost(100e6, 100e6, 30 days);
+        vm.warp(block.timestamp + 30 days + 1);
+        vm.expectRevert(HolderAirdropDistributor.ClaimWindowClosed.selector);
+        dist.claim(LAUNCH, 0, 0, A, 70e6, _proofFor(leafB));
+    }
+
+    function test_claim_afterSweepReverts() public {
+        _fundAndPost(100e6, 100e6, 30 days);
+        dist.claim(LAUNCH, 0, 0, A, 70e6, _proofFor(leafB)); // A claims in-window
+        vm.warp(block.timestamp + 30 days + 1);
+        dist.sweep(LAUNCH, 0); // B's 30 forfeited to treasury
+        // B can no longer claim the already-forfeited amount (CRITICAL-1).
+        vm.expectRevert(HolderAirdropDistributor.AlreadySwept.selector);
+        dist.claim(LAUNCH, 0, 1, B, 30e6, _proofFor(leafA));
+    }
+
+    function test_claim_oversubscribedRootCappedAtTotal() public {
+        // Root pays A=70 + B=50 = 120 but only 100 is posted/collateralized.
+        bytes32 la = keccak256(bytes.concat(keccak256(abi.encode(LAUNCH, uint256(0), uint256(0), A, uint256(70e6)))));
+        bytes32 lb = keccak256(bytes.concat(keccak256(abi.encode(LAUNCH, uint256(0), uint256(1), B, uint256(50e6)))));
+        bytes32 over = _hashPair(la, lb);
+        vm.prank(FUNDER);
+        dist.fund(LAUNCH, address(usdc), 100e6);
+        vm.prank(KEEPER);
+        dist.postDistribution(LAUNCH, address(usdc), over, 100e6, 30 days);
+
+        dist.claim(LAUNCH, 0, 0, A, 70e6, _proofFor(lb)); // ok, claimed = 70
+        // B's 50 would push claimed to 120 > total 100 -> capped revert.
+        vm.expectRevert(abi.encodeWithSelector(HolderAirdropDistributor.InsufficientFunding.selector, 30e6, 50e6));
+        dist.claim(LAUNCH, 0, 1, B, 50e6, _proofFor(la));
     }
 
     function test_sweep_afterDeadlineForfeitsRemainder() public {

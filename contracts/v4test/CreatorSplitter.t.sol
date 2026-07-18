@@ -172,6 +172,36 @@ contract CreatorSplitterTest is Test {
         assertEq(s.pending(address(blk), B), 0, "pending cleared");
     }
 
+    /// HIGH regression: repeated permissionless distribute() must NOT re-hand-out
+    /// a blocked recipient's pending funds. The pending ledger stays fully backed.
+    function test_distribute_repeatDoesNotDrainPending() public {
+        (address[] memory r, uint16[] memory w) = _two();
+        MockBlocklistToken blk = new MockBlocklistToken();
+        (CreatorSplitter s,) = _launch(r, w);
+
+        blk.setBlocked(B);
+        blk.mint(address(s), 100e18);
+        s.distribute(address(blk)); // A=70, pending[B]=30, 30 stays in the splitter
+        assertEq(blk.balanceOf(A), 70e18);
+        assertEq(s.pending(address(blk), B), 30e18);
+        assertEq(s.totalPending(address(blk)), 30e18);
+
+        // Three more permissionless calls with no new fees: all no-ops now.
+        s.distribute(address(blk));
+        s.distribute(address(blk));
+        s.distribute(address(blk));
+        assertEq(blk.balanceOf(A), 70e18, "A not over-paid");
+        assertEq(s.pending(address(blk), B), 30e18, "B's owed unchanged");
+        assertEq(blk.balanceOf(address(s)), 30e18, "backing intact");
+
+        // B unblocks and pulls its full 30 (solvent).
+        blk.setBlocked(address(0));
+        vm.prank(B);
+        s.claimPending(address(blk));
+        assertEq(blk.balanceOf(B), 30e18, "B fully paid");
+        assertEq(s.totalPending(address(blk)), 0);
+    }
+
     function test_setRecipients_onlyOwnerAndValid() public {
         (address[] memory r, uint16[] memory w) = _two();
         (CreatorSplitter s,) = _launch(r, w);
