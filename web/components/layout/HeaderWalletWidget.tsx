@@ -101,23 +101,34 @@ export function HeaderWalletWidget() {
         if (!menuOpen) setPowerOpen(false);
     }, [menuOpen]);
 
-    // Audit 2026-06-11 v3: use a direct viem read instead of wagmi's
-    // `useReadContract`. The wagmi hook had been silently NOT issuing the
-    // `balanceOf` request even with `chainId: arcTestnet.id` pinned —
-    // verified via Network panel (160 RPC calls but none carrying the
-    // selector or the user's address). Most likely cause: Rabby/Backpack
-    // EIP-6963 collision leaves wagmi's internal connector chain out of
-    // sync with `window.ethereum.chainId`, and the singular-read hook
-    // disables itself when it can't reconcile. `useArcReadContract`
-    // bypasses wagmi entirely and hits Arc via a dedicated viem client.
-    const balanceQ = useArcReadContract<bigint>({
-        address: ADDRESSES.usdc,
-        abi: erc20Abi,
-        functionName: "balanceOf",
-        args: address ? [address] : undefined,
-        enabled: !!address,
-    });
-    const raw = (balanceQ.data as bigint | undefined) ?? 0n;
+    // USDC balance via the server (/api/balance). A direct browser viem read of
+    // the Arc RPC returns 0 (CORS / rate-limit on browser-origin eth_call, even
+    // in incognito); reading server-side bypasses the browser entirely, same as
+    // /api/ens/*. Polls every 8s.
+    const [raw, setRaw] = useState<bigint>(0n);
+    useEffect(() => {
+        if (!address) {
+            setRaw(0n);
+            return;
+        }
+        let cancelled = false;
+        const load = async () => {
+            try {
+                const res = await fetch(`/api/balance?address=${address}`, { cache: "no-store" });
+                if (!res.ok) return;
+                const body = (await res.json()) as { raw?: string };
+                if (!cancelled && body.raw) setRaw(BigInt(body.raw));
+            } catch {
+                /* keep the last value on a transient failure */
+            }
+        };
+        load();
+        const id = setInterval(load, 8000);
+        return () => {
+            cancelled = true;
+            clearInterval(id);
+        };
+    }, [address]);
     const amountWhole = formatUSDC(raw, USDC_DECIMALS, 0);
     const usdValue = formatUSDC(raw, USDC_DECIMALS, 2);
 
