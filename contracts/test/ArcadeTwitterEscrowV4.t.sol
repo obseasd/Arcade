@@ -258,6 +258,40 @@ contract ArcadeTwitterEscrowV4Test is Test {
         assertEq(escrow.balances(POS, SLOT, address(usdc)), 0, "slot cleared");
     }
 
+    /// Later credits must NOT push the forfeit clock out (the grief the re-anchor
+    /// fixes): the clock stays anchored on the FIRST credit (launch).
+    function test_forfeit_ongoingCreditsDoNotResetClock() public {
+        uint256 t0 = block.timestamp;
+        _credit(100e6); // anchor = t0
+        vm.warp(t0 + escrow.FORFEIT_DELAY() - 10);
+        _credit(50e6); // a fresh credit near the deadline must not delay forfeit
+        vm.warp(t0 + escrow.FORFEIT_DELAY() + 1); // past the FIRST-credit anchor
+        vm.prank(OWNER);
+        escrow.forfeitStaleClaim(POS, SLOT, OWNER);
+        assertEq(usdc.balanceOf(OWNER), 150e6, "whole balance forfeited despite recent credit");
+    }
+
+    /// A successful claim proves the owner is present -> resets the clock, so an
+    /// actively-claimed slot is never swept.
+    function test_forfeit_claimResetsClock() public {
+        _credit(100e6);
+        _authorizeAndClaim(USER, 100e6, keccak256("c1")); // resets anchor to now
+        uint256 claimTime = block.timestamp;
+        _credit(40e6); // more fees accrue; does NOT bump the anchor
+
+        // Before the claim-anchored deadline: not stale.
+        vm.warp(claimTime + escrow.FORFEIT_DELAY() - 100);
+        vm.expectRevert(ArcadeTwitterEscrowV4.NotStaleYet.selector);
+        vm.prank(OWNER);
+        escrow.forfeitStaleClaim(POS, SLOT, OWNER);
+
+        // Past the reset window: the never-re-claimed residue is forfeitable.
+        vm.warp(claimTime + escrow.FORFEIT_DELAY() + 1);
+        vm.prank(OWNER);
+        escrow.forfeitStaleClaim(POS, SLOT, OWNER);
+        assertEq(usdc.balanceOf(OWNER), 40e6, "post-claim residue forfeited after the reset window");
+    }
+
     function test_forfeit_transferRevert_stashesPullPayment() public {
         BlockingUSDC bad = new BlockingUSDC();
         bad.mint(address(escrow), 100e6);

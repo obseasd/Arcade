@@ -95,8 +95,13 @@ contract ArcadeTwitterEscrowV4 is Ownable2Step, Pausable, ReentrancyGuard {
     /// @notice Sum of `balances[*][*][token]`. `rescue` refuses to touch it, so
     ///         the owner can only sweep un-earmarked dust, never user balances.
     mapping(address => uint256) public creditedTotal;
-    /// @notice Last `creditSlot` timestamp per slot; anchors FORFEIT_DELAY.
-    mapping(uint256 => mapping(uint256 => uint64)) public lastCreditedAt;
+    /// @notice Forfeit clock anchor per slot = the FIRST credit (launch) time,
+    ///         reset ONLY on a successful claim. NOT bumped by later credits, so
+    ///         an actively-traded-but-never-claimed slot still becomes forfeitable
+    ///         FORFEIT_DELAY after launch (a permissionless collectFees can no
+    ///         longer grief the clock by re-crediting). "Time since launch with
+    ///         no successful claim." (Audit 2026-07-18.)
+    mapping(uint256 => mapping(uint256 => uint64)) public forfeitAnchorAt;
     /// @notice The single token a slot has been credited with (fees are USDC).
     ///         Pins forfeit/claim to that token so the owner can't name another.
     mapping(uint256 => mapping(uint256 => address)) public slotToken;
@@ -261,7 +266,12 @@ contract ArcadeTwitterEscrowV4 is Ownable2Step, Pausable, ReentrancyGuard {
 
         balances[positionId][slotIndex][token] += amount;
         creditedTotal[token] += amount;
-        lastCreditedAt[positionId][slotIndex] = uint64(block.timestamp);
+        // Anchor the forfeit clock on the FIRST credit only; later credits do
+        // NOT push it out (that reset is what let a permissionless collectFees
+        // keep an abandoned slot un-forfeitable forever).
+        if (forfeitAnchorAt[positionId][slotIndex] == 0) {
+            forfeitAnchorAt[positionId][slotIndex] = uint64(block.timestamp);
+        }
         emit Credited(positionId, slotIndex, token, amount);
     }
 
@@ -343,6 +353,10 @@ contract ArcadeTwitterEscrowV4 is Ownable2Step, Pausable, ReentrancyGuard {
         balances[positionId][slotIndex][token] = 0;
         creditedTotal[token] -= sweep;
 
+        // A successful claim proves the handle owner is present: reset the
+        // forfeit clock so an actively-claimed slot is never swept.
+        forfeitAnchorAt[positionId][slotIndex] = uint64(block.timestamp);
+
         // Interaction.
         if (sweep > 0) IERC20(token).safeTransfer(recipient, sweep);
         emit Claimed(positionId, slotIndex, recipient, token, sweep);
@@ -363,15 +377,17 @@ contract ArcadeTwitterEscrowV4 is Ownable2Step, Pausable, ReentrancyGuard {
     // ====================== Forfeit (abandoned handle) ======================
 
     /**
-     * @notice After FORFEIT_DELAY of no credits to a slot, the owner may route
-     *         its stranded balance elsewhere (the handle never appeared).
-     *         Bounded to the slot's pinned token and its exact credited amount;
-     *         a reverting transfer stashes to `pendingForfeit` (pull-payment).
+     * @notice After FORFEIT_DELAY with NO successful claim (clock anchored at
+     *         launch, reset only on claim), the owner may route the slot's
+     *         stranded balance elsewhere (the handle never appeared). Ongoing
+     *         credits do NOT delay this. Bounded to the slot's pinned token and
+     *         its exact credited amount; a reverting transfer stashes to
+     *         `pendingForfeit` (pull-payment).
      */
     function forfeitStaleClaim(uint256 positionId, uint256 slotIndex, address to) external onlyOwner {
         if (to == address(0)) revert ZeroAddress();
-        uint64 last = lastCreditedAt[positionId][slotIndex];
-        if (last == 0 || block.timestamp < last + FORFEIT_DELAY) revert NotStaleYet();
+        uint64 anchor = forfeitAnchorAt[positionId][slotIndex];
+        if (anchor == 0 || block.timestamp < anchor + FORFEIT_DELAY) revert NotStaleYet();
         if (hasPending[positionId][slotIndex]) revert SlotPending();
 
         address token = slotToken[positionId][slotIndex];
