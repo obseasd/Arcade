@@ -80,6 +80,11 @@ contract ArcadeHookSwapTest is Test {
         );
         hook = ArcadeHook(hookAddr);
 
+        // Disable the CLANKER anti-snipe buy cap by default so the fee/collect
+        // tests can make large buys unchanged. Dedicated cap tests re-enable it.
+        vm.prank(OWNER);
+        hook.setClankerBuyCap(0, 0);
+
         swapRouter = new PoolSwapTest(pm);
 
         usdc.mint(CREATOR, 100_000e6);
@@ -851,6 +856,53 @@ contract ArcadeHookSwapTest is Test {
         vm.prank(CREATOR);
         vm.expectRevert(ArcadeHook.InvalidFeeOwner.selector);
         hook.createLaunch("P", "P", "ipfs://p", 0, address(0xBEEF), 2_000, 0, 0, 0, "", 0);
+    }
+
+    // --- CLANKER anti-snipe first-window buy cap ---
+
+    function test_clankerCap_bigBuyRevertsInWindow() public {
+        vm.prank(OWNER);
+        hook.setClankerBuyCap(100, 300); // 1% of supply, 5 min
+        (, PoolKey memory key) = _launchClanker();
+
+        // Inline the swap so vm.expectRevert targets IT (not the approve inside
+        // the _buyViaV4 helper). 5_000 USDC at the $35k start buys >>1% -> revert.
+        vm.startPrank(ALICE);
+        usdc.approve(address(swapRouter), type(uint256).max);
+        bool zeroForOne = Currency.unwrap(key.currency0) == address(usdc);
+        uint160 priceLimit = zeroForOne ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1;
+        vm.expectRevert();
+        swapRouter.swap(
+            key,
+            SwapParams({zeroForOne: zeroForOne, amountSpecified: -int256(uint256(5_000e6)), sqrtPriceLimitX96: priceLimit}),
+            PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}),
+            ""
+        );
+        vm.stopPrank();
+    }
+
+    function test_clankerCap_smallBuyPassesInWindow() public {
+        vm.prank(OWNER);
+        hook.setClankerBuyCap(100, 300);
+        (, PoolKey memory key) = _launchClanker();
+        _buyViaV4(key, ALICE, 10e6); // ~0.03% of supply, under the cap -> ok
+    }
+
+    function test_clankerCap_bigBuyPassesAfterWindow() public {
+        vm.prank(OWNER);
+        hook.setClankerBuyCap(100, 300);
+        (, PoolKey memory key) = _launchClanker();
+        vm.warp(block.timestamp + 301); // window elapsed
+        _buyViaV4(key, ALICE, 5_000e6); // no longer capped -> ok
+    }
+
+    function test_clankerCap_sellNotCapped() public {
+        vm.prank(OWNER);
+        hook.setClankerBuyCap(100, 300);
+        (address token, PoolKey memory key) = _launchClanker();
+        _buyViaV4(key, ALICE, 10e6); // small buy under cap
+        uint256 bal = IERC20(token).balanceOf(ALICE);
+        _sellViaV4(key, token, ALICE, bal); // sells are never capped -> ok
     }
 
     function test_clankerFee_tier1_is1pct() public {

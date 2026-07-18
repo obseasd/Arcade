@@ -252,8 +252,15 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         int24 tickLower;
         int24 tickUpper;
         bool seeded;
+        uint64 launchedAt; // for the first-window anti-snipe buy cap
     }
     mapping(address => ClankerPos) public clankerPos;
+
+    /// @notice CLANKER anti-snipe buy cap: reject a buy whose token output tops
+    ///         `clankerMaxBuyBps` of TOTAL_SUPPLY within `clankerCapWindowSecs`
+    ///         of launch. Owner-tunable (setClankerBuyCap); 0 bps disables.
+    uint16 public clankerMaxBuyBps;
+    uint32 public clankerCapWindowSecs;
     /// @notice Launch token => PoolId so `currentSnipeBps` callers (the hook
     ///         itself + indexers) can look up the curve state from a token addr.
     mapping(address => PoolId) public poolIdOf;
@@ -291,6 +298,8 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
     error EmptyName();
     error InvalidSnipeBps();
     error InvalidDecaySeconds();
+    error BuyExceedsCap();
+    error InvalidCap();
     error AlreadyLaunched();
     error NothingToWithdraw();
 
@@ -323,6 +332,7 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
     event FeeHarvested(bytes32 indexed positionKey, uint256 amount0, uint256 amount1);
     event TreasuryUpdated(address indexed oldTreasury, address indexed newTreasury);
     event TwitterEscrowUpdated(address indexed oldEscrow, address indexed newEscrow);
+    event ClankerBuyCapSet(uint16 maxBuyBps, uint32 windowSecs);
     event SnipeConfigured(address indexed token, uint16 startBps, uint32 decaySeconds);
     event TokenCredited(address indexed token, address indexed recipient, uint256 amount);
     event TokenPendingClaimed(address indexed token, address indexed recipient, uint256 amount);
@@ -369,6 +379,11 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         LOCKED_VAULT = lockedVault_;
         TREASURY = treasury_;
         twitterEscrow = twitterEscrow_;
+
+        // Default CLANKER anti-snipe cap: 1% of supply per buy for the first 5
+        // minutes. Owner-tunable (or disable with 0 bps) via setClankerBuyCap.
+        clankerMaxBuyBps = 100;
+        clankerCapWindowSecs = 300;
     }
 
     // -------------------------------------------------------------------
@@ -630,6 +645,18 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         // Zero address is intentional: clears the escrow target entirely.
         emit TwitterEscrowUpdated(twitterEscrow, newEscrow);
         twitterEscrow = newEscrow;
+    }
+
+    /// @notice Tune the CLANKER first-window anti-snipe buy cap. A single buy
+    ///         whose token output exceeds `maxBuyBps` of TOTAL_SUPPLY within
+    ///         `windowSecs` of launch reverts. `maxBuyBps == 0` disables it.
+    ///         The single-sided CLANKER pool cannot carry a take-based tax, so
+    ///         this revert-based cap is its only block-0 snipe defense.
+    function setClankerBuyCap(uint16 maxBuyBps, uint32 windowSecs) external onlyOwner {
+        if (maxBuyBps > 10_000) revert InvalidCap();
+        clankerMaxBuyBps = maxBuyBps;
+        clankerCapWindowSecs = windowSecs;
+        emit ClankerBuyCapSet(maxBuyBps, windowSecs);
     }
 
     // -------------------------------------------------------------------
@@ -1014,8 +1041,9 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         }
 
         // CLANKER: fee is the pool's native LP fee (no hook take, no PUMP
-        // oracle). Nothing to do here.
+        // oracle). The only hook action is the first-window anti-snipe buy cap.
         if (state.mode == uint8(LaunchMode.CLANKER)) {
+            _enforceClankerBuyCap(key, params, delta);
             return (IHooks.afterSwap.selector, int128(0));
         }
 
@@ -1236,6 +1264,27 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         o.lastTs = nowTs;
     }
 
+    /// @dev Revert a CLANKER buy whose token output tops the first-window
+    ///      anti-snipe cap (clankerMaxBuyBps of TOTAL_SUPPLY within
+    ///      clankerCapWindowSecs of launch). The single-sided CLANKER pool
+    ///      can't carry a take-based tax, so this revert is its only block-0
+    ///      snipe defense. Sells and post-window buys pass through.
+    function _enforceClankerBuyCap(PoolKey calldata key, SwapParams calldata params, BalanceDelta delta)
+        internal
+        view
+    {
+        uint16 capBps = clankerMaxBuyBps;
+        if (capBps == 0) return;
+        if (!_isUsdcToTokenSwap(key, params, USDC)) return; // buys only
+        bool usdcIs0 = Currency.unwrap(key.currency0) == Currency.unwrap(USDC);
+        address token = usdcIs0 ? Currency.unwrap(key.currency1) : Currency.unwrap(key.currency0);
+        ClankerPos memory cp = clankerPos[token];
+        if (block.timestamp >= uint256(cp.launchedAt) + clankerCapWindowSecs) return; // window elapsed
+        int128 tokenDelta = usdcIs0 ? delta.amount1() : delta.amount0();
+        uint256 tokensOut = tokenDelta < 0 ? uint256(uint128(-tokenDelta)) : uint256(uint128(tokenDelta));
+        if (tokensOut > (ArcadeV4Curve.TOTAL_SUPPLY * capBps) / 10_000) revert BuyExceedsCap();
+    }
+
     /// @dev True iff the swap routes USDC -> launch token (a buy).
     function _isUsdcToTokenSwap(PoolKey calldata key, SwapParams calldata params, Currency usdcCurrency)
         internal
@@ -1367,10 +1416,11 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
 
         // Record the exact position range so collectFees can address it later
         // (modifyLiquidity keys the position by its tick range).
+        uint64 nowTs = uint64(block.timestamp);
         if (usdcIsCurrency0) {
-            clankerPos[token] = ClankerPos({tickLower: minT, tickUpper: aligned, seeded: true});
+            clankerPos[token] = ClankerPos({tickLower: minT, tickUpper: aligned, seeded: true, launchedAt: nowTs});
         } else {
-            clankerPos[token] = ClankerPos({tickLower: aligned, tickUpper: maxT, seeded: true});
+            clankerPos[token] = ClankerPos({tickLower: aligned, tickUpper: maxT, seeded: true, launchedAt: nowTs});
         }
 
         POOL_MANAGER.unlock(abi.encode(uint8(1), token, supply, uint256(0), aligned));
