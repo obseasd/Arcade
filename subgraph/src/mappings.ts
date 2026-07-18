@@ -14,6 +14,7 @@ import {
   FeeHarvested,
 } from "../generated/ArcadeHookV4/ArcadeHook";
 import { Credited, Claimed } from "../generated/TwitterEscrowV4/ArcadeTwitterEscrowV4";
+import { Swap as V4Swap } from "../generated/PoolManagerV4/PoolManagerV4";
 import {
   Trade,
   Pool,
@@ -324,6 +325,43 @@ function priceV4(usdcRaw: BigInt, tokenRaw: BigInt): BigDecimal {
   if (tokenRaw.isZero()) return BigDecimal.fromString("0");
   const scale = BigDecimal.fromString("1000000000000"); // 1e12 (18dp - 6dp)
   return usdcRaw.toBigDecimal().times(scale).div(tokenRaw.toBigDecimal());
+}
+
+/// V4 orders currencies by numeric address, so USDC is currency0 iff its address
+/// sorts below the launch token's. Both are 20-byte big-endian; compare from the
+/// most-significant byte. (No string `<` in AssemblyScript, so compare bytes.)
+function usdcIsCurrency0(token: Bytes): boolean {
+  const u = usdcAddress();
+  for (let i = 0; i < 20; i++) {
+    const a = u[i];
+    const b = token[i];
+    if (a != b) return a < b;
+  }
+  return false; // equal addresses are impossible (token is never USDC)
+}
+
+/// Trades on a V4 pool AFTER it leaves the curve: PUMP post-graduation and every
+/// CLANKER swap (CLANKER is a V4 pool from birth). The PoolManager is shared, so
+/// skip any pool not in our V4Pool registry. The emitted amounts are the
+/// SWAPPER's balance delta (v4-core emits `pool.swap`'s delta, NOT the pool's
+/// despite the NatSpec): a negative USDC delta means the trader paid USDC = BUY.
+/// Price comes from sqrtPriceX96 and is direction-independent.
+export function handleV4Swap(event: V4Swap): void {
+  const pool = V4Pool.load(event.params.id.toHexString());
+  if (pool == null) return; // not one of our launches
+
+  const usdcC0 = usdcIsCurrency0(pool.token);
+  const usdcRaw = usdcC0 ? event.params.amount0 : event.params.amount1;
+  recordTrade(
+    event,
+    pool.token,
+    event.params.sender,
+    "v4",
+    event.address,
+    priceFromSqrtX96(event.params.sqrtPriceX96, usdcC0),
+    usdcVolume(usdcRaw), // abs
+    usdcRaw.lt(BigInt.fromI32(0)), // trader paid USDC in = buy
+  );
 }
 
 function loadFeeStats(): FeeStats {
