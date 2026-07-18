@@ -271,6 +271,23 @@ contract ArcadeTwitterEscrowV4Test is Test {
         assertEq(usdc.balanceOf(OWNER), 150e6, "whole balance forfeited despite recent credit");
     }
 
+    /// MEDIUM regression: after a forfeit, the anchor resets so a NEW credit gets
+    /// a fresh 180-day window (not instantly forfeitable).
+    function test_forfeit_resetsAnchorForNextEpoch() public {
+        uint256 t0 = block.timestamp;
+        _credit(100e6);
+        vm.warp(t0 + escrow.FORFEIT_DELAY() + 1);
+        vm.prank(OWNER);
+        escrow.forfeitStaleClaim(POS, SLOT, OWNER); // epoch 1 forfeited; anchor reset to 0
+
+        // A fresh credit arrives (e.g. the token kept trading).
+        _credit(50e6); // re-anchors at "now"
+        // Immediately forfeiting again must revert: the new window hasn't elapsed.
+        vm.expectRevert(ArcadeTwitterEscrowV4.NotStaleYet.selector);
+        vm.prank(OWNER);
+        escrow.forfeitStaleClaim(POS, SLOT, OWNER);
+    }
+
     /// A successful claim proves the owner is present -> resets the clock, so an
     /// actively-claimed slot is never swept.
     function test_forfeit_claimResetsClock() public {

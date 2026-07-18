@@ -896,6 +896,37 @@ contract ArcadeHookSwapTest is Test {
         _buyViaV4(key, ALICE, 5_000e6); // no longer capped -> ok
     }
 
+    /// The cap is CUMULATIVE per block: two buys that each pass individually but
+    /// together exceed the cap -> the second reverts (defeats atomic batching).
+    /// A fresh block resets the accumulator.
+    function test_clankerCap_cumulativePerBlock() public {
+        vm.prank(OWNER);
+        hook.setClankerBuyCap(100, 300); // 1%
+        (, PoolKey memory key) = _launchClanker();
+
+        // First buy: ~0.7% of supply, under the cap.
+        _buyViaV4(key, ALICE, 250e6);
+
+        // Second buy SAME block: cumulative tops 1% -> revert (inline so
+        // expectRevert targets the swap, not the approve).
+        vm.startPrank(ALICE);
+        usdc.approve(address(swapRouter), type(uint256).max);
+        bool zeroForOne = Currency.unwrap(key.currency0) == address(usdc);
+        uint160 priceLimit = zeroForOne ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1;
+        vm.expectRevert();
+        swapRouter.swap(
+            key,
+            SwapParams({zeroForOne: zeroForOne, amountSpecified: -int256(uint256(250e6)), sqrtPriceLimitX96: priceLimit}),
+            PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}),
+            ""
+        );
+        vm.stopPrank();
+
+        // Next block: the per-block accumulator resets, so a fresh buy passes.
+        vm.roll(block.number + 1);
+        _buyViaV4(key, ALICE, 250e6);
+    }
+
     function test_clankerCap_sellNotCapped() public {
         vm.prank(OWNER);
         hook.setClankerBuyCap(100, 300);

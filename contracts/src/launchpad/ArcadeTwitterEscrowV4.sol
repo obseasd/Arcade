@@ -397,6 +397,13 @@ contract ArcadeTwitterEscrowV4 is Ownable2Step, Pausable, ReentrancyGuard {
 
         balances[positionId][slotIndex][token] = 0;
         creditedTotal[token] -= amount;
+        // Reset the anchor so the slot is "fresh" again: the NEXT credit
+        // re-anchors a new FORFEIT_DELAY window (matches creditSlot's
+        // first-credit semantics). Without this, every post-forfeit credit
+        // lands already past the old anchor and is instantly forfeitable,
+        // voiding the 180-day protection for a late-arriving handle owner.
+        // (Audit 2026-07-18 MEDIUM.)
+        forfeitAnchorAt[positionId][slotIndex] = 0;
 
         try this.pushForfeit(token, to, amount) {
             emit Forfeited(positionId, slotIndex, to, token, amount);

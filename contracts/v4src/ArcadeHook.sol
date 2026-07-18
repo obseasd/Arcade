@@ -256,11 +256,20 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
     }
     mapping(address => ClankerPos) public clankerPos;
 
-    /// @notice CLANKER anti-snipe buy cap: reject a buy whose token output tops
-    ///         `clankerMaxBuyBps` of TOTAL_SUPPLY within `clankerCapWindowSecs`
-    ///         of launch. Owner-tunable (setClankerBuyCap); 0 bps disables.
+    /// @notice CLANKER anti-snipe buy cap: reject buys whose CUMULATIVE token
+    ///         output in a single block tops `clankerMaxBuyBps` of TOTAL_SUPPLY,
+    ///         within `clankerCapWindowSecs` of launch. Per-BLOCK cumulative (not
+    ///         per-swap) so an atomic multi-swap batch can't split under the cap.
+    ///         Owner-tunable (setClankerBuyCap); 0 bps disables.
     uint16 public clankerMaxBuyBps;
     uint32 public clankerCapWindowSecs;
+    /// @dev token => (block number, tokens bought so far this block). Resets on
+    ///      a new block. Bounds total in-window block-0 accumulation.
+    struct BlockBuy {
+        uint64 blockNumber;
+        uint192 bought;
+    }
+    mapping(address => BlockBuy) internal clankerBlockBuy;
     /// @notice Launch token => PoolId so `currentSnipeBps` callers (the hook
     ///         itself + indexers) can look up the curve state from a token addr.
     mapping(address => PoolId) public poolIdOf;
@@ -299,7 +308,6 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
     error InvalidSnipeBps();
     error InvalidDecaySeconds();
     error BuyExceedsCap();
-    error InvalidCap();
     error AlreadyLaunched();
     error NothingToWithdraw();
 
@@ -653,7 +661,8 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
     ///         The single-sided CLANKER pool cannot carry a take-based tax, so
     ///         this revert-based cap is its only block-0 snipe defense.
     function setClankerBuyCap(uint16 maxBuyBps, uint32 windowSecs) external onlyOwner {
-        if (maxBuyBps > 10_000) revert InvalidCap();
+        // No upper bound needed: bps > 10_000 makes the cap exceed TOTAL_SUPPLY,
+        // i.e. unreachable (a harmless "disabled"), same as bps == 0.
         clankerMaxBuyBps = maxBuyBps;
         clankerCapWindowSecs = windowSecs;
         emit ClankerBuyCapSet(maxBuyBps, windowSecs);
@@ -1269,20 +1278,26 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
     ///      clankerCapWindowSecs of launch). The single-sided CLANKER pool
     ///      can't carry a take-based tax, so this revert is its only block-0
     ///      snipe defense. Sells and post-window buys pass through.
-    function _enforceClankerBuyCap(PoolKey calldata key, SwapParams calldata params, BalanceDelta delta)
-        internal
-        view
-    {
+    function _enforceClankerBuyCap(PoolKey calldata key, SwapParams calldata params, BalanceDelta delta) internal {
         uint16 capBps = clankerMaxBuyBps;
         if (capBps == 0) return;
         if (!_isUsdcToTokenSwap(key, params, USDC)) return; // buys only
         bool usdcIs0 = Currency.unwrap(key.currency0) == Currency.unwrap(USDC);
         address token = usdcIs0 ? Currency.unwrap(key.currency1) : Currency.unwrap(key.currency0);
-        ClankerPos memory cp = clankerPos[token];
-        if (block.timestamp >= uint256(cp.launchedAt) + clankerCapWindowSecs) return; // window elapsed
+        uint64 launchedAt = clankerPos[token].launchedAt;
+        if (block.timestamp >= uint256(launchedAt) + clankerCapWindowSecs) return; // window elapsed
         int128 tokenDelta = usdcIs0 ? delta.amount1() : delta.amount0();
         uint256 tokensOut = tokenDelta < 0 ? uint256(uint128(-tokenDelta)) : uint256(uint128(tokenDelta));
-        if (tokensOut > (ArcadeV4Curve.TOTAL_SUPPLY * capBps) / 10_000) revert BuyExceedsCap();
+
+        // CUMULATIVE per block: a batch of sub-cap swaps in one tx all land in
+        // the same block, so accumulating defeats atomic split-buying (the
+        // per-swap cap alone was ~100% bypassable via multi-swap batching).
+        BlockBuy storage bb = clankerBlockBuy[token];
+        uint256 acc = (bb.blockNumber == uint64(block.number)) ? uint256(bb.bought) : 0;
+        acc += tokensOut;
+        if (acc > (ArcadeV4Curve.TOTAL_SUPPLY * capBps) / 10_000) revert BuyExceedsCap();
+        bb.blockNumber = uint64(block.number);
+        bb.bought = uint192(acc);
     }
 
     /// @dev True iff the swap routes USDC -> launch token (a buy).
