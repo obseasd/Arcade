@@ -1,7 +1,10 @@
+"use client";
+
 import Image from "next/image";
+import { useMemo, useState } from "react";
 import { cn } from "@/lib/utils";
 import { TokenLogo } from "./TokenLogo";
-import { resolveIpfs } from "@/lib/metadata";
+import { resolveIpfs, ipfsGatewayUrls } from "@/lib/metadata";
 
 /**
  * Known well-known tokens that ship with a real logo file in /public.
@@ -27,39 +30,56 @@ interface Props {
   image?: string;
   size?: number;
   className?: string;
-  /** When true, Next/Image is rendered with `priority` so the loader
-   *  emits a `<link rel="preload">` for this image and skips lazy-load.
-   *  Use for the first 6-8 above-the-fold tokens on /launchpad / /explore
-   *  so the user sees logos immediately on first paint instead of after
-   *  the IntersectionObserver fires (which can be 200-400 ms behind on
-   *  slow networks). Off-fold tokens leave this false to keep the bytes
-   *  out of the critical path. */
   priority?: boolean;
 }
 
+/** Candidate URLs for a user-supplied image. IPFS content (whether an ipfs://
+ *  URI or an already-resolved /ipfs/<cid> gateway URL) yields the ordered
+ *  gateway fallback list so a throttled primary gateway retries a public one;
+ *  data: and plain http(s) URLs are single-candidate. */
+function imageCandidates(image: string): string[] {
+  if (image.startsWith("ipfs://")) return ipfsGatewayUrls(image);
+  const m = image.match(/\/ipfs\/([A-Za-z0-9][\w./-]*)$/);
+  if (m) return ipfsGatewayUrls(`ipfs://${m[1]}`);
+  return [resolveIpfs(image)];
+}
+
 export function TokenIcon({ symbol, image, size = 32, className, priority }: Props) {
-  // Resolve ipfs:// to an HTTPS gateway since native <img> can't load the
-  // ipfs:// protocol. Pass through http(s):// and data: URLs untouched.
-  const rawImage = image ? resolveIpfs(image) : undefined;
-  // Strip a leading "$" before looking up the symbol in PNG_LOGOS or
-  // falling back to the gradient initial. Otherwise "$PUMP" looks up as
-  // "$PUMP" (no match) and the placeholder shows "$" as the letter,
-  // which is what users see when a token had no logo upload.
+  const candidates = useMemo(() => (image ? imageCandidates(image) : []), [image]);
+  // Index into the gateway fallback list; advanced by onError. Reset implicitly
+  // when `candidates` identity changes (new token) via the key on <img>.
+  const [idx, setIdx] = useState(0);
+
   const cleanSymbol = symbol?.replace(/^\$+/, "");
-  const src = rawImage || (cleanSymbol ? PNG_LOGOS[cleanSymbol.toUpperCase()] : undefined);
-  if (src) {
-    // Audit 2026-06-11 v2 Perf P0-2: drop `unoptimized` so Next/Image
-    // emits WebP/AVIF variants + lazy-loads off-screen tokens. The
-    // upstream PNGs in /public are large (~50 kB each for the brand
-    // icons, ~5-15 kB for the local glyphs); WebP cuts those by 60-80%
-    // and the lazy-load defers tokens below the dropdown fold. The
-    // unoptimized flag was a temporary bypass — Next can now resolve
-    // the static `/path.png` URLs natively for both first-party PNGs
-    // and IPFS gateway URLs (via the http remotePatterns in
-    // next.config.mjs).
+  const pngLogo = cleanSymbol ? PNG_LOGOS[cleanSymbol.toUpperCase()] : undefined;
+
+  // User-supplied image (data:, http(s):, or IPFS gateway): render a plain
+  // <img> so the browser fetches the bytes directly. Next/Image would route
+  // IPFS gateway URLs through Vercel's server-side optimizer, whose shared
+  // egress IPs get 429'd by the public Pinata gateway -> broken image with no
+  // retry. A plain <img> + onError gateway-cycling is resilient instead.
+  if (candidates.length > 0 && idx < candidates.length) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img
+        key={candidates[0]}
+        src={candidates[idx]}
+        alt={symbol ?? "token"}
+        width={size}
+        height={size}
+        style={{ width: size, height: size }}
+        loading={priority ? "eager" : "lazy"}
+        onError={() => setIdx((i) => i + 1)}
+        className={cn("shrink-0 rounded-full object-cover", className)}
+      />
+    );
+  }
+
+  // First-party brand PNGs: keep Next/Image optimization (WebP/AVIF + lazy).
+  if (pngLogo) {
     return (
       <Image
-        src={src}
+        src={pngLogo}
         alt={symbol ?? "token"}
         width={size}
         height={size}
@@ -69,6 +89,7 @@ export function TokenIcon({ symbol, image, size = 32, className, priority }: Pro
       />
     );
   }
-  // Pass cleanSymbol so the initial is "P" for "$PUMP" rather than "$".
+
+  // No image + no known logo (or every IPFS gateway failed): gradient initial.
   return <TokenLogo symbol={cleanSymbol ?? "?"} size={size} className={className} />;
 }

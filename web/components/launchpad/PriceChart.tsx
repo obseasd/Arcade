@@ -23,13 +23,15 @@ interface Props {
   mode?: number;
   /** Pool address for Clanker tokens (state.v2Pair on the launchpad). */
   pool?: Address;
+  /** Goldsky source override ("v4" for ArcadeHook tokens). */
+  source?: string;
 }
 
 /**
  * Candlestick + volume chart powered by TradingView lightweight-charts.
  * Reads trade events on-chain and aggregates into OHLC candles by timeframe.
  */
-export function PriceChart({ token, mode, pool }: Props) {
+export function PriceChart({ token, mode, pool, source }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
@@ -42,6 +44,7 @@ export function PriceChart({ token, mode, pool }: Props) {
     mode,
     pool,
     timeframe,
+    source,
   });
 
   // Mount the chart once, then update its data when candles change.

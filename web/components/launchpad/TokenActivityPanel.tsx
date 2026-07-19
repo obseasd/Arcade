@@ -19,6 +19,8 @@ interface Props {
   totalSupplyRaw: bigint;
   /** Launchpad address used to label the "Launchpad" curve holder. */
   launchpadAddress?: Address;
+  /** "v4" for ArcadeHook tokens: read the trade feed from the subgraph. */
+  source?: string;
 }
 
 type Tab = "transactions" | "holders";
@@ -29,7 +31,7 @@ type Tab = "transactions" | "holders";
  *     updates pushed in at the top.
  *   - Holders: top wallet holdings with a visual distribution bar.
  */
-export function TokenActivityPanel({ token, symbol, mode, pool, totalSupplyRaw, launchpadAddress }: Props) {
+export function TokenActivityPanel({ token, symbol, mode, pool, totalSupplyRaw, launchpadAddress, source }: Props) {
   const [tab, setTab] = useState<Tab>("transactions");
 
   return (
@@ -43,7 +45,7 @@ export function TokenActivityPanel({ token, symbol, mode, pool, totalSupplyRaw, 
         </TabButton>
       </div>
       {tab === "transactions" ? (
-        <TransactionsTab token={token} symbol={symbol} mode={mode} pool={pool} launchpadAddress={launchpadAddress} />
+        <TransactionsTab token={token} symbol={symbol} mode={mode} pool={pool} launchpadAddress={launchpadAddress} source={source} />
       ) : (
         <HoldersTab token={token} totalSupplyRaw={totalSupplyRaw} launchpadAddress={launchpadAddress} />
       )}
@@ -83,14 +85,16 @@ function TransactionsTab({
   mode,
   pool,
   launchpadAddress,
+  source,
 }: {
   token: Address;
   symbol: string;
   mode?: number;
   pool?: Address;
   launchpadAddress?: Address;
+  source?: string;
 }) {
-  const { trades, isLoading } = useTokenTrades({ token, mode, pool, launchpad: launchpadAddress });
+  const { trades, isLoading } = useTokenTrades({ token, mode, pool, launchpad: launchpadAddress, source });
   const explorerUrl = arcTestnet.blockExplorers?.default.url ?? "https://testnet.arcscan.app";
 
   if (isLoading && trades.length === 0) {

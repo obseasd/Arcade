@@ -79,8 +79,11 @@ export function useTokenCandles(args: {
   pool?: Address | undefined;
   timeframe: Timeframe;
   refreshKey?: number;
+  /** Goldsky trade source override. "v4" for ArcadeHook tokens (PUMP +
+   *  CLANKER on the shared V4 PoolManager). Undefined => mode-based default. */
+  source?: string;
 }): { candles: Candle[]; isLoading: boolean } {
-  const { token, mode, pool, timeframe } = args;
+  const { token, mode, pool, timeframe, source } = args;
   // refreshKey deliberately ignored: the WS push path already invalidates the
   // cache via setQueryData on every live trade, so re-running the 100k-block
   // scan on each push (the previous behaviour when refreshKey was in the
@@ -96,8 +99,9 @@ export function useTokenCandles(args: {
       token?.toLowerCase() ?? null,
       mode ?? null,
       pool?.toLowerCase() ?? null,
+      source ?? null,
     ],
-    [token, mode, pool],
+    [token, mode, pool, source],
   );
 
   const { data, isLoading, isFetching } = useQuery<FetchResult>({
@@ -107,7 +111,7 @@ export function useTokenCandles(args: {
     gcTime: SCAN_STALE_MS * 5,
     queryFn: async () => {
       if (!publicClient || !token || mode === undefined) return { trades: [] };
-      const result = await fetchTrades(publicClient, token, mode, pool);
+      const result = await fetchTrades(publicClient, token, mode, pool, source);
       // Merge in any WS pushes that landed in the cache while the chunked
       // scan was running. Dedup by (time, price, volume) like appendTrades.
       const prior = queryClient.getQueryData<FetchResult | undefined>(tradesKey);
@@ -316,14 +320,21 @@ async function fetchTrades(
   token: Address,
   mode: number,
   pool?: Address,
+  source?: string,
 ): Promise<FetchResult> {
   // Prefer the Goldsky subgraph for the historical base when configured. It
   // returns the same Trade shape with complete history + real timestamps; the
   // caller still merges live WS pushes and bucketizes. Any failure falls
   // through to the client RPC scan below so the chart is never blank.
-  const indexed = await fetchTradesFromGoldsky(GOLDSKY_URL, token, mode, pool);
+  const indexed = await fetchTradesFromGoldsky(GOLDSKY_URL, token, mode, pool, { sourceOverride: source });
   if (indexed && indexed.length > 0) {
     return { trades: indexed };
+  }
+  // V4 (ArcadeHook) tokens have no client-side event-scan fallback -- their
+  // trades live on the shared V4 PoolManager and are only surfaced via the
+  // subgraph. Return empty rather than scanning the legacy launchpad below.
+  if (source === "v4") {
+    return { trades: [] };
   }
 
   // Skip per-block getBlock calls: O(N events) round trips otherwise. Arc
