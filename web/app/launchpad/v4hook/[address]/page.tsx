@@ -33,6 +33,7 @@ import {
 } from "@/lib/constants";
 import { useApproveIfNeeded } from "@/lib/hooks/useApproveIfNeeded";
 import { useArcadeHookCurveState } from "@/lib/hooks/useArcadeHookTokens";
+import { useV4TokenStats } from "@/lib/hooks/useV4TokenStats";
 import { useTokenImage, useTokenMetadata } from "@/lib/hooks/useTokenImage";
 import { pushToast } from "@/lib/toast";
 import { ClankerV4TradePanel } from "@/components/launchpad/ClankerV4TradePanel";
@@ -55,30 +56,6 @@ const MODE_LABEL: Record<number, string> = {
     [ARCADE_HOOK_MODE.CLANKER]: "CLANKER · direct launch",
     [ARCADE_HOOK_MODE.CLANKER_V3]: "CLANKER V3 (locked LP)",
 };
-
-/** Latest USDC-per-token price from the subgraph (V4 source), for the market
- *  cap stat. Undefined until the token has its first indexed trade. */
-function useV4LatestPriceUsd(token: Address | undefined): number | undefined {
-    const [price, setPrice] = useState<number>();
-    useEffect(() => {
-        const url = process.env.NEXT_PUBLIC_GOLDSKY_URL;
-        if (!url || !token) return;
-        let cancelled = false;
-        const q = `{ trades(first: 1, orderBy: blockNumber, orderDirection: desc, where: { token: "${token.toLowerCase()}", source: "v4" }) { price } }`;
-        fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ query: q }) })
-            .then((r) => (r.ok ? r.json() : null))
-            .then((j) => {
-                if (cancelled) return;
-                const p = Number(j?.data?.trades?.[0]?.price);
-                if (Number.isFinite(p) && p > 0) setPrice(p);
-            })
-            .catch(() => {});
-        return () => {
-            cancelled = true;
-        };
-    }, [token]);
-    return price;
-}
 
 export default function ArcadeHookTokenPage() {
     if (!V4_HOOK_ENABLED) {
@@ -170,9 +147,9 @@ function Inner() {
     const isClanker = mode === ARCADE_HOOK_MODE.CLANKER || mode === ARCADE_HOOK_MODE.CLANKER_V3;
     const isPump = mode === ARCADE_HOOK_MODE.PUMP;
 
-    const priceUsd = useV4LatestPriceUsd(valid ? token : undefined);
-    const mcapLabel = priceUsd
-        ? `$${(priceUsd * Number(LAUNCHPAD_TOTAL_SUPPLY)).toLocaleString(undefined, { maximumFractionDigits: 0 })}`
+    const stats = useV4TokenStats(valid ? token : undefined);
+    const mcapLabel = stats.priceUsd
+        ? `$${(stats.priceUsd * Number(LAUNCHPAD_TOTAL_SUPPLY)).toLocaleString(undefined, { maximumFractionDigits: 0 })}`
         : "-";
 
     const curvePct = useMemo(() => {
@@ -314,7 +291,7 @@ function Inner() {
                     <Comments token={token} />
                 </div>
 
-                {/* Right: trade panel (order-first on mobile) */}
+                {/* Right: trade panel + fees/recipient (order-first on mobile) */}
                 <div className="order-first space-y-6 lg:order-none">
                     {isClanker ? (
                         <ClankerV4TradePanel token={token} symbol={symbol} image={image} />
@@ -327,6 +304,11 @@ function Inner() {
                             realUsdcReserve={realUsdcReserve}
                         />
                     )}
+                    <FeesRecipientPanel
+                        token={token}
+                        poolFee={poolFee}
+                        totalVolumeUsdc={stats.totalVolumeUsdc}
+                    />
                 </div>
             </div>
 
@@ -354,19 +336,123 @@ function Stat({ label, value, hint }: { label: string; value: string; hint?: str
 }
 
 // -------------------------------------------------------------------
+// Fees generated + recipient (under the trade panel)
+// -------------------------------------------------------------------
+
+/** Total swap fees this token has generated, plus who receives the creator cut:
+ *  a wallet (the launcher, or a full-route creator2) or a Twitter @handle (via
+ *  the handle-gated escrow -- clicking through to /claim lets the real owner
+ *  verify and collect). Fees = traded volume x fee rate (exact for CLANKER's
+ *  static tier; an estimate at 1% for PUMP's dynamic fee). */
+function FeesRecipientPanel({
+    token,
+    poolFee,
+    totalVolumeUsdc,
+}: {
+    token: Address;
+    poolFee: number;
+    totalVolumeUsdc: number;
+}) {
+    const poolIdQ = useReadContract({
+        address: ADDRESSES.arcadeHook,
+        abi: ARCADE_HOOK_ABI,
+        functionName: "poolIdOf",
+        args: [token],
+        query: { enabled: token !== zeroAddress },
+    });
+    const poolId = poolIdQ.data as `0x${string}` | undefined;
+
+    const feeOwnerQ = useReadContract({
+        address: ADDRESSES.arcadeHook,
+        abi: ARCADE_HOOK_ABI,
+        functionName: "getFeeOwner",
+        args: poolId ? [poolId] : undefined,
+        query: { enabled: !!poolId },
+    });
+    const fo = feeOwnerQ.data as
+        | { creator: Address; creator2: Address; creator2Bps: number; twitterEscrow: Address }
+        | undefined;
+
+    const isTwitter = !!fo && fo.twitterEscrow !== zeroAddress;
+
+    // Handle string only lives in the subgraph (HandleAttribution). Fetch it when
+    // the fees route to a twitter escrow so we can show the @ and link to /claim.
+    const [handle, setHandle] = useState<string>();
+    useEffect(() => {
+        const url = process.env.NEXT_PUBLIC_GOLDSKY_URL;
+        if (!url || !isTwitter) return;
+        let cancelled = false;
+        const q = `{ handleAttributions(first: 1, where: { token: "${token.toLowerCase()}" }) { handle } }`;
+        fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ query: q }) })
+            .then((r) => (r.ok ? r.json() : null))
+            .then((j) => {
+                if (cancelled) return;
+                const h = j?.data?.handleAttributions?.[0]?.handle;
+                if (h) setHandle(String(h).replace(/^@/, ""));
+            })
+            .catch(() => {});
+        return () => {
+            cancelled = true;
+        };
+    }, [isTwitter, token]);
+
+    const feeRate = poolFee > 0 ? poolFee / 1_000_000 : 0.01;
+    const feesUsd = totalVolumeUsdc * feeRate;
+    const recipientAddr = fo
+        ? fo.creator2 !== zeroAddress && Number(fo.creator2Bps) >= 10_000
+            ? fo.creator2
+            : fo.creator
+        : undefined;
+
+    return (
+        <div className="arc-card space-y-3 p-5">
+            <div className="flex items-center justify-between text-sm">
+                <span className="text-arc-text-muted">Fees generated</span>
+                <span className="tabular-nums font-medium">
+                    ${feesUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                    {poolFee === 0 && <span className="text-[10px] text-arc-text-faint"> (est.)</span>}
+                </span>
+            </div>
+            <div className="border-t border-arc-border pt-3">
+                <div className="text-xs text-arc-text-muted">Fees recipient</div>
+                {isTwitter ? (
+                    <>
+                        <Link
+                            href="/claim"
+                            className="mt-1 inline-flex items-center gap-1 text-sm font-medium text-arc-cta-hover hover:underline"
+                        >
+                            @{handle ?? "twitter"} — verify &amp; claim
+                        </Link>
+                        <p className="mt-1 text-[11px] text-arc-text-faint">
+                            Fees accrue in a handle-gated escrow. If this is your @, connect a wallet
+                            and verify on the claim page to receive them.
+                        </p>
+                    </>
+                ) : recipientAddr ? (
+                    <a
+                        href={`https://testnet.arcscan.app/address/${recipientAddr}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="mt-1 block truncate font-mono text-sm text-arc-text hover:text-arc-cta-hover"
+                    >
+                        {formatAddress(recipientAddr)}
+                    </a>
+                ) : (
+                    <div className="mt-1 text-sm text-arc-text-faint">-</div>
+                )}
+            </div>
+        </div>
+    );
+}
+
+// -------------------------------------------------------------------
 // Badges
 // -------------------------------------------------------------------
 
-/** CLANKER is a live direct-launch pool from birth -- never label it
- *  "Graduated" (a bonding-curve concept). PUMP shows the curve lifecycle. */
+/** CLANKER is a live direct-launch pool with no lifecycle badge (the mode pill
+ *  already says "direct launch"). PUMP shows the bonding-curve lifecycle. */
 function StatusBadge({ status, isClanker }: { status: number | undefined; isClanker: boolean }) {
-    if (isClanker) {
-        return (
-            <span className="inline-flex items-center gap-1 rounded-full border border-arc-success/40 bg-arc-success/10 px-2 py-0.5 text-[10px] uppercase tracking-wider text-arc-success">
-                <ShieldCheck className="h-3 w-3" /> Live
-            </span>
-        );
-    }
+    if (isClanker) return null;
     if (status === ARCADE_HOOK_STATUS.CURVING) {
         return (
             <span className="inline-flex items-center gap-1 rounded-full border border-arc-cta-hover/40 bg-arc-cta-hover/10 px-2 py-0.5 text-[10px] uppercase tracking-wider text-arc-cta-hover">

@@ -4,9 +4,16 @@ import { useQuery } from "@tanstack/react-query";
 import { Address, parseAbiItem } from "viem";
 import { usePublicClient } from "wagmi";
 import { getLaunchpadAddressList } from "@/lib/launchpadGenerations";
+import { ADDRESSES } from "@/lib/constants";
 
 const TOKEN_CREATED_EVT = parseAbiItem(
   "event TokenCreated(address indexed token, address indexed creator, uint8 mode, address creator2, uint16 creator2ShareBps, string name, string symbol, string metadataURI)",
+);
+// ArcadeHook (V4) tokens carry their metadataURI in TokenLaunched, emitted by
+// the hook -- NOT TokenCreated on a legacy launchpad. Orphan callers (the V4
+// token detail page) must scan this too or V4 logos/descriptions never resolve.
+const TOKEN_LAUNCHED_EVT = parseAbiItem(
+  "event TokenLaunched(address indexed token, address indexed creator, uint8 mode, string name, string symbol, string metadataURI)",
 );
 
 // 10k chunks match Alchemy's documented filtered-getLogs cap on free
@@ -68,22 +75,30 @@ export function useTokenMetadataURI(
       // up to ~100 addresses; we're at 8 generations * 1 contract
       // each = 8, well under the cap.
       const launchpads = getLaunchpadAddressList();
-      if (launchpads.length === 0) return "";
+      const hook = ADDRESSES.arcadeHook;
+      const hasHook = !!hook && hook !== "0x0000000000000000000000000000000000000000";
+      if (launchpads.length === 0 && !hasHook) return "";
       let end = latest;
       let walked = 0n;
       while (walked < MAX_BACK) {
         if (signal.aborted) return undefined;
         const start = end > CHUNK - 1n ? end - (CHUNK - 1n) : 0n;
         try {
-          const logs = await publicClient.getLogs({
-            address: launchpads,
-            event: TOKEN_CREATED_EVT,
-            args: { token },
-            fromBlock: start,
-            toBlock: end,
-          });
-          if (logs.length > 0) {
-            return (logs[0].args.metadataURI as string) ?? "";
+          // Scan both the legacy launchpads (TokenCreated) and the ArcadeHook
+          // (TokenLaunched) in this window; return whichever yields the URI.
+          const [createdLogs, launchedLogs] = await Promise.all([
+            launchpads.length > 0
+              ? publicClient.getLogs({ address: launchpads, event: TOKEN_CREATED_EVT, args: { token }, fromBlock: start, toBlock: end })
+              : Promise.resolve([] as Awaited<ReturnType<typeof publicClient.getLogs>>),
+            hasHook
+              ? publicClient.getLogs({ address: hook, event: TOKEN_LAUNCHED_EVT, args: { token }, fromBlock: start, toBlock: end })
+              : Promise.resolve([] as Awaited<ReturnType<typeof publicClient.getLogs>>),
+          ]);
+          if (createdLogs.length > 0) {
+            return ((createdLogs[0] as { args: { metadataURI?: string } }).args.metadataURI) ?? "";
+          }
+          if (launchedLogs.length > 0) {
+            return ((launchedLogs[0] as { args: { metadataURI?: string } }).args.metadataURI) ?? "";
           }
         } catch {
           // RPC range cap hit or transient failure; bail and return empty

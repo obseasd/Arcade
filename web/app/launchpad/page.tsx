@@ -1,26 +1,19 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import Link from "next/link";
-import { ArrowRight, Search, Rocket } from "lucide-react";
+import { Search } from "lucide-react";
 import { PlusIcon } from "@/components/ui/MaskIcon";
-import { FEATURED_TOKENS, LAUNCHPAD_CURVE_SUPPLY, LAUNCHPAD_GRADUATION_USDC, LAUNCHPAD_TOTAL_SUPPLY, V4_HOOK_ENABLED } from "@/lib/constants";
-import { ARCADE_HOOK_STATUS } from "@/lib/abis/arcadeHook";
+import { FEATURED_TOKENS, LAUNCHPAD_CURVE_SUPPLY, LAUNCHPAD_TOTAL_SUPPLY, V4_HOOK_ENABLED } from "@/lib/constants";
 import { useLaunchpadTokens, LaunchpadTokenInfo } from "@/lib/hooks/useLaunchpadTokens";
 import { getLaunchpadGenerations } from "@/lib/launchpadGenerations";
-import { useArcadeHookTokens, type ArcadeHookTokenInfo } from "@/lib/hooks/useArcadeHookTokens";
+import { useArcadeHookTokens } from "@/lib/hooks/useArcadeHookTokens";
 import { useClankerSortMcaps } from "@/lib/hooks/useClankerSortMcaps";
-import { useTokenImage } from "@/lib/hooks/useTokenImage";
-import { TokenIcon } from "@/components/ui/TokenIcon";
 import { parseInlineMetadata } from "@/lib/metadata";
 import { TokenCard } from "@/components/launchpad/TokenCard";
+import { V4TokenCard } from "@/components/launchpad/V4TokenCard";
 import { LaunchModeModal } from "@/components/launchpad/LaunchModeModal";
 import { SkeletonCard } from "@/components/ui/Skeleton";
 import { cn } from "@/lib/utils";
-
-// How many ArcadeHook launches to surface in the top preview strip on
-// /launchpad. Six fits one row on lg, three on sm.
-const V4_PREVIEW_LIMIT = 6;
 
 type Filter = "all" | "new" | "trending" | "migrating" | "migrated";
 
@@ -35,14 +28,25 @@ export default function LaunchpadIndexPage() {
   const [q, setQ] = useState("");
   const [launchOpen, setLaunchOpen] = useState(false);
 
-  // ArcadeHook (V4 Phase 2) preview strip.
-  // We don't have a per-token launchedAt yet in the hook surface (the
-  // SnipeConfig.launchedAt is per-token but only populated when snipe is
-  // configured), so we fall back to registry order (which is append-only).
-  const v4HookPreview = useMemo(() => {
+  // ArcadeHook (V4) tokens are shown as regular cards in the main grid (not a
+  // separate strip). Registry is append-only, so reverse() = newest first.
+  // Search applies; the curve-only filters (migrating/migrated) don't apply to
+  // CLANKER (no curve), so V4 tokens are hidden under those tabs.
+  const v4Filtered = useMemo(() => {
     if (!V4_HOOK_ENABLED) return [];
-    return [...v4HookTokens].reverse().slice(0, V4_PREVIEW_LIMIT);
-  }, [v4HookTokens]);
+    if (filter === "migrated" || filter === "migrating") return [];
+    let list = [...v4HookTokens].reverse();
+    const term = q.trim().toLowerCase().replace(/^@/, "");
+    if (term) {
+      list = list.filter(
+        (t) =>
+          (t.name ?? "").toLowerCase().includes(term) ||
+          (t.symbol ?? "").toLowerCase().includes(term) ||
+          t.address.toLowerCase().includes(term),
+      );
+    }
+    return list;
+  }, [v4HookTokens, q, filter]);
 
   const filtered = useMemo(() => {
     // HARD filter: the public /launchpad grid only ever surfaces tokens
@@ -162,54 +166,6 @@ export default function LaunchpadIndexPage() {
         </button>
       </div>
 
-      {/* ArcadeHook (V4 Phase 2) strip. Unified hook stack: 1-step
-          createLaunch + atomic graduation + locked LP. Renders only when
-          V4_HOOK_ENABLED so the prod UX stays untouched until the hook
-          is deployed and addresses land in env. */}
-      {V4_HOOK_ENABLED && (
-        <div className="mb-8">
-          <div className="mb-3 flex items-center justify-between">
-            <h2 className="flex items-center gap-2 text-sm font-medium text-arc-text-muted">
-              <Rocket className="h-4 w-4 text-arc-cta-hover" />
-              <span className="text-arc-text">ArcadeHook launches</span>
-              <span className="rounded-md border border-arc-cta-hover/40 bg-arc-cta-hover/10 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-arc-cta-hover">
-                v4
-              </span>
-            </h2>
-            <div className="flex items-center gap-3">
-              <Link
-                href="/launchpad/v4hook/list"
-                className="flex items-center gap-1 text-xs text-arc-text-muted hover:text-arc-text"
-              >
-                View all
-                <ArrowRight className="h-3 w-3" />
-              </Link>
-              <Link
-                href="/launchpad/v4hook/create"
-                className="flex items-center gap-1 text-xs text-arc-text-muted hover:text-arc-text"
-              >
-                New launch
-                <PlusIcon size={12} />
-              </Link>
-            </div>
-          </div>
-          {v4HookPreview.length === 0 ? (
-            <Link
-              href="/launchpad/v4hook/create"
-              className="block rounded-2xl border border-dashed border-arc-cta-hover/40 bg-arc-cta-hover/5 p-6 text-center text-sm text-arc-text-muted transition-colors hover:border-arc-cta-hover/70 hover:text-arc-text"
-            >
-              No ArcadeHook launches yet. Be the first to ship a V4 token →
-            </Link>
-          ) : (
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {v4HookPreview.map((t) => (
-                <ArcadeHookPreviewCard key={t.address} token={t} />
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
       <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex flex-wrap items-center gap-2">
           {(["all", "new", "trending", "migrating", "migrated"] as Filter[]).map((f) => (
@@ -259,7 +215,7 @@ export default function LaunchpadIndexPage() {
           ))}
         </div>
       )}
-      {!isLoading && filtered.length === 0 && (
+      {!isLoading && filtered.length === 0 && v4Filtered.length === 0 && (
         <div className="arc-card p-12 text-center text-arc-text-muted">
           No tokens yet.{" "}
           <button type="button" onClick={() => setLaunchOpen(true)} className="text-arc-primary hover:underline">
@@ -267,8 +223,12 @@ export default function LaunchpadIndexPage() {
           </button>
         </div>
       )}
-      {!isLoading && filtered.length > 0 && (
+      {!isLoading && (filtered.length > 0 || v4Filtered.length > 0) && (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {/* ArcadeHook (V4) tokens render as regular cards, newest first. */}
+          {v4Filtered.map((t, i) => (
+            <V4TokenCard key={t.address} token={t} priority={i < 6} />
+          ))}
           {filtered.map((t, i) => (
             <TokenCard
               key={t.address}
@@ -276,9 +236,8 @@ export default function LaunchpadIndexPage() {
               curveSupply={LAUNCHPAD_CURVE_SUPPLY}
               // First row of cards gets priority loading so above-the-fold
               // logos appear on first paint instead of after the lazy-load
-              // IntersectionObserver fires. 6 covers the widest layout
-              // (lg = 3 cols, sm = 2 cols → top two rows).
-              priority={i < 6}
+              // IntersectionObserver fires.
+              priority={v4Filtered.length === 0 && i < 6}
             />
           ))}
         </div>
@@ -291,94 +250,5 @@ export default function LaunchpadIndexPage() {
 
       <LaunchModeModal open={launchOpen} onClose={() => setLaunchOpen(false)} />
     </div>
-  );
-}
-
-// -------------------------------------------------------------------
-// ArcadeHook preview card (compact, used in the /launchpad strip)
-// -------------------------------------------------------------------
-
-const ARC_HOOK_MODE_LABEL: Record<number, string> = {
-  0: "PUMP",
-  1: "CLANKER",
-  2: "CLANKER V3",
-};
-
-function ArcadeHookPreviewCard({ token }: { token: ArcadeHookTokenInfo }) {
-  const { image } = useTokenImage(token.address);
-
-  const raisedPct = useMemo(() => {
-    if (LAUNCHPAD_GRADUATION_USDC === 0n) return 0;
-    const bps = (token.realUsdcReserve * 10_000n) / LAUNCHPAD_GRADUATION_USDC;
-    return Math.min(100, Number(bps) / 100);
-  }, [token.realUsdcReserve]);
-
-  const tokensSoldPct = useMemo(() => {
-    const bps = (token.tokensSold * 10_000n) / LAUNCHPAD_CURVE_SUPPLY;
-    return Math.min(100, Number(bps) / 100);
-  }, [token.tokensSold]);
-
-  const isGraduated = token.status === ARCADE_HOOK_STATUS.GRADUATED;
-
-  return (
-    <Link
-      href={`/launchpad/v4hook/${token.address}`}
-      className="arc-card group flex flex-col gap-3 p-4 transition-colors hover:border-arc-cta-hover/40"
-    >
-      <div className="flex items-start gap-3">
-        <TokenIcon symbol={token.symbol ?? "?"} image={image} size={40} />
-        <div className="min-w-0 flex-1">
-          <div className="truncate text-base font-semibold">
-            {token.name ?? "Unnamed"}{" "}
-            <span className="text-arc-text-muted">{token.symbol ?? ""}</span>
-          </div>
-          <div className="mt-0.5 truncate text-[10px] text-arc-text-faint">
-            {token.address.slice(0, 8)}...{token.address.slice(-6)}
-          </div>
-        </div>
-        <div className="flex shrink-0 flex-col items-end gap-1">
-          <span className="rounded-md border border-arc-cta-hover/40 bg-arc-cta-hover/10 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-arc-cta-hover">
-            {ARC_HOOK_MODE_LABEL[token.mode] ?? "?"}
-          </span>
-          <span
-            className={cn(
-              "rounded-md border px-1.5 py-0.5 text-[9px] uppercase tracking-wider",
-              isGraduated
-                ? "border-arc-success/40 bg-arc-success/10 text-arc-success"
-                : "border-arc-cta-hover/40 bg-arc-cta-hover/10 text-arc-cta-hover",
-            )}
-          >
-            {isGraduated ? "Graduated" : "Curving"}
-          </span>
-        </div>
-      </div>
-
-      <div>
-        <div className="mb-1 flex justify-between text-[10px] text-arc-text-faint">
-          <span>{raisedPct.toFixed(1)}% to graduation</span>
-          <span>
-            {(Number(token.realUsdcReserve) / 1e6).toLocaleString(undefined, {
-              maximumFractionDigits: 0,
-            })}{" "}
-            / 20k USDC
-          </span>
-        </div>
-        <div className="relative h-1.5 overflow-hidden rounded-full bg-arc-bg-elevated">
-          <div
-            className={cn(
-              "absolute left-0 top-0 h-full transition-all",
-              isGraduated
-                ? "bg-arc-success"
-                : "bg-gradient-to-r from-arc-cta to-arc-cta-hover",
-            )}
-            style={{ width: `${isGraduated ? 100 : raisedPct}%` }}
-          />
-        </div>
-      </div>
-
-      <div className="text-[10px] text-arc-text-faint">
-        {tokensSoldPct.toFixed(1)}% of 800M curve supply sold
-      </div>
-    </Link>
   );
 }
