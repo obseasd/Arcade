@@ -6,7 +6,7 @@
     "codegen": "graph codegen",
     "build": "graph build",
     "test": "graph test",
-    "deploy:goldsky": "goldsky subgraph deploy arcade-charts/v1 --path ."
+    "deploy:goldsky": "echo 'Use a FRESH version number (goldsky subgraph list first): goldsky subgraph deploy arcade-charts/<next-version> --path . ; then tag prod once 100% synced'"
   },
   "dependencies": {
     "@graphprotocol/graph-cli": "0.97.1",
