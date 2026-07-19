@@ -520,8 +520,12 @@ async function prepareOne(
                 .simulateContract({
                     address: compounderAddress,
                     abi: AUTO_COMPOUNDER_ABI,
+                    // maxAcceptableProtocolFeeBps MUST match the real tx below
+                    // (currentProtocolFeeBps). A hardcoded 500 reverted the sim
+                    // with FEE_BPS_OVER_CAP the moment the owner set the fee
+                    // above 5% (it's 10% live), silently skipping every compound.
                     functionName: "compound",
-                    args: [tokenId, 0n, 0n, 500, deadline],
+                    args: [tokenId, 0n, 0n, currentProtocolFeeBps, deadline],
                     account,
                 })
                 .then((r): CompoundSimResult => r.result as CompoundSim)

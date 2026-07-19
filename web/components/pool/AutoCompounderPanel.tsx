@@ -198,7 +198,7 @@ function FeeDisclosure() {
             Protocol fee is{" "}
             <span className="font-semibold text-arc-text">{pct}%</span>{" "}
             on the fees the keeper collects. The contract caps the rate at
-            5% on-chain so a future owner cannot grow it past that ceiling.
+            10% on-chain so a future owner cannot grow it past that ceiling.
         </div>
     );
 }
