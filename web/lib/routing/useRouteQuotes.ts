@@ -5,6 +5,7 @@ import { Address } from "viem";
 import { usePublicClient } from "wagmi";
 import { RouteProvider, RouteQuote, QuoteRequest } from "./types";
 import { synthraV3Provider } from "./synthraV3";
+import { arcadeV4Provider } from "./arcadeV4";
 import { arcadeV3Provider } from "./arcadeV3";
 import { arcadeV2Provider } from "./arcadeV2";
 import { unitflowV3Provider } from "./unitflowV3";
@@ -35,6 +36,7 @@ import { usycTellerV1Provider } from "./usycTellerV1";
  */
 
 const PROVIDERS: RouteProvider[] = [
+  arcadeV4Provider,
   arcadeV3Provider,
   arcadeV2Provider,
   synthraV3Provider,
@@ -173,6 +175,8 @@ export function useRouteQuotes(args: UseRouteQuotesArgs): UseRouteQuotesResult {
       // Synthra, then UnitFlow. The user sees the same total cost on
       // a tie but the cheapest-to-execute route wins.
       const providerRank: Record<string, number> = {
+        // Native Arcade routes first (no Permit2 / sig dance). V4 alongside V3.
+        "arcade-v4": 0,
         "arcade-v3": 0,
         "arcade-v2": 1,
         "xylonet-v1": 2,
