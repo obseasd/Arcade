@@ -109,6 +109,10 @@ export function useTokenCandles(args: {
     enabled: !!publicClient && !!token && mode !== undefined,
     staleTime: SCAN_STALE_MS,
     gcTime: SCAN_STALE_MS * 5,
+    // V4 tokens have no live WS append path (their swaps are on the shared V4
+    // PoolManager, not a per-token event we subscribe to), so poll the subgraph
+    // to keep the chart fresh without a manual refresh.
+    refetchInterval: source === "v4" ? 15_000 : undefined,
     queryFn: async () => {
       if (!publicClient || !token || mode === undefined) return { trades: [] };
       const result = await fetchTrades(publicClient, token, mode, pool, source);
