@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { AlertTriangle, RotateCcw, ArrowLeft } from "lucide-react";
 import { useEffect } from "react";
+import * as Sentry from "@sentry/nextjs";
 
 interface Props {
   error: Error & { digest?: string };
@@ -10,12 +11,13 @@ interface Props {
 }
 
 /**
- * Global error boundary. Next.js renders this when an unexpected exception
- * bubbles up past a route segment. Pre-mainnet we log to the console; in
- * production we'll wire this to Sentry / a real logger.
+ * Route-segment error boundary. Next.js renders this when an unexpected
+ * exception bubbles up past a route segment. Reports to Sentry (no-op when
+ * unconfigured) in addition to the console.
  */
 export default function GlobalError({ error, reset }: Props) {
   useEffect(() => {
+    Sentry.captureException(error);
     // eslint-disable-next-line no-console
     console.error("[app error boundary]", error);
   }, [error]);
