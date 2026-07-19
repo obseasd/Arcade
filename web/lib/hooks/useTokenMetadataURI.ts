@@ -28,6 +28,30 @@ const TOKEN_LAUNCHED_EVT = parseAbiItem(
 const CHUNK = 10_000n;
 const MAX_BACK = 500_000n;
 
+const GOLDSKY_URL = process.env.NEXT_PUBLIC_GOLDSKY_URL;
+
+/** Try the subgraph's Token.metadataURI (one field read) before the getLogs
+ *  storm. Returns undefined (not "") on any miss so the caller falls back to
+ *  the scan -- covers the pre-redeploy window where the field doesn't exist
+ *  yet (GraphQL returns an error + null data, which we treat as a miss). */
+async function metadataURIFromSubgraph(token: Address, signal?: AbortSignal): Promise<string | undefined> {
+  if (!GOLDSKY_URL) return undefined;
+  try {
+    const res = await fetch(GOLDSKY_URL, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ query: `{ token(id: "${token.toLowerCase()}") { metadataURI } }` }),
+      signal,
+    });
+    if (!res.ok) return undefined;
+    const json = (await res.json()) as { data?: { token?: { metadataURI?: string | null } | null } };
+    const uri = json?.data?.token?.metadataURI;
+    return uri ? uri : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Returns the on-chain metadataURI for a launchpad token. Reads the
  * `TokenCreated` event for that token via chunked log queries. The launchpad
@@ -63,6 +87,11 @@ export function useTokenMetadataURI(
     // TokenCreated for `token` is found - one per token by contract design.
     queryFn: async ({ signal }) => {
       if (!publicClient || !token) return undefined;
+      // Prefer the subgraph: one field read vs a chunked getLogs scan over
+      // every launchpad generation + the hook. Falls through to the scan when
+      // the subgraph is unset, pre-redeploy, or hasn't indexed the token yet.
+      const indexed = await metadataURIFromSubgraph(token, signal);
+      if (indexed) return indexed;
       const latest = await publicClient.getBlockNumber();
       // Walk backwards from head in CHUNK-sized windows. Each window
       // queries ALL launchpad generations in one address-array getLogs
