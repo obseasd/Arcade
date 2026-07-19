@@ -450,8 +450,26 @@ export default function ExplorePage() {
         return out;
     }, [v2Pairs, reservesQ.data, v3Tokens, v3FeeOf, v3PoolOf, v3FactoryPools, tokenLookup, launchpadV3TvlByToken]);
 
+    // One shared per-pool daily map (drives per-row APR + sub-pool metrics +
+    // the Hyped filter + the volume sort).
+    const poolDay = useAllPoolDayStats();
+
+    // Enrich each row with a data-layer APR (dailyFees*365 / TVL) from the
+    // shared PoolDayData map, so the "Hyped" filter + APR sort actually work
+    // (previously aprPct was only computed inside the card -> filter saw
+    // undefined -> "Hyped" returned empty).
+    const decoratedRows = useMemo(() => {
+        if (poolDay.size === 0) return allRows;
+        return allRows.map((r) => {
+            const { fees, has } = sumRowDaily(r.subRows, poolDay);
+            const tvl = Number(r.tvlUsdc) / 1e6;
+            const apr = has && tvl > 0 ? (fees * 365 * 100) / tvl : r.aprPct;
+            return { ...r, aprPct: apr };
+        });
+    }, [allRows, poolDay]);
+
     const filteredRows = useMemo(() => {
-        let rows = allRows;
+        let rows = decoratedRows;
         if (filter === "hyped")
             rows = rows.filter((r) => r.aprPct !== undefined && r.aprPct > 100);
         else if (filter === "incentivized") rows = rows.filter((r) => r.isIncentivized);
@@ -471,16 +489,19 @@ export default function ExplorePage() {
                     r.token1.address.toLowerCase().includes(term),
             );
         }
+        const metric = (r: PoolPairRow): number =>
+            sortKey === "apr"
+                ? (r.aprPct ?? -1)
+                : sortKey === "volume"
+                    ? sumRowDaily(r.subRows, poolDay).vol
+                    : Number(r.tvlUsdc);
         return rows.slice().sort((a, b) => {
-            // Pick the per-row metric. APR is undefined for every row until
-            // the indexer ships, and Volume isn't surfaced yet, so both fall
-            // back to TVL so the click doesn't produce an apparent no-op.
-            const av = sortKey === "apr" ? (a.aprPct ?? -1) : Number(a.tvlUsdc);
-            const bv = sortKey === "apr" ? (b.aprPct ?? -1) : Number(b.tvlUsdc);
+            const av = metric(a);
+            const bv = metric(b);
             const cmp = av === bv ? 0 : av > bv ? 1 : -1;
             return sortDir === "desc" ? -cmp : cmp;
         });
-    }, [allRows, filter, q, sortKey, sortDir]);
+    }, [decoratedRows, filter, q, sortKey, sortDir, poolDay]);
 
     /**
      * Auto-switch to card view when a non-"all" filter narrows the list to
@@ -713,6 +734,7 @@ export default function ExplorePage() {
                             onToggle={() =>
                                 setExpanded((p) => (p === row.key ? null : row.key))
                             }
+                            poolDay={poolDay}
                         />
                     ))}
                 </div>
@@ -802,43 +824,56 @@ function useProtocolTotals(): { volumeUsdc: bigint; feesUsdc: bigint } {
     return data ?? { volumeUsdc: 0n, feesUsdc: 0n };
 }
 
+export type PoolDayMap = Map<string, { vol1d: number; fees1d: number }>;
+
 /**
- * Sum the most-recent daily bucket of each of a pair's pools (subgraph
- * PoolDayData) for the Explore per-row "1D Volume" / "Daily Fees". Works for
- * ANY USDC pool (V2/V3), launchpad or not. Returns {} on a miss (unset /
- * pre-redeploy / no trades) so the row shows "—".
+ * ONE query for every pool's most-recent daily bucket (subgraph PoolDayData),
+ * returned as a pool-address -> {vol1d, fees1d} map. Shared across the whole
+ * Explore list so per-row APR can be computed at the DATA layer (which the
+ * "Hyped" filter + APR sort read) AND rendered per sub-pool -- no per-card
+ * fetch. Empty map on a miss (unset / pre-redeploy) so rows show "—".
  */
-function usePoolDayStats(pools: Address[]): { vol1d?: number; fees1d?: number } {
-    const key = pools.map((p) => p.toLowerCase()).sort().join(",");
-    const { data } = useQuery<{ vol1d?: number; fees1d?: number }>({
-        queryKey: ["arcade", "pool-day-stats", key],
-        enabled: !!process.env.NEXT_PUBLIC_GOLDSKY_URL && pools.length > 0,
+function useAllPoolDayStats(): PoolDayMap {
+    const { data } = useQuery<PoolDayMap>({
+        queryKey: ["arcade", "all-pool-day-stats"],
+        enabled: !!process.env.NEXT_PUBLIC_GOLDSKY_URL,
         staleTime: 30_000,
         refetchInterval: 60_000,
         queryFn: async () => {
             const url = process.env.NEXT_PUBLIC_GOLDSKY_URL as string;
-            const list = pools.map((p) => `"${p.toLowerCase()}"`).join(",");
-            const q = `{ poolDayDatas(first: ${pools.length * 4}, orderBy: date, orderDirection: desc, where: { pool_in: [${list}] }) { pool date volumeUsdc feesUsdc } }`;
+            const q = `{ poolDayDatas(first: 1000, orderBy: date, orderDirection: desc) { pool date volumeUsdc feesUsdc } }`;
             const res = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ query: q }) });
-            if (!res.ok) return {};
+            const map: PoolDayMap = new Map();
+            if (!res.ok) return map;
             const j = (await res.json()) as { data?: { poolDayDatas?: { pool: string; date: number; volumeUsdc: string; feesUsdc: string }[] } };
             const rows = j?.data?.poolDayDatas;
-            if (!Array.isArray(rows)) return {}; // field missing pre-redeploy
-            // Most-recent bucket per pool, summed across the pair's pools.
-            const latest = new Map<string, { vol: number; fees: number }>();
+            if (!Array.isArray(rows)) return map; // field missing pre-redeploy
+            // Rows are date-desc, so the FIRST time we see a pool is its latest bucket.
             for (const r of rows) {
-                if (!latest.has(r.pool)) latest.set(r.pool, { vol: Number(r.volumeUsdc) || 0, fees: Number(r.feesUsdc) || 0 });
+                const k = r.pool.toLowerCase();
+                if (!map.has(k)) map.set(k, { vol1d: Number(r.volumeUsdc) || 0, fees1d: Number(r.feesUsdc) || 0 });
             }
-            let vol = 0;
-            let fees = 0;
-            latest.forEach((v) => {
-                vol += v.vol;
-                fees += v.fees;
-            });
-            return { vol1d: vol, fees1d: fees };
+            return map;
         },
     });
-    return data ?? {};
+    return data ?? new Map();
+}
+
+/** Sum the latest daily volume + fees across a pair's pools. `has` is false
+ *  when NONE of the pools have an indexed bucket (so the row shows "—"). */
+function sumRowDaily(subRows: PoolSubRow[], poolDay: PoolDayMap): { vol: number; fees: number; has: boolean } {
+    let vol = 0;
+    let fees = 0;
+    let has = false;
+    for (const s of subRows) {
+        const d = poolDay.get(s.poolAddress.toLowerCase());
+        if (d) {
+            vol += d.vol1d;
+            fees += d.fees1d;
+            has = true;
+        }
+    }
+    return { vol, fees, has };
 }
 
 interface SeriesPoint {
@@ -1157,10 +1192,12 @@ function PoolPairRowCard({
     row,
     expanded,
     onToggle,
+    poolDay,
 }: {
     row: PoolPairRow;
     expanded: boolean;
     onToggle: () => void;
+    poolDay: PoolDayMap;
 }) {
     const { image: image0 } = useTokenImage(row.token0.address);
     const { image: image1 } = useTokenImage(row.token1.address);
@@ -1168,19 +1205,13 @@ function PoolPairRowCard({
     const tvlLabel = useMemo(() => formatUsd(row.tvlUsdc), [row.tvlUsdc]);
     const subCount = row.subRows.length;
 
-    // Per-row daily metrics from the pair's POOLS (PoolDayData) so ANY USDC
-    // pool (V2/V3, launchpad or not) shows 1D Volume + Daily Fees, and APR =
-    // dailyFees*365 / TVL. "—" (pendingIndexer) until the subgraph serves them.
-    const poolAddrs = useMemo(
-        () => row.subRows.map((s) => s.poolAddress),
-        [row.subRows],
-    );
-    const day = usePoolDayStats(poolAddrs);
-    const tvlUsd = Number(row.tvlUsdc) / 1e6;
-    const aprPct =
-        day.fees1d !== undefined && tvlUsd > 0 ? (day.fees1d * 365 * 100) / tvlUsd : undefined;
-    const vol1dLabel = day.vol1d !== undefined ? `$${day.vol1d.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : "—";
-    const dailyFeesLabel = day.fees1d !== undefined ? `$${day.fees1d.toLocaleString(undefined, { maximumFractionDigits: 2 })}` : "—";
+    // Per-row daily metrics summed from the pair's POOLS (shared PoolDayData
+    // map). APR is read from row.aprPct (already decorated at the data layer so
+    // the Hyped filter + sort agree). "—" until the subgraph serves data.
+    const dsum = sumRowDaily(row.subRows, poolDay);
+    const aprPct = row.aprPct;
+    const vol1dLabel = dsum.has ? `$${dsum.vol.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : "—";
+    const dailyFeesLabel = dsum.has ? `$${dsum.fees.toLocaleString(undefined, { maximumFractionDigits: 2 })}` : "—";
     const aprLabel = aprPct !== undefined ? `${aprPct.toLocaleString(undefined, { maximumFractionDigits: 1 })}%` : "—";
 
     return (
@@ -1249,9 +1280,9 @@ function PoolPairRowCard({
                 </div>
                 <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                     <Metric label="Best APR" value={aprLabel} pendingIndexer={aprPct === undefined} center />
-                    <Metric label="Daily Fees" value={dailyFeesLabel} pendingIndexer={day.fees1d === undefined} center />
+                    <Metric label="Daily Fees" value={dailyFeesLabel} pendingIndexer={!dsum.has} center />
                     <Metric label="TVL" value={tvlLabel} center />
-                    <Metric label="1D Volume" value={vol1dLabel} pendingIndexer={day.vol1d === undefined} center />
+                    <Metric label="1D Volume" value={vol1dLabel} pendingIndexer={!dsum.has} center />
                 </div>
                 <div className="flex items-center justify-end gap-2">
                     <Link
@@ -1308,6 +1339,7 @@ function PoolPairRowCard({
                                 image1={image1}
                                 isBestTvl={isBestTvl}
                                 isIncentivized={row.isIncentivized}
+                                poolDay={poolDay}
                             />
                         );
                     })}
@@ -1326,12 +1358,14 @@ function PoolSubRowCard({
     image1,
     isBestTvl,
     isIncentivized,
+    poolDay,
 }: {
     sub: PoolSubRow;
     token0: { address: Address; symbol: string };
     token1: { address: Address; symbol: string };
     image0?: string;
     image1?: string;
+    poolDay: PoolDayMap;
     /** True when this sub-row holds the largest TVL across the pair's
      *  other sub-rows. Surfaces a small "Best TVL" chip below the
      *  version/fee row, mirroring Hyperswap's superlative labels. */
@@ -1343,6 +1377,13 @@ function PoolSubRowCard({
 }) {
     const feeLabel = `${sub.feeBps / 100}%`;
     const tvlLabel = formatUsd(sub.tvlUsdc);
+    // Per-pool daily metrics (shared PoolDayData map) for THIS sub-pool.
+    const d = poolDay.get(sub.poolAddress.toLowerCase());
+    const subTvlUsd = Number(sub.tvlUsdc) / 1e6;
+    const subApr = d && subTvlUsd > 0 ? (d.fees1d * 365 * 100) / subTvlUsd : undefined;
+    const subAprLabel = subApr !== undefined ? `${subApr.toLocaleString(undefined, { maximumFractionDigits: 1 })}%` : "—";
+    const subFeesLabel = d ? `$${d.fees1d.toLocaleString(undefined, { maximumFractionDigits: 2 })}` : "—";
+    const subVolLabel = d ? `$${d.vol1d.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : "—";
     // The "paired" token is the non-USDC side of the pair; that's the
     // contract the user actually wants to grab for explorer / share /
     // trading-bot input. Falls back to token1 if neither side is USDC.
@@ -1409,10 +1450,10 @@ function PoolSubRowCard({
                 </div>
             </div>
             <div className="grid grid-cols-4 gap-2 text-xs sm:text-sm">
-                <span className="text-center tabular-nums text-arc-text-faint">—</span>
-                <span className="text-center tabular-nums text-arc-text-faint">—</span>
+                <span className={cn("text-center tabular-nums", subApr === undefined && "text-arc-text-faint")}>{subAprLabel}</span>
+                <span className={cn("text-center tabular-nums", !d && "text-arc-text-faint")}>{subFeesLabel}</span>
                 <span className="text-center tabular-nums">{tvlLabel}</span>
-                <span className="text-center tabular-nums text-arc-text-faint">—</span>
+                <span className={cn("text-center tabular-nums", !d && "text-arc-text-faint")}>{subVolLabel}</span>
             </div>
             <div className="flex justify-end">
                 <Link
