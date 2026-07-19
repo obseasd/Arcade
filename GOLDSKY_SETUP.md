@@ -139,3 +139,26 @@ by deleting the superseded 1.0.1 (project cap = 3 versions; prod=1.0.4 untouched
 1.1.0 is 100% synced (keeps NEXT_PUBLIC_GOLDSKY_URL stable).
 MAINNET: redeploy the subgraph with the mainnet hook/escrow addresses +
 `network: arc-mainnet` and flip the USDC address in src/mappings.ts usdcAddress().
+
+## Update 2026-07-19 — per-token stats + holders + daily buckets (version 1.4.0)
+Big foundation add so the frontend stops client-side event-scanning. Schema:
+`Token` + name/symbol/**metadataURI** (kills the per-token getLogs logo scan) +
+totalVolumeUsdc/tradeCount/feesUsdc/lastPriceUsdc/usdcLiquidity/holderCount; new
+**`TokenBalance`** entity + an ERC20 `Transfer` **template** (`ArcadeToken.create`
+per launch) → holders; new **`TokenDayData`** (daily volume/fees/OHLC) → 1D
+volume / daily fees / APR. Manifest: index **`TokenLaunched`** on ArcadeHookV4
+(handleTokenLaunchedV4, carries metadataURI, previously unindexed) + the ERC20
+template. Mappings: recordTrade bumps per-token aggregates + the daily bucket;
+handleRoyaltyPaidV4 credits per-token feesUsdc; handleTransfer maintains
+balances + holderCount. `graph codegen` + `graph build` BOTH PASS ON WINDOWS
+now (the old "must use WSL to build" note is overtaken — but the goldsky CLI
+itself is still Linux-only, so deploy from WSL).
+
+⚠️ **VERSION-CAP GOTCHA (hit 2026-07-19):** the project caps at 3 versions and
+`goldsky subgraph deploy arcade-charts/<v>` FAILS with "already exists" if `<v>`
+is taken. ALWAYS `goldsky subgraph list` first and pick a FRESH number. Deploying
+a stale/existing version does NOT update it, and `tag create ... --tag prod` will
+happily point prod at whatever version you name — including an OLDER one, silently
+regressing prod. Verify `prod -> <the version you just deployed>` after tagging.
+Correct flow: `list` → `deploy arcade-charts/<fresh>` → wait Synced 100% →
+`tag create arcade-charts/<fresh> --tag prod` → re-`list` to confirm the arrow.
