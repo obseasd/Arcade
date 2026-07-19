@@ -30,6 +30,30 @@ type Pool @entity(immutable: false) {
   token1: Bytes!
   token: Bytes!
   usdcIsToken0: Boolean!
+  # V3 fee tier in hundredths of a bip (e.g. 3000 = 0.30%). Used to derive
+  # per-pool fees = volume x feeTier/1e6 for the Explore daily-fees/APR columns.
+  feeTier: Int!
+}
+
+# Per-pool daily bucket (any USDC pool: V3 today, V2 later) for the Explore
+# per-row "1D volume", "daily fees" and APR. id = `${pool}-${dayStartUnix}`.
+type PoolDayData @entity(immutable: false) {
+  id: ID!
+  pool: Bytes!
+  date: Int!
+  volumeUsdc: BigDecimal!
+  feesUsdc: BigDecimal!
+  tradeCount: Int!
+}
+
+# Protocol-wide daily bucket for the Explore hero sparklines (Volume + Fees over
+# time, with per-day tooltip detail). id = `${dayStartUnix}`.
+type GlobalDayData @entity(immutable: false) {
+  id: ID!
+  date: Int!
+  volumeUsdc: BigDecimal!
+  feesUsdc: BigDecimal!
+  tradeCount: Int!
 }
 
 type Trader @entity(immutable: false) {

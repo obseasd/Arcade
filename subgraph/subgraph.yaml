@@ -33,6 +33,7 @@ dataSources:
         - Token
         - TokenDayData
         - Global
+        - GlobalDayData
       abis:
         - name: Launchpad
           file: ./abis/Launchpad.json
@@ -61,6 +62,7 @@ dataSources:
       language: wasm/assemblyscript
       entities:
         - Pool
+        - PoolDayData
       abis:
         - name: V3Factory
           file: ./abis/V3Factory.json
@@ -86,6 +88,7 @@ dataSources:
         - TokenDayData
         - Creator
         - Global
+        - GlobalDayData
         - V4Pool
         - HandleAttribution
         - FeeStats
@@ -161,6 +164,7 @@ dataSources:
         - TokenDayData
         - Creator
         - Global
+        - GlobalDayData
         - V4Pool
       abis:
         - name: PoolManagerV4
@@ -204,8 +208,10 @@ templates:
       entities:
         - Trade
         - Pool
+        - PoolDayData
         - Trader
         - Global
+        - GlobalDayData
       abis:
         - name: V3Pool
           file: ./abis/V3Pool.json

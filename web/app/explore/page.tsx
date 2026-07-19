@@ -796,26 +796,39 @@ function useProtocolTotals(): { volumeUsdc: bigint; feesUsdc: bigint } {
 }
 
 /**
- * A launchpad token's most-recent daily bucket (subgraph TokenDayData) for the
- * per-row "1D Volume" / "Daily Fees" metrics + the APR derivation. Returns {}
- * on any miss (unset / pre-redeploy / not-indexed) so the row shows "—".
+ * Sum the most-recent daily bucket of each of a pair's pools (subgraph
+ * PoolDayData) for the Explore per-row "1D Volume" / "Daily Fees". Works for
+ * ANY USDC pool (V2/V3), launchpad or not. Returns {} on a miss (unset /
+ * pre-redeploy / no trades) so the row shows "—".
  */
-function useTokenDayStats(token: Address | undefined): { vol1d?: number; fees1d?: number } {
-    const key = token?.toLowerCase();
+function usePoolDayStats(pools: Address[]): { vol1d?: number; fees1d?: number } {
+    const key = pools.map((p) => p.toLowerCase()).sort().join(",");
     const { data } = useQuery<{ vol1d?: number; fees1d?: number }>({
-        queryKey: ["arcade", "token-day-stats", key],
-        enabled: !!process.env.NEXT_PUBLIC_GOLDSKY_URL && !!key,
+        queryKey: ["arcade", "pool-day-stats", key],
+        enabled: !!process.env.NEXT_PUBLIC_GOLDSKY_URL && pools.length > 0,
         staleTime: 30_000,
         refetchInterval: 60_000,
         queryFn: async () => {
             const url = process.env.NEXT_PUBLIC_GOLDSKY_URL as string;
-            const q = `{ tokenDayDatas(first: 1, orderBy: date, orderDirection: desc, where: { token: "${key}" }) { volumeUsdc feesUsdc } }`;
+            const list = pools.map((p) => `"${p.toLowerCase()}"`).join(",");
+            const q = `{ poolDayDatas(first: ${pools.length * 4}, orderBy: date, orderDirection: desc, where: { pool_in: [${list}] }) { pool date volumeUsdc feesUsdc } }`;
             const res = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ query: q }) });
             if (!res.ok) return {};
-            const j = (await res.json()) as { data?: { tokenDayDatas?: { volumeUsdc: string; feesUsdc: string }[] } };
-            const d = j?.data?.tokenDayDatas?.[0];
-            if (!d) return {};
-            return { vol1d: Number(d.volumeUsdc) || 0, fees1d: Number(d.feesUsdc) || 0 };
+            const j = (await res.json()) as { data?: { poolDayDatas?: { pool: string; date: number; volumeUsdc: string; feesUsdc: string }[] } };
+            const rows = j?.data?.poolDayDatas;
+            if (!Array.isArray(rows)) return {}; // field missing pre-redeploy
+            // Most-recent bucket per pool, summed across the pair's pools.
+            const latest = new Map<string, { vol: number; fees: number }>();
+            for (const r of rows) {
+                if (!latest.has(r.pool)) latest.set(r.pool, { vol: Number(r.volumeUsdc) || 0, fees: Number(r.feesUsdc) || 0 });
+            }
+            let vol = 0;
+            let fees = 0;
+            latest.forEach((v) => {
+                vol += v.vol;
+                fees += v.fees;
+            });
+            return { vol1d: vol, fees1d: fees };
         },
     });
     return data ?? {};
@@ -1085,12 +1098,14 @@ function PoolPairRowCard({
     const tvlLabel = useMemo(() => formatUsd(row.tvlUsdc), [row.tvlUsdc]);
     const subCount = row.subRows.length;
 
-    // Per-row daily metrics: the launchpad token is the non-USDC side of the
-    // pair; its TokenDayData drives 1D Volume + Daily Fees, and APR =
+    // Per-row daily metrics from the pair's POOLS (PoolDayData) so ANY USDC
+    // pool (V2/V3, launchpad or not) shows 1D Volume + Daily Fees, and APR =
     // dailyFees*365 / TVL. "—" (pendingIndexer) until the subgraph serves them.
-    const launchToken =
-        row.token0.address.toLowerCase() === USDC_LOWER ? row.token1.address : row.token0.address;
-    const day = useTokenDayStats(launchToken);
+    const poolAddrs = useMemo(
+        () => row.subRows.map((s) => s.poolAddress),
+        [row.subRows],
+    );
+    const day = usePoolDayStats(poolAddrs);
     const tvlUsd = Number(row.tvlUsdc) / 1e6;
     const aprPct =
         day.fees1d !== undefined && tvlUsd > 0 ? (day.fees1d * 365 * 100) / tvlUsd : undefined;
