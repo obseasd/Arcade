@@ -1,5 +1,4 @@
 "use client";
-import { V4PreviewBanner } from "@/components/launchpad/V4PreviewBanner";
 
 import { ArrowLeft, Lock, Image as ImageIcon, Upload } from "lucide-react";
 import Image from "next/image";
@@ -98,12 +97,15 @@ function Inner() {
     const publicClient = usePublicClient();
     const { address: account, isConnected } = useAccount();
 
-    // Mode can be preselected from the launch picker (?mode=0 PUMP, 1 CLANKER).
+    // Mode is FIXED by the launch picker (?mode=0 PUMP, 1 CLANKER) -- the modal
+    // already made the choice and each mode has a different form, so there is no
+    // in-page toggle. To switch mode the user goes back to the picker.
     const modeParam = Number(searchParams.get("mode"));
-    const initialMode: ArcadeHookMode =
+    const mode: ArcadeHookMode =
         modeParam === ARCADE_HOOK_MODE.CLANKER
             ? ARCADE_HOOK_MODE.CLANKER
             : ARCADE_HOOK_MODE.PUMP;
+    const isClanker = mode === ARCADE_HOOK_MODE.CLANKER;
 
     // --- Form state ---------------------------------------------------------
     const [name, setName] = useState("");
@@ -112,7 +114,6 @@ function Inner() {
     const [image, setImage] = useState("");
     const [imagePreview, setImagePreview] = useState("");
     const [imageUploading, setImageUploading] = useState(false);
-    const [mode, setMode] = useState<ArcadeHookMode>(initialMode);
 
     // CLANKER-only fields (only relevant when mode == CLANKER).
     const [creator2, setCreator2] = useState("");
@@ -134,7 +135,6 @@ function Inner() {
     const { ensureAllowance } = useApproveIfNeeded(ADDRESSES.usdc, ADDRESSES.arcadeHook);
     const { writeContractAsync } = useWriteContract();
 
-    const isClanker = mode === ARCADE_HOOK_MODE.CLANKER;
     const creator2Addr =
         isClanker && creator2.trim().length > 0 && isAddress(creator2.trim())
             ? (creator2.trim() as Address)
@@ -332,22 +332,40 @@ function Inner() {
 
     return (
         <div className="mx-auto max-w-2xl px-4 py-10 sm:px-6">
-            <V4PreviewBanner />
             <div className="mb-6 flex items-center gap-3">
                 <Link
                     href="/launchpad"
                     className="rounded-lg border border-arc-border bg-arc-surface p-2 hover:border-arc-primary/40"
+                    title="Back to mode picker"
                 >
                     <ArrowLeft className="h-4 w-4" />
                 </Link>
                 <div className="flex-1">
-                    <h1 className="text-2xl font-semibold">Launch on V4 (ArcadeHook)</h1>
+                    <div className="flex items-center gap-2">
+                        <h1 className="text-2xl font-semibold">
+                            Launch a {isClanker ? "CLANKER" : "PUMP"} token
+                        </h1>
+                        <span className="rounded-md border border-arc-cta-hover/40 bg-arc-cta-hover/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-arc-cta-hover">
+                            {isClanker ? "Direct launch" : "Bonding curve"}
+                        </span>
+                    </div>
                     <p className="mt-1 text-sm text-arc-text-muted">
-                        Atomic createLaunch on the unified V4 hook. PUMP runs a bonding curve
-                        (starts ~$5k mcap, graduates near ~$60k into a locked full-range V4 LP).
-                        CLANKER launches directly: the full supply is seeded single-sided in a
-                        locked V4 LP at your chosen start market cap, tradable immediately with a
-                        fixed fee tier.
+                        {isClanker ? (
+                            <>
+                                The full supply is seeded single-sided into a locked V4 LP at your
+                                chosen starting market cap, tradable immediately. Fixed 1/2/3% swap
+                                fee, 80% to you / 20% protocol.
+                            </>
+                        ) : (
+                            <>
+                                A bonding curve (starts ~$5k mcap) that graduates near ~$60k into a
+                                locked full-range V4 LP. Post-graduation the swap fee decays from 1%
+                                to 0.30% as market cap grows, 80% to you / 20% protocol.
+                            </>
+                        )}{" "}
+                        <Link href="/launchpad" className="text-arc-cta-hover hover:underline">
+                            switch mode
+                        </Link>
                     </p>
                 </div>
             </div>
@@ -429,33 +447,14 @@ function Inner() {
                     />
                 </label>
 
-                {/* Mode select -------------------------------------------- */}
-                <div className="space-y-3 rounded-xl border border-arc-border bg-arc-bg-elevated p-4">
-                    <span className="text-sm font-medium text-arc-text">Launch mode</span>
-                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                        <ModeButton
-                            active={mode === ARCADE_HOOK_MODE.PUMP}
-                            onClick={() => setMode(ARCADE_HOOK_MODE.PUMP)}
-                            title="PUMP"
-                            subtitle="Dynamic fee 1% -> 0.30%"
-                            description="Post-grad swap fee decays with market cap, pump.fun-style. 80% you / 20% protocol."
-                        />
-                        <ModeButton
-                            active={mode === ARCADE_HOOK_MODE.CLANKER}
-                            onClick={() => setMode(ARCADE_HOOK_MODE.CLANKER)}
-                            title="CLANKER"
-                            subtitle="Direct launch, fixed fee 1/2/3%"
-                            description="No curve: full supply seeded single-sided in a locked V4 LP, tradable at once. Fixed swap fee, 80% you / 20% protocol."
-                        />
-                    </div>
-                </div>
-
                 {/* Start market cap (CLANKER only) --------------------------- */}
                 {isClanker && (
                     <div className="space-y-3 rounded-xl border border-arc-border bg-arc-bg-elevated p-4">
-                        <span className="text-sm font-medium text-arc-text">Start market cap</span>
+                        <span className="text-sm font-medium text-arc-text">
+                            Starting market cap
+                        </span>
                         <label className="block text-sm">
-                            <span className="text-arc-text-muted">FDV in USDC</span>
+                            <span className="text-arc-text-muted">Valuation in USDC</span>
                             <input
                                 type="number"
                                 min={CLANKER_MIN_START_MCAP}
@@ -473,10 +472,11 @@ function Inner() {
                             />
                         </label>
                         <p className="text-xs text-arc-text-faint">
-                            The full supply is seeded single-sided at this fully-diluted valuation
-                            (${CLANKER_MIN_START_MCAP.toLocaleString()} to $
-                            {CLANKER_MAX_START_MCAP.toLocaleString()}). The price only moves as
-                            people buy. Default ${CLANKER_DEFAULT_START_MCAP.toLocaleString()}.
+                            The full supply is seeded single-sided at this valuation. Because 100%
+                            of the supply is live from the first block, this is also the FDV. The
+                            price only moves as people buy (${CLANKER_MIN_START_MCAP.toLocaleString()}{" "}
+                            to ${CLANKER_MAX_START_MCAP.toLocaleString()}, default $
+                            {CLANKER_DEFAULT_START_MCAP.toLocaleString()}).
                         </p>
                     </div>
                 )}
@@ -635,33 +635,3 @@ function Inner() {
     );
 }
 
-function ModeButton({
-    active,
-    onClick,
-    title,
-    subtitle,
-    description,
-}: {
-    active: boolean;
-    onClick: () => void;
-    title: string;
-    subtitle: string;
-    description: string;
-}) {
-    return (
-        <button
-            onClick={onClick}
-            type="button"
-            className={cn(
-                "rounded-xl border p-3 text-left transition-all",
-                active
-                    ? "border-arc-cta-hover bg-arc-cta-hover/10"
-                    : "border-arc-border bg-arc-bg hover:border-arc-cta-hover/40",
-            )}
-        >
-            <div className="text-sm font-semibold">{title}</div>
-            <div className="mt-0.5 text-xs text-arc-text-muted">{subtitle}</div>
-            <div className="mt-2 text-[11px] text-arc-text-faint">{description}</div>
-        </button>
-    );
-}
