@@ -1,5 +1,4 @@
 "use client";
-import { V4PreviewBanner } from "@/components/launchpad/V4PreviewBanner";
 
 import { ArrowLeft, ExternalLink, Lock, ShieldCheck, ShieldOff, Sparkles, Clock } from "lucide-react";
 import Link from "next/link";
@@ -18,12 +17,15 @@ import { useApproveIfNeeded } from "@/lib/hooks/useApproveIfNeeded";
 import { useArcadeHookCurveState } from "@/lib/hooks/useArcadeHookTokens";
 import { useTokenImage, useTokenMetadata } from "@/lib/hooks/useTokenImage";
 import { pushToast } from "@/lib/toast";
+import { ClankerV4TradePanel } from "@/components/launchpad/ClankerV4TradePanel";
 import { TokenIcon } from "@/components/ui/TokenIcon";
 import { formatAddress, formatToken, formatUSDC } from "@/lib/utils";
 
+// Fee split is 80% creator / 20% treasury for BOTH live modes (2026-07-17 model).
+// The label conveys the launch shape, not a stale split ratio.
 const MODE_LABEL: Record<number, string> = {
-    [ARCADE_HOOK_MODE.PUMP]: "PUMP (50/50 split)",
-    [ARCADE_HOOK_MODE.CLANKER]: "CLANKER (70/30 split)",
+    [ARCADE_HOOK_MODE.PUMP]: "PUMP · bonding curve",
+    [ARCADE_HOOK_MODE.CLANKER]: "CLANKER · direct launch",
     [ARCADE_HOOK_MODE.CLANKER_V3]: "CLANKER V3 (locked LP)",
 };
 
@@ -134,9 +136,11 @@ function Inner() {
         );
     }
 
+    const isClanker =
+        mode === ARCADE_HOOK_MODE.CLANKER || mode === ARCADE_HOOK_MODE.CLANKER_V3;
+
     return (
         <div className="mx-auto max-w-5xl px-4 py-8 sm:px-6">
-            <V4PreviewBanner />
             {/* Header --------------------------------------------------- */}
             <div className="mb-6 flex items-start gap-3 sm:items-center">
                 <Link
@@ -188,22 +192,34 @@ function Inner() {
                 </div>
             </div>
 
-            {/* Two-column body: curve + trade ---------------------------- */}
+            {/* Two-column body -------------------------------------------
+                CLANKER has NO bonding curve: full supply seeded single-sided in
+                a locked V4 LP at launch, traded on the canonical V4 router. PUMP
+                runs the curve then graduates. Branch the whole body on mode so a
+                CLANKER never shows curve/graduation language. */}
             <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_400px]">
-                <CurveProgressCard
-                    status={status}
-                    tokensSold={tokensSold}
-                    realUsdcReserve={realUsdcReserve}
-                    isLoading={isLoading}
-                    description={metadata?.description}
-                />
-                <TradeCard
-                    token={token}
-                    symbol={symbol}
-                    status={status}
-                    tokensSold={tokensSold}
-                    realUsdcReserve={realUsdcReserve}
-                />
+                {isClanker ? (
+                    <DirectLaunchCard token={token} description={metadata?.description} />
+                ) : (
+                    <CurveProgressCard
+                        status={status}
+                        tokensSold={tokensSold}
+                        realUsdcReserve={realUsdcReserve}
+                        isLoading={isLoading}
+                        description={metadata?.description}
+                    />
+                )}
+                {isClanker ? (
+                    <ClankerV4TradePanel token={token} symbol={symbol} image={image} />
+                ) : (
+                    <TradeCard
+                        token={token}
+                        symbol={symbol}
+                        status={status}
+                        tokensSold={tokensSold}
+                        realUsdcReserve={realUsdcReserve}
+                    />
+                )}
             </div>
         </div>
     );
@@ -379,6 +395,59 @@ function Stat({ label, value, sub }: { label: string; value: string; sub?: strin
             <div className="text-arc-text-muted">{label}</div>
             <div className="mt-0.5 font-semibold tabular-nums">{value}</div>
             {sub && <div className="mt-0.5 text-[10px] text-arc-text-faint">{sub}</div>}
+        </div>
+    );
+}
+
+// -------------------------------------------------------------------
+// Direct-launch card (CLANKER): NO bonding curve. The full supply was seeded
+// single-sided into a locked V4 LP at the chosen starting market cap and is
+// tradable immediately on the canonical V4 pool. Shows the launch shape + fee
+// tier instead of curve progress / graduation (which are PUMP-only concepts).
+// -------------------------------------------------------------------
+
+function DirectLaunchCard({ token, description }: { token: Address; description?: string }) {
+    const feeQ = useReadContract({
+        address: ADDRESSES.arcadeHook,
+        abi: ARCADE_HOOK_ABI,
+        functionName: "poolFeeOf",
+        args: [token],
+        query: { enabled: V4_HOOK_ENABLED },
+    });
+    const fee = Number((feeQ.data as bigint | number | undefined) ?? 0);
+
+    return (
+        <div className="arc-card p-6">
+            <div className="mb-1 text-xs uppercase tracking-wider text-arc-text-faint">
+                Direct launch
+            </div>
+            <div className="flex items-baseline gap-3">
+                <div className="text-3xl font-semibold">Live pool</div>
+                <div className="text-sm text-arc-text-muted">tradable now</div>
+            </div>
+
+            <div className="mt-4 rounded-lg border border-arc-success/30 bg-arc-success/10 p-3 text-xs text-arc-success">
+                <div className="font-semibold">Full supply seeded, locked.</div>
+                <div className="mt-0.5">
+                    100% of the supply was seeded single-sided into a full-range Uniswap V4 LP at
+                    the launch market cap. The seed is locked permanently. There is no bonding curve
+                    -- the price only moves as people trade.
+                </div>
+            </div>
+
+            <div className="mt-6 grid grid-cols-2 gap-3 text-xs">
+                <Stat label="Swap fee tier" value={fee > 0 ? `${fee / 10_000}%` : "…"} sub="creator 80% / treasury 20%" />
+                <Stat label="Liquidity" value="Locked" sub="single-sided full-range V4 LP" />
+            </div>
+
+            {description && (
+                <div className="mt-6 border-t border-arc-border pt-4">
+                    <div className="text-xs uppercase tracking-wider text-arc-text-faint">About</div>
+                    <p className="mt-2 whitespace-pre-wrap text-sm text-arc-text-muted">
+                        {description}
+                    </p>
+                </div>
+            )}
         </div>
     );
 }

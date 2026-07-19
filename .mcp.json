@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "arcade": {
+      "command": "npx",
+      "args": ["-y", "arcade-agent-mcp"],
+      "env": { "ARCADE_API_BASE": "https://www.arcade.trading" }
+    }
+  }
+}
