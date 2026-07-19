@@ -19,6 +19,7 @@ import { useApproveIfNeeded } from "@/lib/hooks/useApproveIfNeeded";
 import { useV2Tokens } from "@/lib/hooks/useV2Tokens";
 import { useV3Tokens } from "@/lib/hooks/useV3Tokens";
 import { useLaunchpadCurveTokens } from "@/lib/hooks/useLaunchpadCurveTokens";
+import { useArcadeHookTokens } from "@/lib/hooks/useArcadeHookTokens";
 import { useUsdValue } from "@/lib/hooks/useTokenUsdPrice";
 import { useSwapRoute } from "@/lib/hooks/useSwapRoute";
 import { pushToast } from "@/lib/toast";
@@ -94,19 +95,32 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
   // (which carries decimals + name from the actual ERC20) and drops the
   // curve placeholder.
   const { tokens: curveTokens } = useLaunchpadCurveTokens();
+  // ArcadeHook (V4) tokens: CLANKER + graduated PUMP, tradeable on their V4 pool
+  // via the arcade-v4 route provider. All launch tokens are 18-decimal.
+  const { tokens: v4HookTokens } = useArcadeHookTokens();
+  const v4Tokens: TokenOption[] = useMemo(
+    () =>
+      v4HookTokens.map((t) => ({
+        address: t.address,
+        symbol: t.symbol,
+        name: t.name,
+        decimals: 18,
+      })),
+    [v4HookTokens],
+  );
   const { writeContractAsync } = useWriteContract();
 
   const allTokens: TokenOption[] = useMemo(() => {
     const seen = new Set<string>();
     const out: TokenOption[] = [];
-    for (const t of [USDC_TOKEN, USYC_TOKEN, ...v2Tokens, ...v3Tokens, ...curveTokens]) {
+    for (const t of [USDC_TOKEN, USYC_TOKEN, ...v2Tokens, ...v3Tokens, ...curveTokens, ...v4Tokens]) {
       const k = t.address.toLowerCase();
       if (seen.has(k)) continue;
       seen.add(k);
       out.push(t);
     }
     return out;
-  }, [v2Tokens, v3Tokens, curveTokens]);
+  }, [v2Tokens, v3Tokens, curveTokens, v4Tokens]);
 
   const searchParams = useSearchParams();
   const [tokenIn, setTokenIn] = useState<TokenOption>(USDC_TOKEN);
