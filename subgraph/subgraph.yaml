@@ -71,6 +71,26 @@ dataSources:
           handler: handlePoolCreated
       file: ./src/mappings.ts
   - kind: ethereum
+    name: V2Factory
+    network: arc-testnet
+    source:
+      address: "0x3a404154A7Ac320C93BB09A539BcF9B27Fc63067"
+      abi: V2Factory
+      startBlock: 49467254
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.9
+      language: wasm/assemblyscript
+      entities:
+        - Pool
+      abis:
+        - name: V2Factory
+          file: ./abis/V2Factory.json
+      eventHandlers:
+        - event: PairCreated(indexed address,indexed address,address,uint256)
+          handler: handleV2PairCreated
+      file: ./src/mappings.ts
+  - kind: ethereum
     name: ArcadeHookV4
     network: arc-testnet
     source:
@@ -215,7 +235,31 @@ templates:
       abis:
         - name: V3Pool
           file: ./abis/V3Pool.json
+        - name: ERC20
+          file: ./abis/ERC20.json
       eventHandlers:
         - event: Swap(indexed address,indexed address,int256,int256,uint160,uint128,int24)
           handler: handleSwap
+      file: ./src/mappings.ts
+  # V2 pair template (spawned on PairCreated). Sync gives exact reserves after
+  # every mint/burn/swap, so the pool's USDC-side reserve -> TVL is exact.
+  - kind: ethereum
+    name: V2Pair
+    network: arc-testnet
+    source:
+      abi: V2Pair
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.9
+      language: wasm/assemblyscript
+      entities:
+        - Pool
+        - Global
+        - GlobalDayData
+      abis:
+        - name: V2Pair
+          file: ./abis/V2Pair.json
+      eventHandlers:
+        - event: Sync(uint112,uint112)
+          handler: handleV2Sync
       file: ./src/mappings.ts

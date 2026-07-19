@@ -521,9 +521,10 @@ export default function ExplorePage() {
 
     // Protocol-wide Volume + Generated Fees from the subgraph (was hardcoded 0).
     const protocolTotals = useProtocolTotals();
-    // Real per-day series for the Volume + Fees hero sparklines (windowed).
+    // Real per-day series for the Volume + Fees + TVL hero sparklines (windowed).
     const volDay = useGlobalDaySeries(volWindow, "volume");
     const feeDay = useGlobalDaySeries(feeWindow, "fees");
+    const tvlDay = useGlobalDaySeries(tvlWindow, "tvl");
 
     const { tvlV2, tvlV3 } = useMemo(() => {
         let v2 = 0n;
@@ -566,12 +567,15 @@ export default function ExplorePage() {
             <div className="mb-6 grid grid-cols-1 gap-4 lg:grid-cols-3">
                 <ChartCard
                     label="TVL"
+                    // Headline = accurate on-chain TVL now; sparkline = the real
+                    // daily TVL history from the subgraph (GlobalDayData.tvlUsdc).
                     valueUsdc={totalTvlUsdc}
                     v2Usdc={tvlV2}
                     v3Usdc={tvlV3}
                     window={tvlWindow}
                     onWindow={setTvlWindow}
                     singleLine
+                    realSeries={tvlDay.series}
                 />
                 <ChartCard
                     label="Volume"
@@ -876,8 +880,12 @@ interface SeriesPoint {
  * returns the window SUM as the headline (6-dp micro bigint). Empty on a miss
  * (unset / pre-redeploy) so the card keeps its synthetic placeholder.
  */
-function useGlobalDaySeries(win: Win, metric: "volume" | "fees"): { series: SeriesPoint[]; sumMicro: bigint } {
+function useGlobalDaySeries(win: Win, metric: "volume" | "fees" | "tvl"): { series: SeriesPoint[]; sumMicro: bigint } {
     const days = win === "7D" ? 7 : win === "30D" ? 30 : 90;
+    // TVL is a point-in-time snapshot: carry the last known value across days
+    // with no bucket (it doesn't drop to 0 on a quiet day). Volume/Fees are
+    // flows: missing days are genuinely 0.
+    const isTvl = metric === "tvl";
     const { data } = useQuery<{ series: SeriesPoint[]; sumMicro: string }>({
         queryKey: ["arcade", "global-day-series", metric, days],
         enabled: !!process.env.NEXT_PUBLIC_GOLDSKY_URL,
@@ -885,21 +893,23 @@ function useGlobalDaySeries(win: Win, metric: "volume" | "fees"): { series: Seri
         refetchInterval: 120_000,
         queryFn: async () => {
             const url = process.env.NEXT_PUBLIC_GOLDSKY_URL as string;
-            const q = `{ globalDayDatas(first: ${days}, orderBy: date, orderDirection: desc) { date volumeUsdc feesUsdc } }`;
+            const q = `{ globalDayDatas(first: ${days}, orderBy: date, orderDirection: desc) { date volumeUsdc feesUsdc tvlUsdc } }`;
             const res = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ query: q }) });
             if (!res.ok) return { series: [], sumMicro: "0" };
-            const j = (await res.json()) as { data?: { globalDayDatas?: { date: number; volumeUsdc: string; feesUsdc: string }[] } };
+            const j = (await res.json()) as { data?: { globalDayDatas?: { date: number; volumeUsdc: string; feesUsdc: string; tvlUsdc?: string }[] } };
             const rows = j?.data?.globalDayDatas;
             if (!Array.isArray(rows)) return { series: [], sumMicro: "0" };
             const byDay = new Map<number, number>();
-            for (const r of rows) byDay.set(Number(r.date), Number(metric === "volume" ? r.volumeUsdc : r.feesUsdc) || 0);
+            for (const r of rows) byDay.set(Number(r.date), Number(metric === "volume" ? r.volumeUsdc : metric === "fees" ? r.feesUsdc : r.tvlUsdc ?? 0) || 0);
             const DAY = 86_400;
             const todayStart = Math.floor(Date.now() / 1000 / DAY) * DAY;
             const series: SeriesPoint[] = [];
             let sum = 0;
+            let lastVal = 0;
             for (let i = days - 1; i >= 0; i--) {
                 const dayStart = todayStart - i * DAY;
-                const v = byDay.get(dayStart) ?? 0;
+                const v = byDay.has(dayStart) ? (byDay.get(dayStart) as number) : isTvl ? lastVal : 0;
+                lastVal = v;
                 sum += v;
                 series.push({
                     x: days - 1 - i,
