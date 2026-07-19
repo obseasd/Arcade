@@ -28,6 +28,40 @@ const SCAN_LOOKBACK = 100_000n;
 
 const SCAN_STALE_MS = 90_000;
 
+const GOLDSKY_URL = process.env.NEXT_PUBLIC_GOLDSKY_URL;
+
+/** Holders from the subgraph's TokenBalance entity (indexed from the Transfer
+ *  template). Returns null on any miss (unset / pre-redeploy / not-indexed) so
+ *  the caller falls back to the client Transfer scan. */
+async function holdersFromSubgraph(token: Address, totalSupply: bigint): Promise<Holder[] | null> {
+  if (!GOLDSKY_URL) return null;
+  try {
+    const q = `{ tokenBalances(first: 100, orderBy: balanceRaw, orderDirection: desc, where: { token: "${token.toLowerCase()}", balanceRaw_gt: "0" }) { holder balanceRaw } }`;
+    const res = await fetch(GOLDSKY_URL, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ query: q }),
+    });
+    if (!res.ok) return null;
+    const json = (await res.json()) as {
+      data?: { tokenBalances?: { holder: string; balanceRaw: string }[] };
+      errors?: unknown;
+    };
+    const rows = json?.data?.tokenBalances;
+    if (!Array.isArray(rows)) return null; // field missing pre-redeploy
+    const out: Holder[] = [];
+    for (const r of rows) {
+      const bal = BigInt(r.balanceRaw);
+      if (bal < DUST_THRESHOLD_WEI) continue;
+      const pct = totalSupply > 0n ? Number((bal * 10_000n) / totalSupply) / 100 : 0;
+      out.push({ address: r.holder as Address, balanceRaw: bal, pctOfSupply: pct });
+    }
+    return out;
+  } catch {
+    return null;
+  }
+}
+
 /** Holders with less than one whole token are treated as dust and dropped
  *  from the list. The launchpad's swept-rounding leftover after
  *  `lockSingleSided` lands here (a few wei) and would show as a confusing
@@ -62,6 +96,10 @@ export function useTokenHolders(
     gcTime: SCAN_STALE_MS * 5,
     queryFn: async () => {
       if (!publicClient || !token) return [];
+      // Prefer the subgraph (indexed balances) over the 100k-block Transfer
+      // scan. Falls through when the subgraph is unset / pre-redeploy.
+      const indexed = await holdersFromSubgraph(token, totalSupply);
+      if (indexed !== null) return indexed;
       const balances = new Map<string, bigint>();
       try {
         const latest = await publicClient.getBlockNumber();

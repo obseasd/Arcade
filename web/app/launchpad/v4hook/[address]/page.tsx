@@ -312,6 +312,7 @@ function Inner() {
                         token={token}
                         poolFee={poolFee}
                         totalVolumeUsdc={stats.totalVolumeUsdc}
+                        exactFeesUsd={stats.feesUsdc}
                     />
                 </div>
             </div>
@@ -352,10 +353,12 @@ function FeesRecipientPanel({
     token,
     poolFee,
     totalVolumeUsdc,
+    exactFeesUsd,
 }: {
     token: Address;
     poolFee: number;
     totalVolumeUsdc: number;
+    exactFeesUsd?: number;
 }) {
     const poolIdQ = useReadContract({
         address: ADDRESSES.arcadeHook,
@@ -400,8 +403,11 @@ function FeesRecipientPanel({
         };
     }, [isTwitter, token]);
 
+    // Prefer the subgraph's exact per-token fee total; estimate from volume x
+    // rate only pre-redeploy (exact for CLANKER's static tier, ~1% for PUMP).
     const feeRate = poolFee > 0 ? poolFee / 1_000_000 : 0.01;
-    const feesUsd = totalVolumeUsdc * feeRate;
+    const isEstimate = exactFeesUsd == null;
+    const feesUsd = isEstimate ? totalVolumeUsdc * feeRate : exactFeesUsd;
     const recipientAddr = fo
         ? fo.creator2 !== zeroAddress && Number(fo.creator2Bps) >= 10_000
             ? fo.creator2
@@ -414,7 +420,7 @@ function FeesRecipientPanel({
                 <span className="text-arc-text-muted">Fees generated</span>
                 <span className="tabular-nums font-medium">
                     ${feesUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })}
-                    {poolFee === 0 && <span className="text-[10px] text-arc-text-faint"> (est.)</span>}
+                    {isEstimate && <span className="text-[10px] text-arc-text-faint"> (est.)</span>}
                 </span>
             </div>
             <div className="border-t border-arc-border pt-3">
