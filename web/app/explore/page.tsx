@@ -18,6 +18,7 @@ import {
 import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { CreatePoolModal } from "@/components/pool/CreatePoolModal";
 import {
     Area,
@@ -511,6 +512,9 @@ export default function ExplorePage() {
         [allRows],
     );
 
+    // Protocol-wide Volume + Generated Fees from the subgraph (was hardcoded 0).
+    const protocolTotals = useProtocolTotals();
+
     const { tvlV2, tvlV3 } = useMemo(() => {
         let v2 = 0n;
         let v3 = 0n;
@@ -561,19 +565,21 @@ export default function ExplorePage() {
                 />
                 <ChartCard
                     label="Volume"
-                    valueUsdc={0n}
+                    valueUsdc={protocolTotals.volumeUsdc}
                     v2Usdc={0n}
                     v3Usdc={0n}
                     window={volWindow}
                     onWindow={setVolWindow}
+                    singleLine
                 />
                 <ChartCard
                     label="Generated Fees"
-                    valueUsdc={0n}
+                    valueUsdc={protocolTotals.feesUsdc}
                     v2Usdc={0n}
                     v3Usdc={0n}
                     window={feeWindow}
                     onWindow={setFeeWindow}
+                    singleLine
                 />
             </div>
 
@@ -752,6 +758,43 @@ export default function ExplorePage() {
 
 // -------------------------------------------------------------------
 // Hero stat card with sparkline + hover tooltip (Total / V3 / V2).
+/**
+ * Protocol-wide Volume + Generated Fees from the Goldsky subgraph (Global +
+ * FeeStats singletons -- both already indexed, so this works without a redeploy).
+ * Values are BigDecimal human-USDC; converted to the 6-dp micro bigint the
+ * ChartCard renders. Returns zeros when the subgraph is unset/unreachable.
+ */
+function useProtocolTotals(): { volumeUsdc: bigint; feesUsdc: bigint } {
+    const { data } = useQuery<{ volumeUsdc: bigint; feesUsdc: bigint }>({
+        queryKey: ["arcade", "explore-protocol-totals"],
+        enabled: !!process.env.NEXT_PUBLIC_GOLDSKY_URL,
+        staleTime: 30_000,
+        refetchInterval: 60_000,
+        queryFn: async () => {
+            const url = process.env.NEXT_PUBLIC_GOLDSKY_URL as string;
+            const q = `{ global(id: "global") { totalVolumeUsdc } feeStats(id: "v4") { creatorFeesUsdc treasuryFeesUsdc } }`;
+            const res = await fetch(url, {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ query: q }),
+            });
+            if (!res.ok) return { volumeUsdc: 0n, feesUsdc: 0n };
+            const j = (await res.json()) as {
+                data?: {
+                    global?: { totalVolumeUsdc?: string } | null;
+                    feeStats?: { creatorFeesUsdc?: string; treasuryFeesUsdc?: string } | null;
+                };
+            };
+            const toMicro = (n: number) => (Number.isFinite(n) && n > 0 ? BigInt(Math.round(n * 1e6)) : 0n);
+            const vol = Number(j?.data?.global?.totalVolumeUsdc ?? 0);
+            const cf = Number(j?.data?.feeStats?.creatorFeesUsdc ?? 0);
+            const tf = Number(j?.data?.feeStats?.treasuryFeesUsdc ?? 0);
+            return { volumeUsdc: toMicro(vol), feesUsdc: toMicro(cf + tf) };
+        },
+    });
+    return data ?? { volumeUsdc: 0n, feesUsdc: 0n };
+}
+
 // TVL uses singleLine so only the total trace renders, and the tooltip
 // surfaces a single TVL row instead of the split.
 // -------------------------------------------------------------------
