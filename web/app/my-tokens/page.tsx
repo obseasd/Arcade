@@ -1,5 +1,6 @@
 "use client";
 
+import { useQuery } from "@tanstack/react-query";
 import { useAccountModal } from "@rainbow-me/rainbowkit";
 import {
     ArrowLeft,
@@ -342,6 +343,86 @@ function PortfolioTabs({ current, onChange }: { current: TabKey; onChange: (k: T
 
 // ============================ Overview tab ============================
 
+interface WalletPortfolio {
+    /** Reconstructed value-over-time from the wallet's trade stream. */
+    series: { x: number; y: number }[];
+    /** Realised P/L: sell proceeds minus average cost of the tokens sold. */
+    realized: number;
+    /** Cost basis still tied up in current (traded) holdings. */
+    remainingCost: number;
+    hasData: boolean;
+}
+
+/**
+ * Real portfolio from the wallet's on-chain trade history (subgraph Trade
+ * entity, all venues). Reconstructs per-token balance + average cost basis to
+ * derive realised P/L and a value-over-time curve (balance × last trade price
+ * at each trade). It covers TRADED tokens; airdrops/LP that were never traded
+ * aren't in the historical curve but ARE in the live holdings value used for
+ * unrealised P/L. Empty (hasData=false) when the subgraph is unset or the wallet
+ * has no trades -> caller keeps the placeholder curve.
+ */
+function useWalletPortfolio(account: Address | undefined): WalletPortfolio {
+    const { data } = useQuery<{ series: { x: number; y: number }[]; realized: number; remainingCost: number }>({
+        queryKey: ["arcade", "wallet-portfolio", account?.toLowerCase() ?? null],
+        enabled: !!process.env.NEXT_PUBLIC_GOLDSKY_URL && !!account,
+        staleTime: 60_000,
+        refetchInterval: 120_000,
+        queryFn: async () => {
+            const url = process.env.NEXT_PUBLIC_GOLDSKY_URL as string;
+            const q = `{ trades(first: 1000, orderBy: blockNumber, orderDirection: asc, where: { trader: "${(account as Address).toLowerCase()}" }) { token price volumeUsdc isBuy blockTime } }`;
+            const res = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ query: q }) });
+            if (!res.ok) return { series: [], realized: 0, remainingCost: 0 };
+            const j = (await res.json()) as { data?: { trades?: { token: string; price: string; volumeUsdc: string; isBuy: boolean; blockTime: number }[] } };
+            const trades = j?.data?.trades;
+            if (!Array.isArray(trades) || trades.length === 0) return { series: [], realized: 0, remainingCost: 0 };
+            const bal = new Map<string, number>();
+            const cost = new Map<string, number>();
+            const lastPrice = new Map<string, number>();
+            let realized = 0;
+            const raw: { t: number; y: number }[] = [];
+            for (const tr of trades) {
+                const price = Number(tr.price);
+                const vol = Number(tr.volumeUsdc);
+                const tokens = price > 0 ? vol / price : 0;
+                if (price > 0) lastPrice.set(tr.token, price);
+                if (tr.isBuy) {
+                    bal.set(tr.token, (bal.get(tr.token) || 0) + tokens);
+                    cost.set(tr.token, (cost.get(tr.token) || 0) + vol);
+                } else {
+                    const b = bal.get(tr.token) || 0;
+                    const c = cost.get(tr.token) || 0;
+                    const avg = b > 0 ? c / b : 0;
+                    const sold = Math.min(tokens, b);
+                    realized += vol - avg * sold;
+                    bal.set(tr.token, b - sold);
+                    cost.set(tr.token, c - avg * sold);
+                }
+                let val = 0;
+                bal.forEach((bb, tk) => {
+                    val += bb * (lastPrice.get(tk) || 0);
+                });
+                raw.push({ t: Number(tr.blockTime), y: val });
+            }
+            let remainingCost = 0;
+            cost.forEach((c) => (remainingCost += Math.max(0, c)));
+            // Downsample to ~40 points for the sparkline.
+            const MAX = 40;
+            const step = Math.max(1, Math.ceil(raw.length / MAX));
+            const series: { x: number; y: number }[] = [];
+            for (let i = 0; i < raw.length; i += step) series.push({ x: series.length, y: raw[i].y });
+            if (raw.length > 0) series.push({ x: series.length, y: raw[raw.length - 1].y });
+            return { series, realized, remainingCost };
+        },
+    });
+    return {
+        series: data?.series ?? [],
+        realized: data?.realized ?? 0,
+        remainingCost: data?.remainingCost ?? 0,
+        hasData: (data?.series.length ?? 0) > 0,
+    };
+}
+
 /**
  * Pure placeholder pseudo-random walk anchored to the current portfolio
  * value. Real historical USD value over time requires the indexer to land;
@@ -434,27 +515,32 @@ function OverviewTab({
     }, [moreOpen]);
 
     const currentUsd = Number(totalHoldingsUsd) / 1e6;
-    const series = useMemo(() => generatePlaceholderSeries(currentUsd), [currentUsd]);
-    // Count is shown in the Recent activity card subtitle so the user gets
-    // a quick "how much have I done" signal without expanding the tab.
+    // Real portfolio from the wallet's trade history (subgraph). Falls back to
+    // the placeholder walk only when there are no indexed trades.
+    const pf = useWalletPortfolio(account);
+    const series = useMemo(() => {
+        if (pf.hasData) {
+            const s = pf.series.map((p) => ({ x: p.x, y: p.y }));
+            s.push({ x: s.length, y: currentUsd }); // pin the last point to live value
+            return s;
+        }
+        return generatePlaceholderSeries(currentUsd);
+    }, [pf.hasData, pf.series, currentUsd]);
     const activityCount = useMemo(() => buildActivity(account).length, [account]);
 
-    // Daily change: compare last to ~24h ago in the placeholder. Real value
-    // would come from the indexer; this exists so the layout has the right
-    // shape and so Realized/Total P/L compute without throwing.
+    // Change over the reconstructed curve (start -> now). Not a strict 24h
+    // window, but real once trade history exists.
     const firstY = series[0]?.y ?? currentUsd;
     const dailyDelta = currentUsd - firstY;
     const dailyPct = firstY > 0 ? (dailyDelta / firstY) * 100 : 0;
     const dailyDown = dailyDelta < 0;
 
-    // Performance placeholders. Unrealized = "what holdings are worth now
-    // minus a notional cost basis we don't have"; we surface the chart's
-    // implied move as a stand-in. Realized = 0 since we don't track
-    // historical trades. Total = sum. The indexer will replace this with
-    // real numbers.
-    const unrealized = dailyDelta;
-    const realized = 0;
-    const total = unrealized + realized;
+    // Real P/L from trades: realised = sell proceeds - avg cost of tokens sold;
+    // unrealised = live holdings value - remaining cost basis. Placeholder only
+    // when the wallet has no indexed trades.
+    const realized = pf.hasData ? pf.realized : 0;
+    const unrealized = pf.hasData ? currentUsd - pf.remainingCost : dailyDelta;
+    const total = realized + unrealized;
 
     return (
         <>
@@ -475,8 +561,13 @@ function OverviewTab({
                                 >
                                     {dailyDown ? "▼" : "▲"}{" "}
                                     ${Math.abs(dailyDelta).toLocaleString(undefined, { maximumFractionDigits: 2 })}{" "}
-                                    ({dailyPct.toFixed(2)}%) today
-                                    <span className="ml-2 text-arc-text-faint">· placeholder, waiting for indexer</span>
+                                    ({dailyPct.toFixed(2)}%) {pf.hasData ? "since first trade" : "today"}
+                                    {!pf.hasData && (
+                                        <span className="ml-2 text-arc-text-faint">· placeholder, waiting for indexer</span>
+                                    )}
+                                    {pf.hasData && (
+                                        <span className="ml-2 text-arc-text-faint">· from your trade history</span>
+                                    )}
                                 </div>
                             </div>
                         </div>
@@ -502,7 +593,7 @@ function OverviewTab({
                                 </button>
                             ))}
                             <span className="ml-2 text-[10px] text-arc-text-faint">
-                                real history unlocks with the indexer
+                                {pf.hasData ? "reconstructed from your trades" : "real history unlocks with the indexer"}
                             </span>
                         </div>
                     </div>
