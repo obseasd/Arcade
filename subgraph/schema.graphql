@@ -33,6 +33,11 @@ type Pool @entity(immutable: false) {
   # V3 fee tier in hundredths of a bip (e.g. 3000 = 0.30%). Used to derive
   # per-pool fees = volume x feeTier/1e6 for the Explore daily-fees/APR columns.
   feeTier: Int!
+  # "v2" | "v3" -- how the pool's USDC reserve is tracked (Sync vs balanceOf).
+  kind: String!
+  # USDC-side reserve of the pool (human USDC). V2: exact from Sync; V3: read
+  # from USDC.balanceOf(pool) on each swap. Pool TVL ~= usdcReserve x 2.
+  usdcReserve: BigDecimal!
 }
 
 # Per-pool daily bucket (any USDC pool: V3 today, V2 later) for the Explore
@@ -54,6 +59,8 @@ type GlobalDayData @entity(immutable: false) {
   volumeUsdc: BigDecimal!
   feesUsdc: BigDecimal!
   tradeCount: Int!
+  # Last-known protocol TVL snapshot for the day (from Global.tvlUsdc).
+  tvlUsdc: BigDecimal!
 }
 
 type Trader @entity(immutable: false) {
@@ -133,6 +140,8 @@ type Global @entity(immutable: false) {
   tokenCount: Int!
   graduatedCount: Int!
   uniqueTraders: Int!
+  # Live protocol TVL (sum of every tracked pool's usdcReserve x 2), delta-updated.
+  tvlUsdc: BigDecimal!
 }
 
 # Per-creator running totals for the /stats "top creators" breakdown. A creator

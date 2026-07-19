@@ -2,8 +2,11 @@ import { BigInt, BigDecimal, Address, Bytes, ethereum } from "@graphprotocol/gra
 import { Buy, Sell, TokenCreated, Migrated } from "../generated/Launchpad/Launchpad";
 import { PoolCreated } from "../generated/V3Factory/V3Factory";
 import { Swap } from "../generated/templates/V3Pool/V3Pool";
+import { ERC20 } from "../generated/templates/V3Pool/ERC20";
 import { Transfer } from "../generated/templates/ArcadeToken/ERC20";
-import { V3Pool, ArcadeToken } from "../generated/templates";
+import { PairCreated } from "../generated/V2Factory/V2Factory";
+import { Sync } from "../generated/templates/V2Pair/V2Pair";
+import { V3Pool, ArcadeToken, V2Pair } from "../generated/templates";
 import {
   LaunchCreated,
   TokenLaunched,
@@ -92,6 +95,7 @@ function loadGlobal(): Global {
     g.tokenCount = 0;
     g.graduatedCount = 0;
     g.uniqueTraders = 0;
+    g.tvlUsdc = BigDecimal.fromString("0");
   }
   return g;
 }
@@ -225,7 +229,9 @@ function feeRateForSource(source: string, pool: Bytes | null): BigDecimal {
 }
 
 /** Upsert the protocol-wide daily bucket. */
-function bumpGlobalDay(volumeUsdc: BigDecimal, feeUsdc: BigDecimal, blockTime: i32): void {
+/** Load or create the protocol-wide daily bucket, seeding tvl at the current
+ *  running Global.tvlUsdc so the field is always populated. */
+function loadGlobalDay(blockTime: i32): GlobalDayData {
   const dayStart = dayStartOf(blockTime);
   const id = dayStart.toString();
   let d = GlobalDayData.load(id);
@@ -235,10 +241,36 @@ function bumpGlobalDay(volumeUsdc: BigDecimal, feeUsdc: BigDecimal, blockTime: i
     d.volumeUsdc = BigDecimal.fromString("0");
     d.feesUsdc = BigDecimal.fromString("0");
     d.tradeCount = 0;
+    d.tvlUsdc = loadGlobal().tvlUsdc;
   }
+  return d;
+}
+
+function bumpGlobalDay(volumeUsdc: BigDecimal, feeUsdc: BigDecimal, blockTime: i32): void {
+  const d = loadGlobalDay(blockTime);
   d.volumeUsdc = d.volumeUsdc.plus(volumeUsdc);
   d.feesUsdc = d.feesUsdc.plus(feeUsdc);
   d.tradeCount = d.tradeCount + 1;
+  d.tvlUsdc = loadGlobal().tvlUsdc;
+  d.save();
+}
+
+/** Set a pool's USDC-side reserve to `newReserve`, propagate the delta (x2 for
+ *  both sides) into the running Global TVL, and snapshot it onto today's
+ *  bucket. Pool TVL ~= usdcReserve x 2 (assumes a roughly-balanced pool). */
+function setPoolReserve(pool: Pool, newReserve: BigDecimal, blockTime: i32): void {
+  const TWO = BigDecimal.fromString("2");
+  const delta = newReserve.minus(pool.usdcReserve);
+  pool.usdcReserve = newReserve;
+  pool.save();
+
+  const g = loadGlobal();
+  g.tvlUsdc = g.tvlUsdc.plus(delta.times(TWO));
+  if (g.tvlUsdc.lt(BigDecimal.fromString("0"))) g.tvlUsdc = BigDecimal.fromString("0");
+  g.save();
+
+  const d = loadGlobalDay(blockTime);
+  d.tvlUsdc = g.tvlUsdc;
   d.save();
 }
 
@@ -498,6 +530,8 @@ export function handlePoolCreated(event: PoolCreated): void {
   p.token = usdcIsToken0 ? token1 : token0;
   p.usdcIsToken0 = usdcIsToken0;
   p.feeTier = event.params.fee;
+  p.kind = "v3";
+  p.usdcReserve = BigDecimal.fromString("0");
   p.save();
 
   V3Pool.create(event.params.pool);
@@ -523,6 +557,42 @@ export function handleSwap(event: Swap): void {
   // Per-pool daily bucket for the Explore per-row 1D volume / daily fees / APR.
   const feeRate = BigDecimal.fromString(p.feeTier.toString()).div(BigDecimal.fromString("1000000"));
   bumpPoolDay(event.address, volumeUsdc, volumeUsdc.times(feeRate), event.block.timestamp.toI32());
+
+  // TVL: V3 has no reserve event, so read the pool's live USDC balance.
+  const bal = ERC20.bind(usdcAddress()).try_balanceOf(event.address);
+  if (!bal.reverted) {
+    setPoolReserve(p, usdcVolume(bal.value), event.block.timestamp.toI32());
+  }
+}
+
+/** V2 pair created: register the USDC-paired pool + spawn its Sync template. */
+export function handleV2PairCreated(event: PairCreated): void {
+  const token0 = event.params.token0;
+  const token1 = event.params.token1;
+  const usdc = usdcAddress();
+  const usdcIsToken0 = token0.equals(usdc);
+  const usdcIsToken1 = token1.equals(usdc);
+  if (!usdcIsToken0 && !usdcIsToken1) return; // not a USDC pool
+
+  const p = new Pool(event.params.pair.toHexString());
+  p.token0 = token0;
+  p.token1 = token1;
+  p.token = usdcIsToken0 ? token1 : token0;
+  p.usdcIsToken0 = usdcIsToken0;
+  p.feeTier = 3000; // V2 flat 0.30%
+  p.kind = "v2";
+  p.usdcReserve = BigDecimal.fromString("0");
+  p.save();
+
+  V2Pair.create(event.params.pair);
+}
+
+/** V2 Sync: exact reserves after every mint/burn/swap -> exact USDC-side TVL. */
+export function handleV2Sync(event: Sync): void {
+  const p = Pool.load(event.address.toHexString());
+  if (p == null) return;
+  const usdcRaw = p.usdcIsToken0 ? event.params.reserve0 : event.params.reserve1;
+  setPoolReserve(p, usdcVolume(usdcRaw), event.block.timestamp.toI32());
 }
 
 // ===========================================================================
