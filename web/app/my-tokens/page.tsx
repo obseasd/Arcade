@@ -58,6 +58,7 @@ import { useArcadeHookTokens, type ArcadeHookTokenInfo } from "@/lib/hooks/useAr
 import { useLaunchpadTokens } from "@/lib/hooks/useLaunchpadTokens";
 import { useMyHoldings, type HoldingInfo } from "@/lib/hooks/useMyHoldings";
 import { useTokenImage } from "@/lib/hooks/useTokenImage";
+import { useV4TokenStats } from "@/lib/hooks/useV4TokenStats";
 import { loadBridgeHistory, type HistoryEntry } from "@/lib/bridgeHistory";
 import { listPendingClaims, type PendingTwitterClaim } from "@/lib/pendingClaims";
 import { iconForActivity, loadActivity, type ActivityEntry } from "@/lib/activityFeed";
@@ -899,6 +900,11 @@ function ArcadeHookHoldingsList({ items }: { items: ArcadeHookHolding[] }) {
 
 function ArcadeHookHoldingCard({ holding }: { holding: ArcadeHookHolding }) {
     const { image } = useTokenImage(holding.token.address);
+    const stats = useV4TokenStats(holding.token.address);
+    // USD value of the held balance = balance x latest price (subgraph).
+    const usdValue = stats.priceUsd !== undefined
+        ? (Number(holding.balance) / 1e18) * stats.priceUsd
+        : undefined;
     const isGraduated = holding.token.status === ARCADE_HOOK_STATUS.GRADUATED;
     const raisedPct = useMemo(() => {
         if (LAUNCHPAD_GRADUATION_USDC === 0n) return 0;
@@ -920,6 +926,11 @@ function ArcadeHookHoldingCard({ holding }: { holding: ArcadeHookHolding }) {
                     </div>
                     <div className="mt-0.5 text-[10px] text-arc-text-faint">
                         {formatToken(holding.balance, LAUNCHPAD_TOKEN_DECIMALS, 2)} held
+                        {usdValue !== undefined && (
+                            <span className="ml-1 text-arc-text-muted">
+                                (${usdValue.toLocaleString(undefined, { maximumFractionDigits: 2 })})
+                            </span>
+                        )}
                     </div>
                 </div>
                 <span
