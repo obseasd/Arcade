@@ -490,5 +490,17 @@ function bucketize(trades: Trade[], bucketSize: number, initialPrice?: number): 
     }
   }
   if (currentCandle !== null) candles.push(currentCandle);
+
+  // lightweight-charts REQUIRES strictly-ascending, unique `time` values or it
+  // throws and the whole series renders blank. The intra-bucket side-flip split
+  // above (buy+sell in the same minute) produces two candles at the SAME bucket
+  // time -- rare at 1s (distinct seconds) but common at 1m+, which is why the
+  // chart "disappeared" when switching to 1m. Nudge any duplicate/backwards
+  // time forward by 1s so ordering holds; the shift is visually negligible.
+  let lastTime = -1;
+  for (const c of candles) {
+    if (c.time <= lastTime) c.time = lastTime + 1;
+    lastTime = c.time;
+  }
   return candles;
 }
