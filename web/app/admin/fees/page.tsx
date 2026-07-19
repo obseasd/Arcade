@@ -89,6 +89,96 @@ export default function FeesPage() {
     return <FeesBody />;
 }
 
+// Flat launch fees (from ArcadeHook constants) -- derived from subgraph counts.
+const CREATION_FEE_USD = 3;
+const MIGRATION_FEE_USD = 2500;
+
+interface FeeBreakdown {
+    creationUsd: number;
+    graduationUsd: number;
+    treasuryTradingUsd: number;
+    creatorTradingUsd: number;
+    antiSnipeUsd: number;
+    clankerHarvests: number;
+}
+
+/**
+ * All-time fee breakdown by category from the Goldsky subgraph. V4 trading /
+ * anti-sniper come EXACT from FeeStats; creation + graduation fees are derived
+ * from Global counts x the flat on-chain constants (both are fixed amounts, so
+ * count x rate is exact). Legacy V2/V3-locker/compounder/referral/bridge fees
+ * are not yet indexed -- listed as a caveat. Renders nothing pre-redeploy.
+ */
+function FeeCategoriesCard() {
+    const [bd, setBd] = useState<FeeBreakdown | null>(null);
+    useEffect(() => {
+        const url = process.env.NEXT_PUBLIC_GOLDSKY_URL;
+        if (!url) return;
+        let cancelled = false;
+        const q = `{ feeStats(id: "v4") { creatorFeesUsdc treasuryFeesUsdc antiSnipeUsdc clankerHarvests } global(id: "global") { tokenCount graduatedCount } }`;
+        fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ query: q }) })
+            .then((r) => (r.ok ? r.json() : null))
+            .then((j) => {
+                if (cancelled || !j?.data) return;
+                const f = j.data.feeStats ?? {};
+                const g = j.data.global ?? {};
+                setBd({
+                    creationUsd: (Number(g.tokenCount) || 0) * CREATION_FEE_USD,
+                    graduationUsd: (Number(g.graduatedCount) || 0) * MIGRATION_FEE_USD,
+                    treasuryTradingUsd: Number(f.treasuryFeesUsdc) || 0,
+                    creatorTradingUsd: Number(f.creatorFeesUsdc) || 0,
+                    antiSnipeUsd: Number(f.antiSnipeUsdc) || 0,
+                    clankerHarvests: Number(f.clankerHarvests) || 0,
+                });
+            })
+            .catch(() => {});
+        return () => {
+            cancelled = true;
+        };
+    }, []);
+    if (!bd) return null;
+    const protocolTotal = bd.creationUsd + bd.graduationUsd + bd.treasuryTradingUsd;
+    const fmt = (n: number) => `$${n.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+    return (
+        <div className="arc-card mb-6 p-6">
+            <div className="text-xs uppercase tracking-wider text-arc-text-muted">
+                Fees by category · all-time (indexer)
+            </div>
+            <div className="mt-1 text-3xl font-semibold tabular-nums">
+                {fmt(protocolTotal)}{" "}
+                <span className="text-sm font-normal text-arc-text-faint">protocol revenue → treasury</span>
+            </div>
+            <div className="mt-4 space-y-2 text-sm">
+                <CatRow label="Launch creation fees" sub="3 USDC × launches → treasury" value={fmt(bd.creationUsd)} />
+                <CatRow label="Graduation fees" sub="2,500 USDC × graduations → treasury" value={fmt(bd.graduationUsd)} />
+                <CatRow label="Trading fees — protocol (20%)" sub="V4 post-graduation → treasury" value={fmt(bd.treasuryTradingUsd)} />
+                <div className="my-1 border-t border-arc-border/60" />
+                <CatRow label="Trading fees — creators (80%)" sub="V4 post-graduation → launch creators" value={fmt(bd.creatorTradingUsd)} muted />
+                <CatRow label="Anti-sniper auction" sub="→ launch creators" value={fmt(bd.antiSnipeUsd)} muted />
+                <CatRow label="CLANKER fee harvests" sub={`${bd.clankerHarvests} harvest event${bd.clankerHarvests === 1 ? "" : "s"} · USD folded into trading fees`} value="—" muted />
+            </div>
+            <p className="mt-4 text-[11px] leading-relaxed text-arc-text-faint">
+                Not yet categorised by the indexer (would need extra subgraph datasources): V2 pair
+                split (0.15% protocol / 0.05% creator), V3 locker fees (80/20), auto-compounder fee
+                (≤10%), referral surcharge, CCTP bridge fee (0.05%), and the 1% pre-graduation curve
+                fee. Inbound treasury USDC from those still shows in the recent-window scan below.
+            </p>
+        </div>
+    );
+}
+
+function CatRow({ label, sub, value, muted }: { label: string; sub: string; value: string; muted?: boolean }) {
+    return (
+        <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0">
+                <div className={cn("font-medium", muted && "text-arc-text-muted")}>{label}</div>
+                <div className="text-[11px] text-arc-text-faint">{sub}</div>
+            </div>
+            <div className="shrink-0 tabular-nums font-semibold">{value}</div>
+        </div>
+    );
+}
+
 function FeesBody() {
     const [data, setData] = useState<FeesResponse | null>(null);
     const [loading, setLoading] = useState(true);
@@ -188,6 +278,9 @@ function FeesBody() {
                     </>
                 ) : null}
             </div>
+
+            {/* All-time fee breakdown by category, from the subgraph. */}
+            <FeeCategoriesCard />
 
             {/* Error state */}
             {error && (
