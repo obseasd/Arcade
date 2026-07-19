@@ -1,4 +1,5 @@
 import bundleAnalyzer from "@next/bundle-analyzer";
+import { withSentryConfig } from "@sentry/nextjs";
 
 // Audit 2026-06-11 v2 Perf: bundle analyzer wired but gated on
 // ANALYZE=1 so it's a no-op for normal builds. Run with:
@@ -70,4 +71,18 @@ const nextConfig = {
   },
 };
 
-export default withBundleAnalyzer(nextConfig);
+// Sentry wraps the config to upload source maps (only when SENTRY_AUTH_TOKEN is
+// set) and to tree-shake logging. Safe to always apply: with no auth token it
+// simply skips the upload. `silent` keeps normal builds quiet.
+export default withSentryConfig(withBundleAnalyzer(nextConfig), {
+  org: process.env.SENTRY_ORG,
+  project: process.env.SENTRY_PROJECT,
+  authToken: process.env.SENTRY_AUTH_TOKEN,
+  silent: !process.env.CI,
+  widenClientFileUpload: true,
+  disableLogger: true,
+  // Route Sentry requests through /monitoring to dodge ad-blockers (only used
+  // client-side when a DSN is configured).
+  tunnelRoute: "/monitoring",
+});
+
