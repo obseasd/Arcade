@@ -2,9 +2,11 @@ import { BigInt, BigDecimal, Address, Bytes, ethereum } from "@graphprotocol/gra
 import { Buy, Sell, TokenCreated, Migrated } from "../generated/Launchpad/Launchpad";
 import { PoolCreated } from "../generated/V3Factory/V3Factory";
 import { Swap } from "../generated/templates/V3Pool/V3Pool";
-import { V3Pool } from "../generated/templates";
+import { Transfer } from "../generated/templates/ArcadeToken/ERC20";
+import { V3Pool, ArcadeToken } from "../generated/templates";
 import {
   LaunchCreated,
+  TokenLaunched,
   CurveBuy,
   CurveSell,
   Graduated,
@@ -20,6 +22,8 @@ import {
   Pool,
   Trader,
   Token,
+  TokenBalance,
+  TokenDayData,
   Global,
   Creator,
   V4Pool,
@@ -192,7 +196,140 @@ function recordTrade(
   // graduated volume ONLY for the token's official migrated pool.
   creditCreator(token, volumeUsdc, blockTime, pool);
 
+  // Per-token running aggregates + daily bucket (launchpad tokens only).
+  bumpTokenAggregates(token, price, volumeUsdc, isBuy, blockTime);
+
   g.save();
+}
+
+/** Initialise the non-null aggregate fields on a freshly-created Token. Called
+ *  at every `new Token(...)` site so the schema's non-null constraints hold. */
+function initTokenAggregates(tok: Token): void {
+  tok.totalVolumeUsdc = BigDecimal.fromString("0");
+  tok.tradeCount = 0;
+  tok.feesUsdc = BigDecimal.fromString("0");
+  tok.lastPriceUsdc = BigDecimal.fromString("0");
+  tok.usdcLiquidity = BigDecimal.fromString("0");
+  tok.holderCount = 0;
+}
+
+/** The day-start epoch (UTC midnight) for a block timestamp. */
+function dayStartOf(blockTime: i32): i32 {
+  return (blockTime / 86400) * 86400;
+}
+
+/** Load or create the per-token daily bucket, seeding OHLC at `price`. */
+function loadTokenDay(token: Bytes, blockTime: i32, price: BigDecimal): TokenDayData {
+  const dayStart = dayStartOf(blockTime);
+  const dayId = token.toHexString() + "-" + dayStart.toString();
+  let d = TokenDayData.load(dayId);
+  if (d == null) {
+    d = new TokenDayData(dayId);
+    d.token = token;
+    d.date = dayStart;
+    d.volumeUsdc = BigDecimal.fromString("0");
+    d.feesUsdc = BigDecimal.fromString("0");
+    d.tradeCount = 0;
+    d.open = price;
+    d.high = price;
+    d.low = price;
+    d.close = price;
+  }
+  return d;
+}
+
+/** Update a launchpad token's running volume/trade-count/last-price/liquidity
+ *  and its daily bucket. No-op for a non-launchpad token (no Token row). */
+function bumpTokenAggregates(
+  token: Bytes,
+  price: BigDecimal,
+  volumeUsdc: BigDecimal,
+  isBuy: boolean,
+  blockTime: i32,
+): void {
+  const tok = Token.load(token.toHexString());
+  if (tok == null) return;
+  tok.totalVolumeUsdc = tok.totalVolumeUsdc.plus(volumeUsdc);
+  tok.tradeCount = tok.tradeCount + 1;
+  tok.lastPriceUsdc = price;
+  let liq = isBuy ? tok.usdcLiquidity.plus(volumeUsdc) : tok.usdcLiquidity.minus(volumeUsdc);
+  if (liq.lt(BigDecimal.fromString("0"))) liq = BigDecimal.fromString("0");
+  tok.usdcLiquidity = liq;
+  tok.save();
+
+  const d = loadTokenDay(token, blockTime, price);
+  d.volumeUsdc = d.volumeUsdc.plus(volumeUsdc);
+  d.tradeCount = d.tradeCount + 1;
+  d.close = price;
+  if (price.gt(d.high)) d.high = price;
+  if (price.lt(d.low)) d.low = price;
+  d.save();
+}
+
+/** Credit swap fees (USDC) to a launchpad token + its daily bucket. */
+function creditTokenFees(token: Bytes, feeUsdc: BigDecimal, blockTime: i32): void {
+  const tok = Token.load(token.toHexString());
+  if (tok == null) return;
+  tok.feesUsdc = tok.feesUsdc.plus(feeUsdc);
+  tok.save();
+
+  const d = loadTokenDay(token, blockTime, tok.lastPriceUsdc);
+  d.feesUsdc = d.feesUsdc.plus(feeUsdc);
+  d.save();
+}
+
+/** ERC20 Transfer handler (ArcadeToken template): maintain per-holder balances
+ *  + the token's live holder count. Mints (from 0) and burns (to 0) move supply
+ *  in/out without counting the zero address as a holder. */
+export function handleTransfer(event: Transfer): void {
+  const token = event.address;
+  const value = event.params.value;
+  const blockTime = event.block.timestamp.toI32();
+  const zero = Address.zero();
+
+  const tok = Token.load(token.toHexString());
+  let holderDelta = 0;
+
+  // Sender: subtract (unless mint from zero).
+  if (!event.params.from.equals(zero)) {
+    const fromId = token.toHexString() + "-" + event.params.from.toHexString();
+    let fromBal = TokenBalance.load(fromId);
+    if (fromBal == null) {
+      fromBal = new TokenBalance(fromId);
+      fromBal.token = token;
+      fromBal.holder = event.params.from;
+      fromBal.balanceRaw = BigInt.fromI32(0);
+    }
+    const wasPositive = fromBal.balanceRaw.gt(BigInt.fromI32(0));
+    fromBal.balanceRaw = fromBal.balanceRaw.minus(value);
+    if (fromBal.balanceRaw.lt(BigInt.fromI32(0))) fromBal.balanceRaw = BigInt.fromI32(0);
+    if (wasPositive && fromBal.balanceRaw.equals(BigInt.fromI32(0))) holderDelta -= 1;
+    fromBal.lastUpdate = blockTime;
+    fromBal.save();
+  }
+
+  // Recipient: add (unless burn to zero).
+  if (!event.params.to.equals(zero)) {
+    const toId = token.toHexString() + "-" + event.params.to.toHexString();
+    let toBal = TokenBalance.load(toId);
+    if (toBal == null) {
+      toBal = new TokenBalance(toId);
+      toBal.token = token;
+      toBal.holder = event.params.to;
+      toBal.balanceRaw = BigInt.fromI32(0);
+    }
+    const wasZero = toBal.balanceRaw.equals(BigInt.fromI32(0));
+    toBal.balanceRaw = toBal.balanceRaw.plus(value);
+    if (wasZero && toBal.balanceRaw.gt(BigInt.fromI32(0))) holderDelta += 1;
+    toBal.lastUpdate = blockTime;
+    toBal.save();
+  }
+
+  if (tok != null && holderDelta != 0) {
+    tok.holderCount = tok.holderCount + holderDelta;
+    if (tok.holderCount < 0) tok.holderCount = 0;
+    tok.save();
+  }
 }
 
 // ---- Curve / launchpad ----
@@ -230,7 +367,14 @@ export function handleTokenCreated(event: TokenCreated): void {
   tok.mode = event.params.mode;
   tok.createdAt = blockTime;
   tok.migrated = false;
+  tok.name = event.params.name;
+  tok.symbol = event.params.symbol;
+  tok.metadataURI = event.params.metadataURI;
+  initTokenAggregates(tok);
   tok.save();
+
+  // Spawn the ERC20 Transfer listener so holders index from launch.
+  ArcadeToken.create(event.params.token);
 
   const g = loadGlobal();
   g.tokenCount = g.tokenCount + 1;
@@ -267,6 +411,7 @@ export function handleMigrated(event: Migrated): void {
     tok.creator = Address.zero();
     tok.mode = 0;
     tok.createdAt = event.block.timestamp.toI32();
+    initTokenAggregates(tok);
   }
   tok.migrated = true;
   tok.migratedAt = event.block.timestamp.toI32();
@@ -395,6 +540,9 @@ export function handleLaunchCreatedV4(event: LaunchCreated): void {
   p.save();
 
   // Token lifecycle row (shared with V2/V3 stats).
+  // Token row is normally created by handleTokenLaunchedV4 (emitted just before
+  // LaunchCreated in the same tx, so it runs first). This is a defensive
+  // fallback if that event is ever missed -- it creates WITHOUT metadata.
   const tid = token.toHexString();
   let tok = Token.load(tid);
   if (tok == null) {
@@ -403,7 +551,10 @@ export function handleLaunchCreatedV4(event: LaunchCreated): void {
     tok.mode = mode;
     tok.createdAt = event.block.timestamp.toI32();
     tok.migrated = false;
+    initTokenAggregates(tok);
     tok.save();
+
+    ArcadeToken.create(token);
 
     const g = loadGlobal();
     g.tokenCount = g.tokenCount + 1;
@@ -422,6 +573,55 @@ export function handleLaunchCreatedV4(event: LaunchCreated): void {
     }
     c.tokenCount = c.tokenCount + 1;
     c.save();
+  }
+}
+
+/**
+ * V4 token metadata + lifecycle. TokenLaunched is emitted just BEFORE
+ * LaunchCreated in the same createLaunch tx, so this is the canonical creator of
+ * the V4 Token row (it carries name/symbol/metadataURI + creator + mode). It
+ * bumps the global/creator counts and spawns the Transfer listener; the later
+ * LaunchCreated handler then only adds the PoolId->token map.
+ */
+export function handleTokenLaunchedV4(event: TokenLaunched): void {
+  const blockTime = event.block.timestamp.toI32();
+  const tid = event.params.token.toHexString();
+  let tok = Token.load(tid);
+  const isNew = tok == null;
+  if (tok == null) {
+    tok = new Token(tid);
+    tok.createdAt = blockTime;
+    tok.migrated = false;
+    initTokenAggregates(tok);
+    ArcadeToken.create(event.params.token);
+  }
+  tok.creator = event.params.creator;
+  tok.mode = event.params.mode;
+  tok.name = event.params.name;
+  tok.symbol = event.params.symbol;
+  tok.metadataURI = event.params.metadataURI;
+  tok.save();
+
+  if (isNew) {
+    const g = loadGlobal();
+    g.tokenCount = g.tokenCount + 1;
+    g.save();
+
+    if (!event.params.creator.equals(Address.zero())) {
+      const cid = event.params.creator.toHexString();
+      let c = Creator.load(cid);
+      if (c == null) {
+        c = new Creator(cid);
+        c.tokenCount = 0;
+        c.tradeCount = 0;
+        c.totalVolumeUsdc = BigDecimal.fromString("0");
+        c.graduatedVolumeUsdc = BigDecimal.fromString("0");
+        c.firstSeenAt = blockTime;
+        c.lastTradeAt = 0;
+      }
+      c.tokenCount = c.tokenCount + 1;
+      c.save();
+    }
   }
 }
 
@@ -475,10 +675,18 @@ export function handleRoyaltyPaidV4(event: RoyaltyPaid): void {
   // carries an 18dp launch-token amount that would corrupt the 6dp USDC tally.
   // Only fold the USDC side into the fee stats.
   if (!event.params.currency.equals(usdcAddress())) return;
+  const creatorFee = usdcVolume(event.params.creatorAmount);
+  const treasuryFee = usdcVolume(event.params.treasuryAmount);
   const f = loadFeeStats();
-  f.creatorFeesUsdc = f.creatorFeesUsdc.plus(usdcVolume(event.params.creatorAmount));
-  f.treasuryFeesUsdc = f.treasuryFeesUsdc.plus(usdcVolume(event.params.treasuryAmount));
+  f.creatorFeesUsdc = f.creatorFeesUsdc.plus(creatorFee);
+  f.treasuryFeesUsdc = f.treasuryFeesUsdc.plus(treasuryFee);
   f.save();
+
+  // Per-token fee total (creator + treasury) + its daily bucket.
+  const p = V4Pool.load(event.params.poolId.toHexString());
+  if (p != null) {
+    creditTokenFees(p.token, creatorFee.plus(treasuryFee), event.block.timestamp.toI32());
+  }
 }
 
 export function handleFeeHarvestedV4(event: FeeHarvested): void {

@@ -31,10 +31,13 @@ dataSources:
         - Trade
         - Trader
         - Token
+        - TokenDayData
         - Global
       abis:
         - name: Launchpad
           file: ./abis/Launchpad.json
+        - name: ERC20
+          file: ./abis/ERC20.json
       eventHandlers:
         - event: Buy(indexed address,indexed address,uint256,uint256,uint256)
           handler: handleBuy
@@ -80,6 +83,7 @@ dataSources:
         - Trade
         - Trader
         - Token
+        - TokenDayData
         - Creator
         - Global
         - V4Pool
@@ -88,9 +92,13 @@ dataSources:
       abis:
         - name: ArcadeHook
           file: ./abis/ArcadeHook.json
+        - name: ERC20
+          file: ./abis/ERC20.json
       eventHandlers:
         - event: LaunchCreated(indexed bytes32,indexed address,address,uint8)
           handler: handleLaunchCreatedV4
+        - event: TokenLaunched(indexed address,indexed address,uint8,string,string,string)
+          handler: handleTokenLaunchedV4
         - event: CurveBuy(indexed bytes32,indexed address,uint256,uint256)
           handler: handleCurveBuyV4
         - event: CurveSell(indexed bytes32,indexed address,uint256,uint256)
@@ -150,6 +158,7 @@ dataSources:
         - Trade
         - Trader
         - Token
+        - TokenDayData
         - Creator
         - Global
         - V4Pool
@@ -161,6 +170,28 @@ dataSources:
           handler: handleV4Swap
       file: ./src/mappings.ts
 templates:
+  # ERC20 Transfer template, spawned per launched token (ArcadeToken.create in
+  # handleTokenCreated / handleTokenLaunchedV4) so holder balances are indexed
+  # from launch without a client-side Transfer scan.
+  - kind: ethereum
+    name: ArcadeToken
+    network: arc-testnet
+    source:
+      abi: ERC20
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.9
+      language: wasm/assemblyscript
+      entities:
+        - TokenBalance
+        - Token
+      abis:
+        - name: ERC20
+          file: ./abis/ERC20.json
+      eventHandlers:
+        - event: Transfer(indexed address,indexed address,uint256)
+          handler: handleTransfer
+      file: ./src/mappings.ts
   - kind: ethereum
     name: V3Pool
     network: arc-testnet
