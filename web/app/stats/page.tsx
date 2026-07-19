@@ -63,15 +63,22 @@ export default async function StatsPage({
     const backHref = from === "admin" ? "/admin" : "/";
     const backLabel = from === "admin" ? "Admin" : "Home";
 
-    // Headline stays on the persisted DB snapshot (monotonic all-time MAX, full
-    // scope incl. V2 pairs) -> RPC scan. The Goldsky subgraph is a strict SUBSET
-    // (Launchpad + V3 only, no V2) so it must NOT drive the cumulative headline
-    // (it would visibly lower Volume / Txs / Wallets). We read it ONLY for the
-    // additive "graduated" count, which the RPC path does not have.
+    // Headline now comes from the Goldsky subgraph (Global running totals):
+    // volume / txs / unique wallets / launched / graduated. It covers curve +
+    // V3 + V4; the only gap is legacy V2 pairs (a minor slice), so the numbers
+    // read slightly LOWER than the old RPC scan but are live + free. Falls back
+    // to the persisted DB snapshot, then a live RPC scan, if the subgraph is
+    // unset/behind. The 500k-block × ~50-contract getLogs scan is now only a
+    // last-resort fallback, not the default.
     const persisted = await getLatestPersistedSnapshot();
+    const goldsky = await getGoldskyStats();
     let snap: StatsSnapshot;
     let usingPersisted = false;
-    if (persisted) {
+    if (goldsky) {
+        snap = goldsky;
+        // Keep the DB history (if any) for the delta + sparkline.
+        usingPersisted = !!persisted;
+    } else if (persisted) {
         snap = persisted;
         usingPersisted = true;
     } else {
@@ -81,9 +88,9 @@ export default async function StatsPage({
         // retry hourly anyway.
         void insertSnapshot(snap, "fallback").catch(() => {});
     }
-    // Supplementary: the graduated-token count from the subgraph (additive; does
-    // not affect any headline number). Null when the subgraph is unset/behind.
-    const graduated = (await getGoldskyStats())?.tokensGraduated ?? null;
+    // Graduated-token count (from whichever snapshot carries it; the RPC path
+    // does not, so fall back to the subgraph value explicitly).
+    const graduated = goldsky?.tokensGraduated ?? snap.tokensGraduated ?? null;
 
     // M3 breakdowns (additive, each hides when empty):
     //   - top creators by attributable volume + estimated fee (subgraph)

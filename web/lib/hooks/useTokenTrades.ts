@@ -39,15 +39,16 @@ interface ScanResult {
 const GOLDSKY_URL = process.env.NEXT_PUBLIC_GOLDSKY_URL;
 
 /**
- * V4 (ArcadeHook) trade feed from the Goldsky subgraph. The Trade entity id is
+ * Trade feed from the Goldsky subgraph for ANY venue. The Trade entity id is
  * `${txHash}-${logIndex}` so we recover the real tx hash for the explorer link.
  * volumeUsdc is whole USDC and price is USDC-per-token (subgraph BigDecimals);
  * we scale back to the raw 6-/18-dec units the row renderer expects. `trader`
- * is the subgraph's recorded wallet.
+ * is the subgraph's recorded wallet. `sourceWhere` is the GraphQL fragment that
+ * pins the venue (e.g. `source: "v3"` or `source_in: ["v4","v4curve"]`).
  */
-async function fetchV4Trades(token: Address): Promise<Trade[]> {
+async function fetchTradesFromSubgraph(token: Address, sourceWhere: string): Promise<Trade[]> {
   if (!GOLDSKY_URL) return [];
-  const q = `{ trades(first: ${MAX_TRADES}, orderBy: blockNumber, orderDirection: desc, where: { token: "${token.toLowerCase()}", source: "v4" }) { id trader price volumeUsdc isBuy blockTime blockNumber } }`;
+  const q = `{ trades(first: ${MAX_TRADES}, orderBy: blockNumber, orderDirection: desc, where: { token: "${token.toLowerCase()}", ${sourceWhere} }) { id trader price volumeUsdc isBuy blockTime blockNumber } }`;
   try {
     const res = await fetch(GOLDSKY_URL, {
       method: "POST",
@@ -179,17 +180,23 @@ export function useTokenTrades(args: {
       if (!publicClient || !token || mode === undefined) {
         return { trades: [], latestBlock: 0n };
       }
-      // V4 (ArcadeHook) tokens: read the trade feed from the subgraph. Their
-      // swaps live on the shared V4 PoolManager, which has no per-token event
-      // to scan client-side. Correct amounts + real tx hashes come from the
-      // Trade entity; the "wallet" is the subgraph's trader field.
-      if (source === "v4") {
-        const latest = await publicClient.getBlockNumber();
-        const trades = await fetchV4Trades(token);
-        return { trades, latestBlock: latest };
-      }
-      if (isV3 && !pool) return { trades: [], latestBlock: 0n };
       const latest = await publicClient.getBlockNumber();
+
+      // Subgraph-first for EVERY venue (retires the per-token getLogs walk).
+      // Venue -> Trade.source: v4 hook = v4/v4curve, CLANKER_V3 = v3, curve =
+      // curve. If the subgraph returns rows, use them; otherwise fall through
+      // to the on-chain scan (v4 has no scan fallback -> empty).
+      const sourceWhere =
+        source === "v4"
+          ? `source_in: ["v4", "v4curve"]`
+          : isV3
+            ? `source: "v3"`
+            : `source: "curve"`;
+      const indexed = await fetchTradesFromSubgraph(token, sourceWhere);
+      if (indexed.length > 0) return { trades: indexed, latestBlock: latest };
+      if (source === "v4") return { trades: [], latestBlock: latest };
+
+      if (isV3 && !pool) return { trades: [], latestBlock: 0n };
 
       // Detect USDC side for V3 pools.
       let usdcIsToken0 = true;
