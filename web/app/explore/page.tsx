@@ -66,20 +66,6 @@ const FILTERS: { value: Filter; label: string; icon?: React.ReactNode }[] = [
         icon: <HotFlameIcon className="h-3.5 w-3.5" />,
     },
     {
-        value: "points",
-        label: "Points Program",
-        icon: (
-            <Image
-                src="/arcdlogo22.png"
-                alt=""
-                width={16}
-                height={16}
-                className="h-4 w-4"
-                unoptimized
-            />
-        ),
-    },
-    {
         value: "incentivized",
         label: "Incentivized & Liquidity Mining",
         icon: (

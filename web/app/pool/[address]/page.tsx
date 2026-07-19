@@ -4,6 +4,7 @@ import { ArrowLeft, ExternalLink, Plus, TrendingUp, Trash2 } from "lucide-react"
 import Link from "next/link";
 import { useParams, useSearchParams } from "next/navigation";
 import { useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Address, erc20Abi, formatUnits, isAddress, parseAbi, zeroAddress } from "viem";
 import { useAccount, useReadContract } from "wagmi";
 
@@ -28,6 +29,28 @@ const USDC_LOWER = ADDRESSES.usdc.toLowerCase();
  * panel (current price, raw token reserves) instead of the V2-only
  * reserves/totalSupply/share triad which would read as zero on a V3 pool.
  */
+/** Latest daily volume + fees for a pool (subgraph PoolDayData). {} on a miss
+ *  (unset / pre-redeploy / no trades) so the KPIs show "—". */
+function usePoolDay24h(pool: Address | undefined): { vol?: number; fees?: number } {
+    const { data } = useQuery<{ vol?: number; fees?: number }>({
+        queryKey: ["arcade", "pool-day-24h", pool?.toLowerCase() ?? null],
+        enabled: !!process.env.NEXT_PUBLIC_GOLDSKY_URL && !!pool && pool !== zeroAddress,
+        staleTime: 30_000,
+        refetchInterval: 60_000,
+        queryFn: async () => {
+            const url = process.env.NEXT_PUBLIC_GOLDSKY_URL as string;
+            const q = `{ poolDayDatas(first: 1, orderBy: date, orderDirection: desc, where: { pool: "${(pool as Address).toLowerCase()}" }) { volumeUsdc feesUsdc } }`;
+            const res = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ query: q }) });
+            if (!res.ok) return {};
+            const j = (await res.json()) as { data?: { poolDayDatas?: { volumeUsdc: string; feesUsdc: string }[] } };
+            const d = j?.data?.poolDayDatas?.[0];
+            if (!d) return {};
+            return { vol: Number(d.volumeUsdc) || 0, fees: Number(d.feesUsdc) || 0 };
+        },
+    });
+    return data ?? {};
+}
+
 export default function PoolDetailPage() {
     const params = useParams<{ address: string }>();
     const searchParams = useSearchParams();
@@ -48,6 +71,8 @@ export default function PoolDetailPage() {
         ? (pairAddrRaw as Address)
         : (zeroAddress as Address);
     const isPair = pair !== zeroAddress;
+    // Latest daily volume + fees for this pool (subgraph PoolDayData).
+    const day = usePoolDay24h(pair);
 
     const token0Q = useReadContract({
         address: pair,
@@ -418,8 +443,8 @@ export default function PoolDetailPage() {
                         return tvl > 0n ? formatUsd(tvl) : "—";
                     })()}
                 />
-                <Kpi label="24h Volume" value="—" pendingIndexer />
-                <Kpi label="24h Fees" value="—" pendingIndexer />
+                <Kpi label="24h Volume" value={day.vol !== undefined ? `$${day.vol.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : "—"} pendingIndexer={day.vol === undefined} />
+                <Kpi label="24h Fees" value={day.fees !== undefined ? `$${day.fees.toLocaleString(undefined, { maximumFractionDigits: 2 })}` : "—"} pendingIndexer={day.fees === undefined} />
             </div>
 
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-[2fr_1fr]">

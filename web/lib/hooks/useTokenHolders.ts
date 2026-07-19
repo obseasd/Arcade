@@ -85,6 +85,32 @@ export function useTokenHolders(
 ): { holders: Holder[]; totalHolders: number; isLoading: boolean } {
   const publicClient = usePublicClient();
 
+  // Exact holder count from the subgraph (Token.holderCount) -- the balances
+  // list below is capped at 100 for display, so `holders.length` under-counts
+  // the true holder base. Null when the subgraph is unset / pre-redeploy.
+  const countQ = useQuery<number | null>({
+    queryKey: ["arcade", "holder-count", token?.toLowerCase() ?? null],
+    enabled: !!GOLDSKY_URL && !!token,
+    staleTime: 60_000,
+    refetchInterval: 120_000,
+    queryFn: async () => {
+      if (!GOLDSKY_URL || !token) return null;
+      try {
+        const res = await fetch(GOLDSKY_URL, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ query: `{ token(id: "${token.toLowerCase()}") { holderCount } }` }),
+        });
+        if (!res.ok) return null;
+        const j = (await res.json()) as { data?: { token?: { holderCount?: number } | null } };
+        const c = j?.data?.token?.holderCount;
+        return typeof c === "number" ? c : null;
+      } catch {
+        return null;
+      }
+    },
+  });
+
   const { data, isLoading, isFetching } = useQuery<Holder[]>({
     // thouders-no-totalSupply-reactivity: totalSupply lives in the
     // RETURNED data (for pct calc), not in the queryKey, so the chunked
@@ -133,9 +159,11 @@ export function useTokenHolders(
   });
 
   const holders = data ?? [];
+  // Prefer the exact subgraph count; fall back to the (capped) list length.
+  const totalHolders = countQ.data != null ? countQ.data : holders.length;
   return {
     holders,
-    totalHolders: holders.length,
+    totalHolders,
     isLoading: !!token && (isLoading || isFetching),
   };
 }
