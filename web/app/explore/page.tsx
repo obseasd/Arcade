@@ -795,6 +795,32 @@ function useProtocolTotals(): { volumeUsdc: bigint; feesUsdc: bigint } {
     return data ?? { volumeUsdc: 0n, feesUsdc: 0n };
 }
 
+/**
+ * A launchpad token's most-recent daily bucket (subgraph TokenDayData) for the
+ * per-row "1D Volume" / "Daily Fees" metrics + the APR derivation. Returns {}
+ * on any miss (unset / pre-redeploy / not-indexed) so the row shows "—".
+ */
+function useTokenDayStats(token: Address | undefined): { vol1d?: number; fees1d?: number } {
+    const key = token?.toLowerCase();
+    const { data } = useQuery<{ vol1d?: number; fees1d?: number }>({
+        queryKey: ["arcade", "token-day-stats", key],
+        enabled: !!process.env.NEXT_PUBLIC_GOLDSKY_URL && !!key,
+        staleTime: 30_000,
+        refetchInterval: 60_000,
+        queryFn: async () => {
+            const url = process.env.NEXT_PUBLIC_GOLDSKY_URL as string;
+            const q = `{ tokenDayDatas(first: 1, orderBy: date, orderDirection: desc, where: { token: "${key}" }) { volumeUsdc feesUsdc } }`;
+            const res = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ query: q }) });
+            if (!res.ok) return {};
+            const j = (await res.json()) as { data?: { tokenDayDatas?: { volumeUsdc: string; feesUsdc: string }[] } };
+            const d = j?.data?.tokenDayDatas?.[0];
+            if (!d) return {};
+            return { vol1d: Number(d.volumeUsdc) || 0, fees1d: Number(d.feesUsdc) || 0 };
+        },
+    });
+    return data ?? {};
+}
+
 // TVL uses singleLine so only the total trace renders, and the tooltip
 // surfaces a single TVL row instead of the split.
 // -------------------------------------------------------------------
@@ -1059,6 +1085,19 @@ function PoolPairRowCard({
     const tvlLabel = useMemo(() => formatUsd(row.tvlUsdc), [row.tvlUsdc]);
     const subCount = row.subRows.length;
 
+    // Per-row daily metrics: the launchpad token is the non-USDC side of the
+    // pair; its TokenDayData drives 1D Volume + Daily Fees, and APR =
+    // dailyFees*365 / TVL. "—" (pendingIndexer) until the subgraph serves them.
+    const launchToken =
+        row.token0.address.toLowerCase() === USDC_LOWER ? row.token1.address : row.token0.address;
+    const day = useTokenDayStats(launchToken);
+    const tvlUsd = Number(row.tvlUsdc) / 1e6;
+    const aprPct =
+        day.fees1d !== undefined && tvlUsd > 0 ? (day.fees1d * 365 * 100) / tvlUsd : undefined;
+    const vol1dLabel = day.vol1d !== undefined ? `$${day.vol1d.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : "—";
+    const dailyFeesLabel = day.fees1d !== undefined ? `$${day.fees1d.toLocaleString(undefined, { maximumFractionDigits: 2 })}` : "—";
+    const aprLabel = aprPct !== undefined ? `${aprPct.toLocaleString(undefined, { maximumFractionDigits: 1 })}%` : "—";
+
     return (
         <div className="relative">
             {/* "LP Boost" sticker - sits on top of the row border for any pool
@@ -1113,7 +1152,7 @@ function PoolPairRowCard({
                                 {row.token0.symbol} / {row.token1.symbol}
                             </span>
                         </div>
-                        {row.aprPct !== undefined && row.aprPct > 100 && (
+                        {aprPct !== undefined && aprPct > 100 && (
                             <div className="mt-1 flex flex-wrap items-center gap-1.5">
                                 <span className="inline-flex items-center gap-1 rounded-md border border-arc-warn/40 bg-arc-warn/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-arc-warn">
                                     <Flame className="h-2.5 w-2.5" />
@@ -1124,10 +1163,10 @@ function PoolPairRowCard({
                     </div>
                 </div>
                 <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                    <Metric label="Best APR" value="—" pendingIndexer center />
-                    <Metric label="Daily Fees" value="—" pendingIndexer center />
+                    <Metric label="Best APR" value={aprLabel} pendingIndexer={aprPct === undefined} center />
+                    <Metric label="Daily Fees" value={dailyFeesLabel} pendingIndexer={day.fees1d === undefined} center />
                     <Metric label="TVL" value={tvlLabel} center />
-                    <Metric label="1D Volume" value="—" pendingIndexer center />
+                    <Metric label="1D Volume" value={vol1dLabel} pendingIndexer={day.vol1d === undefined} center />
                 </div>
                 <div className="flex items-center justify-end gap-2">
                     <Link
