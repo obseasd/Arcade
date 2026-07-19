@@ -36,6 +36,64 @@ interface ScanResult {
   latestBlock: bigint;
 }
 
+const GOLDSKY_URL = process.env.NEXT_PUBLIC_GOLDSKY_URL;
+
+/**
+ * V4 (ArcadeHook) trade feed from the Goldsky subgraph. The Trade entity id is
+ * `${txHash}-${logIndex}` so we recover the real tx hash for the explorer link.
+ * volumeUsdc is whole USDC and price is USDC-per-token (subgraph BigDecimals);
+ * we scale back to the raw 6-/18-dec units the row renderer expects. `trader`
+ * is the subgraph's recorded wallet.
+ */
+async function fetchV4Trades(token: Address): Promise<Trade[]> {
+  if (!GOLDSKY_URL) return [];
+  const q = `{ trades(first: ${MAX_TRADES}, orderBy: blockNumber, orderDirection: desc, where: { token: "${token.toLowerCase()}", source: "v4" }) { id trader price volumeUsdc isBuy blockTime blockNumber } }`;
+  try {
+    const res = await fetch(GOLDSKY_URL, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ query: q }),
+    });
+    if (!res.ok) return [];
+    const json = (await res.json()) as {
+      data?: {
+        trades?: Array<{
+          id: string;
+          trader: string;
+          price: string | number;
+          volumeUsdc: string | number;
+          isBuy: boolean;
+          blockTime: string | number;
+          blockNumber: string | number;
+        }>;
+      };
+    };
+    const rows = json?.data?.trades ?? [];
+    const nowSec = Math.floor(Date.now() / 1000);
+    return rows.map((r) => {
+      const vol = Number(r.volumeUsdc); // whole USDC
+      const price = Number(r.price); // USDC per token
+      const usdcRaw = BigInt(Math.max(0, Math.round(vol * 1e6)));
+      const tokens = price > 0 ? vol / price : 0;
+      // Two-step scale keeps Number precision on large token counts.
+      const tokenRaw = BigInt(Math.max(0, Math.floor(tokens * 1e6))) * 10n ** 12n;
+      const txHash = ((r.id.split("-")[0] ?? "0x") as `0x${string}`);
+      const blockTime = Number(r.blockTime);
+      return {
+        txHash,
+        blockNumber: BigInt(r.blockNumber),
+        blocksAgo: Math.max(0, nowSec - (Number.isFinite(blockTime) ? blockTime : nowSec)),
+        type: r.isBuy ? "buy" : "sell",
+        wallet: r.trader as Address,
+        usdcRaw,
+        tokenRaw,
+      } satisfies Trade;
+    });
+  } catch {
+    return [];
+  }
+}
+
 /**
  * Recent trades on a launchpad token, with live updates via WebSocket.
  *
@@ -60,12 +118,16 @@ export function useTokenTrades(args: {
    *  the Buy/Sell scan + live watch hit the right contract (pages audit
    *  2026-07-02: prior-generation curve tokens showed "No trades yet"). */
   launchpad?: Address;
+  /** "v4" for ArcadeHook tokens: their trades live on the shared V4
+   *  PoolManager and are only surfaced via the subgraph, so we read the feed
+   *  from Goldsky instead of scanning legacy launchpad / V3 events. */
+  source?: string;
 }): {
   trades: Trade[];
   isLoading: boolean;
   latestBlock: bigint;
 } {
-  const { token, mode, pool } = args;
+  const { token, mode, pool, source } = args;
   const lp = args.launchpad ?? ADDRESSES.launchpad;
   const publicClient = usePublicClient();
   const queryClient = useQueryClient();
@@ -102,8 +164,9 @@ export function useTokenTrades(args: {
       mode ?? null,
       pool?.toLowerCase() ?? null,
       lp.toLowerCase(),
+      source ?? null,
     ],
-    [token, mode, pool, lp],
+    [token, mode, pool, lp, source],
   );
 
   const { data, isLoading, isFetching } = useQuery<ScanResult>({
@@ -115,6 +178,15 @@ export function useTokenTrades(args: {
     queryFn: async () => {
       if (!publicClient || !token || mode === undefined) {
         return { trades: [], latestBlock: 0n };
+      }
+      // V4 (ArcadeHook) tokens: read the trade feed from the subgraph. Their
+      // swaps live on the shared V4 PoolManager, which has no per-token event
+      // to scan client-side. Correct amounts + real tx hashes come from the
+      // Trade entity; the "wallet" is the subgraph's trader field.
+      if (source === "v4") {
+        const latest = await publicClient.getBlockNumber();
+        const trades = await fetchV4Trades(token);
+        return { trades, latestBlock: latest };
       }
       if (isV3 && !pool) return { trades: [], latestBlock: 0n };
       const latest = await publicClient.getBlockNumber();

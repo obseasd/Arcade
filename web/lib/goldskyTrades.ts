@@ -43,7 +43,10 @@ export async function fetchTradesFromGoldsky(
     pool?: Address,
     // Page size / cap are injectable so the pagination is unit-testable without
     // generating 1000+ mock rows; production uses the exported defaults.
-    opts?: { pageSize?: number; maxPages?: number },
+    // sourceOverride: pass "v4" for ArcadeHook tokens (PUMP + CLANKER trade on
+    // the shared V4 PoolManager, indexed under source "v4"); the mode-based
+    // default only knows about the legacy launchpad ("curve") and V3 ("v3").
+    opts?: { pageSize?: number; maxPages?: number; sourceOverride?: string },
 ): Promise<GoldskyTrade[] | null> {
     if (!url) return null;
     const pageSize = opts?.pageSize ?? GOLDSKY_PAGE;
@@ -52,7 +55,7 @@ export async function fetchTradesFromGoldsky(
     // CLANKER_V3 token (V3 pool swaps), everything else is a curve token
     // (launchpad Buy/Sell). For V3 we pin the exact pool the client charts (the
     // permissionless factory can index several USDC pools for one token).
-    const source = mode === 2 ? "v3" : "curve";
+    const source = opts?.sourceOverride ?? (mode === 2 ? "v3" : "curve");
     const wherePool =
         source === "v3" && pool && pool.toLowerCase() !== ZERO_ADDR
             ? `, pool: "${pool.toLowerCase()}"`

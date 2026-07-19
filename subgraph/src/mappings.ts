@@ -352,10 +352,14 @@ export function handleV4Swap(event: V4Swap): void {
 
   const usdcC0 = usdcIsCurrency0(pool.token);
   const usdcRaw = usdcC0 ? event.params.amount0 : event.params.amount1;
+  // `event.params.sender` is the V4 router (it calls poolManager.swap in the
+  // unlock callback), identical for every trade. `transaction.from` is the EOA
+  // that submitted the swap = the real trader, which is what the UI feed and
+  // per-wallet volume should attribute to.
   recordTrade(
     event,
     pool.token,
-    event.params.sender,
+    event.transaction.from,
     "v4",
     event.address,
     priceFromSqrtX96(event.params.sqrtPriceX96, usdcC0),

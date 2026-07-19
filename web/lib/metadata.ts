@@ -54,19 +54,38 @@ export function parseInlineMetadata(uri: string): TokenMetadata | null {
   return null;
 }
 
+/** Primary IPFS gateway for image bytes. Prefer a configured dedicated gateway
+ *  (NEXT_PUBLIC_IPFS_GATEWAY, e.g. https://<name>.mypinata.cloud) because the
+ *  SHARED gateway.pinata.cloud host is aggressively rate-limited (429) on free
+ *  accounts and increasingly gates freshly-pinned CIDs -- which is exactly what
+ *  a just-launched token's logo is. Falls back to the shared host when unset. */
+function ipfsGatewayBase(): string {
+  const raw = (process.env.NEXT_PUBLIC_IPFS_GATEWAY ?? "").trim().replace(/\/+$/, "");
+  if (raw) return raw.endsWith("/ipfs") ? raw : `${raw}/ipfs`;
+  return "https://gateway.pinata.cloud/ipfs";
+}
+
 export function resolveIpfs(uri: string): string {
   if (uri.startsWith("ipfs://")) {
-    // Pinata's public gateway is the canonical host for content we pinned
-    // through their service - it returns image bytes within ~50-100ms vs
-    // 1-3s on ipfs.io while the DHT lookup happens. The launchpad list
-    // renders 20+ logos at once, so the per-image latency multiplies into
-    // visible "all images blank for several seconds" before they finally
-    // pop in. Switching the primary gateway keeps the same security
-    // posture (HTTPS public gateway, no auth header sent) and is what
-    // the fetchMetadata path also tries first.
-    return `https://gateway.pinata.cloud/ipfs/${uri.slice("ipfs://".length)}`;
+    return `${ipfsGatewayBase()}/${uri.slice("ipfs://".length)}`;
   }
   return uri;
+}
+
+/** Ordered gateway fallbacks for a bare CID, used by <TokenIcon> onError so a
+ *  throttled primary gateway retries a public one instead of showing a broken
+ *  image. The configured/primary gateway is first. */
+export function ipfsGatewayUrls(uri: string): string[] {
+  if (!uri.startsWith("ipfs://")) return [uri];
+  const cid = uri.slice("ipfs://".length);
+  const hosts = [
+    ipfsGatewayBase(),
+    "https://ipfs.io/ipfs",
+    "https://cloudflare-ipfs.com/ipfs",
+    "https://gateway.pinata.cloud/ipfs",
+  ];
+  // De-dup while preserving order.
+  return Array.from(new Set(hosts.map((h) => `${h}/${cid}`)));
 }
 
 /**

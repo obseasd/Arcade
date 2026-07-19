@@ -116,12 +116,18 @@ function Inner() {
     const [imageUploading, setImageUploading] = useState(false);
 
     // CLANKER-only fields (only relevant when mode == CLANKER).
-    const [creator2, setCreator2] = useState("");
-    const [creator2Pct, setCreator2Pct] = useState(0); // % (UI 0..100)
+    // Where the creator fees go:
+    //   "wallet"  -> the launcher's connected wallet (msg.sender; the default).
+    //   "other"   -> a different wallet (routed 100% via the creator2 split, so
+    //                the entered address receives the whole creator cut).
+    //   "twitter" -> a handle-gated escrow, claimable by the verified @ owner.
+    type RecipientMode = "wallet" | "other" | "twitter";
+    const [recipientMode, setRecipientMode] = useState<RecipientMode>("wallet");
+    const [recipientAddr, setRecipientAddr] = useState("");
     // CLANKER fee tier: 1/2/3 = 1%/2%/3% fixed post-graduation fee. PUMP ignores it.
     const [feeTier, setFeeTier] = useState<1 | 2 | 3>(1);
     // CLANKER: optional Twitter @handle that receives the creator fees (accrues
-    // in a handle-gated escrow, claimable by the verified owner). Empty = direct.
+    // in a handle-gated escrow, claimable by the verified owner).
     const [feeHandle, setFeeHandle] = useState("");
     // CLANKER: start market cap (FDV in USDC) the single-sided LP is seeded at.
     const [startMcap, setStartMcap] = useState(CLANKER_DEFAULT_START_MCAP);
@@ -135,11 +141,17 @@ function Inner() {
     const { ensureAllowance } = useApproveIfNeeded(ADDRESSES.usdc, ADDRESSES.arcadeHook);
     const { writeContractAsync } = useWriteContract();
 
+    // Route the creator cut. "other" wallet => 100% of the creator cut to that
+    // address via the creator2 split (createLaunch always records creator ==
+    // msg.sender, so an alternate primary recipient is expressed as a full
+    // creator2 route). "twitter" => no creator2, the handle escrow takes it.
+    const otherAddrValid =
+        recipientMode === "other" && isAddress(recipientAddr.trim());
     const creator2Addr =
-        isClanker && creator2.trim().length > 0 && isAddress(creator2.trim())
-            ? (creator2.trim() as Address)
-            : (zeroAddress as Address);
-    const creator2Bps = isClanker && creator2Addr !== zeroAddress ? creator2Pct * 100 : 0;
+        isClanker && otherAddrValid ? (recipientAddr.trim() as Address) : (zeroAddress as Address);
+    const creator2Bps = creator2Addr !== zeroAddress ? 10_000 : 0;
+    const effectiveHandle =
+        isClanker && recipientMode === "twitter" ? feeHandle.trim().replace(/^@/, "") : "";
 
     const startMcapValid =
         !isClanker ||
@@ -147,15 +159,21 @@ function Inner() {
             startMcap >= CLANKER_MIN_START_MCAP &&
             startMcap <= CLANKER_MAX_START_MCAP);
 
+    // Recipient section is valid unless "other" is picked without a valid
+    // address, or "twitter" is picked without a handle.
+    const recipientValid =
+        !isClanker ||
+        recipientMode === "wallet" ||
+        (recipientMode === "other" && otherAddrValid) ||
+        (recipientMode === "twitter" && feeHandle.trim().replace(/^@/, "").length > 0);
+
     const formValid =
         name.trim().length > 0 &&
         symbol.trim().length > 0 &&
         snipeStartBps >= 0 &&
         snipeStartBps <= MAX_SNIPE_BPS &&
         (mode === ARCADE_HOOK_MODE.PUMP || mode === ARCADE_HOOK_MODE.CLANKER) &&
-        (!isClanker || creator2.trim().length === 0 || isAddress(creator2.trim())) &&
-        creator2Pct >= 0 &&
-        creator2Pct <= 100 &&
+        recipientValid &&
         startMcapValid &&
         !imageUploading;
 
@@ -284,8 +302,8 @@ function Inner() {
                     isClanker ? feeTier : 0,
                     // CLANKER: optional Twitter @handle to receive the creator
                     // fees (claimable by the verified handle owner). Empty =
-                    // fees go direct to the launcher. PUMP ignores it.
-                    isClanker ? feeHandle.trim().replace(/^@/, "") : "",
+                    // fees go to the wallet recipient. PUMP ignores it.
+                    effectiveHandle,
                     // CLANKER: start market cap (FDV) the single-sided LP is
                     // seeded at, in USDC micro-units. PUMP ignores it (bonding
                     // curve sets its own start price).
@@ -481,45 +499,95 @@ function Inner() {
                     </div>
                 )}
 
-                {/* Creator2 (CLANKER only) ----------------------------------- */}
+                {/* Creator fees recipient + fee tier (CLANKER only) --------- */}
                 {isClanker && (
-                    <div className="space-y-3 rounded-xl border border-arc-border bg-arc-bg-elevated p-4">
-                        <span className="text-sm font-medium text-arc-text">
-                            Optional secondary recipient
-                        </span>
-                        <label className="block text-sm">
-                            <span className="text-arc-text-muted">Address</span>
-                            <input
-                                value={creator2}
-                                onChange={(e) => setCreator2(e.target.value)}
-                                placeholder="0x... (optional)"
-                                className="mt-1 w-full rounded-lg border border-arc-border bg-arc-bg px-3 py-2 text-sm tabular-nums focus:border-arc-cta-hover focus:outline-none"
-                            />
-                        </label>
-                        <label className="block text-sm">
-                            <span className="text-arc-text-muted">
-                                Share of creator cut ({creator2Pct}%)
+                    <div className="space-y-4 rounded-xl border border-arc-border bg-arc-bg-elevated p-4">
+                        <div>
+                            <span className="text-sm font-medium text-arc-text">
+                                Creator fees recipient
                             </span>
-                            <input
-                                type="range"
-                                min={0}
-                                max={100}
-                                step={1}
-                                value={creator2Pct}
-                                onChange={(e) => setCreator2Pct(Number(e.target.value))}
-                                disabled={creator2.trim().length === 0}
-                                className="mt-2 w-full"
-                            />
-                        </label>
-                        <p className="text-xs text-arc-text-faint">
-                            Only active in CLANKER mode. Leave empty to route the full creator
-                            cut to the launcher.
-                        </p>
+                            <div className="mt-2 grid grid-cols-3 gap-2">
+                                {([
+                                    { k: "wallet", label: "My wallet" },
+                                    { k: "other", label: "Another wallet" },
+                                    { k: "twitter", label: "Twitter @" },
+                                ] as const).map((opt) => (
+                                    <button
+                                        key={opt.k}
+                                        type="button"
+                                        onClick={() => setRecipientMode(opt.k)}
+                                        className={cn(
+                                            "rounded-lg border px-3 py-2 text-xs font-medium transition",
+                                            recipientMode === opt.k
+                                                ? "border-arc-cta-hover bg-arc-cta/10 text-arc-text"
+                                                : "border-arc-border bg-arc-bg text-arc-text-muted hover:border-arc-cta-hover",
+                                        )}
+                                    >
+                                        {opt.label}
+                                    </button>
+                                ))}
+                            </div>
+
+                            {recipientMode === "wallet" && (
+                                <div className="mt-3">
+                                    <span className="text-xs text-arc-text-muted">
+                                        Fees go to your connected wallet
+                                    </span>
+                                    <div className="mt-1 truncate rounded-lg border border-arc-border bg-arc-bg px-3 py-2 text-sm tabular-nums text-arc-text-muted">
+                                        {account ?? "connect a wallet"}
+                                    </div>
+                                </div>
+                            )}
+
+                            {recipientMode === "other" && (
+                                <label className="mt-3 block text-sm">
+                                    <span className="text-arc-text-muted">Recipient address</span>
+                                    <input
+                                        value={recipientAddr}
+                                        onChange={(e) => setRecipientAddr(e.target.value)}
+                                        placeholder={account ?? "0x..."}
+                                        className={cn(
+                                            "mt-1 w-full rounded-lg border bg-arc-bg px-3 py-2 text-sm tabular-nums focus:outline-none",
+                                            recipientAddr.trim().length === 0 || otherAddrValid
+                                                ? "border-arc-border focus:border-arc-cta-hover"
+                                                : "border-red-500/60 focus:border-red-500",
+                                        )}
+                                    />
+                                    <p className="mt-1 flex items-center justify-between gap-2 text-xs text-arc-text-faint">
+                                        <span>100% of the creator fees route to this address.</span>
+                                        {account && (
+                                            <button
+                                                type="button"
+                                                onClick={() => setRecipientAddr(account)}
+                                                className="shrink-0 text-arc-cta-hover hover:underline"
+                                            >
+                                                use my wallet
+                                            </button>
+                                        )}
+                                    </p>
+                                </label>
+                            )}
+
+                            {recipientMode === "twitter" && (
+                                <label className="mt-3 block text-sm">
+                                    <span className="text-arc-text-muted">Twitter / X handle</span>
+                                    <input
+                                        value={feeHandle}
+                                        onChange={(e) => setFeeHandle(e.target.value)}
+                                        placeholder="@handle"
+                                        className="mt-1 w-full rounded-lg border border-arc-border bg-arc-bg px-3 py-2 text-sm focus:border-arc-cta-hover focus:outline-none"
+                                    />
+                                    <p className="mt-1 text-xs text-arc-text-faint">
+                                        ALL creator fees accrue in a handle-gated escrow; the verified
+                                        owner of the @ claims them after connecting a wallet. Useful
+                                        when launching on behalf of someone who has not joined yet.
+                                    </p>
+                                </label>
+                            )}
+                        </div>
 
                         <div className="border-t border-arc-border pt-3">
-                            <span className="text-sm text-arc-text-muted">
-                                Post-graduation fee tier
-                            </span>
+                            <span className="text-sm text-arc-text-muted">Swap fee tier</span>
                             <div className="mt-2 flex gap-2">
                                 {([1, 2, 3] as const).map((t) => (
                                     <button
@@ -537,28 +605,10 @@ function Inner() {
                                 ))}
                             </div>
                             <p className="mt-2 text-xs text-arc-text-faint">
-                                Fixed swap fee once the token graduates to the AMM. 80% to you,
-                                20% to the protocol. PUMP mode instead decays from 1% to 0.30% as
-                                market cap grows.
+                                Fixed swap fee charged on every trade. 80% to the recipient above,
+                                20% to the protocol.
                             </p>
                         </div>
-
-                        <label className="block border-t border-arc-border pt-3 text-sm">
-                            <span className="text-arc-text-muted">
-                                Send creator fees to a Twitter @ (optional)
-                            </span>
-                            <input
-                                value={feeHandle}
-                                onChange={(e) => setFeeHandle(e.target.value)}
-                                placeholder="@handle — leave empty to receive fees in your wallet"
-                                className="mt-1 w-full rounded-lg border border-arc-border bg-arc-bg px-3 py-2 text-sm focus:border-arc-cta-hover focus:outline-none"
-                            />
-                            <p className="mt-1 text-xs text-arc-text-faint">
-                                The creator fees accrue in a handle-gated escrow; the verified
-                                owner of the @ claims them after connecting a wallet. Useful when
-                                launching a token on behalf of someone who has not joined yet.
-                            </p>
-                        </label>
                     </div>
                 )}
 
