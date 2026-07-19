@@ -234,7 +234,11 @@ function Inner() {
                             {isClanker ? (
                                 <>
                                     <Stat label="Swap fee" value={poolFee > 0 ? `${poolFee / 10_000}%` : "-"} hint="Fixed CLANKER tier. 80% creator / 20% treasury." />
-                                    <Stat label="Liquidity" value="Locked" hint="Full supply seeded single-sided into a full-range V4 LP, locked permanently." />
+                                    <Stat
+                                        label="Liquidity"
+                                        value={stats.usdcLiquidity > 0 ? `$${stats.usdcLiquidity.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : "Locked"}
+                                        hint="USDC currently in the locked single-sided V4 pool (net bought). The LP position itself is locked permanently."
+                                    />
                                     <Stat label="Type" value="Direct (V4)" hint="No bonding curve: tradable on the canonical V4 pool from launch." />
                                 </>
                             ) : (

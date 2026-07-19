@@ -10,6 +10,10 @@ export interface V4TokenStats {
   priceUsd?: number;
   /** Sum of USDC volume across the token's (recent) V4 trades. */
   totalVolumeUsdc: number;
+  /** USDC currently in the pool = net USDC bought (buys - sells). CLANKER seeds
+   *  the pool single-sided with TOKENS only, so all USDC-side liquidity comes
+   *  from net buying; this is the tradeable USDC depth. Floored at 0. */
+  usdcLiquidity: number;
   isLoading: boolean;
 }
 
@@ -22,34 +26,49 @@ export interface V4TokenStats {
  */
 export function useV4TokenStats(token: Address | undefined): V4TokenStats {
   const tokenKey = token?.toLowerCase();
-  const { data, isLoading, isFetching } = useQuery<{ priceUsd?: number; totalVolumeUsdc: number }>({
+  const { data, isLoading, isFetching } = useQuery<{ priceUsd?: number; totalVolumeUsdc: number; usdcLiquidity: number }>({
     queryKey: ["arcade", "v4-token-stats", tokenKey],
     enabled: !!GOLDSKY_URL && !!tokenKey,
     staleTime: 10_000,
     refetchInterval: 15_000,
     queryFn: async () => {
-      if (!GOLDSKY_URL || !tokenKey) return { totalVolumeUsdc: 0 };
+      if (!GOLDSKY_URL || !tokenKey) return { totalVolumeUsdc: 0, usdcLiquidity: 0 };
       const q = `{
         latest: trades(first: 1, orderBy: blockNumber, orderDirection: desc, where: { token: "${tokenKey}", source: "v4" }) { price }
-        vol: trades(first: 1000, orderBy: blockNumber, orderDirection: desc, where: { token: "${tokenKey}", source: "v4" }) { volumeUsdc }
+        vol: trades(first: 1000, orderBy: blockNumber, orderDirection: desc, where: { token: "${tokenKey}", source: "v4" }) { volumeUsdc isBuy }
       }`;
       const res = await fetch(GOLDSKY_URL, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ query: q }),
       });
-      if (!res.ok) return { totalVolumeUsdc: 0 };
+      if (!res.ok) return { totalVolumeUsdc: 0, usdcLiquidity: 0 };
       const json = (await res.json()) as {
-        data?: { latest?: { price: string | number }[]; vol?: { volumeUsdc: string | number }[] };
+        data?: {
+          latest?: { price: string | number }[];
+          vol?: { volumeUsdc: string | number; isBuy: boolean }[];
+        };
       };
       const p = Number(json?.data?.latest?.[0]?.price);
-      const totalVolumeUsdc = (json?.data?.vol ?? []).reduce((acc, r) => acc + Number(r.volumeUsdc || 0), 0);
-      return { priceUsd: Number.isFinite(p) && p > 0 ? p : undefined, totalVolumeUsdc };
+      let totalVolumeUsdc = 0;
+      let netUsdc = 0;
+      for (const r of json?.data?.vol ?? []) {
+        const v = Number(r.volumeUsdc || 0);
+        if (!Number.isFinite(v)) continue;
+        totalVolumeUsdc += v;
+        netUsdc += r.isBuy ? v : -v;
+      }
+      return {
+        priceUsd: Number.isFinite(p) && p > 0 ? p : undefined,
+        totalVolumeUsdc,
+        usdcLiquidity: Math.max(0, netUsdc),
+      };
     },
   });
   return {
     priceUsd: data?.priceUsd,
     totalVolumeUsdc: data?.totalVolumeUsdc ?? 0,
+    usdcLiquidity: data?.usdcLiquidity ?? 0,
     isLoading: isLoading || isFetching,
   };
 }
