@@ -16,9 +16,7 @@ import { arcTestnet } from "@/lib/chains";
 import { TransactionSettings } from "@/components/ui/TransactionSettings";
 import { QuickButton } from "@/components/swap/QuickButton";
 import { useApproveIfNeeded } from "@/lib/hooks/useApproveIfNeeded";
-import { useV2Tokens } from "@/lib/hooks/useV2Tokens";
 import { useV3Tokens } from "@/lib/hooks/useV3Tokens";
-import { useLaunchpadCurveTokens } from "@/lib/hooks/useLaunchpadCurveTokens";
 import { useArcadeHookTokens } from "@/lib/hooks/useArcadeHookTokens";
 import { useUsdValue } from "@/lib/hooks/useTokenUsdPrice";
 import { useSwapRoute } from "@/lib/hooks/useSwapRoute";
@@ -66,9 +64,31 @@ const USYC_TOKEN: TokenOption = {
   pinned: true,
 };
 
-// EURC used to be pinned here. Audit 2026-06-06 flagged that it carried a
-// hardcoded $1.08 price (useTokenPrices.ts), which surfaced as a fake quote
-// in the swap dropdown. EURC is unlisted until a real EUR/USD feed lands.
+// Whitelisted base assets shown in the swap selector alongside the (new) V4
+// launchpad tokens. Old V2/V3/curve launchpad tokens are intentionally NOT
+// listed anymore -- the selector = base assets + ArcadeHook launches only.
+const WETH_TOKEN: TokenOption = {
+  address: ADDRESSES.weth,
+  symbol: "ETH",
+  name: "Ether",
+  decimals: 18,
+  pinned: true,
+};
+const EURC_TOKEN: TokenOption = {
+  address: ADDRESSES.eurc,
+  symbol: "EURC",
+  name: "Euro Coin",
+  decimals: 6,
+  pinned: true,
+};
+const CIRBTC_TOKEN: TokenOption = {
+  address: ADDRESSES.cirBtc,
+  symbol: "cirBTC",
+  name: "Circle Wrapped BTC",
+  decimals: 8,
+  pinned: true,
+};
+const ZERO_ADDR = "0x0000000000000000000000000000000000000000";
 
 const PRESETS_BPS = [10, 50, 100];
 const DEFAULT_BPS = 10;
@@ -84,17 +104,9 @@ interface SwapCardProps {
 export function SwapCard({ tab, onTabChange }: SwapCardProps) {
   const { address: account } = useAccount();
   const publicClient = usePublicClient();
-  const { tokens: v2Tokens } = useV2Tokens();
-  const { tokens: v3Tokens, isV3Token, feeOf } = useV3Tokens();
-  // Audit 2026-06-11 bug #5: surface PUMP-mode pre-graduation tokens in
-  // the dropdown so users can discover & navigate to them from the swap
-  // surface. They don't trade on AMMs (no V2 pair, no V3 pool) so the
-  // SwapCard renders a "Trade on bonding curve" CTA that deep-links to
-  // /launchpad/<addr> rather than attempting an aggregator quote. Dedup
-  // by address so a token that graduates mid-session keeps its V2 entry
-  // (which carries decimals + name from the actual ERC20) and drops the
-  // curve placeholder.
-  const { tokens: curveTokens } = useLaunchpadCurveTokens();
+  // V3 token metadata (isV3Token / feeOf) still drives pricing hints; its token
+  // LIST is no longer shown in the selector (base assets + V4 launches only).
+  const { isV3Token, feeOf } = useV3Tokens();
   // ArcadeHook (V4) tokens: CLANKER + graduated PUMP, tradeable on their V4 pool
   // via the arcade-v4 route provider. All launch tokens are 18-decimal.
   const { tokens: v4HookTokens } = useArcadeHookTokens();
@@ -113,14 +125,16 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
   const allTokens: TokenOption[] = useMemo(() => {
     const seen = new Set<string>();
     const out: TokenOption[] = [];
-    for (const t of [USDC_TOKEN, USYC_TOKEN, ...v2Tokens, ...v3Tokens, ...curveTokens, ...v4Tokens]) {
+    // Selector = whitelisted base assets + the NEW ArcadeHook (V4) launches.
+    // The old V2/V3/curve launchpad tokens are deliberately excluded (noise).
+    for (const t of [USDC_TOKEN, WETH_TOKEN, EURC_TOKEN, USYC_TOKEN, CIRBTC_TOKEN, ...v4Tokens]) {
       const k = t.address.toLowerCase();
-      if (seen.has(k)) continue;
+      if (!t.address || k === ZERO_ADDR || seen.has(k)) continue;
       seen.add(k);
       out.push(t);
     }
     return out;
-  }, [v2Tokens, v3Tokens, curveTokens, v4Tokens]);
+  }, [v4Tokens]);
 
   const searchParams = useSearchParams();
   const [tokenIn, setTokenIn] = useState<TokenOption>(USDC_TOKEN);
@@ -136,8 +150,10 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
   const [confirmOpen, setConfirmOpen] = useState(false);
 
   useEffect(() => {
-    if (!tokenOut && v2Tokens.length > 0) setTokenOut(v2Tokens[0]);
-  }, [v2Tokens, tokenOut]);
+    // Default the "to" side to ETH when it's a valid listed asset; else leave
+    // it empty for the user to pick (the old v2Tokens[0] default is gone).
+    if (!tokenOut && ADDRESSES.weth && ADDRESSES.weth !== ZERO_ADDR) setTokenOut(WETH_TOKEN);
+  }, [tokenOut]);
 
   // Pool detail page deep-link: /swap?t0=0xUSDC&t1=0xETH (or any of
   // t0/t1/tokenIn/tokenOut) pre-fills the swap pair so the Swap button
