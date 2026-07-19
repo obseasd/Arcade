@@ -514,6 +514,9 @@ export default function ExplorePage() {
 
     // Protocol-wide Volume + Generated Fees from the subgraph (was hardcoded 0).
     const protocolTotals = useProtocolTotals();
+    // Real per-day series for the Volume + Fees hero sparklines (windowed).
+    const volDay = useGlobalDaySeries(volWindow, "volume");
+    const feeDay = useGlobalDaySeries(feeWindow, "fees");
 
     const { tvlV2, tvlV3 } = useMemo(() => {
         let v2 = 0n;
@@ -565,21 +568,25 @@ export default function ExplorePage() {
                 />
                 <ChartCard
                     label="Volume"
-                    valueUsdc={protocolTotals.volumeUsdc}
+                    // Windowed sum when the subgraph serves the daily series;
+                    // else the all-time total + synthetic curve (pre-redeploy).
+                    valueUsdc={volDay.series.length > 0 ? volDay.sumMicro : protocolTotals.volumeUsdc}
                     v2Usdc={0n}
                     v3Usdc={0n}
                     window={volWindow}
                     onWindow={setVolWindow}
                     singleLine
+                    realSeries={volDay.series}
                 />
                 <ChartCard
                     label="Generated Fees"
-                    valueUsdc={protocolTotals.feesUsdc}
+                    valueUsdc={feeDay.series.length > 0 ? feeDay.sumMicro : protocolTotals.feesUsdc}
                     v2Usdc={0n}
                     v3Usdc={0n}
                     window={feeWindow}
                     onWindow={setFeeWindow}
                     singleLine
+                    realSeries={feeDay.series}
                 />
             </div>
 
@@ -834,6 +841,59 @@ function usePoolDayStats(pools: Address[]): { vol1d?: number; fees1d?: number } 
     return data ?? {};
 }
 
+interface SeriesPoint {
+    x: number;
+    total: number;
+    v3: number;
+    v2: number;
+    label: string;
+}
+
+/**
+ * Real protocol daily timeseries (subgraph GlobalDayData) for a hero card's
+ * sparkline + per-day tooltip. Fills missing days with 0 across the window, and
+ * returns the window SUM as the headline (6-dp micro bigint). Empty on a miss
+ * (unset / pre-redeploy) so the card keeps its synthetic placeholder.
+ */
+function useGlobalDaySeries(win: Win, metric: "volume" | "fees"): { series: SeriesPoint[]; sumMicro: bigint } {
+    const days = win === "7D" ? 7 : win === "30D" ? 30 : 90;
+    const { data } = useQuery<{ series: SeriesPoint[]; sumMicro: string }>({
+        queryKey: ["arcade", "global-day-series", metric, days],
+        enabled: !!process.env.NEXT_PUBLIC_GOLDSKY_URL,
+        staleTime: 60_000,
+        refetchInterval: 120_000,
+        queryFn: async () => {
+            const url = process.env.NEXT_PUBLIC_GOLDSKY_URL as string;
+            const q = `{ globalDayDatas(first: ${days}, orderBy: date, orderDirection: desc) { date volumeUsdc feesUsdc } }`;
+            const res = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ query: q }) });
+            if (!res.ok) return { series: [], sumMicro: "0" };
+            const j = (await res.json()) as { data?: { globalDayDatas?: { date: number; volumeUsdc: string; feesUsdc: string }[] } };
+            const rows = j?.data?.globalDayDatas;
+            if (!Array.isArray(rows)) return { series: [], sumMicro: "0" };
+            const byDay = new Map<number, number>();
+            for (const r of rows) byDay.set(Number(r.date), Number(metric === "volume" ? r.volumeUsdc : r.feesUsdc) || 0);
+            const DAY = 86_400;
+            const todayStart = Math.floor(Date.now() / 1000 / DAY) * DAY;
+            const series: SeriesPoint[] = [];
+            let sum = 0;
+            for (let i = days - 1; i >= 0; i--) {
+                const dayStart = todayStart - i * DAY;
+                const v = byDay.get(dayStart) ?? 0;
+                sum += v;
+                series.push({
+                    x: days - 1 - i,
+                    total: v,
+                    v3: v,
+                    v2: 0,
+                    label: new Date(dayStart * 1000).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }),
+                });
+            }
+            return { series, sumMicro: BigInt(Math.max(0, Math.round(sum * 1e6))).toString() };
+        },
+    });
+    return { series: data?.series ?? [], sumMicro: BigInt(data?.sumMicro ?? "0") };
+}
+
 // TVL uses singleLine so only the total trace renders, and the tooltip
 // surfaces a single TVL row instead of the split.
 // -------------------------------------------------------------------
@@ -846,6 +906,7 @@ function ChartCard({
     window,
     onWindow,
     singleLine,
+    realSeries,
 }: {
     label: string;
     valueUsdc: bigint;
@@ -854,6 +915,9 @@ function ChartCard({
     window: Win;
     onWindow: (w: Win) => void;
     singleLine?: boolean;
+    /** Real per-day timeseries (GlobalDayData). When present it replaces the
+     *  synthetic curve and the tooltip shows the day's ACTUAL value. */
+    realSeries?: SeriesPoint[];
 }) {
     const totalUsd = Number(valueUsdc) / 1e6;
     const v2Usd = Number(v2Usdc) / 1e6;
@@ -901,6 +965,10 @@ function ChartCard({
         return out;
     }, [window]);
 
+    // Real GlobalDayData series (when provided) replaces the synthetic curve.
+    const useReal = !!(realSeries && realSeries.length > 0);
+    const chartSeries = useReal ? realSeries! : series;
+
     // Prepend "$" so the hero TVL/Volume/Fees numbers read as money. The
     // formatBig helper handles K/M suffixes; we add the dollar sign once at
     // the call site so the empty-state "—" stays untouched.
@@ -945,7 +1013,7 @@ function ChartCard({
             </div>
             <div className="absolute inset-x-0 bottom-0 h-24">
                 <ResponsiveContainer width="100%" height="100%">
-                    <AreaChart data={series} margin={{ left: 0, right: 0, top: 0, bottom: 0 }}>
+                    <AreaChart data={chartSeries} margin={{ left: 0, right: 0, top: 0, bottom: 0 }}>
                         <defs>
                             <linearGradient id={fillId} x1="0" y1="0" x2="0" y2="1">
                                 <stop offset="0%" stopColor={TOTAL_COLOR} stopOpacity={0.45} />
@@ -969,9 +1037,10 @@ function ChartCard({
                                     totalUsd={totalUsd}
                                     v3Usd={v3Usd}
                                     v2Usd={v2Usd}
-                                    lastTotal={series[series.length - 1]?.total ?? 1}
-                                    lastV3={series[series.length - 1]?.v3 ?? 1}
-                                    lastV2={series[series.length - 1]?.v2 ?? 1}
+                                    lastTotal={chartSeries[chartSeries.length - 1]?.total ?? 1}
+                                    lastV3={chartSeries[chartSeries.length - 1]?.v3 ?? 1}
+                                    lastV2={chartSeries[chartSeries.length - 1]?.v2 ?? 1}
+                                    rawValues={useReal}
                                 />
                             )}
                         />
@@ -1023,6 +1092,7 @@ function ChartTooltip({
     lastTotal,
     lastV3,
     lastV2,
+    rawValues,
 }: {
     payload: ReadonlyArray<{ payload?: { total: number; v3: number; v2: number; label: string } }> | undefined;
     singleLine?: boolean;
@@ -1035,18 +1105,18 @@ function ChartTooltip({
     lastTotal: number;
     lastV3: number;
     lastV2: number;
+    /** When true the series carries REAL per-day USD values (GlobalDayData), so
+     *  show them directly instead of scaling a synthetic 0-1 curve. */
+    rawValues?: boolean;
 }) {
     const point = payload?.[0]?.payload;
     if (!point) return null;
-    // Scale the synthetic 0-1 curve to the actual snapshot so the numbers
-    // displayed on hover trend along with the line. Pages audit 2026-07-02:
-    // the old `point.x * (xUsd / Math.max(point.x, 0.01))` self-cancelled to a
-    // constant (point.x always > 0.01), pinning every hovered day to the
-    // current value. Scale by the series ENDPOINT so earlier points read
-    // proportionally smaller than the current snapshot.
-    const tot = lastTotal > 0 ? (point.total / lastTotal) * totalUsd : 0;
-    const v3 = lastV3 > 0 ? (point.v3 / lastV3) * v3Usd : 0;
-    const v2 = lastV2 > 0 ? (point.v2 / lastV2) * v2Usd : 0;
+    // Real data: the point IS the day's USD value. Synthetic: scale the 0-1
+    // curve to the current snapshot by the series ENDPOINT so earlier points
+    // read proportionally smaller (pages audit 2026-07-02).
+    const tot = rawValues ? point.total : lastTotal > 0 ? (point.total / lastTotal) * totalUsd : 0;
+    const v3 = rawValues ? point.v3 : lastV3 > 0 ? (point.v3 / lastV3) * v3Usd : 0;
+    const v2 = rawValues ? point.v2 : lastV2 > 0 ? (point.v2 / lastV2) * v2Usd : 0;
     return (
         <div className="rounded-xl border border-arc-border bg-black/30 px-3 py-2 text-xs shadow-arc-card backdrop-blur-xl">
             <div className="mb-1 text-arc-text-muted">{point.label}</div>
