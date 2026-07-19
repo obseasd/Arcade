@@ -20,6 +20,8 @@ import { Swap as V4Swap } from "../generated/PoolManagerV4/PoolManagerV4";
 import {
   Trade,
   Pool,
+  PoolDayData,
+  GlobalDayData,
   Trader,
   Token,
   TokenBalance,
@@ -199,7 +201,64 @@ function recordTrade(
   // Per-token running aggregates + daily bucket (launchpad tokens only).
   bumpTokenAggregates(token, price, volumeUsdc, isBuy, blockTime);
 
+  // Protocol-wide daily bucket (all sources) for the Explore hero sparklines.
+  // Fee estimate by venue: V3 uses the pool's tier; V2 0.30%; everything else
+  // (curve / v4 / v4curve) ~1%. This is a display estimate, not the exact
+  // distributed fee (which for V4 only lands on harvest via RoyaltyPaid).
+  const feeUsdc = volumeUsdc.times(feeRateForSource(source, pool));
+  bumpGlobalDay(volumeUsdc, feeUsdc, blockTime);
+
   g.save();
+}
+
+/** Swap-fee rate (as a fraction) for a trade, by venue. */
+function feeRateForSource(source: string, pool: Bytes | null): BigDecimal {
+  if (source == "v3" && pool !== null) {
+    const p = Pool.load((pool as Bytes).toHexString());
+    if (p != null) {
+      // feeTier is hundredths of a bip: 3000 => 0.30% => /1e6.
+      return BigDecimal.fromString(p.feeTier.toString()).div(BigDecimal.fromString("1000000"));
+    }
+  }
+  if (source == "v2") return BigDecimal.fromString("0.003");
+  return BigDecimal.fromString("0.01"); // curve / v4 / v4curve
+}
+
+/** Upsert the protocol-wide daily bucket. */
+function bumpGlobalDay(volumeUsdc: BigDecimal, feeUsdc: BigDecimal, blockTime: i32): void {
+  const dayStart = dayStartOf(blockTime);
+  const id = dayStart.toString();
+  let d = GlobalDayData.load(id);
+  if (d == null) {
+    d = new GlobalDayData(id);
+    d.date = dayStart;
+    d.volumeUsdc = BigDecimal.fromString("0");
+    d.feesUsdc = BigDecimal.fromString("0");
+    d.tradeCount = 0;
+  }
+  d.volumeUsdc = d.volumeUsdc.plus(volumeUsdc);
+  d.feesUsdc = d.feesUsdc.plus(feeUsdc);
+  d.tradeCount = d.tradeCount + 1;
+  d.save();
+}
+
+/** Upsert a per-pool daily bucket (Explore per-row 1D volume / daily fees). */
+function bumpPoolDay(pool: Bytes, volumeUsdc: BigDecimal, feeUsdc: BigDecimal, blockTime: i32): void {
+  const dayStart = dayStartOf(blockTime);
+  const id = pool.toHexString() + "-" + dayStart.toString();
+  let d = PoolDayData.load(id);
+  if (d == null) {
+    d = new PoolDayData(id);
+    d.pool = pool;
+    d.date = dayStart;
+    d.volumeUsdc = BigDecimal.fromString("0");
+    d.feesUsdc = BigDecimal.fromString("0");
+    d.tradeCount = 0;
+  }
+  d.volumeUsdc = d.volumeUsdc.plus(volumeUsdc);
+  d.feesUsdc = d.feesUsdc.plus(feeUsdc);
+  d.tradeCount = d.tradeCount + 1;
+  d.save();
 }
 
 /** Initialise the non-null aggregate fields on a freshly-created Token. Called
@@ -438,6 +497,7 @@ export function handlePoolCreated(event: PoolCreated): void {
   p.token1 = token1;
   p.token = usdcIsToken0 ? token1 : token0;
   p.usdcIsToken0 = usdcIsToken0;
+  p.feeTier = event.params.fee;
   p.save();
 
   V3Pool.create(event.params.pool);
@@ -448,6 +508,7 @@ export function handleSwap(event: Swap): void {
   if (p == null) return; // not a tracked USDC pool
 
   const usdcRaw = p.usdcIsToken0 ? event.params.amount0 : event.params.amount1;
+  const volumeUsdc = usdcVolume(usdcRaw);
   recordTrade(
     event,
     p.token,
@@ -455,9 +516,13 @@ export function handleSwap(event: Swap): void {
     "v3",
     event.address,
     priceFromSqrtX96(event.params.sqrtPriceX96, p.usdcIsToken0),
-    usdcVolume(usdcRaw),
+    volumeUsdc,
     usdcRaw.gt(BigInt.fromI32(0)),
   );
+
+  // Per-pool daily bucket for the Explore per-row 1D volume / daily fees / APR.
+  const feeRate = BigDecimal.fromString(p.feeTier.toString()).div(BigDecimal.fromString("1000000"));
+  bumpPoolDay(event.address, volumeUsdc, volumeUsdc.times(feeRate), event.block.timestamp.toI32());
 }
 
 // ===========================================================================
