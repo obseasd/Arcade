@@ -34,22 +34,51 @@ export type ForwardResult =
     | { ok: true; forwarded: true; amountRaw: string; tx: Hex }
     | { ok: false; error: string };
 
+// Arc's RPCs cap eth_getLogs at a 10_000-block range (and arc.network also rate-
+// limits), so a single deploy-block->latest query silently fails and the caller
+// would read 0 owed. We page the range in <=CHUNK-block windows, a few in
+// parallel, and sum. CHUNK stays under the 10k cap with margin for inclusive
+// bounds.
+const LOG_CHUNK = 9_000n;
+const CHUNK_CONCURRENCY = 6;
+
 /** Accrued token-side creator fee for a pool = Σ RoyaltyPaid.creatorAmount on
- *  the launch-token leg. Shared by the preview and the executing path. */
+ *  the launch-token leg. Shared by the preview and the executing path. Paginated
+ *  so it works on the 10k-block-limited Arc RPCs. */
 async function accruedTokenSide(poolIdHex: string, launchToken: Address): Promise<bigint> {
     const client = serverPublicClient();
-    const logs = await client.getLogs({
-        address: ADDRESSES.arcadeHook as Address,
-        event: ROYALTY_PAID,
-        args: { poolId: poolIdHex as Hex },
-        fromBlock: HOOK_DEPLOY_BLOCK,
-        toBlock: "latest",
-    });
+    const latest = await client.getBlockNumber();
+
+    // Build the [from,to] windows covering deploy-block..latest.
+    const windows: Array<{ from: bigint; to: bigint }> = [];
+    for (let from = HOOK_DEPLOY_BLOCK; from <= latest; from += LOG_CHUNK + 1n) {
+        const to = from + LOG_CHUNK > latest ? latest : from + LOG_CHUNK;
+        windows.push({ from, to });
+    }
+
+    const want = launchToken.toLowerCase();
     let accrued = 0n;
-    for (const l of logs) {
-        const currency = (l.args.currency ?? "0x") as string;
-        if (currency.toLowerCase() !== launchToken.toLowerCase()) continue; // USDC leg
-        accrued += (l.args.creatorAmount ?? 0n) as bigint;
+    // Run the windows in bounded-concurrency batches.
+    for (let i = 0; i < windows.length; i += CHUNK_CONCURRENCY) {
+        const batch = windows.slice(i, i + CHUNK_CONCURRENCY);
+        const results = await Promise.all(
+            batch.map((w) =>
+                client.getLogs({
+                    address: ADDRESSES.arcadeHook as Address,
+                    event: ROYALTY_PAID,
+                    args: { poolId: poolIdHex as Hex },
+                    fromBlock: w.from,
+                    toBlock: w.to,
+                }),
+            ),
+        );
+        for (const logs of results) {
+            for (const l of logs) {
+                const currency = (l.args.currency ?? "0x") as string;
+                if (currency.toLowerCase() !== want) continue; // USDC leg
+                accrued += (l.args.creatorAmount ?? 0n) as bigint;
+            }
+        }
     }
     return accrued;
 }
