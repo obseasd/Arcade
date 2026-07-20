@@ -70,8 +70,25 @@ export type V4ClaimResult =
     | { kind: "error"; error: string }
     | { kind: "ok"; payload: V4ClaimPayload };
 
+// Minimal chain (no multicall3 config) matching the cron's client, which reads
+// reliably from Vercel serverless. `http()` with retries/timeout absorbs the
+// transient RPC failures the callback was hitting (v4_poolid/balance_read_failed).
+const ARC_CHAIN = {
+    id: 5042002,
+    name: "Arc Testnet",
+    nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 6 },
+    rpcUrls: { default: { http: ["https://rpc.testnet.arc.network"] } },
+} as const;
+
 function rpcClient() {
-    return createPublicClient({ chain: arcTestnet, transport: http(arcTestnet.rpcUrls.default.http[0]) });
+    return createPublicClient({
+        chain: ARC_CHAIN,
+        transport: http("https://rpc.testnet.arc.network", {
+            retryCount: 4,
+            retryDelay: 400,
+            timeout: 20_000,
+        }),
+    });
 }
 
 /** Launcher handle for a V4 launch = subgraph HandleAttribution(id = poolId). */

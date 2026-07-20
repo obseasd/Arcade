@@ -19,6 +19,8 @@ import { ADDRESSES } from "@/lib/constants";
 import { fetchMetadata } from "@/lib/metadata";
 
 export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
+export const maxDuration = 30;
 
 const TWITTER_TOKEN_URL = "https://api.twitter.com/2/oauth2/token";
 const TWITTER_ME_URL = "https://api.twitter.com/2/users/me";
