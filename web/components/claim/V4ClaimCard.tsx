@@ -99,14 +99,24 @@ export function V4ClaimCard({
     useEffect(() => {
         let alive = true;
         (async () => {
-            try {
-                const r = await fetch(
-                    `/api/twitter-launch/forward-token?token=${payload.token}&slot=${payload.slotIndex}`,
-                );
-                const j = (await r.json()) as { owedRaw?: string };
-                if (alive && j?.owedRaw) setTokenOwed(Number(formatUnits(BigInt(j.owedRaw), 18)));
-            } catch {
-                /* preview is best-effort */
+            // The preview can transiently return 0 when the Arc RPC throttles the
+            // server; retry a few times (the server caches the first good read) so
+            // the token amount reliably appears.
+            for (let attempt = 0; attempt < 4 && alive; attempt++) {
+                try {
+                    const r = await fetch(
+                        `/api/twitter-launch/forward-token?token=${payload.token}&slot=${payload.slotIndex}`,
+                    );
+                    const j = (await r.json()) as { owedRaw?: string };
+                    const raw = j?.owedRaw ? BigInt(j.owedRaw) : 0n;
+                    if (alive && raw > 0n) {
+                        setTokenOwed(Number(formatUnits(raw, 18)));
+                        return;
+                    }
+                } catch {
+                    /* preview is best-effort */
+                }
+                await new Promise((res) => setTimeout(res, 2500));
             }
         })();
         return () => {

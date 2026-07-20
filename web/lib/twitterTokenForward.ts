@@ -92,21 +92,39 @@ async function computeOwed(
     return { owed, already };
 }
 
+// Warm-instance cache of computed owed amounts. The Arc RPCs rate-limit Vercel's
+// shared IPs, so the balanceOf read intermittently stalls; once ANY request
+// computes owed we serve it from here (fresh for TTL, and as a stale fallback if
+// a later compute stalls) so the claim page shows the token amount reliably
+// instead of flapping to 0. Owed changes only on new trades/harvests, so a short
+// TTL is safe. Preview-only; the executing forward always reads fresh.
+const owedCache = new Map<string, { value: string; at: number }>();
+const OWED_TTL_MS = 60_000;
+
 /**
  * Read-only preview of the launch-token amount still owed to (poolId, slotIndex).
  * Does NOT reserve or transfer, so it is safe to call before the user claims (to
- * show the "+ N TICKER" they will receive). Returns "0" on any error/unknown pool.
+ * show the "+ N TICKER" they will receive). Cache-first, with a stale fallback so
+ * a throttled RPC read degrades to the last known value, not 0.
  */
 export async function previewTokenSideOwed(
     poolIdHex: string,
     slotIndex: 0 | 1,
     launchToken: Address,
+    nowMs = Date.now(),
 ): Promise<string> {
+    const key = `${poolIdHex}:${slotIndex}`;
+    const cached = owedCache.get(key);
+    if (cached && nowMs - cached.at < OWED_TTL_MS) return cached.value; // fresh hit
     try {
         const r = await computeOwed(poolIdHex, slotIndex, launchToken);
-        return r && r.owed > 0n ? r.owed.toString() : "0";
+        const value = r && r.owed > 0n ? r.owed.toString() : "0";
+        owedCache.set(key, { value, at: nowMs });
+        return value;
     } catch {
-        return "0";
+        // Compute stalled (throttled RPC): serve the last known value if we have
+        // one, even if past TTL, rather than flapping the UI back to 0.
+        return cached?.value ?? "0";
     }
 }
 

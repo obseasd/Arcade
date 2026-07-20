@@ -52,8 +52,11 @@ export function serverReadClient() {
     return createPublicClient({
         chain: ARC_CHAIN,
         transport: fallback(
-            READ_RPC_URLS.map((u) => http(u, { retryCount: 1, retryDelay: 250, timeout: 6_000 })),
-            { retryCount: 1, retryDelay: 200 },
+            // No per-transport retry (a throttled Arc RPC HANGS rather than erroring
+            // fast, so retries just stack timeouts); a short timeout fails over to
+            // the next endpoint quickly. Two endpoints => ~7s worst case.
+            READ_RPC_URLS.map((u) => http(u, { retryCount: 0, timeout: 3_500 })),
+            { retryCount: 0 },
         ),
     });
 }
