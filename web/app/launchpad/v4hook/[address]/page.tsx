@@ -436,6 +436,9 @@ function FeesRecipientPanel({
     const estimated = totalVolumeUsdc * feeRate;
     const feesUsd = exactFeesUsd != null && exactFeesUsd > estimated ? exactFeesUsd : estimated;
     const isEstimate = poolFee === 0 && !(exactFeesUsd != null && exactFeesUsd > estimated);
+    // The recipient (creator) gets 80% of the fee; treasury takes 20% (the V4
+    // post-graduation split). "Fees generated" shows the CREATOR portion only.
+    const creatorFeesUsd = feesUsd * 0.8;
     const recipientAddr = fo
         ? fo.creator2 !== zeroAddress && Number(fo.creator2Bps) >= 10_000
             ? fo.creator2
@@ -447,7 +450,7 @@ function FeesRecipientPanel({
             <div className="flex items-center justify-between text-sm">
                 <span className="text-arc-text-muted">Fees generated</span>
                 <span className="tabular-nums font-medium">
-                    ${feesUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                    ${creatorFeesUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })}
                     {isEstimate && <span className="text-[10px] text-arc-text-faint"> (est.)</span>}
                 </span>
             </div>

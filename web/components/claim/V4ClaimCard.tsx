@@ -8,6 +8,17 @@ import { ADDRESSES, USDC_DECIMALS } from "@/lib/constants";
 import { TWITTER_ESCROW_V4_ABI } from "@/lib/abis/twitterEscrowV4";
 import { cn } from "@/lib/utils";
 
+/** Permissionless harvest: flush a CLANKER launch's pool LP fees to the escrow. */
+const HOOK_COLLECT_ABI = [
+    {
+        type: "function",
+        name: "collectFees",
+        stateMutability: "nonpayable",
+        inputs: [{ name: "token", type: "address" }],
+        outputs: [],
+    },
+] as const;
+
 /** The V4 claim payload handed over from the OAuth callback (escrowVersion:"v4"). */
 export interface V4ClaimCardPayload {
     escrowVersion: "v4";
@@ -80,6 +91,25 @@ export function V4ClaimCard({
         setBusy(true);
         setMsg(null);
         try {
+            // Step 0: harvest. CLANKER fees accrue as pool LP fees; collectFees
+            // (permissionless) flushes the creator's 80% into the escrow slot so
+            // there is a live balance to sweep. Best-effort: if nothing is
+            // pending it reverts, which we ignore and let authorize decide.
+            try {
+                setMsg("Harvesting fees from the pool…");
+                const hHash = await writeContractAsync({
+                    address: ADDRESSES.arcadeHook as Address,
+                    abi: HOOK_COLLECT_ABI,
+                    functionName: "collectFees",
+                    args: [payload.token],
+                });
+                await publicClient.waitForTransactionReceipt({ hash: hHash });
+                await balQ.refetch();
+            } catch {
+                /* nothing to harvest / already harvested */
+            }
+            setMsg(null);
+
             // Step 1: authorize (commits the signed claim on-chain).
             const aHash = await writeContractAsync({
                 address: escrow,
@@ -158,22 +188,32 @@ export function V4ClaimCard({
                         Connect the wallet you started the claim with
                         ({payload.recipient.slice(0, 6)}…{payload.recipient.slice(-4)}).
                     </div>
-                ) : nothingToClaim ? (
-                    <div className="mt-5 text-sm text-arc-text-muted">
-                        Nothing to claim yet. Fees accrue as your token trades, so check back later.
-                    </div>
                 ) : (
-                    <button
-                        type="button"
-                        onClick={authorizedAt && timelock > 0 ? onFinish : onClaim}
-                        disabled={busy}
-                        className={cn(
-                            "mt-5 w-full rounded-xl bg-arc-cta px-4 py-3 text-sm font-semibold text-arc-bg transition-colors hover:bg-arc-cta-hover",
-                            busy && "opacity-60",
+                    <>
+                        <button
+                            type="button"
+                            onClick={authorizedAt && timelock > 0 ? onFinish : onClaim}
+                            disabled={busy}
+                            className={cn(
+                                "mt-5 w-full rounded-xl bg-arc-cta px-4 py-3 text-sm font-semibold text-arc-bg transition-colors hover:bg-arc-cta-hover",
+                                busy && "opacity-60",
+                            )}
+                        >
+                            {busy
+                                ? "Submitting…"
+                                : authorizedAt && timelock > 0
+                                  ? "Finish claim"
+                                  : nothingToClaim
+                                    ? "Harvest & claim"
+                                    : "Claim"}
+                        </button>
+                        {nothingToClaim && (
+                            <p className="mt-2 text-[11px] text-arc-text-faint">
+                                No fees in the escrow yet. This first harvests the pool&apos;s accrued
+                                LP fees into your slot, then claims them.
+                            </p>
                         )}
-                    >
-                        {busy ? "Submitting…" : authorizedAt && timelock > 0 ? "Finish claim" : "Claim"}
-                    </button>
+                    </>
                 )}
 
                 {msg && !done && (
