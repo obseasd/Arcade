@@ -23,6 +23,7 @@ import {
     type LaunchCommand,
 } from "@/lib/twitterLaunch";
 import { hasLaunchIntent, parseLaunchWithClaude } from "@/lib/twitterLaunchParse";
+import { postLaunchReply } from "@/lib/twitterReply";
 import {
     isTweetProcessed,
     recordLaunchTweet,
@@ -337,6 +338,12 @@ export async function POST(req: NextRequest) {
                 opHandle: m.opUser?.username,
             });
             summary.launched++;
+
+            // Announce the launch: reply to the tweet as the bot with the Arcade
+            // link. Best-effort (needs the OAuth 1.0a write creds); never blocks.
+            if (token) {
+                await postLaunchReply(m.tweetId, token, cmd.name, cmd.ticker).catch(() => false);
+            }
         } catch (err) {
             summary.failed++;
             const msg = err instanceof Error ? err.message : String(err);
