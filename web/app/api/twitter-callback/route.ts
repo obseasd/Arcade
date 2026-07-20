@@ -14,6 +14,7 @@ import { LAUNCHPAD_ABI } from "@/lib/abis/launchpad";
 import { V3_LOCKER_ABI, V3_POOL_ABI } from "@/lib/abis/v3";
 import { TWITTER_ESCROW_V3_ABI } from "@/lib/abis/twitterEscrowV3";
 import { arcTestnet } from "@/lib/chains";
+import { buildV4ClaimPayload } from "@/lib/twitterClaimV4";
 import { ADDRESSES } from "@/lib/constants";
 import { fetchMetadata } from "@/lib/metadata";
 
@@ -232,6 +233,48 @@ export async function GET(req: NextRequest) {
   // against the on-chain metadata, which a deployer fully controls.
   const oauthHandle = normaliseHandle(rawOauthHandle);
   if (!oauthHandle) return redirectBackWithError(origin, "no_handle");
+
+  // 2.5) V4-hook claim path. V4-hook launches use ArcadeTwitterEscrowV4 (single
+  // token, keyed by uint256(poolId), 7-field Claim, domain version "4"), which
+  // the V3 block below (locker positionIdByToken + dual paired/clanker) cannot
+  // serve. Try V4 first; a non-hook token returns not-v4 and falls through. The
+  // same upstream gates (state HMAC, per-IP + per-slot rate limit, OAuth) apply.
+  {
+    const v4 = await buildV4ClaimPayload({
+      token: token as Address,
+      slotIndex,
+      recipient: recipient as Address,
+      oauthHandle,
+      backendPk,
+    });
+    if (v4.kind === "error") return redirectBackWithError(origin, v4.error);
+    if (v4.kind === "ok") {
+      const claimBody = JSON.stringify(v4.payload);
+      const claimMac = crypto.createHmac("sha256", secret).update(claimBody).digest("hex");
+      const res = NextResponse.redirect(new URL(`${origin}/claim`).toString());
+      const cookieDomain = req.nextUrl.hostname.endsWith("arcade.trading") ? "arcade.trading" : undefined;
+      // Clear the one-shot state cookie, then hand the signed payload to /claim
+      // via the same HttpOnly + HMAC one-shot cookie the V3 path uses.
+      res.cookies.set(cookieName, "", {
+        httpOnly: true,
+        secure: req.nextUrl.protocol === "https:",
+        sameSite: "lax",
+        domain: cookieDomain,
+        path: "/",
+        maxAge: 0,
+      });
+      res.cookies.set("arcade_claim_payload", `${claimBody}.${claimMac}`, {
+        httpOnly: true,
+        secure: req.nextUrl.protocol === "https:",
+        sameSite: "strict",
+        domain: cookieDomain,
+        path: "/",
+        maxAge: 120,
+      });
+      return res;
+    }
+    // v4.kind === "not-v4" -> a legacy V3-locker token; continue below.
+  }
 
   // 3) Look up the token's metadata to read slot attribution.
   let positionId = 0n;

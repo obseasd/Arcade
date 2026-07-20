@@ -1,0 +1,198 @@
+import crypto from "crypto";
+import { createPublicClient, http, zeroAddress, type Address } from "viem";
+import { privateKeyToAccount } from "viem/accounts";
+
+import { arcTestnet } from "@/lib/chains";
+import { ADDRESSES } from "@/lib/constants";
+import { normaliseHandle } from "@/lib/twitterHandle";
+import {
+    TWITTER_ESCROW_V4_ABI,
+    TWITTER_ESCROW_V4_CLAIM_TYPES,
+    TWITTER_ESCROW_V4_DOMAIN_VERSION,
+} from "@/lib/abis/twitterEscrowV4";
+import { getReplyLaunchByPool } from "@/lib/twitterLaunchPersistence";
+import { reconcileReplySlot } from "@/lib/twitterReplyReconcile";
+
+/**
+ * V4-hook claim path. The V3 flow in twitter-callback (dual paired+clanker,
+ * keyed by the v3Locker's positionIdByToken) does NOT work for V4-hook launches:
+ * their escrow (ArcadeTwitterEscrowV4) is single-token, keyed by uint256(poolId),
+ * with a 7-field Claim at domain version "4". This module builds a V4 claim
+ * payload; the callback falls through to it when the token is a hook launch.
+ *
+ * Handle attribution differs by slot:
+ *  - slot 0 (launcher): on-chain, via the subgraph HandleAttribution(poolId).
+ *  - slot 1 (reply-target): off-chain, via our DB (op_handle). Before signing we
+ *    reconcile the slot so its escrow balance reflects the operator's accrued
+ *    half (idempotent; the launcher's slot 0 is credited directly by the hook).
+ *
+ * SECURITY: identical gates to the V3 path apply upstream in the callback (state
+ * HMAC, per-IP + per-slot rate limit, OAuth). Here we additionally: normalise
+ * BOTH the attributed handle and the OAuth handle through the shared
+ * normaliseHandle; sign for the current on-chain balance only (the escrow's
+ * authorize re-checks amount <= balance and recipient == msg.sender on-chain).
+ */
+
+const HOOK_POOLID_ABI = [
+    {
+        type: "function",
+        name: "poolIdOf",
+        stateMutability: "view",
+        inputs: [{ name: "", type: "address" }],
+        outputs: [{ name: "", type: "bytes32" }],
+    },
+] as const;
+
+export interface V4ClaimPayload {
+    escrowVersion: "v4";
+    token: string;
+    positionId: string;
+    slotIndex: number;
+    recipient: string;
+    escrowToken: string; // USDC (the V4 escrow is single-token)
+    amount: string;
+    deadline: string;
+    nonce: string;
+    sig: string;
+    handle: string;
+}
+
+export type V4ClaimResult =
+    | { kind: "not-v4" }
+    | { kind: "error"; error: string }
+    | { kind: "ok"; payload: V4ClaimPayload };
+
+function rpcClient() {
+    return createPublicClient({ chain: arcTestnet, transport: http(arcTestnet.rpcUrls.default.http[0]) });
+}
+
+/** Launcher handle for a V4 launch = subgraph HandleAttribution(id = poolId). */
+async function handleFromSubgraph(poolIdHex: string): Promise<string | undefined> {
+    const url = process.env.NEXT_PUBLIC_GOLDSKY_URL;
+    if (!url) return undefined;
+    try {
+        const q = `{ handleAttribution(id: "${poolIdHex.toLowerCase()}") { handle } }`;
+        const res = await fetch(url, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ query: q }),
+        });
+        if (!res.ok) return undefined;
+        const j = (await res.json()) as { data?: { handleAttribution?: { handle?: string } | null } };
+        return j?.data?.handleAttribution?.handle ?? undefined;
+    } catch {
+        return undefined;
+    }
+}
+
+export async function buildV4ClaimPayload(args: {
+    token: Address;
+    slotIndex: number;
+    recipient: Address;
+    oauthHandle: string;
+    backendPk: `0x${string}`;
+}): Promise<V4ClaimResult> {
+    const { token, slotIndex, recipient, oauthHandle, backendPk } = args;
+    const hook = ADDRESSES.arcadeHook as Address;
+    const escrow = ADDRESSES.twitterEscrow as Address;
+    const usdc = ADDRESSES.usdc as Address;
+    if (!hook || hook === zeroAddress || !escrow || escrow === zeroAddress) {
+        return { kind: "not-v4" };
+    }
+    // V4 only exposes slots 0 (launcher) and 1 (reply-target).
+    if (slotIndex !== 0 && slotIndex !== 1) return { kind: "not-v4" };
+
+    const client = rpcClient();
+
+    // 1) Is this a V4-hook token? poolIdOf(token) != 0.
+    let poolId: string;
+    try {
+        poolId = (await client.readContract({
+            address: hook,
+            abi: HOOK_POOLID_ABI,
+            functionName: "poolIdOf",
+            args: [token],
+        })) as string;
+    } catch {
+        return { kind: "not-v4" };
+    }
+    if (!poolId || /^0x0*$/.test(poolId)) return { kind: "not-v4" };
+
+    const positionId = BigInt(poolId);
+
+    // 2) Handle attribution + (slot 1) on-demand reconciliation.
+    let expected: string | undefined;
+    if (slotIndex === 0) {
+        expected = await handleFromSubgraph(poolId);
+    } else {
+        const row = await getReplyLaunchByPool(poolId);
+        if (!row) return { kind: "error", error: "slot_not_attributed" };
+        expected = row.opHandle;
+        // Fund slot 1 before reading the balance / signing (idempotent). A
+        // failure here is non-fatal: the balance simply stays at whatever was
+        // already credited; the user can retry.
+        try {
+            await reconcileReplySlot(poolId);
+        } catch {
+            /* non-fatal */
+        }
+    }
+    const expNorm = normaliseHandle(expected);
+    if (!expNorm) return { kind: "error", error: "slot_not_attributed" };
+    if (expNorm !== oauthHandle) return { kind: "error", error: "handle_mismatch" };
+
+    // 3) Current on-chain slot balance (USDC).
+    let amount: bigint;
+    try {
+        amount = (await client.readContract({
+            address: escrow,
+            abi: TWITTER_ESCROW_V4_ABI,
+            functionName: "balances",
+            args: [positionId, BigInt(slotIndex), usdc],
+        })) as bigint;
+    } catch {
+        return { kind: "error", error: "onchain_read_failed" };
+    }
+
+    // 4) Sign the V4 Claim (7-field, domain version "4"). Signing for the live
+    //    balance; claimByTwitter sweeps the balance at execute time (>= signed).
+    const account = privateKeyToAccount(backendPk);
+    const nonce = `0x${crypto.randomBytes(32).toString("hex")}` as `0x${string}`;
+    const deadline = BigInt(Math.floor(Date.now() / 1000) + 30 * 60);
+    const sig = await account.signTypedData({
+        domain: {
+            name: "ArcadeTwitterEscrow",
+            version: TWITTER_ESCROW_V4_DOMAIN_VERSION,
+            chainId: arcTestnet.id,
+            verifyingContract: escrow,
+        },
+        types: TWITTER_ESCROW_V4_CLAIM_TYPES,
+        primaryType: "Claim",
+        message: {
+            positionId,
+            slotIndex: BigInt(slotIndex),
+            recipient,
+            token: usdc,
+            amount,
+            deadline,
+            nonce,
+        },
+    });
+
+    return {
+        kind: "ok",
+        payload: {
+            escrowVersion: "v4",
+            token,
+            positionId: positionId.toString(),
+            slotIndex,
+            recipient,
+            escrowToken: usdc,
+            amount: amount.toString(),
+            deadline: deadline.toString(),
+            nonce,
+            sig,
+            handle: oauthHandle,
+        },
+    };
+}

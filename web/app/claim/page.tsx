@@ -8,6 +8,7 @@ import { Address, encodeFunctionData, formatUnits, isAddress } from "viem";
 import { useAccount, usePublicClient, useReadContract, useWriteContract } from "wagmi";
 import { erc20Abi } from "viem";
 import { TWITTER_ESCROW_V3_ABI } from "@/lib/abis/twitterEscrowV3";
+import { V4ClaimCard, type V4ClaimCardPayload } from "@/components/claim/V4ClaimCard";
 import { V3_LOCKER_ABI } from "@/lib/abis/v3";
 import { readPendingClaim, removePendingClaim, savePendingClaim } from "@/lib/pendingClaims";
 import { ADDRESSES, LAUNCHPAD_TOKEN_DECIMALS, USDC_DECIMALS } from "@/lib/constants";
@@ -127,6 +128,10 @@ function ClaimPageInner() {
 
   // Unify the cookie (OAuth) and localStorage (resume) sources.
   const effectivePayload = payload ?? resumePayload;
+  // V4-hook launches deliver an escrowVersion:"v4" payload (single-token escrow);
+  // rendered by a dedicated card so the V3 flow below is untouched.
+  const isV4 =
+    (effectivePayload as unknown as { escrowVersion?: string } | null)?.escrowVersion === "v4";
   const effectiveStatus: "loading" | "ready" | "absent" = isResume
     ? resumePayload
       ? "ready"
@@ -243,6 +248,16 @@ function ClaimPageInner() {
       <div className="mx-auto max-w-2xl px-4 py-16 text-center text-arc-text-muted">
         Loading claim…
       </div>
+    );
+  }
+
+  // V4-hook escrow claim: dedicated single-token flow (no pool-sync step).
+  if (isV4 && effectivePayload) {
+    return (
+      <V4ClaimCard
+        payload={effectivePayload as unknown as V4ClaimCardPayload}
+        account={(account as Address | undefined) ?? null}
+      />
     );
   }
 
