@@ -7,6 +7,7 @@ import { useAccount, usePublicClient, useReadContract, useWriteContract } from "
 
 import { ADDRESSES, USDC_DECIMALS } from "@/lib/constants";
 import { TWITTER_ESCROW_V4_ABI } from "@/lib/abis/twitterEscrowV4";
+import { pushToast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 
 /** Permissionless harvest: flush a CLANKER launch's pool LP fees to the escrow. */
@@ -133,7 +134,19 @@ export function V4ClaimCard({
                 setBusy(false);
                 return;
             }
-            // Step 2 (timelock 0): sweep immediately.
+            // Step 2 (timelock 0): sweep immediately. Read the exact balance about
+            // to be swept so the confirmation shows the real claimed amount.
+            let sweptMicros = liveBal;
+            try {
+                sweptMicros = (await publicClient.readContract({
+                    address: escrow,
+                    abi: TWITTER_ESCROW_V4_ABI,
+                    functionName: "balances",
+                    args: [positionId, slot, payload.escrowToken],
+                })) as bigint;
+            } catch {
+                /* use the live hook value */
+            }
             const cHash = await writeContractAsync({
                 address: escrow,
                 abi: TWITTER_ESCROW_V4_ABI,
@@ -141,8 +154,14 @@ export function V4ClaimCard({
                 args: [payload.nonce],
             });
             await publicClient.waitForTransactionReceipt({ hash: cHash });
+            const claimedUsd = Number(formatUnits(sweptMicros, USDC_DECIMALS));
+            pushToast({
+                kind: "info",
+                title: "Creator fees claimed",
+                message: `$${claimedUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })} USDC is in your wallet`,
+            });
             setDone(true);
-            setMsg("Claimed. The USDC is in your wallet. Redirecting…");
+            setMsg(`Claimed $${claimedUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })}. Redirecting…`);
             redirectToToken();
         } catch (e) {
             setMsg(e instanceof Error ? e.message.slice(0, 200) : "Claim failed");
