@@ -84,8 +84,10 @@ function rpcClient() {
     return createPublicClient({
         chain: ARC_CHAIN,
         transport: http("https://rpc.testnet.arc.network", {
-            retryCount: 4,
-            retryDelay: 400,
+            // Space retries out so a short-window "request limit reached" clears
+            // between attempts (the Arc testnet RPC is heavily rate-limited).
+            retryCount: 5,
+            retryDelay: 1_200,
             timeout: 20_000,
         }),
     });
@@ -145,20 +147,10 @@ export async function buildV4ClaimPayload(args: {
 
     const positionId = BigInt(poolId);
 
-    // The escrow is read FROM THE HOOK (not ADDRESSES.twitterEscrow, which has no
-    // deployments fallback and breaks when NEXT_PUBLIC_TWITTER_ESCROW_ADDRESS is
-    // unset/wrong). This is the same escrow the hook credited, guaranteed.
-    let escrow: Address;
-    try {
-        escrow = (await client.readContract({
-            address: hook,
-            abi: HOOK_ABI,
-            functionName: "twitterEscrow",
-        })) as Address;
-    } catch (e) {
-        console.error("[v4claim] hook.twitterEscrow read failed:", e instanceof Error ? e.message : e);
-        return { kind: "error", error: "v4_poolid_read_failed" };
-    }
+    // Escrow from ADDRESSES (env + deployments.json fallback). We avoid an extra
+    // on-chain hook.twitterEscrow() read here: the Arc testnet RPC is rate-limited
+    // ("request limit reached") and every saved eth_call keeps the claim under it.
+    const escrow = ADDRESSES.twitterEscrow as Address;
     if (!escrow || escrow === zeroAddress) return { kind: "error", error: "slot_not_attributed" };
 
     // 2) Handle attribution. slot 0 (launcher) is on-chain via the subgraph;
