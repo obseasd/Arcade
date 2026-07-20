@@ -28,6 +28,8 @@ import {
     isTweetProcessed,
     recordLaunchTweet,
     userLaunchCountSince,
+    globalLaunchCountSince,
+    reserveTweet,
     getSinceId,
     setSinceId,
 } from "@/lib/twitterLaunchPersistence";
@@ -67,6 +69,9 @@ const ARC_CHAIN = {
 
 const MAX_LAUNCHES_PER_RUN = 5;
 const PER_USER_DAILY_LIMIT = Number(process.env.TWEET_LAUNCH_PER_USER_DAILY ?? "1");
+// Circuit breaker: a hard global ceiling on sponsored launches per 24h so a sybil
+// fleet can't drain the operator's gas + 3-USDC-per-launch sponsorship.
+const GLOBAL_DAILY_LIMIT = Number(process.env.TWEET_LAUNCH_GLOBAL_DAILY ?? "50");
 
 function criteriaFromEnv(): CriteriaConfig {
     return {
@@ -236,17 +241,28 @@ export async function POST(req: NextRequest) {
     }
     summary.scanned = mentions.length;
 
-    // Advance the since_id cursor to the newest tweet seen (search returns
-    // newest-first), so the next poll skips everything we've already fetched --
-    // even the ones we reject -- keeping X pay-per-use spend minimal.
-    const newestId = mentions.reduce<string | null>((max, m) => {
-        if (!max) return m.tweetId;
-        // tweet ids are monotonic snowflakes; compare as BigInt.
-        return BigInt(m.tweetId) > BigInt(max) ? m.tweetId : max;
-    }, null);
+    // Process OLDEST-first and advance since_id only to the last tweet we actually
+    // finished handling. If a per-run / global cap breaks the loop, the UNhandled
+    // (newer) tweets are left BEHIND the cursor and re-fetched next run, instead of
+    // being skipped forever (audit MEDIUM: the old newest-first + advance-past-all
+    // dropped every tweet beyond the 5th, oldest-first).
+    mentions.sort((a, b) => (BigInt(a.tweetId) < BigInt(b.tweetId) ? -1 : 1));
+    let cursorId: string | null = sinceId;
+    // Query the global count once + increment locally on each launch (cheaper
+    // than a DB call per tweet).
+    let globalCount = await globalLaunchCountSince(dayAgoIso);
 
     for (const m of mentions) {
         if (summary.launched >= MAX_LAUNCHES_PER_RUN) break;
+        // Global circuit breaker (checked before committing the cursor so the
+        // unhandled tweets stay behind it).
+        if (globalCount >= GLOBAL_DAILY_LIMIT) {
+            summary.notes.push("global daily limit reached");
+            break;
+        }
+        // We are committing to handle this tweet (any outcome writes a row, so a
+        // re-fetch is deduped): advance the cursor to it.
+        cursorId = m.tweetId;
         try {
             if (await isTweetProcessed(m.tweetId)) {
                 summary.skipped++;
@@ -288,6 +304,14 @@ export async function POST(req: NextRequest) {
                     status: "rejected",
                     reason: "per-user daily limit",
                 });
+                continue;
+            }
+
+            // RESERVE the tweet BEFORE the on-chain spend. Closes the check-then-
+            // act window: a crash or a concurrent run between the relay and the DB
+            // write can no longer re-launch (the reserve is atomic; a loser skips).
+            if (!(await reserveTweet(m.tweetId, m.author.id, m.author.username))) {
+                summary.skipped++;
                 continue;
             }
 
@@ -338,6 +362,7 @@ export async function POST(req: NextRequest) {
                 opHandle: m.opUser?.username,
             });
             summary.launched++;
+            globalCount++;
 
             // Announce the launch: reply to the tweet as the bot with the Arcade
             // link. Best-effort (needs the OAuth 1.0a write creds); never blocks.
@@ -358,9 +383,9 @@ export async function POST(req: NextRequest) {
         }
     }
 
-    // Persist the cursor only after processing, so a mid-run crash re-fetches
-    // (idempotency guard dedupes the already-launched ones).
-    if (newestId) await setSinceId(newestId);
+    // Persist the cursor: the last tweet we finished handling (unhandled newer
+    // ones stay behind it and re-fetch next run). Reserve/idempotency dedupes.
+    if (cursorId && cursorId !== sinceId) await setSinceId(cursorId);
 
     return NextResponse.json({ ran: true, ...summary });
 }

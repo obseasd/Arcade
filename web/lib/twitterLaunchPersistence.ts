@@ -41,6 +41,37 @@ export async function userLaunchCountSince(userId: string, sinceIso: string): Pr
     return rows[0]?.n ?? 0;
 }
 
+/** Global launched count since `sinceIso` (a circuit breaker against a sybil
+ *  fleet draining the operator's creation-fee sponsorship). */
+export async function globalLaunchCountSince(sinceIso: string): Promise<number> {
+    if (!isDbConfigured()) return 0;
+    const sql = getSql();
+    const rows = (await sql`
+        SELECT count(*)::int AS n FROM twitter_launches
+        WHERE status = 'launched' AND created_at >= ${sinceIso}
+    `) as { n: number }[];
+    return rows[0]?.n ?? 0;
+}
+
+/**
+ * Atomically RESERVE a tweet before the on-chain relay: insert a 'pending' row,
+ * returning true only if THIS call created it. A concurrent run or a retry after
+ * a mid-relay crash gets false (the row already exists) and must NOT relay again
+ * — this closes the check-then-act window that allowed a double-launch /
+ * double-spend. The row is later updated to launched/failed by recordLaunchTweet.
+ */
+export async function reserveTweet(tweetId: string, userId: string, handle: string): Promise<boolean> {
+    if (!isDbConfigured()) return false;
+    const sql = getSql();
+    const rows = (await sql`
+        INSERT INTO twitter_launches (tweet_id, user_id, handle, status)
+        VALUES (${tweetId}, ${userId}, ${handle}, 'pending')
+        ON CONFLICT (tweet_id) DO NOTHING
+        RETURNING tweet_id
+    `) as { tweet_id: string }[];
+    return rows.length > 0;
+}
+
 /** Upsert a processed tweet row. */
 export async function recordLaunchTweet(input: {
     tweetId: string;
