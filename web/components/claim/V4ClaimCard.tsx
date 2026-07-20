@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { Address, formatUnits } from "viem";
 import { useAccount, usePublicClient, useReadContract, useWriteContract } from "wagmi";
 
@@ -52,6 +53,13 @@ export function V4ClaimCard({
     const { isConnected } = useAccount();
     const publicClient = usePublicClient();
     const { writeContractAsync } = useWriteContract();
+    const router = useRouter();
+
+    // On a successful claim, linger on the confirmation then send the user back
+    // to the token page.
+    function redirectToToken() {
+        setTimeout(() => router.push(`/launchpad/v4hook/${payload.token}`), 3000);
+    }
     // Escrow comes from the payload (resolved from the hook on the server), NOT
     // ADDRESSES.twitterEscrow, which breaks when the env is unset/wrong.
     const escrow = payload.escrowAddress;
@@ -134,7 +142,8 @@ export function V4ClaimCard({
             });
             await publicClient.waitForTransactionReceipt({ hash: cHash });
             setDone(true);
-            setMsg("Claimed. The USDC is in your wallet.");
+            setMsg("Claimed. The USDC is in your wallet. Redirecting…");
+            redirectToToken();
         } catch (e) {
             setMsg(e instanceof Error ? e.message.slice(0, 200) : "Claim failed");
         } finally {
@@ -155,7 +164,8 @@ export function V4ClaimCard({
             });
             await publicClient.waitForTransactionReceipt({ hash: cHash });
             setDone(true);
-            setMsg("Claimed. The USDC is in your wallet.");
+            setMsg("Claimed. The USDC is in your wallet. Redirecting…");
+            redirectToToken();
         } catch (e) {
             setMsg(e instanceof Error ? e.message.slice(0, 200) : "Claim failed");
         } finally {
