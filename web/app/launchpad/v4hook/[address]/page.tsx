@@ -456,7 +456,7 @@ function FeesRecipientPanel({
                 {isTwitter ? (
                     <>
                         <Link
-                            href="/claim"
+                            href={`/claim?token=${token}&slot=0${handle ? `&handle=${handle}` : ""}`}
                             className="mt-1 inline-flex items-center gap-1 text-sm font-medium text-arc-cta-hover hover:underline"
                         >
                             @{handle ?? "twitter"} · verify &amp; claim
