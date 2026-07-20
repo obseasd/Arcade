@@ -3,7 +3,7 @@ import { isAddress, parseEventLogs, parseAbiItem, type Address, type Hex } from 
 
 import { ADDRESSES } from "@/lib/constants";
 import { serverPublicClient } from "@/lib/serverRpc";
-import { forwardTokenSide, previewTokenSideOwed } from "@/lib/twitterTokenForward";
+import { forwardTokenSide, previewTokenSideOwed, tokenForwardDebug } from "@/lib/twitterTokenForward";
 
 /**
  * Forward the launch-token side of a claimant's creator fees (see
@@ -63,6 +63,12 @@ export async function GET(req: NextRequest) {
     }
 
     const owedRaw = await previewTokenSideOwed(poolIdHex, slotIndex, token as Address);
+    // Temporary diagnostic (?debug=1): surface why owed is 0 (missing DB row,
+    // operator key, balance, cursors). No secret leaked (operator addr is public).
+    if (url.searchParams.get("debug") === "1") {
+        const dbg = await tokenForwardDebug(poolIdHex, token as Address);
+        return NextResponse.json({ owedRaw, poolIdHex, ...dbg });
+    }
     return NextResponse.json({ owedRaw });
 }
 
