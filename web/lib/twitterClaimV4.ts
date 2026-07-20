@@ -113,8 +113,9 @@ export async function buildV4ClaimPayload(args: {
             functionName: "poolIdOf",
             args: [token],
         })) as string;
-    } catch {
-        return { kind: "not-v4" };
+    } catch (e) {
+        console.error("[v4claim] poolIdOf read failed (hook=" + hook + "):", e instanceof Error ? e.message : e);
+        return { kind: "error", error: "v4_poolid_read_failed" };
     }
     if (!poolId || /^0x0*$/.test(poolId)) return { kind: "not-v4" };
 
@@ -131,8 +132,14 @@ export async function buildV4ClaimPayload(args: {
         expected = row.opHandle;
     }
     const expNorm = normaliseHandle(expected);
-    if (!expNorm) return { kind: "error", error: "slot_not_attributed" };
-    if (expNorm !== oauthHandle) return { kind: "error", error: "handle_mismatch" };
+    if (!expNorm) {
+        console.error("[v4claim] no attributed handle (poolId=" + poolId + ", slot=" + slotIndex + ", raw=" + String(expected) + ")");
+        return { kind: "error", error: "slot_not_attributed" };
+    }
+    if (expNorm !== oauthHandle) {
+        console.error("[v4claim] handle mismatch: attributed=" + expNorm + " oauth=" + oauthHandle);
+        return { kind: "error", error: "handle_mismatch" };
+    }
 
     // 2.5) ONLY NOW (handle proven) fund slot 1 on-demand. Audit fix: running
     // this before the handle check let any OAuth completer trigger the
@@ -156,8 +163,9 @@ export async function buildV4ClaimPayload(args: {
             functionName: "balances",
             args: [positionId, BigInt(slotIndex), usdc],
         })) as bigint;
-    } catch {
-        return { kind: "error", error: "onchain_read_failed" };
+    } catch (e) {
+        console.error("[v4claim] escrow.balances read failed (escrow=" + escrow + "):", e instanceof Error ? e.message : e);
+        return { kind: "error", error: "v4_balance_read_failed" };
     }
 
     // 4) Sign the V4 Claim (7-field, domain version "4"). Signing for the live

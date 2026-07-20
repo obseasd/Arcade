@@ -640,6 +640,8 @@ function ErrorState({ error }: { error: string }) {
     no_position: "Token has no V3 locked position.",
     slot_bps_zero: "Slot has zero share.",
     onchain_read_failed: "Could not read on-chain state.",
+    v4_poolid_read_failed: "Could not look up the V4 pool (RPC read failed). Try again.",
+    v4_balance_read_failed: "Could not read the V4 escrow balance (RPC read failed). Try again.",
     nothing_to_claim:
       "No fees credited to this slot yet. If the token has had trades, the fees are still pending in the V3 pool — visit the token page and click \"Claim Fees\" to flush them into the escrow, then come back here.",
   }[error] ?? error;

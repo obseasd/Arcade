@@ -273,7 +273,9 @@ export async function GET(req: NextRequest) {
       });
       return res;
     }
-    // v4.kind === "not-v4" -> a legacy V3-locker token; continue below.
+    // v4.kind === "not-v4" -> not a hook token (or hook/escrow unset); continue
+    // to the legacy V3 path. Logged so a MIS-routed V4 token is visible.
+    console.error("[claim] V4 path returned not-v4 for token=" + token + " slot=" + slotIndex + "; falling through to V3");
   }
 
   // 3) Look up the token's metadata to read slot attribution.
