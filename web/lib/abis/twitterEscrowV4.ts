@@ -1,5 +1,5 @@
 /**
- * ArcadeTwitterEscrowV4 — the V4-hook fee escrow (single-token, keyed by
+ * ArcadeTwitterEscrowV4, the V4-hook fee escrow (single-token, keyed by
  * uint256(poolId)). Distinct from the V3 escrow (dual paired+clanker, keyed by
  * the v3Locker's positionIdByToken): the V4 Claim struct has 7 fields and the
  * EIP-712 domain version is "4". Used by the V4 claim path (twitterClaimV4.ts +

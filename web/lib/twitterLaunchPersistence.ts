@@ -22,7 +22,7 @@ import { getSql, isDbConfigured } from "@/lib/db";
 
 export type LaunchStatus = "pending" | "launched" | "rejected" | "failed";
 
-/** True if this tweet was already processed (any status) — idempotency guard. */
+/** True if this tweet was already processed (any status), idempotency guard. */
 export async function isTweetProcessed(tweetId: string): Promise<boolean> {
     if (!isDbConfigured()) return false;
     const sql = getSql();

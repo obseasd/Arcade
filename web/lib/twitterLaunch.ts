@@ -57,7 +57,7 @@ export function parseLaunchCommand(text: string): LaunchCommand | null {
 
 /** Minimal X (Twitter) user shape the criteria gate needs. */
 export interface XUser {
-    /** Immutable numeric user-id — the canonical fee-attribution key. */
+    /** Immutable numeric user-id, the canonical fee-attribution key. */
     id: string;
     username: string;
     /** ISO 8601 account creation time. */

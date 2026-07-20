@@ -185,7 +185,7 @@ async function pinLaunchMetadata(
         const { uri } = await pinJson({
             name,
             symbol,
-            description: `Launched from a tweet via @${botHandle()} on Arcade.`,
+            description: `Launched from a tweet via @${botHandle()} on Twitter.`,
             image: imageUri,
         });
         return uri;

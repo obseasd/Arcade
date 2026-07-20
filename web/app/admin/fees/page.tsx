@@ -182,21 +182,21 @@ function FeeCategoriesCard() {
             <div className="mt-4 space-y-2 text-sm">
                 <CatRow label="Launch creation fees" sub="3 USDC × launches → treasury" value={fmt(bd.creationUsd)} />
                 <CatRow label="Graduation fees" sub="2,500 USDC × graduations → treasury" value={fmt(bd.graduationUsd)} />
-                <CatRow label="Curve trading fee — platform (50%)" sub="1% pre-graduation curve fee · platform half" value={fmt(curvePlatformUsd)} />
-                <CatRow label="V2 swap fee — protocol (0.15%)" sub="Graduated-pair input fee → treasury" value={fmt(bd.v2ProtocolUsd)} />
-                <CatRow label="V3 LP fees — treasury (20%)" sub="Locker-collected LP fees · treasury share" value={fmt(v3LpTreasuryUsd)} />
+                <CatRow label="Curve trading fee, platform (50%)" sub="1% pre-graduation curve fee · platform half" value={fmt(curvePlatformUsd)} />
+                <CatRow label="V2 swap fee, protocol (0.15%)" sub="Graduated-pair input fee → treasury" value={fmt(bd.v2ProtocolUsd)} />
+                <CatRow label="V3 LP fees, treasury (20%)" sub="Locker-collected LP fees · treasury share" value={fmt(v3LpTreasuryUsd)} />
                 <CatRow label="Auto-compound fee" sub={`≤10% of compounded LP fees → treasury · ${bd.compounderCount} compound${bd.compounderCount === 1 ? "" : "s"}`} value={fmt(bd.compounderUsd)} />
-                <CatRow label="V4 trading fee — protocol (20%)" sub="V4 post-graduation → treasury" value={fmt(bd.treasuryTradingUsd)} />
+                <CatRow label="V4 trading fee, protocol (20%)" sub="V4 post-graduation → treasury" value={fmt(bd.treasuryTradingUsd)} />
                 <CatRow label="CCTP bridge fee (0.05%)" sub="Bridge-and-buy → treasury" value={fmt(bd.bridgeUsd)} />
                 <CatRow label="Referral surcharge" sub="Collected on referred swaps (default off)" value={fmt(bd.referralUsd)} />
                 <div className="my-1 border-t border-arc-border/60" />
                 <div className="text-[11px] uppercase tracking-wider text-arc-text-faint">Goes to creators / LPs (not treasury)</div>
-                <CatRow label="Curve trading fee — creator (50%)" sub="1% curve fee · creator half" value={fmt(bd.curveUsd * 0.5)} muted />
-                <CatRow label="V2 swap fee — creator (0.05%)" sub="Graduated-pair → launch creators" value={fmt(bd.v2CreatorUsd)} muted />
-                <CatRow label="V3 LP fees — creators (80%)" sub="Locker-collected LP fees · creator share" value={fmt(bd.v3LpUsd * 0.8)} muted />
-                <CatRow label="V4 trading fee — creators (80%)" sub="V4 post-graduation → launch creators" value={fmt(bd.creatorTradingUsd)} muted />
+                <CatRow label="Curve trading fee, creator (50%)" sub="1% curve fee · creator half" value={fmt(bd.curveUsd * 0.5)} muted />
+                <CatRow label="V2 swap fee, creator (0.05%)" sub="Graduated-pair → launch creators" value={fmt(bd.v2CreatorUsd)} muted />
+                <CatRow label="V3 LP fees, creators (80%)" sub="Locker-collected LP fees · creator share" value={fmt(bd.v3LpUsd * 0.8)} muted />
+                <CatRow label="V4 trading fee, creators (80%)" sub="V4 post-graduation → launch creators" value={fmt(bd.creatorTradingUsd)} muted />
                 <CatRow label="Anti-sniper auction" sub="→ launch creators" value={fmt(bd.antiSnipeUsd)} muted />
-                <CatRow label="CLANKER fee harvests" sub={`${bd.clankerHarvests} harvest event${bd.clankerHarvests === 1 ? "" : "s"} · USD folded into V4 trading fees`} value="—" muted />
+                <CatRow label="CLANKER fee harvests" sub={`${bd.clankerHarvests} harvest event${bd.clankerHarvests === 1 ? "" : "s"} · USD folded into V4 trading fees`} value="-" muted />
             </div>
             <p className="mt-4 text-[11px] leading-relaxed text-arc-text-faint">
                 Every protocol fee source is now categorised from the indexer. Token-denominated legs

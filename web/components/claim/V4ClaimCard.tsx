@@ -157,7 +157,7 @@ export function V4ClaimCard({
                     </div>
                 ) : nothingToClaim ? (
                     <div className="mt-5 text-sm text-arc-text-muted">
-                        Nothing to claim yet — fees accrue as your token trades. Check back later.
+                        Nothing to claim yet. Fees accrue as your token trades, so check back later.
                     </div>
                 ) : (
                     <button

@@ -8,7 +8,7 @@ import { Address, zeroAddress } from "viem";
  * Reads the pool's latest PoolDayData bucket (volume + fees) and Pool.usdcReserve
  * (TVL = usdcReserve x 2). APR = feesUsdc annualised over TVL. Returns undefined
  * fields while loading or when a pool has no indexed activity yet, so callers can
- * render "—". Replaces the hardcoded "—" placeholders on the V2/V3 position cards.
+ * render a dash. Replaces the hardcoded placeholders on the V2/V3 position cards.
  */
 export interface PoolMetrics {
     volUsd?: number;

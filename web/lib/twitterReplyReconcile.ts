@@ -67,7 +67,7 @@ export type ReconcileResult =
 
 /**
  * Reconcile one reply-launch pool: sweep the operator's accrued half into escrow
- * slot 1. Idempotent — credits only the delta since the last run (tracked in DB).
+ * slot 1. Idempotent, credits only the delta since the last run (tracked in DB).
  * poolIdHex is the bytes32 PoolId (0x…) recorded at launch.
  */
 export async function reconcileReplySlot(poolIdHex: string): Promise<ReconcileResult> {
@@ -125,7 +125,7 @@ export async function reconcileReplySlot(poolIdHex: string): Promise<ReconcileRe
 
     const account = privateKeyToAccount(operatorKey);
     const walletClient = createWalletClient({ account, chain: ARC_CHAIN, transport: http() });
-    const positionId = BigInt(poolIdHex); // uint256(PoolId) — matches the hook's slot-0 key
+    const positionId = BigInt(poolIdHex); // uint256(PoolId), matches the hook's slot-0 key
 
     let txTransfer: Hex;
     let txCredit: Hex;

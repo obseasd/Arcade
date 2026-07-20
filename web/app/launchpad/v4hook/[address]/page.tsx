@@ -34,6 +34,7 @@ import {
 import { useApproveIfNeeded } from "@/lib/hooks/useApproveIfNeeded";
 import { useArcadeHookCurveState } from "@/lib/hooks/useArcadeHookTokens";
 import { useV4TokenStats } from "@/lib/hooks/useV4TokenStats";
+import { useV4PoolPrice } from "@/lib/hooks/useV4PoolPrice";
 import { useTokenImage, useTokenMetadata } from "@/lib/hooks/useTokenImage";
 import { pushToast } from "@/lib/toast";
 import { ClankerV4TradePanel } from "@/components/launchpad/ClankerV4TradePanel";
@@ -148,8 +149,13 @@ function Inner() {
     const isPump = mode === ARCADE_HOOK_MODE.PUMP;
 
     const stats = useV4TokenStats(valid ? token : undefined);
-    const mcapLabel = stats.priceUsd
-        ? `$${(stats.priceUsd * Number(LAUNCHPAD_TOTAL_SUPPLY)).toLocaleString(undefined, { maximumFractionDigits: 0 })}`
+    // Market cap uses the traded price when available, else the pool's SEED price
+    // (StateView.getSlot0) so a freshly-launched token shows a real mcap before
+    // its first trade instead of a dash.
+    const poolPrice = useV4PoolPrice(valid ? token : undefined);
+    const effectivePrice = stats.priceUsd ?? poolPrice;
+    const mcapLabel = effectivePrice
+        ? `$${(effectivePrice * Number(LAUNCHPAD_TOTAL_SUPPLY)).toLocaleString(undefined, { maximumFractionDigits: 0 })}`
         : "-";
 
     // Total pool liquidity = USDC side (net bought) + TOKEN side value. The
@@ -165,8 +171,8 @@ function Inner() {
     });
     const tokenInPool = poolTokenBalQ.data as bigint | undefined;
     const tokenSideUsd =
-        tokenInPool !== undefined && stats.priceUsd
-            ? (Number(tokenInPool) / 1e18) * stats.priceUsd
+        tokenInPool !== undefined && effectivePrice
+            ? (Number(tokenInPool) / 1e18) * effectivePrice
             : 0;
     const liquidityUsd = stats.usdcLiquidity + tokenSideUsd;
 
@@ -453,7 +459,7 @@ function FeesRecipientPanel({
                             href="/claim"
                             className="mt-1 inline-flex items-center gap-1 text-sm font-medium text-arc-cta-hover hover:underline"
                         >
-                            @{handle ?? "twitter"} — verify &amp; claim
+                            @{handle ?? "twitter"} · verify &amp; claim
                         </Link>
                         <p className="mt-1 text-[11px] text-arc-text-faint">
                             Fees accrue in a handle-gated escrow. If this is your @, connect a wallet

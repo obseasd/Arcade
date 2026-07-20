@@ -245,7 +245,7 @@ type FeeStats @entity(immutable: false) {
 }
 
 # ---------------------------------------------------------------------------
-# 1.8.0 — per-recipient V3 locker LP-fee earnings, so the creator earnings
+# 1.8.0: per-recipient V3 locker LP-fee earnings, so the creator earnings
 # dashboard reads the subgraph instead of a client-side RecipientPaid getLogs
 # scan. PositionLocked maps a locker positionId -> its launch token; RecipientPaid
 # then accrues each payout to (recipient, launchToken).
