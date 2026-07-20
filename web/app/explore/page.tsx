@@ -750,9 +750,8 @@ export default function ExplorePage() {
             )}
 
             <p className="mt-10 text-center text-xs text-arc-text-faint">
-                Historical volume + APR + Daily Fees charts ship with the ArcLens indexer
-                (Circle Grant Milestone 3). For now the page surfaces a live TVL snapshot
-                across every Arcade pool plus the categorisation infrastructure.
+                Volume, daily fees, APR and TVL are live from the ArcLens indexer (Circle
+                Grant Milestone 3), aggregated across every Arcade pool.
             </p>
 
             {/* Create-a-new-pool modal. Defaults to the highest-TVL pair so the

@@ -190,8 +190,8 @@ export default function DocsPage() {
           <li><b>Claim all fees</b>: select several positions and collect them in a <b>single signature</b> (batched via Multicall3From).</li>
         </ul>
         <p className="mt-2 text-arc-text-faint">
-          APR / 24h volume / TVL show &quot;—&quot; until the indexer ships
-          (Mainnet); fees themselves are computed exactly on-chain.
+          APR / 24h volume / TVL are live from the ArcLens indexer; fees are also
+          computed exactly on-chain.
         </p>
       </Section>
 
