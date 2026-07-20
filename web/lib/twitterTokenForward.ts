@@ -37,38 +37,6 @@ export type ForwardResult =
     | { ok: true; forwarded: true; amountRaw: string; tx: Hex }
     | { ok: false; error: string };
 
-/** Temporary diagnostic for the ?debug=1 preview: why is owed 0? */
-export async function tokenForwardDebug(
-    poolIdHex: string,
-    launchToken: Address,
-): Promise<Record<string, unknown>> {
-    const operator = operatorAddress();
-    const cursors = await getTokenFwd(poolIdHex);
-    let balance: string | null = null;
-    if (operator) {
-        try {
-            balance = (
-                (await serverPublicClient().readContract({
-                    address: launchToken,
-                    abi: erc20Abi,
-                    functionName: "balanceOf",
-                    args: [operator],
-                })) as bigint
-            ).toString();
-        } catch (e) {
-            balance = `err:${e instanceof Error ? e.message.slice(0, 60) : "?"}`;
-        }
-    }
-    const bps = await creator2BpsFor(poolIdHex).catch(() => -1n);
-    return {
-        operator: operator ?? "MISSING_KEY",
-        hasRow: !!cursors,
-        cursors: cursors ?? null,
-        operatorBalance: balance,
-        creator2Bps: bps.toString(),
-    };
-}
-
 /** The operator EOA that holds token-side fees (createLaunch msg.sender). Derived
  *  from the operator key; null if the key is unset/malformed. */
 function operatorAddress(): Address | null {
