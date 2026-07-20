@@ -100,6 +100,13 @@ interface FeeBreakdown {
     creatorTradingUsd: number;
     antiSnipeUsd: number;
     clankerHarvests: number;
+    // 1.7.0 categories
+    curveUsd: number; // 1% curve fee (total; PUMP 50/50 platform/creator)
+    v2ProtocolUsd: number; // V2 graduated-pair 0.15% protocol
+    v2CreatorUsd: number; // V2 graduated-pair 0.05% creator
+    v3LpUsd: number; // V3 locker LP fees collected (total; 80/20 creator/treasury)
+    compounderUsd: number; // auto-compound protocol fee (net)
+    compounderCount: number;
 }
 
 /**
@@ -115,7 +122,7 @@ function FeeCategoriesCard() {
         const url = process.env.NEXT_PUBLIC_GOLDSKY_URL;
         if (!url) return;
         let cancelled = false;
-        const q = `{ feeStats(id: "v4") { creatorFeesUsdc treasuryFeesUsdc antiSnipeUsdc clankerHarvests } global(id: "global") { tokenCount graduatedCount } }`;
+        const q = `{ feeStats(id: "v4") { creatorFeesUsdc treasuryFeesUsdc antiSnipeUsdc clankerHarvests curveFeesUsdc v2ProtocolUsdc v2CreatorUsdc v3LpFeesUsdc compounderProtocolUsdc compounderCount } global(id: "global") { tokenCount graduatedCount } }`;
         fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ query: q }) })
             .then((r) => (r.ok ? r.json() : null))
             .then((j) => {
@@ -129,6 +136,12 @@ function FeeCategoriesCard() {
                     creatorTradingUsd: Number(f.creatorFeesUsdc) || 0,
                     antiSnipeUsd: Number(f.antiSnipeUsdc) || 0,
                     clankerHarvests: Number(f.clankerHarvests) || 0,
+                    curveUsd: Number(f.curveFeesUsdc) || 0,
+                    v2ProtocolUsd: Number(f.v2ProtocolUsdc) || 0,
+                    v2CreatorUsd: Number(f.v2CreatorUsdc) || 0,
+                    v3LpUsd: Number(f.v3LpFeesUsdc) || 0,
+                    compounderUsd: Number(f.compounderProtocolUsdc) || 0,
+                    compounderCount: Number(f.compounderCount) || 0,
                 });
             })
             .catch(() => {});
@@ -137,7 +150,19 @@ function FeeCategoriesCard() {
         };
     }, []);
     if (!bd) return null;
-    const protocolTotal = bd.creationUsd + bd.graduationUsd + bd.treasuryTradingUsd;
+    // Protocol (treasury) share of each category. Curve is PUMP 50/50; V3 locker
+    // LP fees split 80/20 creator/treasury; V2 protocol + compounder fee are
+    // already the treasury-side amounts.
+    const curvePlatformUsd = bd.curveUsd * 0.5;
+    const v3LpTreasuryUsd = bd.v3LpUsd * 0.2;
+    const protocolTotal =
+        bd.creationUsd +
+        bd.graduationUsd +
+        bd.treasuryTradingUsd +
+        bd.v2ProtocolUsd +
+        v3LpTreasuryUsd +
+        bd.compounderUsd +
+        curvePlatformUsd;
     const fmt = (n: number) => `$${n.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
     return (
         <div className="arc-card mb-6 p-6">
@@ -151,17 +176,25 @@ function FeeCategoriesCard() {
             <div className="mt-4 space-y-2 text-sm">
                 <CatRow label="Launch creation fees" sub="3 USDC × launches → treasury" value={fmt(bd.creationUsd)} />
                 <CatRow label="Graduation fees" sub="2,500 USDC × graduations → treasury" value={fmt(bd.graduationUsd)} />
-                <CatRow label="Trading fees — protocol (20%)" sub="V4 post-graduation → treasury" value={fmt(bd.treasuryTradingUsd)} />
+                <CatRow label="Curve trading fee — platform (50%)" sub="1% pre-graduation curve fee · platform half" value={fmt(curvePlatformUsd)} />
+                <CatRow label="V2 swap fee — protocol (0.15%)" sub="Graduated-pair input fee → treasury" value={fmt(bd.v2ProtocolUsd)} />
+                <CatRow label="V3 LP fees — treasury (20%)" sub="Locker-collected LP fees · treasury share" value={fmt(v3LpTreasuryUsd)} />
+                <CatRow label="Auto-compound fee" sub={`≤10% of compounded LP fees → treasury · ${bd.compounderCount} compound${bd.compounderCount === 1 ? "" : "s"}`} value={fmt(bd.compounderUsd)} />
+                <CatRow label="V4 trading fee — protocol (20%)" sub="V4 post-graduation → treasury" value={fmt(bd.treasuryTradingUsd)} />
                 <div className="my-1 border-t border-arc-border/60" />
-                <CatRow label="Trading fees — creators (80%)" sub="V4 post-graduation → launch creators" value={fmt(bd.creatorTradingUsd)} muted />
+                <div className="text-[11px] uppercase tracking-wider text-arc-text-faint">Goes to creators / LPs (not treasury)</div>
+                <CatRow label="Curve trading fee — creator (50%)" sub="1% curve fee · creator half" value={fmt(bd.curveUsd * 0.5)} muted />
+                <CatRow label="V2 swap fee — creator (0.05%)" sub="Graduated-pair → launch creators" value={fmt(bd.v2CreatorUsd)} muted />
+                <CatRow label="V3 LP fees — creators (80%)" sub="Locker-collected LP fees · creator share" value={fmt(bd.v3LpUsd * 0.8)} muted />
+                <CatRow label="V4 trading fee — creators (80%)" sub="V4 post-graduation → launch creators" value={fmt(bd.creatorTradingUsd)} muted />
                 <CatRow label="Anti-sniper auction" sub="→ launch creators" value={fmt(bd.antiSnipeUsd)} muted />
-                <CatRow label="CLANKER fee harvests" sub={`${bd.clankerHarvests} harvest event${bd.clankerHarvests === 1 ? "" : "s"} · USD folded into trading fees`} value="—" muted />
+                <CatRow label="CLANKER fee harvests" sub={`${bd.clankerHarvests} harvest event${bd.clankerHarvests === 1 ? "" : "s"} · USD folded into V4 trading fees`} value="—" muted />
             </div>
             <p className="mt-4 text-[11px] leading-relaxed text-arc-text-faint">
-                Not yet categorised by the indexer (would need extra subgraph datasources): V2 pair
-                split (0.15% protocol / 0.05% creator), V3 locker fees (80/20), auto-compounder fee
-                (≤10%), referral surcharge, CCTP bridge fee (0.05%), and the 1% pre-graduation curve
-                fee. Inbound treasury USDC from those still shows in the recent-window scan below.
+                Still not categorised by the indexer: referral surcharge (≤1%, default 0) and the CCTP
+                bridge fee (0.05%, receiver off deployments.json). Inbound treasury USDC from those
+                still shows in the recent-window scan below. V2 token-side legs are valued at the
+                token&apos;s last traded price.
             </p>
         </div>
     );

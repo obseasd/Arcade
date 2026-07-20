@@ -221,4 +221,20 @@ type FeeStats @entity(immutable: false) {
   # Count of CLANKER collectFees harvests. The USDC value harvested is folded
   # into creatorFeesUsdc/treasuryFeesUsdc via RoyaltyPaid (USDC side only).
   clankerHarvests: BigInt!
+  # --- 1.7.0: swap / LP / auto-compound fee categories (all USDC-valued) so
+  #     /admin/fees can break revenue down by source instead of estimating. ---
+  # Pre-graduation curve trade fee: 1% of every curve Buy/Sell (PUMP: 50/50
+  # platform/creator; the frontend applies the split). Accrued in recordTrade.
+  curveFeesUsdc: BigDecimal!
+  # V2 graduated-pair swap fee (ArcadeV2Pair.LaunchFeePaid): 0.15% protocol +
+  # 0.05% creator, taken input-side. USDC legs added directly; token legs valued
+  # at the token's last traded price.
+  v2ProtocolUsdc: BigDecimal!
+  v2CreatorUsdc: BigDecimal!
+  # V3 locker LP fees collected (paired USDC side of ArcadeV3Locker.FeesCollected).
+  v3LpFeesUsdc: BigDecimal!
+  # Auto-compounder protocol fee (USDC leg of ArcadeAutoCompounder.Compounded
+  # protocolFee0/1, resolved via NPM.positions token0/token1).
+  compounderProtocolUsdc: BigDecimal!
+  compounderCount: BigInt!
 }

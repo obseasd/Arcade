@@ -5,7 +5,10 @@ import { Swap } from "../generated/templates/V3Pool/V3Pool";
 import { ERC20 } from "../generated/templates/V3Pool/ERC20";
 import { Transfer } from "../generated/templates/ArcadeToken/ERC20";
 import { PairCreated } from "../generated/V2Factory/V2Factory";
-import { Sync } from "../generated/templates/V2Pair/V2Pair";
+import { Sync, LaunchFeePaid } from "../generated/templates/V2Pair/V2Pair";
+import { FeesCollected } from "../generated/V3Locker/ArcadeV3Locker";
+import { Compounded } from "../generated/AutoCompounder/ArcadeAutoCompounder";
+import { NonfungiblePositionManager } from "../generated/AutoCompounder/NonfungiblePositionManager";
 import { V3Pool, ArcadeToken, V2Pair } from "../generated/templates";
 import {
   LaunchCreated,
@@ -213,6 +216,15 @@ function recordTrade(
   bumpGlobalDay(volumeUsdc, feeUsdc, blockTime);
 
   g.save();
+
+  // Real fee category: pre-graduation curve trade fee = 1% of curve volume.
+  // (Post-graduation v2/v3/v4 swaps have their own fee events -- LaunchFeePaid,
+  // locker FeesCollected, RoyaltyPaid -- and are NOT double-counted here.)
+  if (source == "curve" || source == "v4curve") {
+    const f = loadFeeStats();
+    f.curveFeesUsdc = f.curveFeesUsdc.plus(volumeUsdc.times(BigDecimal.fromString("0.01")));
+    f.save();
+  }
 }
 
 /** Swap-fee rate (as a fraction) for a trade, by venue. */
@@ -595,6 +607,85 @@ export function handleV2Sync(event: Sync): void {
   setPoolReserve(p, usdcVolume(usdcRaw), event.block.timestamp.toI32());
 }
 
+/** |raw| / 1e18 (human token units). */
+function tokenVolume(raw: BigInt): BigDecimal {
+  const zero = BigInt.fromI32(0);
+  const abs = raw.lt(zero) ? raw.neg() : raw;
+  return abs.toBigDecimal().div(BigDecimal.fromString("1000000000000000000")); // /1e18
+}
+
+/**
+ * V2 graduated-pair swap fee (ArcadeV2Pair.LaunchFeePaid): 0.15% protocol +
+ * 0.05% creator, taken on the INPUT token. `event.params.token` is that input
+ * token: if it's USDC the amounts are USDC (6dp); otherwise they're the launch
+ * token (18dp), valued at the token's last traded price. Feeds the /admin/fees
+ * "V2 swap fee" category.
+ */
+export function handleV2LaunchFee(event: LaunchFeePaid): void {
+  const feeToken = event.params.token;
+  let protoUsdc: BigDecimal;
+  let creatorUsdc: BigDecimal;
+  if (feeToken.equals(usdcAddress())) {
+    protoUsdc = usdcVolume(event.params.protocolAmount);
+    creatorUsdc = usdcVolume(event.params.creatorAmount);
+  } else {
+    // Token-denominated leg: value at the token's last traded price (USDC/token).
+    const tok = Token.load(feeToken.toHexString());
+    const price = tok == null ? BigDecimal.fromString("0") : tok.lastPriceUsdc;
+    protoUsdc = tokenVolume(event.params.protocolAmount).times(price);
+    creatorUsdc = tokenVolume(event.params.creatorAmount).times(price);
+  }
+  const f = loadFeeStats();
+  f.v2ProtocolUsdc = f.v2ProtocolUsdc.plus(protoUsdc);
+  f.v2CreatorUsdc = f.v2CreatorUsdc.plus(creatorUsdc);
+  f.save();
+}
+
+/**
+ * V3 locker LP fees (ArcadeV3Locker.FeesCollected): `pairedAmount` is the
+ * paired (USDC) side collected from the locked position, `clankerAmount` the
+ * token side. We track the USDC side as the "V3 LP fees" category (the token
+ * side has no reliable price at collect time). This is the TOTAL collected
+ * before the 80/20 creator/protocol split.
+ */
+export function handleV3LockerFees(event: FeesCollected): void {
+  const f = loadFeeStats();
+  f.v3LpFeesUsdc = f.v3LpFeesUsdc.plus(usdcVolume(event.params.pairedAmount));
+  f.save();
+}
+
+/**
+ * Auto-compounder protocol fee (ArcadeAutoCompounder.Compounded): protocolFee0/1
+ * are in the position's token0/token1. Resolve which is USDC via NPM.positions
+ * (the event carries only the tokenId) and count the USDC leg. Non-USDC pools
+ * contribute 0 (no on-chain USDC price here). Feeds the "Auto-compound" category.
+ */
+export function handleCompounded(event: Compounded): void {
+  const f = loadFeeStats();
+  f.compounderCount = f.compounderCount.plus(BigInt.fromI32(1));
+
+  const npm = NonfungiblePositionManager.bind(npmAddress());
+  const pos = npm.try_positions(event.params.tokenId);
+  if (!pos.reverted) {
+    // positions() tuple: ...(2)=token0, (3)=token1...
+    const token0 = pos.value.getToken0();
+    const token1 = pos.value.getToken1();
+    const usdc = usdcAddress();
+    if (token0.equals(usdc)) {
+      f.compounderProtocolUsdc = f.compounderProtocolUsdc.plus(usdcVolume(event.params.protocolFee0));
+    } else if (token1.equals(usdc)) {
+      f.compounderProtocolUsdc = f.compounderProtocolUsdc.plus(usdcVolume(event.params.protocolFee1));
+    }
+  }
+  f.save();
+}
+
+function npmAddress(): Address {
+  // v3PositionManager (deployments.json, 2026-07-16 Safe-governed gen). BUMP at
+  // each V3 NPM redeploy so the compounder fee eth_call hits the right contract.
+  return Address.fromString("0x9A0955174A200FcaFA232c9A2111771B8Ee4100b");
+}
+
 // ===========================================================================
 // V4 ArcadeHook (new fee-model launchpad). Events key by PoolId; V4Pool maps
 // a PoolId back to its token so curve trades feed the same Trade/Token/Creator
@@ -656,6 +747,12 @@ function loadFeeStats(): FeeStats {
     f.treasuryFeesUsdc = BigDecimal.fromString("0");
     f.antiSnipeUsdc = BigDecimal.fromString("0");
     f.clankerHarvests = BigInt.fromI32(0);
+    f.curveFeesUsdc = BigDecimal.fromString("0");
+    f.v2ProtocolUsdc = BigDecimal.fromString("0");
+    f.v2CreatorUsdc = BigDecimal.fromString("0");
+    f.v3LpFeesUsdc = BigDecimal.fromString("0");
+    f.compounderProtocolUsdc = BigDecimal.fromString("0");
+    f.compounderCount = BigInt.fromI32(0);
   }
   return f;
 }

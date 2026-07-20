@@ -27,7 +27,7 @@ import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { Address, erc20Abi, formatUnits } from "viem";
-import { useAccount, useReadContracts } from "wagmi";
+import { useAccount, useReadContract, useReadContracts } from "wagmi";
 import dynamic from "next/dynamic";
 // Audit 2026-06-11 v2 Perf P0-1: defer recharts into its own chunk via
 // next/dynamic + ssr:false. The /my-tokens route was 503 kB First Load
@@ -190,6 +190,19 @@ function MyTokensPageInner() {
         return out;
     }, [account, v4Tokens, v4BalanceCalls.data]);
 
+    // Spot USDC balance counts toward portfolio value: idle USDC in the wallet
+    // is still part of what the user holds (they just aren't in a token yet).
+    const usdcBalanceQ = useReadContract({
+        address: ADDRESSES.usdc as Address,
+        abi: erc20Abi,
+        functionName: "balanceOf",
+        args: account ? [account] : undefined,
+        query: { enabled: !!account },
+    });
+    const usdcBalanceRaw = (usdcBalanceQ.data as bigint | undefined) ?? 0n;
+
+    // Token holdings only (cost-basis P/L is computed against this). Idle USDC
+    // is added to the DISPLAYED value separately so it doesn't distort the P/L.
     const totalHoldingsUsd = useMemo(() => {
         let total = 0n;
         for (const h of holdings) {
@@ -224,6 +237,7 @@ function MyTokensPageInner() {
                     account={account}
                     holdings={holdings}
                     totalHoldingsUsd={totalHoldingsUsd}
+                    usdcBalanceUsd={Number(usdcBalanceRaw) / 1e6}
                     launchedCount={mine.length}
                     onShowAllTokens={() => setTab("tokens")}
                     onShowAllActivity={() => setTab("activity")}
@@ -452,6 +466,7 @@ function OverviewTab({
     account,
     holdings,
     totalHoldingsUsd,
+    usdcBalanceUsd,
     launchedCount,
     onShowAllTokens,
     onShowAllActivity,
@@ -459,6 +474,7 @@ function OverviewTab({
     account: Address;
     holdings: HoldingInfo[];
     totalHoldingsUsd: bigint;
+    usdcBalanceUsd: number;
     launchedCount: number;
     onShowAllTokens: () => void;
     onShowAllActivity: () => void;
@@ -514,7 +530,11 @@ function OverviewTab({
         return () => document.removeEventListener("mousedown", handler);
     }, [moreOpen]);
 
-    const currentUsd = Number(totalHoldingsUsd) / 1e6;
+    // Token holdings value drives the cost-basis P/L; the displayed portfolio
+    // value adds idle USDC on top (spot cash is part of the portfolio but has
+    // no cost basis, so it must not leak into unrealised P/L).
+    const tokensUsd = Number(totalHoldingsUsd) / 1e6;
+    const currentUsd = tokensUsd + usdcBalanceUsd;
     // Real portfolio from the wallet's trade history (subgraph). Falls back to
     // the placeholder walk only when there are no indexed trades.
     const pf = useWalletPortfolio(account);
@@ -539,7 +559,7 @@ function OverviewTab({
     // unrealised = live holdings value - remaining cost basis. Placeholder only
     // when the wallet has no indexed trades.
     const realized = pf.hasData ? pf.realized : 0;
-    const unrealized = pf.hasData ? currentUsd - pf.remainingCost : dailyDelta;
+    const unrealized = pf.hasData ? tokensUsd - pf.remainingCost : dailyDelta;
     const total = realized + unrealized;
 
     return (

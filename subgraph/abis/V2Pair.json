@@ -7,5 +7,15 @@
     ],
     "name": "Sync",
     "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      { "indexed": true, "internalType": "address", "name": "token", "type": "address" },
+      { "indexed": false, "internalType": "uint256", "name": "protocolAmount", "type": "uint256" },
+      { "indexed": false, "internalType": "uint256", "name": "creatorAmount", "type": "uint256" }
+    ],
+    "name": "LaunchFeePaid",
+    "type": "event"
   }
 ]

@@ -1,0 +1,20 @@
+[
+  {
+    "anonymous": false,
+    "inputs": [
+      { "indexed": true, "internalType": "uint256", "name": "tokenId", "type": "uint256" },
+      { "indexed": true, "internalType": "address", "name": "caller", "type": "address" },
+      { "indexed": false, "internalType": "uint256", "name": "fee0Collected", "type": "uint256" },
+      { "indexed": false, "internalType": "uint256", "name": "fee1Collected", "type": "uint256" },
+      { "indexed": false, "internalType": "uint256", "name": "protocolFee0", "type": "uint256" },
+      { "indexed": false, "internalType": "uint256", "name": "protocolFee1", "type": "uint256" },
+      { "indexed": false, "internalType": "uint128", "name": "liquidityAdded", "type": "uint128" },
+      { "indexed": false, "internalType": "uint256", "name": "amount0Used", "type": "uint256" },
+      { "indexed": false, "internalType": "uint256", "name": "amount1Used", "type": "uint256" },
+      { "indexed": false, "internalType": "uint256", "name": "amount0Leftover", "type": "uint256" },
+      { "indexed": false, "internalType": "uint256", "name": "amount1Leftover", "type": "uint256" }
+    ],
+    "name": "Compounded",
+    "type": "event"
+  }
+]

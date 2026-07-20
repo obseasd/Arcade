@@ -152,6 +152,24 @@ function Inner() {
         ? `$${(stats.priceUsd * Number(LAUNCHPAD_TOTAL_SUPPLY)).toLocaleString(undefined, { maximumFractionDigits: 0 })}`
         : "-";
 
+    // Total pool liquidity = USDC side (net bought) + TOKEN side value. The
+    // CLANKER single-sided seed lives as tokens in the canonical V4 PoolManager
+    // (singleton), so token.balanceOf(poolManager) is this pool's token depth.
+    // Without it the "Liquidity" stat under-reads a fresh single-sided pool.
+    const poolTokenBalQ = useReadContract({
+        address: valid ? token : undefined,
+        abi: erc20Abi,
+        functionName: "balanceOf",
+        args: [ADDRESSES.v4PoolManager],
+        query: { enabled: valid && ADDRESSES.v4PoolManager !== zeroAddress },
+    });
+    const tokenInPool = poolTokenBalQ.data as bigint | undefined;
+    const tokenSideUsd =
+        tokenInPool !== undefined && stats.priceUsd
+            ? (Number(tokenInPool) / 1e18) * stats.priceUsd
+            : 0;
+    const liquidityUsd = stats.usdcLiquidity + tokenSideUsd;
+
     const curvePct = useMemo(() => {
         if (LAUNCHPAD_GRADUATION_USDC === 0n) return 0;
         const bps = (realUsdcReserve * 10_000n) / LAUNCHPAD_GRADUATION_USDC;
@@ -236,7 +254,7 @@ function Inner() {
                                     <Stat label="Swap fee" value={poolFee > 0 ? `${poolFee / 10_000}%` : "-"} hint="Fixed CLANKER tier. 80% creator / 20% treasury." />
                                     <Stat
                                         label="Liquidity"
-                                        value={stats.usdcLiquidity > 0 ? `$${stats.usdcLiquidity.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : "Locked"}
+                                        value={liquidityUsd > 0 ? `$${liquidityUsd.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : "Locked"}
                                         hint="USDC currently in the locked single-sided V4 pool (net bought). The LP position itself is locked permanently."
                                     />
                                     <Stat label="Type" value="Direct (V4)" hint="No bonding curve: tradable on the canonical V4 pool from launch." />

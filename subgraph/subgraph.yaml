@@ -159,6 +159,53 @@ dataSources:
         - event: Claimed(indexed uint256,indexed uint256,indexed address,address,uint256)
           handler: handleEscrowClaimed
       file: ./src/mappings.ts
+  # V3 locker: LP fees collected from locked CLANKER_V3 positions. FeesCollected
+  # gives the paired (USDC) side directly -> the "V3 LP fees" /admin/fees category.
+  - kind: ethereum
+    name: V3Locker
+    network: arc-testnet
+    source:
+      address: "0xBaAfC02fEAd665D398Cf8f53bE9C713c321c9eEB"
+      abi: ArcadeV3Locker
+      startBlock: 49467254
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.9
+      language: wasm/assemblyscript
+      entities:
+        - FeeStats
+      abis:
+        - name: ArcadeV3Locker
+          file: ./abis/ArcadeV3Locker.json
+      eventHandlers:
+        - event: FeesCollected(indexed uint256,uint256,uint256)
+          handler: handleV3LockerFees
+      file: ./src/mappings.ts
+  # Auto-compounder: protocol fee taken on each V3-position compound. The event
+  # carries only tokenId, so handleCompounded resolves token0/token1 (which side
+  # is USDC) via an NPM.positions eth_call -> the "Auto-compound" fee category.
+  - kind: ethereum
+    name: AutoCompounder
+    network: arc-testnet
+    source:
+      address: "0x2DC0ABb9945506F78bf2490332329BA05E6541a8"
+      abi: ArcadeAutoCompounder
+      startBlock: 49467254
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.9
+      language: wasm/assemblyscript
+      entities:
+        - FeeStats
+      abis:
+        - name: ArcadeAutoCompounder
+          file: ./abis/ArcadeAutoCompounder.json
+        - name: NonfungiblePositionManager
+          file: ./abis/NonfungiblePositionManager.json
+      eventHandlers:
+        - event: Compounded(indexed uint256,indexed address,uint256,uint256,uint256,uint256,uint128,uint256,uint256,uint256,uint256)
+          handler: handleCompounded
+      file: ./src/mappings.ts
   # Canonical Uniswap V4 PoolManager. Its Swap event is the ONLY on-chain signal
   # for trades on V4 pools once they leave the curve: PUMP post-graduation AND
   # every CLANKER swap (CLANKER is a V4 pool from birth). handleV4Swap filters to
@@ -256,10 +303,14 @@ templates:
         - Pool
         - Global
         - GlobalDayData
+        - FeeStats
+        - Token
       abis:
         - name: V2Pair
           file: ./abis/V2Pair.json
       eventHandlers:
         - event: Sync(uint112,uint112)
           handler: handleV2Sync
+        - event: LaunchFeePaid(indexed address,uint256,uint256)
+          handler: handleV2LaunchFee
       file: ./src/mappings.ts

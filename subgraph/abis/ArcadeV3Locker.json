@@ -1,0 +1,12 @@
+[
+  {
+    "anonymous": false,
+    "inputs": [
+      { "indexed": true, "internalType": "uint256", "name": "positionId", "type": "uint256" },
+      { "indexed": false, "internalType": "uint256", "name": "pairedAmount", "type": "uint256" },
+      { "indexed": false, "internalType": "uint256", "name": "clankerAmount", "type": "uint256" }
+    ],
+    "name": "FeesCollected",
+    "type": "event"
+  }
+]
