@@ -44,7 +44,11 @@ export function useArcReadContract<T = unknown>(opts: {
     enabled?: boolean;
     refetchIntervalMs?: number;
 }): { data: T | undefined; isLoading: boolean; error: Error | null } {
-    const { address, abi, functionName, args, enabled = true, refetchIntervalMs = 8000 } = opts;
+    // Default 30s (was 8s): the Arc testnet RPC returns "request limit reached"
+    // under the old cadence (every read across the app re-polled every 8s). 30s
+    // keeps totals well under the rate limit; callers that need faster can pass
+    // a smaller refetchIntervalMs.
+    const { address, abi, functionName, args, enabled = true, refetchIntervalMs = 30_000 } = opts;
     const [data, setData] = useState<T | undefined>(undefined);
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<Error | null>(null);

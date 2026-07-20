@@ -123,7 +123,9 @@ export function HeaderWalletWidget() {
             }
         };
         load();
-        const id = setInterval(load, 8000);
+        // 30s (was 8s): the Arc testnet RPC is rate-limited and the balance
+        // display does not need sub-30s freshness.
+        const id = setInterval(load, 30_000);
         return () => {
             cancelled = true;
             clearInterval(id);
