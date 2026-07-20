@@ -465,8 +465,8 @@ function FeesRecipientPanel({
                             @{handle ?? "twitter"} · verify &amp; claim
                         </Link>
                         <p className="mt-1 text-[11px] text-arc-text-faint">
-                            Fees accrue in a handle-gated escrow. If this is your @, connect a wallet
-                            and verify on the claim page to receive them.
+                            Fees are held for your @ (USDC in escrow, token side forwarded on claim). If
+                            this is your @, connect a wallet and verify on the claim page to receive both.
                         </p>
                     </>
                 ) : recipientAddr ? (

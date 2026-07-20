@@ -578,9 +578,10 @@ function Inner() {
                                         className="mt-1 w-full rounded-lg border border-arc-border bg-arc-bg px-3 py-2 text-sm focus:border-arc-cta-hover focus:outline-none"
                                     />
                                     <p className="mt-1 text-xs text-arc-text-faint">
-                                        ALL creator fees accrue in a handle-gated escrow; the verified
-                                        owner of the @ claims them after connecting a wallet. Useful
-                                        when launching on behalf of someone who has not joined yet.
+                                        Creator fees are held for the @ (USDC in a handle-gated escrow,
+                                        launch-token side forwarded on claim); the verified owner of the
+                                        @ receives both after connecting a wallet. Useful when launching
+                                        on behalf of someone who has not joined yet.
                                     </p>
                                 </label>
                             )}

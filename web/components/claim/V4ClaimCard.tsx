@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Address, formatUnits } from "viem";
+import { Address, erc20Abi, formatUnits } from "viem";
 import { useAccount, usePublicClient, useReadContract, useWriteContract } from "wagmi";
 
 import { ADDRESSES, USDC_DECIMALS } from "@/lib/constants";
@@ -90,6 +90,8 @@ export function V4ClaimCard({
         functionName: "claimTimelock",
     });
     const timelock = Number((tlQ.data as bigint | undefined) ?? 0n);
+    const symbolQ = useReadContract({ address: payload.token, abi: erc20Abi, functionName: "symbol" });
+    const tokenSymbol = (symbolQ.data as string | undefined) ?? "tokens";
 
     const recipientMismatch =
         !!account && account.toLowerCase() !== payload.recipient.toLowerCase();
@@ -155,13 +157,38 @@ export function V4ClaimCard({
             });
             await publicClient.waitForTransactionReceipt({ hash: cHash });
             const claimedUsd = Number(formatUnits(sweptMicros, USDC_DECIMALS));
+
+            // Forward the TOKEN-side creator fees too. CLANKER fees have a token-
+            // denominated leg the escrow doesn't hold (it sits on the operator);
+            // the backend transfers it to us, proven by this claim tx. Best-effort.
+            let tokenMsg = "";
+            try {
+                const fr = await fetch("/api/twitter-launch/forward-token", {
+                    method: "POST",
+                    headers: { "content-type": "application/json" },
+                    body: JSON.stringify({
+                        token: payload.token,
+                        slotIndex: payload.slotIndex,
+                        recipient: payload.recipient,
+                        claimTxHash: cHash,
+                    }),
+                });
+                const fj = (await fr.json()) as { result?: { forwarded?: boolean; amountRaw?: string } };
+                if (fj?.result?.forwarded && fj.result.amountRaw) {
+                    const n = Number(formatUnits(BigInt(fj.result.amountRaw), 18));
+                    tokenMsg = ` + ${n.toLocaleString(undefined, { maximumFractionDigits: 2 })} ${tokenSymbol}`;
+                }
+            } catch {
+                /* token forward is best-effort; USDC already claimed */
+            }
+
             pushToast({
                 kind: "info",
                 title: "Creator fees claimed",
-                message: `$${claimedUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })} USDC is in your wallet`,
+                message: `$${claimedUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })} USDC${tokenMsg} is in your wallet`,
             });
             setDone(true);
-            setMsg(`Claimed $${claimedUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })}. Redirecting…`);
+            setMsg(`Claimed $${claimedUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })}${tokenMsg}. Redirecting…`);
             redirectToToken();
         } catch (e) {
             setMsg(e instanceof Error ? e.message.slice(0, 200) : "Claim failed");

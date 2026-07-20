@@ -118,6 +118,17 @@ export async function POST(req: NextRequest) {
         `,
     );
 
+    // --- v3: token-side fee forwarding. CLANKER fees accrue in BOTH USDC and the
+    // launch token; the token side lands on the operator (the on-chain creator).
+    // These cursors track how much launch-token has been forwarded to each slot's
+    // claimant so the forward is idempotent (raw 18-dp token, as NUMERIC).
+    await step("v3_slot0_token_fwd", async () =>
+        sql`ALTER TABLE twitter_launches ADD COLUMN IF NOT EXISTS slot0_token_fwd NUMERIC NOT NULL DEFAULT 0`,
+    );
+    await step("v3_slot1_token_fwd", async () =>
+        sql`ALTER TABLE twitter_launches ADD COLUMN IF NOT EXISTS slot1_token_fwd NUMERIC NOT NULL DEFAULT 0`,
+    );
+
     const failed = results.filter((r) => !r.ok);
     return NextResponse.json(
         {

@@ -144,6 +144,43 @@ export async function advanceSlot1CreditedIf(
     return rows.length > 0;
 }
 
+/** Current token-forward cursors (raw 18-dp launch-token) for a pool's slots. */
+export async function getTokenFwd(poolId: string): Promise<{ slot0: string; slot1: string } | null> {
+    if (!isDbConfigured()) return null;
+    const sql = getSql();
+    const rows = (await sql`
+        SELECT slot0_token_fwd, slot1_token_fwd FROM twitter_launches WHERE pool_id = ${poolId} LIMIT 1
+    `) as { slot0_token_fwd: string; slot1_token_fwd: string }[];
+    const r = rows[0];
+    if (!r) return null;
+    return { slot0: r.slot0_token_fwd, slot1: r.slot1_token_fwd };
+}
+
+/** Atomic compare-and-set on a slot's token-forward cursor (idempotency guard,
+ *  same reserve-then-execute pattern as advanceSlot1CreditedIf). */
+export async function advanceTokenFwdIf(
+    poolId: string,
+    slotIndex: 0 | 1,
+    expectedRaw: string,
+    newRaw: string,
+): Promise<boolean> {
+    if (!isDbConfigured()) return false;
+    const sql = getSql();
+    const rows =
+        slotIndex === 0
+            ? ((await sql`
+                UPDATE twitter_launches SET slot0_token_fwd = ${newRaw}
+                WHERE pool_id = ${poolId} AND slot0_token_fwd = ${expectedRaw}
+                RETURNING pool_id
+              `) as { pool_id: string }[])
+            : ((await sql`
+                UPDATE twitter_launches SET slot1_token_fwd = ${newRaw}
+                WHERE pool_id = ${poolId} AND slot1_token_fwd = ${expectedRaw}
+                RETURNING pool_id
+              `) as { pool_id: string }[]);
+    return rows.length > 0;
+}
+
 /** Every launched reply-launch pool (for the safety-net batch reconciliation). */
 export async function listReplyLaunchPools(): Promise<string[]> {
     if (!isDbConfigured()) return [];
