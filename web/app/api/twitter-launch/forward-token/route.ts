@@ -4,11 +4,6 @@ import { isAddress, parseEventLogs, parseAbiItem, type Address, type Hex } from 
 import { ADDRESSES } from "@/lib/constants";
 import { serverReadClient } from "@/lib/serverRpc";
 import { forwardTokenSide, previewTokenSideOwed } from "@/lib/twitterTokenForward";
-import { getTokenFwd, getReplyLaunchByPool } from "@/lib/twitterLaunchPersistence";
-
-const erc20MinAbi = [
-    { type: "function", name: "balanceOf", stateMutability: "view", inputs: [{ name: "", type: "address" }], outputs: [{ name: "", type: "uint256" }] },
-] as const;
 
 /**
  * Forward the launch-token side of a claimant's creator fees (see
@@ -60,9 +55,6 @@ export async function GET(req: NextRequest) {
         return NextResponse.json({ error: "invalid token" }, { status: 400 });
     }
 
-    const probe = url.searchParams.get("probe") === "1";
-    const t0 = performance.now();
-
     const client = serverReadClient();
     let poolIdHex: string;
     try {
@@ -76,47 +68,20 @@ export async function GET(req: NextRequest) {
             8_000,
             "poolIdOf",
         )) as string;
-    } catch (e) {
+    } catch {
         // Timeout or read error: degrade to 0 (never let the function hang to 504).
-        return NextResponse.json({ owedRaw: "0", ...(probe ? { step: "poolIdOf", err: String(e).slice(0, 120) } : {}) });
+        return NextResponse.json({ owedRaw: "0" });
     }
-    const tPool = performance.now();
     if (!poolIdHex || /^0x0*$/.test(poolIdHex)) {
-        return NextResponse.json({ owedRaw: "0", ...(probe ? { poolMs: Math.round(tPool - t0), note: "zero pool" } : {}) });
+        return NextResponse.json({ owedRaw: "0" });
     }
 
-    // Fine-grained step probe: time each sub-call (DB getTokenFwd, viem balanceOf,
-    // DB getReplyLaunchByPool) independently to see which one stalls.
-    if (probe) {
-        const timed = async (label: string, p: Promise<unknown>) => {
-            const s = performance.now();
-            try {
-                await withTimeout(p, 10_000, label);
-                return { [`${label}Ms`]: Math.round(performance.now() - s) };
-            } catch {
-                return { [`${label}Ms`]: Math.round(performance.now() - s), [`${label}Err`]: "timeout/err" };
-            }
-        };
-        const OP = "0x3a0Dd90212838f32a953Acd4B32596b62859324A" as Address;
-        const a = await timed("dbTokenFwd", getTokenFwd(poolIdHex));
-        const b = await timed(
-            "balanceOf",
-            serverReadClient().readContract({ address: token as Address, abi: erc20MinAbi, functionName: "balanceOf", args: [OP] }),
-        );
-        const c = await timed("dbReply", getReplyLaunchByPool(poolIdHex));
-        return NextResponse.json({ poolMs: Math.round(tPool - t0), ...a, ...b, ...c });
-    }
-
-    let owedRaw = "0";
     try {
-        owedRaw = await withTimeout(previewTokenSideOwed(poolIdHex, slotIndex, token as Address), 12_000, "preview");
-    } catch (e) {
-        return NextResponse.json({ owedRaw: "0", ...(probe ? { step: "preview", err: String(e).slice(0, 120), poolMs: Math.round(tPool - t0) } : {}) });
+        const owedRaw = await withTimeout(previewTokenSideOwed(poolIdHex, slotIndex, token as Address), 12_000, "preview");
+        return NextResponse.json({ owedRaw });
+    } catch {
+        return NextResponse.json({ owedRaw: "0" });
     }
-    if (probe) {
-        return NextResponse.json({ owedRaw, poolMs: Math.round(tPool - t0), previewMs: Math.round(performance.now() - tPool) });
-    }
-    return NextResponse.json({ owedRaw });
 }
 
 export async function POST(req: NextRequest) {
