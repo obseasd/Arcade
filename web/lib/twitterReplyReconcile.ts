@@ -10,7 +10,7 @@ import {
 import { privateKeyToAccount } from "viem/accounts";
 
 import { ADDRESSES } from "@/lib/constants";
-import { getReplyLaunchByPool, setSlot1Credited } from "@/lib/twitterLaunchPersistence";
+import { getReplyLaunchByPool, advanceSlot1CreditedIf } from "@/lib/twitterLaunchPersistence";
 
 /**
  * On-demand reconciliation for reply-to-launch (50/50). On each swap of a
@@ -113,8 +113,16 @@ export async function reconcileReplySlot(poolIdHex: string): Promise<ReconcileRe
     const owed = accrued - already;
     if (owed <= 0n) return { ok: true, credited: false, reason: "nothing new to credit" };
 
-    // Deliver USDC to the escrow FIRST, then credit slot 1 (the escrow's
-    // balance-diff invariant: amount <= balanceOf - creditedTotal).
+    // Audit fix (idempotency + concurrency): RESERVE the delta by advancing the
+    // DB cursor BEFORE any on-chain action. A compare-and-set on the row means
+    // only ONE run (concurrent or retried) proceeds for a given delta, and a
+    // crash AFTER the on-chain credit can never re-sweep it. On on-chain failure
+    // we roll the cursor back so a later run retries; if that rollback itself
+    // fails the worst case is UNDER-credit (funds stay safe in the operator
+    // wallet), never a double-spend.
+    const reserved = await advanceSlot1CreditedIf(poolIdHex, already.toString(), (already + owed).toString());
+    if (!reserved) return { ok: true, credited: false, reason: "already reconciled / concurrent run" };
+
     const account = privateKeyToAccount(operatorKey);
     const walletClient = createWalletClient({ account, chain: ARC_CHAIN, transport: http() });
     const positionId = BigInt(poolIdHex); // uint256(PoolId) — matches the hook's slot-0 key
@@ -122,6 +130,8 @@ export async function reconcileReplySlot(poolIdHex: string): Promise<ReconcileRe
     let txTransfer: Hex;
     let txCredit: Hex;
     try {
+        // Deliver USDC to the escrow FIRST, then credit slot 1 (the escrow's
+        // balance-diff invariant: amount <= balanceOf - creditedTotal).
         txTransfer = await walletClient.writeContract({
             address: usdc,
             abi: erc20Abi,
@@ -138,9 +148,10 @@ export async function reconcileReplySlot(poolIdHex: string): Promise<ReconcileRe
         });
         await publicClient.waitForTransactionReceipt({ hash: txCredit });
     } catch (e) {
+        // Roll back the reservation so the delta is retried next run.
+        await advanceSlot1CreditedIf(poolIdHex, (already + owed).toString(), already.toString()).catch(() => {});
         return { ok: false, error: `credit failed: ${e instanceof Error ? e.message : String(e)}` };
     }
 
-    await setSlot1Credited(poolIdHex, (already + owed).toString());
     return { ok: true, credited: true, amountMicros: owed.toString(), txTransfer, txCredit };
 }

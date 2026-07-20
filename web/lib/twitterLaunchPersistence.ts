@@ -120,12 +120,28 @@ export async function getReplyLaunchByPool(poolId: string): Promise<ReplyLaunchR
     return { poolId: r.pool_id, opUserId: r.op_user_id, opHandle: r.op_handle, slot1CreditedUsdc: r.slot1_credited_usdc };
 }
 
-/** Record that `totalCreditedMicros` (cumulative raw USDC micros) has now been
- *  swept from the operator into the escrow slot 1 for this pool. */
-export async function setSlot1Credited(poolId: string, totalCreditedMicros: string): Promise<void> {
-    if (!isDbConfigured()) return;
+/**
+ * Atomically advance the slot-1 credited cursor from `expectedMicros` to
+ * `newMicros`, returning true only if the row still held `expectedMicros`. This
+ * is the reconciliation's idempotency + concurrency guard: the caller RESERVES
+ * the delta (advances the cursor) BEFORE the on-chain transfer/credit, so two
+ * concurrent runs can't both sweep the same delta, and a crash after the on-
+ * chain credit can't be re-swept. On on-chain failure the caller rolls the
+ * cursor back with the inverse call. Compare-and-set on the NUMERIC column.
+ */
+export async function advanceSlot1CreditedIf(
+    poolId: string,
+    expectedMicros: string,
+    newMicros: string,
+): Promise<boolean> {
+    if (!isDbConfigured()) return false;
     const sql = getSql();
-    await sql`UPDATE twitter_launches SET slot1_credited_usdc = ${totalCreditedMicros} WHERE pool_id = ${poolId}`;
+    const rows = (await sql`
+        UPDATE twitter_launches SET slot1_credited_usdc = ${newMicros}
+        WHERE pool_id = ${poolId} AND slot1_credited_usdc = ${expectedMicros}
+        RETURNING pool_id
+    `) as { pool_id: string }[];
+    return rows.length > 0;
 }
 
 /** Every launched reply-launch pool (for the safety-net batch reconciliation). */

@@ -120,7 +120,8 @@ export async function buildV4ClaimPayload(args: {
 
     const positionId = BigInt(poolId);
 
-    // 2) Handle attribution + (slot 1) on-demand reconciliation.
+    // 2) Handle attribution. slot 0 (launcher) is on-chain via the subgraph;
+    //    slot 1 (reply-target) is our DB.
     let expected: string | undefined;
     if (slotIndex === 0) {
         expected = await handleFromSubgraph(poolId);
@@ -128,18 +129,23 @@ export async function buildV4ClaimPayload(args: {
         const row = await getReplyLaunchByPool(poolId);
         if (!row) return { kind: "error", error: "slot_not_attributed" };
         expected = row.opHandle;
-        // Fund slot 1 before reading the balance / signing (idempotent). A
-        // failure here is non-fatal: the balance simply stays at whatever was
-        // already credited; the user can retry.
+    }
+    const expNorm = normaliseHandle(expected);
+    if (!expNorm) return { kind: "error", error: "slot_not_attributed" };
+    if (expNorm !== oauthHandle) return { kind: "error", error: "handle_mismatch" };
+
+    // 2.5) ONLY NOW (handle proven) fund slot 1 on-demand. Audit fix: running
+    // this before the handle check let any OAuth completer trigger the
+    // operator-funded transfer. reconcileReplySlot is idempotent + reserves its
+    // DB cursor atomically, so a failure here is non-fatal (balance stays at
+    // whatever was already credited; the user can retry).
+    if (slotIndex === 1) {
         try {
             await reconcileReplySlot(poolId);
         } catch {
             /* non-fatal */
         }
     }
-    const expNorm = normaliseHandle(expected);
-    if (!expNorm) return { kind: "error", error: "slot_not_attributed" };
-    if (expNorm !== oauthHandle) return { kind: "error", error: "handle_mismatch" };
 
     // 3) Current on-chain slot balance (USDC).
     let amount: bigint;
