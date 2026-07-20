@@ -4,6 +4,11 @@ import { isAddress, parseEventLogs, parseAbiItem, type Address, type Hex } from 
 import { ADDRESSES } from "@/lib/constants";
 import { serverReadClient } from "@/lib/serverRpc";
 import { forwardTokenSide, previewTokenSideOwed } from "@/lib/twitterTokenForward";
+import { getTokenFwd, getReplyLaunchByPool } from "@/lib/twitterLaunchPersistence";
+
+const erc20MinAbi = [
+    { type: "function", name: "balanceOf", stateMutability: "view", inputs: [{ name: "", type: "address" }], outputs: [{ name: "", type: "uint256" }] },
+] as const;
 
 /**
  * Forward the launch-token side of a claimant's creator fees (see
@@ -78,6 +83,28 @@ export async function GET(req: NextRequest) {
     const tPool = performance.now();
     if (!poolIdHex || /^0x0*$/.test(poolIdHex)) {
         return NextResponse.json({ owedRaw: "0", ...(probe ? { poolMs: Math.round(tPool - t0), note: "zero pool" } : {}) });
+    }
+
+    // Fine-grained step probe: time each sub-call (DB getTokenFwd, viem balanceOf,
+    // DB getReplyLaunchByPool) independently to see which one stalls.
+    if (probe) {
+        const timed = async (label: string, p: Promise<unknown>) => {
+            const s = performance.now();
+            try {
+                await withTimeout(p, 10_000, label);
+                return { [`${label}Ms`]: Math.round(performance.now() - s) };
+            } catch {
+                return { [`${label}Ms`]: Math.round(performance.now() - s), [`${label}Err`]: "timeout/err" };
+            }
+        };
+        const OP = "0x3a0Dd90212838f32a953Acd4B32596b62859324A" as Address;
+        const a = await timed("dbTokenFwd", getTokenFwd(poolIdHex));
+        const b = await timed(
+            "balanceOf",
+            serverReadClient().readContract({ address: token as Address, abi: erc20MinAbi, functionName: "balanceOf", args: [OP] }),
+        );
+        const c = await timed("dbReply", getReplyLaunchByPool(poolIdHex));
+        return NextResponse.json({ poolMs: Math.round(tPool - t0), ...a, ...b, ...c });
     }
 
     let owedRaw = "0";
