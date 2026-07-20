@@ -46,6 +46,9 @@ export async function GET(req: NextRequest) {
         return NextResponse.json({ error: "invalid token" }, { status: 400 });
     }
 
+    const probe = url.searchParams.get("probe") === "1";
+    const t0 = probe ? performance.now() : 0;
+
     const client = serverReadClient();
     let poolIdHex: string;
     try {
@@ -55,14 +58,19 @@ export async function GET(req: NextRequest) {
             functionName: "poolIdOf",
             args: [token as Address],
         })) as string;
-    } catch {
+    } catch (e) {
+        if (probe) return NextResponse.json({ owedRaw: "0", step: "poolIdOf", err: String(e).slice(0, 120) });
         return NextResponse.json({ owedRaw: "0" });
     }
+    const tPool = probe ? performance.now() : 0;
     if (!poolIdHex || /^0x0*$/.test(poolIdHex)) {
-        return NextResponse.json({ owedRaw: "0" });
+        return NextResponse.json({ owedRaw: "0", ...(probe ? { poolMs: tPool - t0, note: "zero pool" } : {}) });
     }
 
     const owedRaw = await previewTokenSideOwed(poolIdHex, slotIndex, token as Address);
+    if (probe) {
+        return NextResponse.json({ owedRaw, poolMs: Math.round(tPool - t0), previewMs: Math.round(performance.now() - tPool) });
+    }
     return NextResponse.json({ owedRaw });
 }
 
