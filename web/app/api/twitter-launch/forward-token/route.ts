@@ -16,7 +16,9 @@ import { forwardTokenSide, previewTokenSideOwed } from "@/lib/twitterTokenForwar
  */
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 30;
+// The token-side scan pages eth_getLogs across the hook's full block range
+// (10k-block windows); allow headroom over the default 30s.
+export const maxDuration = 60;
 
 const HOOK_POOLID_ABI = [
     {

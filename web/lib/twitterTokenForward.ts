@@ -1,7 +1,7 @@
 import { createWalletClient, http, parseAbiItem, erc20Abi, type Address, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 
-import { ARC_CHAIN, serverPublicClient } from "@/lib/serverRpc";
+import { ARC_CHAIN, serverPublicClient, serverLogsClient } from "@/lib/serverRpc";
 import { ADDRESSES } from "@/lib/constants";
 import { getTokenFwd, advanceTokenFwdIf } from "@/lib/twitterLaunchPersistence";
 
@@ -40,13 +40,13 @@ export type ForwardResult =
 // parallel, and sum. CHUNK stays under the 10k cap with margin for inclusive
 // bounds.
 const LOG_CHUNK = 9_000n;
-const CHUNK_CONCURRENCY = 6;
+const CHUNK_CONCURRENCY = 12;
 
 /** Accrued token-side creator fee for a pool = Σ RoyaltyPaid.creatorAmount on
  *  the launch-token leg. Shared by the preview and the executing path. Paginated
- *  so it works on the 10k-block-limited Arc RPCs. */
+ *  so it works on the 10k-block-limited Arc RPCs, over the fast logs client. */
 async function accruedTokenSide(poolIdHex: string, launchToken: Address): Promise<bigint> {
-    const client = serverPublicClient();
+    const client = serverLogsClient();
     const latest = await client.getBlockNumber();
 
     // Build the [from,to] windows covering deploy-block..latest.
