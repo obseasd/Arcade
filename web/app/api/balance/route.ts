@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createPublicClient, http, erc20Abi, isAddress, type Address } from "viem";
+import { erc20Abi, isAddress, type Address } from "viem";
 
 import { ADDRESSES } from "@/lib/constants";
-import { arcTestnet } from "@/lib/chains";
+import { serverPublicClient } from "@/lib/serverRpc";
 
 /**
  * Server-side USDC balance read. The header wallet widget's direct browser viem
@@ -13,12 +13,8 @@ import { arcTestnet } from "@/lib/chains";
  */
 export const dynamic = "force-dynamic";
 
-const client = createPublicClient({
-    chain: arcTestnet,
-    // The Arc testnet RPC is rate-limited; retry a couple times on a transient
-    // "request limit reached" instead of surfacing a 502 to the widget.
-    transport: http(undefined, { retryCount: 2, retryDelay: 800 }),
-});
+// Fallback across RPC endpoints so a rate-limited primary falls over (serverRpc).
+const client = serverPublicClient();
 
 // Warm-instance cache: dedupe rapid polls for the same address (multiple tabs /
 // re-renders) so each address hits the RPC at most once per TTL. Serverless

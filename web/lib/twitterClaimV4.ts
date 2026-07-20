@@ -1,9 +1,10 @@
 import crypto from "crypto";
-import { createPublicClient, http, zeroAddress, type Address } from "viem";
+import { zeroAddress, type Address } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 
 import { arcTestnet } from "@/lib/chains";
 import { ADDRESSES } from "@/lib/constants";
+import { serverPublicClient } from "@/lib/serverRpc";
 import { normaliseHandle } from "@/lib/twitterHandle";
 import {
     TWITTER_ESCROW_V4_ABI,
@@ -70,28 +71,9 @@ export type V4ClaimResult =
     | { kind: "error"; error: string }
     | { kind: "ok"; payload: V4ClaimPayload };
 
-// Minimal chain (no multicall3 config) matching the cron's client, which reads
-// reliably from Vercel serverless. `http()` with retries/timeout absorbs the
-// transient RPC failures the callback was hitting (v4_poolid/balance_read_failed).
-const ARC_CHAIN = {
-    id: 5042002,
-    name: "Arc Testnet",
-    nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 6 },
-    rpcUrls: { default: { http: ["https://rpc.testnet.arc.network"] } },
-} as const;
-
-function rpcClient() {
-    return createPublicClient({
-        chain: ARC_CHAIN,
-        transport: http("https://rpc.testnet.arc.network", {
-            // Space retries out so a short-window "request limit reached" clears
-            // between attempts (the Arc testnet RPC is heavily rate-limited).
-            retryCount: 5,
-            retryDelay: 1_200,
-            timeout: 20_000,
-        }),
-    });
-}
+// Server-side RPC with a fallback across endpoints (see serverRpc.ts). The
+// arc.network RPC is rate-limited from Vercel; viem falls over to thirdweb.
+const rpcClient = serverPublicClient;
 
 /** Launcher handle for a V4 launch = subgraph HandleAttribution(id = poolId). */
 async function handleFromSubgraph(poolIdHex: string): Promise<string | undefined> {
