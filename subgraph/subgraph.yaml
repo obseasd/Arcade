@@ -174,12 +174,19 @@ dataSources:
       language: wasm/assemblyscript
       entities:
         - FeeStats
+        - LockerPosition
+        - LockerRecipientEarning
+        - Token
       abis:
         - name: ArcadeV3Locker
           file: ./abis/ArcadeV3Locker.json
       eventHandlers:
         - event: FeesCollected(indexed uint256,uint256,uint256)
           handler: handleV3LockerFees
+        - event: PositionLocked(indexed uint256,indexed address,address,uint128)
+          handler: handlePositionLocked
+        - event: RecipientPaid(indexed uint256,indexed uint256,indexed address,address,uint256)
+          handler: handleLockerRecipientPaid
       file: ./src/mappings.ts
   # Auto-compounder: protocol fee taken on each V3-position compound. The event
   # carries only tokenId, so handleCompounded resolves token0/token1 (which side
@@ -205,6 +212,55 @@ dataSources:
       eventHandlers:
         - event: Compounded(indexed uint256,indexed address,uint256,uint256,uint256,uint256,uint128,uint256,uint256,uint256,uint256)
           handler: handleCompounded
+        - event: FeesPushed(indexed uint256,indexed address,indexed address,uint256,uint256,uint256,uint256)
+          handler: handleCompounderFeesPushed
+      file: ./src/mappings.ts
+  # CCTP bridge-and-buy receiver: BridgeFeeTaken -> the bridge-fee revenue line.
+  # Address = NEXT_PUBLIC_CCTP_BUY_RECEIVER default (web/lib/constants.ts). TESTNET
+  # value; CCTP addresses differ on mainnet -> BUMP for a mainnet subgraph.
+  - kind: ethereum
+    name: CctpReceiver
+    network: arc-testnet
+    source:
+      address: "0x939440Dd711499f26e101261cB956AA80E6B6fA2"
+      abi: ArcadeCctpReceiver
+      startBlock: 49467254
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.9
+      language: wasm/assemblyscript
+      entities:
+        - FeeStats
+      abis:
+        - name: ArcadeCctpReceiver
+          file: ./abis/ArcadeCctpReceiver.json
+      eventHandlers:
+        - event: BridgeFeeTaken(uint256)
+          handler: handleBridgeFeeTaken
+      file: ./src/mappings.ts
+  # ArcadeV4SwapRouter: ReferralFeePaid -> per-referrer realized referral revenue
+  # (the referral surcharge is default-0, so this is often empty until enabled).
+  - kind: ethereum
+    name: V4SwapRouter
+    network: arc-testnet
+    source:
+      address: "0x9Ef130336B37E81d3013e806a32f9BcB6687453E"
+      abi: ArcadeV4SwapRouter
+      startBlock: 52470498
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.9
+      language: wasm/assemblyscript
+      entities:
+        - FeeStats
+        - Referrer
+        - Token
+      abis:
+        - name: ArcadeV4SwapRouter
+          file: ./abis/ArcadeV4SwapRouter.json
+      eventHandlers:
+        - event: ReferralFeePaid(indexed address,indexed address,uint256)
+          handler: handleReferralFeePaid
       file: ./src/mappings.ts
   # Canonical Uniswap V4 PoolManager. Its Swap event is the ONLY on-chain signal
   # for trades on V4 pools once they leave the curve: PUMP post-graduation AND
@@ -305,6 +361,11 @@ templates:
         - GlobalDayData
         - FeeStats
         - Token
+        - Trade
+        - Trader
+        - Creator
+        - TokenDayData
+        - PoolDayData
       abis:
         - name: V2Pair
           file: ./abis/V2Pair.json
@@ -313,4 +374,6 @@ templates:
           handler: handleV2Sync
         - event: LaunchFeePaid(indexed address,uint256,uint256)
           handler: handleV2LaunchFee
+        - event: Swap(indexed address,uint256,uint256,uint256,uint256,indexed address)
+          handler: handleV2Swap
       file: ./src/mappings.ts

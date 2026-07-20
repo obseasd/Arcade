@@ -234,7 +234,46 @@ type FeeStats @entity(immutable: false) {
   # V3 locker LP fees collected (paired USDC side of ArcadeV3Locker.FeesCollected).
   v3LpFeesUsdc: BigDecimal!
   # Auto-compounder protocol fee (USDC leg of ArcadeAutoCompounder.Compounded
-  # protocolFee0/1, resolved via NPM.positions token0/token1).
+  # AND FeesPushed protocolFee0/1, resolved via NPM.positions token0/token1).
   compounderProtocolUsdc: BigDecimal!
   compounderCount: BigInt!
+  # --- 1.8.0: complete the revenue map ---
+  # CCTP bridge-and-buy fee (ArcadeCctpBuyReceiver.BridgeFeeTaken, USDC).
+  bridgeFeesUsdc: BigDecimal!
+  # Referral surcharge actually collected (ArcadeV4SwapRouter.ReferralFeePaid).
+  referralFeesUsdc: BigDecimal!
+}
+
+# ---------------------------------------------------------------------------
+# 1.8.0 — per-recipient V3 locker LP-fee earnings, so the creator earnings
+# dashboard reads the subgraph instead of a client-side RecipientPaid getLogs
+# scan. PositionLocked maps a locker positionId -> its launch token; RecipientPaid
+# then accrues each payout to (recipient, launchToken).
+# ---------------------------------------------------------------------------
+
+# positionId -> launch token + pool, from ArcadeV3Locker.PositionLocked.
+type LockerPosition @entity(immutable: false) {
+  id: ID! # positionId (decimal string)
+  token: Bytes!
+  pool: Bytes!
+}
+
+# Cumulative LP-fee payouts to one recipient for one launch token (USDC-valued;
+# USDC legs direct, token legs at the token's last price). id = `${recipient}-${token}`.
+type LockerRecipientEarning @entity(immutable: false) {
+  id: ID!
+  recipient: Bytes!
+  token: Bytes!
+  amountUsdc: BigDecimal!
+  payoutCount: Int!
+  lastPaidAt: Int!
+}
+
+# Per-referrer running total of referral surcharge collected on their referred
+# swaps (ArcadeV4SwapRouter.ReferralFeePaid). id = referrer address (lowercase).
+type Referrer @entity(immutable: false) {
+  id: ID!
+  totalFeesUsdc: BigDecimal!
+  payoutCount: Int!
+  lastPaidAt: Int!
 }

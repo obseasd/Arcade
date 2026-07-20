@@ -5,10 +5,12 @@ import { Swap } from "../generated/templates/V3Pool/V3Pool";
 import { ERC20 } from "../generated/templates/V3Pool/ERC20";
 import { Transfer } from "../generated/templates/ArcadeToken/ERC20";
 import { PairCreated } from "../generated/V2Factory/V2Factory";
-import { Sync, LaunchFeePaid } from "../generated/templates/V2Pair/V2Pair";
-import { FeesCollected } from "../generated/V3Locker/ArcadeV3Locker";
-import { Compounded } from "../generated/AutoCompounder/ArcadeAutoCompounder";
+import { Sync, LaunchFeePaid, Swap as V2Swap } from "../generated/templates/V2Pair/V2Pair";
+import { FeesCollected, PositionLocked, RecipientPaid } from "../generated/V3Locker/ArcadeV3Locker";
+import { Compounded, FeesPushed } from "../generated/AutoCompounder/ArcadeAutoCompounder";
 import { NonfungiblePositionManager } from "../generated/AutoCompounder/NonfungiblePositionManager";
+import { BridgeFeeTaken } from "../generated/CctpReceiver/ArcadeCctpReceiver";
+import { ReferralFeePaid } from "../generated/V4SwapRouter/ArcadeV4SwapRouter";
 import { V3Pool, ArcadeToken, V2Pair } from "../generated/templates";
 import {
   LaunchCreated,
@@ -38,6 +40,9 @@ import {
   HandleAttribution,
   EscrowSlot,
   FeeStats,
+  LockerPosition,
+  LockerRecipientEarning,
+  Referrer,
 } from "../generated/schema";
 
 /**
@@ -607,6 +612,36 @@ export function handleV2Sync(event: Sync): void {
   setPoolReserve(p, usdcVolume(usdcRaw), event.block.timestamp.toI32());
 }
 
+/**
+ * V2 post-graduation swap. PUMP + CLANKER graduate to a USDC-paired V2 pair, so
+ * WITHOUT this every trade after graduation produced zero Trade rows (no chart,
+ * no volume, no creator/referral credit -- the biggest indexer hole). UniswapV2
+ * emits Sync BEFORE Swap in the same tx, so Pool.usdcReserve is already
+ * post-swap here. Volume = the USDC side of the swap; price = realized USDC/token
+ * of this swap; isBuy = USDC went IN. Trader = the EOA (transaction.from), not
+ * the router `to`/`sender`.
+ */
+export function handleV2Swap(event: V2Swap): void {
+  const p = Pool.load(event.address.toHexString());
+  if (p == null) return; // only USDC-paired launchpad pairs are templated
+
+  const usdcIn = p.usdcIsToken0 ? event.params.amount0In : event.params.amount1In;
+  const usdcOut = p.usdcIsToken0 ? event.params.amount0Out : event.params.amount1Out;
+  const tokenIn = p.usdcIsToken0 ? event.params.amount1In : event.params.amount0In;
+  const tokenOut = p.usdcIsToken0 ? event.params.amount1Out : event.params.amount0Out;
+
+  const usdcRaw = usdcIn.plus(usdcOut); // one leg is zero
+  const tokenRaw = tokenIn.plus(tokenOut);
+  const volumeUsdc = usdcVolume(usdcRaw);
+  const tokenAmt = tokenVolume(tokenRaw);
+  const price = tokenAmt.equals(BigDecimal.fromString("0"))
+    ? BigDecimal.fromString("0")
+    : volumeUsdc.div(tokenAmt);
+  const isBuy = usdcIn.gt(BigInt.fromI32(0)); // USDC in => buying the token
+
+  recordTrade(event, p.token, event.transaction.from, "v2", event.address, price, volumeUsdc, isBuy);
+}
+
 /** |raw| / 1e18 (human token units). */
 function tokenVolume(raw: BigInt): BigDecimal {
   const zero = BigInt.fromI32(0);
@@ -663,21 +698,114 @@ export function handleV3LockerFees(event: FeesCollected): void {
 export function handleCompounded(event: Compounded): void {
   const f = loadFeeStats();
   f.compounderCount = f.compounderCount.plus(BigInt.fromI32(1));
-
-  const npm = NonfungiblePositionManager.bind(npmAddress());
-  const pos = npm.try_positions(event.params.tokenId);
-  if (!pos.reverted) {
-    // positions() tuple: ...(2)=token0, (3)=token1...
-    const token0 = pos.value.getToken0();
-    const token1 = pos.value.getToken1();
-    const usdc = usdcAddress();
-    if (token0.equals(usdc)) {
-      f.compounderProtocolUsdc = f.compounderProtocolUsdc.plus(usdcVolume(event.params.protocolFee0));
-    } else if (token1.equals(usdc)) {
-      f.compounderProtocolUsdc = f.compounderProtocolUsdc.plus(usdcVolume(event.params.protocolFee1));
-    }
-  }
+  f.compounderProtocolUsdc = f.compounderProtocolUsdc.plus(
+    compounderUsdcLeg(event.params.tokenId, event.params.protocolFee0, event.params.protocolFee1),
+  );
   f.save();
+}
+
+/**
+ * Second protocol-fee path: FeesPushed (fees pushed straight to the depositor
+ * rather than re-compounded). Same USDC-leg resolution; does NOT bump the
+ * compound COUNT (that tracks compounds, not pushes).
+ */
+export function handleCompounderFeesPushed(event: FeesPushed): void {
+  const f = loadFeeStats();
+  f.compounderProtocolUsdc = f.compounderProtocolUsdc.plus(
+    compounderUsdcLeg(event.params.tokenId, event.params.protocolFee0, event.params.protocolFee1),
+  );
+  f.save();
+}
+
+/** Resolve which of a position's (pf0, pf1) is the USDC leg via NPM.positions. */
+function compounderUsdcLeg(tokenId: BigInt, pf0: BigInt, pf1: BigInt): BigDecimal {
+  const npm = NonfungiblePositionManager.bind(npmAddress());
+  const pos = npm.try_positions(tokenId);
+  if (pos.reverted) return BigDecimal.fromString("0");
+  const usdc = usdcAddress();
+  if (pos.value.getToken0().equals(usdc)) return usdcVolume(pf0);
+  if (pos.value.getToken1().equals(usdc)) return usdcVolume(pf1);
+  return BigDecimal.fromString("0");
+}
+
+/** Locker PositionLocked: map positionId -> its launch token (+ pool) so
+ *  RecipientPaid can group per-recipient earnings by launch token. */
+export function handlePositionLocked(event: PositionLocked): void {
+  const id = event.params.positionId.toString();
+  let lp = LockerPosition.load(id);
+  if (lp == null) lp = new LockerPosition(id);
+  lp.token = event.params.token;
+  lp.pool = event.params.pool;
+  lp.save();
+}
+
+/**
+ * Locker RecipientPaid: one payout of LP fees to one recipient (creator / handle
+ * slot). Accrue to (recipient, launchToken) in USDC: USDC payouts direct, launch-
+ * token payouts at the token's last price. Replaces the client RecipientPaid scan
+ * in useCreatorEarnings.
+ */
+export function handleLockerRecipientPaid(event: RecipientPaid): void {
+  const lp = LockerPosition.load(event.params.positionId.toString());
+  const launchToken = lp == null ? event.params.token : lp.token;
+
+  let usdc: BigDecimal;
+  if (event.params.token.equals(usdcAddress())) {
+    usdc = usdcVolume(event.params.amount);
+  } else {
+    const tok = Token.load(event.params.token.toHexString());
+    const price = tok == null ? BigDecimal.fromString("0") : tok.lastPriceUsdc;
+    usdc = tokenVolume(event.params.amount).times(price);
+  }
+
+  const id = event.params.recipient.toHexString() + "-" + launchToken.toHexString();
+  let e = LockerRecipientEarning.load(id);
+  if (e == null) {
+    e = new LockerRecipientEarning(id);
+    e.recipient = event.params.recipient;
+    e.token = launchToken;
+    e.amountUsdc = BigDecimal.fromString("0");
+    e.payoutCount = 0;
+  }
+  e.amountUsdc = e.amountUsdc.plus(usdc);
+  e.payoutCount = e.payoutCount + 1;
+  e.lastPaidAt = event.block.timestamp.toI32();
+  e.save();
+}
+
+/** CCTP bridge-and-buy fee (USDC). */
+export function handleBridgeFeeTaken(event: BridgeFeeTaken): void {
+  const f = loadFeeStats();
+  f.bridgeFeesUsdc = f.bridgeFeesUsdc.plus(usdcVolume(event.params.fee));
+  f.save();
+}
+
+/** Referral surcharge actually collected on a referred swap (per referrer). */
+export function handleReferralFeePaid(event: ReferralFeePaid): void {
+  let usdc: BigDecimal;
+  if (event.params.currency.equals(usdcAddress())) {
+    usdc = usdcVolume(event.params.amount);
+  } else {
+    const tok = Token.load(event.params.currency.toHexString());
+    const price = tok == null ? BigDecimal.fromString("0") : tok.lastPriceUsdc;
+    usdc = tokenVolume(event.params.amount).times(price);
+  }
+
+  const f = loadFeeStats();
+  f.referralFeesUsdc = f.referralFeesUsdc.plus(usdc);
+  f.save();
+
+  const id = event.params.referrer.toHexString();
+  let r = Referrer.load(id);
+  if (r == null) {
+    r = new Referrer(id);
+    r.totalFeesUsdc = BigDecimal.fromString("0");
+    r.payoutCount = 0;
+  }
+  r.totalFeesUsdc = r.totalFeesUsdc.plus(usdc);
+  r.payoutCount = r.payoutCount + 1;
+  r.lastPaidAt = event.block.timestamp.toI32();
+  r.save();
 }
 
 function npmAddress(): Address {
@@ -753,6 +881,8 @@ function loadFeeStats(): FeeStats {
     f.v3LpFeesUsdc = BigDecimal.fromString("0");
     f.compounderProtocolUsdc = BigDecimal.fromString("0");
     f.compounderCount = BigInt.fromI32(0);
+    f.bridgeFeesUsdc = BigDecimal.fromString("0");
+    f.referralFeesUsdc = BigDecimal.fromString("0");
   }
   return f;
 }

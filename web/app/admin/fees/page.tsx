@@ -107,6 +107,8 @@ interface FeeBreakdown {
     v3LpUsd: number; // V3 locker LP fees collected (total; 80/20 creator/treasury)
     compounderUsd: number; // auto-compound protocol fee (net)
     compounderCount: number;
+    bridgeUsd: number; // CCTP bridge-and-buy fee (0.05%)
+    referralUsd: number; // referral surcharge collected
 }
 
 /**
@@ -122,7 +124,7 @@ function FeeCategoriesCard() {
         const url = process.env.NEXT_PUBLIC_GOLDSKY_URL;
         if (!url) return;
         let cancelled = false;
-        const q = `{ feeStats(id: "v4") { creatorFeesUsdc treasuryFeesUsdc antiSnipeUsdc clankerHarvests curveFeesUsdc v2ProtocolUsdc v2CreatorUsdc v3LpFeesUsdc compounderProtocolUsdc compounderCount } global(id: "global") { tokenCount graduatedCount } }`;
+        const q = `{ feeStats(id: "v4") { creatorFeesUsdc treasuryFeesUsdc antiSnipeUsdc clankerHarvests curveFeesUsdc v2ProtocolUsdc v2CreatorUsdc v3LpFeesUsdc compounderProtocolUsdc compounderCount bridgeFeesUsdc referralFeesUsdc } global(id: "global") { tokenCount graduatedCount } }`;
         fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ query: q }) })
             .then((r) => (r.ok ? r.json() : null))
             .then((j) => {
@@ -142,6 +144,8 @@ function FeeCategoriesCard() {
                     v3LpUsd: Number(f.v3LpFeesUsdc) || 0,
                     compounderUsd: Number(f.compounderProtocolUsdc) || 0,
                     compounderCount: Number(f.compounderCount) || 0,
+                    bridgeUsd: Number(f.bridgeFeesUsdc) || 0,
+                    referralUsd: Number(f.referralFeesUsdc) || 0,
                 });
             })
             .catch(() => {});
@@ -162,7 +166,9 @@ function FeeCategoriesCard() {
         bd.v2ProtocolUsd +
         v3LpTreasuryUsd +
         bd.compounderUsd +
-        curvePlatformUsd;
+        curvePlatformUsd +
+        bd.bridgeUsd +
+        bd.referralUsd;
     const fmt = (n: number) => `$${n.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
     return (
         <div className="arc-card mb-6 p-6">
@@ -181,6 +187,8 @@ function FeeCategoriesCard() {
                 <CatRow label="V3 LP fees — treasury (20%)" sub="Locker-collected LP fees · treasury share" value={fmt(v3LpTreasuryUsd)} />
                 <CatRow label="Auto-compound fee" sub={`≤10% of compounded LP fees → treasury · ${bd.compounderCount} compound${bd.compounderCount === 1 ? "" : "s"}`} value={fmt(bd.compounderUsd)} />
                 <CatRow label="V4 trading fee — protocol (20%)" sub="V4 post-graduation → treasury" value={fmt(bd.treasuryTradingUsd)} />
+                <CatRow label="CCTP bridge fee (0.05%)" sub="Bridge-and-buy → treasury" value={fmt(bd.bridgeUsd)} />
+                <CatRow label="Referral surcharge" sub="Collected on referred swaps (default off)" value={fmt(bd.referralUsd)} />
                 <div className="my-1 border-t border-arc-border/60" />
                 <div className="text-[11px] uppercase tracking-wider text-arc-text-faint">Goes to creators / LPs (not treasury)</div>
                 <CatRow label="Curve trading fee — creator (50%)" sub="1% curve fee · creator half" value={fmt(bd.curveUsd * 0.5)} muted />
@@ -191,10 +199,9 @@ function FeeCategoriesCard() {
                 <CatRow label="CLANKER fee harvests" sub={`${bd.clankerHarvests} harvest event${bd.clankerHarvests === 1 ? "" : "s"} · USD folded into V4 trading fees`} value="—" muted />
             </div>
             <p className="mt-4 text-[11px] leading-relaxed text-arc-text-faint">
-                Still not categorised by the indexer: referral surcharge (≤1%, default 0) and the CCTP
-                bridge fee (0.05%, receiver off deployments.json). Inbound treasury USDC from those
-                still shows in the recent-window scan below. V2 token-side legs are valued at the
-                token&apos;s last traded price.
+                Every protocol fee source is now categorised from the indexer. Token-denominated legs
+                (V2 sells, CLANKER token-side, referral in-token) are valued at the token&apos;s last
+                traded price; CLANKER token-side creator fees with no reliable price are not counted.
             </p>
         </div>
     );

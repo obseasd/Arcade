@@ -8,5 +8,28 @@
     ],
     "name": "FeesCollected",
     "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      { "indexed": true, "internalType": "uint256", "name": "positionId", "type": "uint256" },
+      { "indexed": true, "internalType": "address", "name": "token", "type": "address" },
+      { "indexed": false, "internalType": "address", "name": "pool", "type": "address" },
+      { "indexed": false, "internalType": "uint128", "name": "liquidity", "type": "uint128" }
+    ],
+    "name": "PositionLocked",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      { "indexed": true, "internalType": "uint256", "name": "positionId", "type": "uint256" },
+      { "indexed": true, "internalType": "uint256", "name": "slotIndex", "type": "uint256" },
+      { "indexed": true, "internalType": "address", "name": "token", "type": "address" },
+      { "indexed": false, "internalType": "address", "name": "recipient", "type": "address" },
+      { "indexed": false, "internalType": "uint256", "name": "amount", "type": "uint256" }
+    ],
+    "name": "RecipientPaid",
+    "type": "event"
   }
 ]
