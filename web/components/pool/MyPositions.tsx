@@ -9,6 +9,7 @@ import { FACTORY_ABI, PAIR_ABI, ROUTER_ABI } from "@/lib/abis/dex";
 import { ADDRESSES, USDC_DECIMALS } from "@/lib/constants";
 import { arcTestnet } from "@/lib/chains";
 import { useApproveIfNeeded } from "@/lib/hooks/useApproveIfNeeded";
+import { usePoolMetrics } from "@/lib/hooks/usePoolMetrics";
 import { pushToast } from "@/lib/toast";
 import { addActivity } from "@/lib/activityFeed";
 import { TokenIcon } from "@/components/ui/TokenIcon";
@@ -303,6 +304,7 @@ function PositionRow({
   const [slippageBps, setSlippageBps] = useState(50);
   const [removing, setRemoving] = useState(false);
 
+  const metrics = usePoolMetrics(p.pair);
   const sharePct = (Number(p.lpBalance) / Number(p.lpTotal)) * 100;
   const amt0 = (p.reserve0 * p.lpBalance) / p.lpTotal;
   const amt1 = (p.reserve1 * p.lpBalance) / p.lpTotal;
@@ -434,20 +436,20 @@ function PositionRow({
         </div>
       </div>
 
-      {/* Pool-level metrics row. APR / 1D Volume / Total TVL placeholders
-          until the indexer (ArcLens) ships. */}
+      {/* Pool-level metrics row, live from the ArcLens indexer (PoolDayData +
+          Pool.usdcReserve). "—" only while a pair has no indexed day yet. */}
       <div className="mt-4 grid grid-cols-3 gap-3 text-xs">
         <div>
           <div className="text-[10px] uppercase tracking-wider text-arc-text-faint">APR</div>
-          <div className="mt-0.5 text-sm font-semibold tabular-nums text-arc-text-faint">—</div>
+          <div className="mt-0.5 text-sm font-semibold tabular-nums">{metrics.aprPct !== undefined ? `${metrics.aprPct.toFixed(1)}%` : "—"}</div>
         </div>
         <div>
           <div className="text-[10px] uppercase tracking-wider text-arc-text-faint">1D Volume</div>
-          <div className="mt-0.5 text-sm font-semibold tabular-nums text-arc-text-faint">—</div>
+          <div className="mt-0.5 text-sm font-semibold tabular-nums">{metrics.volUsd !== undefined ? `$${metrics.volUsd.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : "—"}</div>
         </div>
         <div>
           <div className="text-[10px] uppercase tracking-wider text-arc-text-faint">Total TVL</div>
-          <div className="mt-0.5 text-sm font-semibold tabular-nums text-arc-text-faint">—</div>
+          <div className="mt-0.5 text-sm font-semibold tabular-nums">{metrics.tvlUsd !== undefined ? `$${metrics.tvlUsd.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : "—"}</div>
         </div>
       </div>
 

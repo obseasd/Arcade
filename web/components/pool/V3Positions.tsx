@@ -22,6 +22,7 @@ import {
     tickToPriceWithDecimals,
 } from "@/lib/v3-math";
 import { computePendingFees } from "@/lib/v3-fee-math";
+import { usePoolMetrics } from "@/lib/hooks/usePoolMetrics";
 import { cn } from "@/lib/utils";
 
 const USDC_LOWER = ADDRESSES.usdc.toLowerCase();
@@ -799,6 +800,7 @@ function V3PositionRow({
 }: V3PositionRowProps) {
     const t0Info = tokenInfo[p.token0.toLowerCase()] ?? { symbol: "?", decimals: 18 };
     const t1Info = tokenInfo[p.token1.toLowerCase()] ?? { symbol: "?", decimals: 18 };
+    const metrics = usePoolMetrics(poolAddress);
     const minPrice = tickToPriceWithDecimals(p.tickLower, t0Info.decimals, t1Info.decimals);
     const maxPrice = tickToPriceWithDecimals(p.tickUpper, t0Info.decimals, t1Info.decimals);
     const explorerUrl = arcTestnet.blockExplorers?.default.url ?? "https://testnet.arcscan.app";
@@ -950,21 +952,20 @@ function V3PositionRow({
                 </span>
             </div>
 
-            {/* Pool-level metrics row. APR / 1D Volume / Total TVL all read
-                from the indexer; for now they render as "—" so the layout
-                exists when ArcLens lands. */}
+            {/* Pool-level metrics row, live from the ArcLens indexer (PoolDayData
+                + Pool.usdcReserve). "—" only while a pool has no indexed day yet. */}
             <div className="mt-3 grid grid-cols-3 gap-3 text-xs">
                 <div>
                     <div className="text-[10px] uppercase tracking-wider text-arc-text-faint">APR</div>
-                    <div className="mt-0.5 text-sm font-semibold tabular-nums text-arc-text-faint">—</div>
+                    <div className="mt-0.5 text-sm font-semibold tabular-nums">{metrics.aprPct !== undefined ? `${metrics.aprPct.toFixed(1)}%` : "—"}</div>
                 </div>
                 <div>
                     <div className="text-[10px] uppercase tracking-wider text-arc-text-faint">1D Volume</div>
-                    <div className="mt-0.5 text-sm font-semibold tabular-nums text-arc-text-faint">—</div>
+                    <div className="mt-0.5 text-sm font-semibold tabular-nums">{metrics.volUsd !== undefined ? `$${metrics.volUsd.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : "—"}</div>
                 </div>
                 <div>
                     <div className="text-[10px] uppercase tracking-wider text-arc-text-faint">Total TVL</div>
-                    <div className="mt-0.5 text-sm font-semibold tabular-nums text-arc-text-faint">—</div>
+                    <div className="mt-0.5 text-sm font-semibold tabular-nums">{metrics.tvlUsd !== undefined ? `$${metrics.tvlUsd.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : "—"}</div>
                 </div>
             </div>
 
