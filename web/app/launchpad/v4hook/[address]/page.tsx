@@ -9,6 +9,8 @@ import {
     Sparkles,
     Clock,
     HelpCircle,
+    Copy,
+    Check,
 } from "lucide-react";
 import Link from "next/link";
 import dynamic from "next/dynamic";
@@ -228,8 +230,12 @@ function Inner() {
                                     )}
                                 </div>
                                 <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-arc-text-muted">
-                                    <span className="break-all sm:hidden">{formatAddress(token)}</span>
-                                    <span className="hidden break-all sm:inline">{token}</span>
+                                    <span className="sm:hidden">
+                                        <CopyAddress address={token} short />
+                                    </span>
+                                    <span className="hidden sm:inline">
+                                        <CopyAddress address={token} />
+                                    </span>
                                 </div>
                                 {metadata?.description && (
                                     <p className="mt-3 max-w-2xl text-sm text-arc-text-muted">{metadata.description}</p>
@@ -470,10 +476,6 @@ function FeesRecipientPanel({
                         >
                             @{handle ?? "twitter"} · verify &amp; claim
                         </Link>
-                        <p className="mt-1 text-[11px] text-arc-text-faint">
-                            Fees are held for your @ (USDC in escrow, token side forwarded on claim). If
-                            this is your @, connect a wallet and verify on the claim page to receive both.
-                        </p>
                     </>
                 ) : recipientAddr ? (
                     <a
@@ -489,6 +491,43 @@ function FeesRecipientPanel({
                 )}
             </div>
         </div>
+    );
+}
+
+// -------------------------------------------------------------------
+// Copy-to-clipboard address
+// -------------------------------------------------------------------
+
+/** The token contract address, click-to-copy with a check-mark flip. */
+function CopyAddress({ address, short }: { address: string; short?: boolean }) {
+    const [copied, setCopied] = useState(false);
+    const copy = async () => {
+        try {
+            await navigator.clipboard.writeText(address);
+        } catch {
+            return;
+        }
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1400);
+    };
+    return (
+        <button
+            type="button"
+            onClick={copy}
+            title="Copy contract address"
+            className="group inline-flex items-center gap-1 rounded-md px-1 py-0.5 font-mono transition-colors hover:bg-arc-cta-hover/10 hover:text-arc-text"
+        >
+            <span className="break-all">{short ? formatAddress(address) : address}</span>
+            <span className="relative inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center">
+                <Copy
+                    className={`absolute h-3.5 w-3.5 transition-all duration-200 ${copied ? "scale-0 opacity-0" : "scale-100 opacity-60 group-hover:opacity-100"}`}
+                />
+                <Check
+                    className={`absolute h-3.5 w-3.5 text-arc-success transition-all duration-200 ${copied ? "scale-100 opacity-100" : "scale-0 opacity-0"}`}
+                />
+            </span>
+            {copied && <span className="text-[10px] text-arc-success">Copied</span>}
+        </button>
     );
 }
 

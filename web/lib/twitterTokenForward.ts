@@ -34,6 +34,49 @@ export type ForwardResult =
     | { ok: true; forwarded: true; amountRaw: string; tx: Hex }
     | { ok: false; error: string };
 
+/** Accrued token-side creator fee for a pool = Σ RoyaltyPaid.creatorAmount on
+ *  the launch-token leg. Shared by the preview and the executing path. */
+async function accruedTokenSide(poolIdHex: string, launchToken: Address): Promise<bigint> {
+    const client = serverPublicClient();
+    const logs = await client.getLogs({
+        address: ADDRESSES.arcadeHook as Address,
+        event: ROYALTY_PAID,
+        args: { poolId: poolIdHex as Hex },
+        fromBlock: HOOK_DEPLOY_BLOCK,
+        toBlock: "latest",
+    });
+    let accrued = 0n;
+    for (const l of logs) {
+        const currency = (l.args.currency ?? "0x") as string;
+        if (currency.toLowerCase() !== launchToken.toLowerCase()) continue; // USDC leg
+        accrued += (l.args.creatorAmount ?? 0n) as bigint;
+    }
+    return accrued;
+}
+
+/**
+ * Read-only preview of the launch-token amount still owed to (poolId, slotIndex),
+ * i.e. accrued token-side creator fee minus what was already forwarded. Does NOT
+ * reserve or transfer, so it is safe to call before the user claims (to show the
+ * "+ N TICKER" they will receive). Returns "0" on any error / unknown pool.
+ */
+export async function previewTokenSideOwed(
+    poolIdHex: string,
+    slotIndex: 0 | 1,
+    launchToken: Address,
+): Promise<string> {
+    try {
+        const cursors = await getTokenFwd(poolIdHex);
+        if (!cursors) return "0";
+        const accrued = await accruedTokenSide(poolIdHex, launchToken);
+        const already = BigInt((slotIndex === 0 ? cursors.slot0 : cursors.slot1) || "0");
+        const owed = accrued - already;
+        return owed > 0n ? owed.toString() : "0";
+    } catch {
+        return "0";
+    }
+}
+
 /**
  * Forward the launch-token creator fees owed to (poolId, slotIndex) to
  * `recipient`. `launchToken` is the token whose fees we forward.
@@ -56,20 +99,9 @@ export async function forwardTokenSide(
 
     // Accrued token-side creator fee = Σ RoyaltyPaid(poolId).creatorAmount where
     // currency == the launch token (the token-denominated leg of CLANKER fees).
-    let accrued = 0n;
+    let accrued: bigint;
     try {
-        const logs = await client.getLogs({
-            address: ADDRESSES.arcadeHook as Address,
-            event: ROYALTY_PAID,
-            args: { poolId: poolIdHex as Hex },
-            fromBlock: HOOK_DEPLOY_BLOCK,
-            toBlock: "latest",
-        });
-        for (const l of logs) {
-            const currency = (l.args.currency ?? "0x") as string;
-            if (currency.toLowerCase() !== launchToken.toLowerCase()) continue; // USDC leg
-            accrued += (l.args.creatorAmount ?? 0n) as bigint;
-        }
+        accrued = await accruedTokenSide(poolIdHex, launchToken);
     } catch (e) {
         return { ok: false, error: `getLogs failed: ${e instanceof Error ? e.message : String(e)}` };
     }

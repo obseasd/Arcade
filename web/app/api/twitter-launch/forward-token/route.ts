@@ -3,7 +3,7 @@ import { isAddress, parseEventLogs, parseAbiItem, type Address, type Hex } from 
 
 import { ADDRESSES } from "@/lib/constants";
 import { serverPublicClient } from "@/lib/serverRpc";
-import { forwardTokenSide } from "@/lib/twitterTokenForward";
+import { forwardTokenSide, previewTokenSideOwed } from "@/lib/twitterTokenForward";
 
 /**
  * Forward the launch-token side of a claimant's creator fees (see
@@ -31,6 +31,40 @@ const HOOK_POOLID_ABI = [
 const CLAIMED_EVENT = parseAbiItem(
     "event Claimed(uint256 indexed positionId, uint256 indexed slotIndex, address indexed recipient, address token, uint256 amount)",
 );
+
+/**
+ * Read-only preview of the launch-token amount still owed to (token, slotIndex).
+ * No proof needed (nothing is moved); the claim page uses it to show "+ N TICKER"
+ * before the user claims. GET ?token=0x..&slot=0|1 -> { owedRaw: string }.
+ */
+export async function GET(req: NextRequest) {
+    const url = new URL(req.url);
+    const token = url.searchParams.get("token");
+    const slotParam = url.searchParams.get("slot");
+    const slotIndex = slotParam === "1" ? 1 : 0;
+    if (!token || !isAddress(token)) {
+        return NextResponse.json({ error: "invalid token" }, { status: 400 });
+    }
+
+    const client = serverPublicClient();
+    let poolIdHex: string;
+    try {
+        poolIdHex = (await client.readContract({
+            address: ADDRESSES.arcadeHook as Address,
+            abi: HOOK_POOLID_ABI,
+            functionName: "poolIdOf",
+            args: [token as Address],
+        })) as string;
+    } catch {
+        return NextResponse.json({ owedRaw: "0" });
+    }
+    if (!poolIdHex || /^0x0*$/.test(poolIdHex)) {
+        return NextResponse.json({ owedRaw: "0" });
+    }
+
+    const owedRaw = await previewTokenSideOwed(poolIdHex, slotIndex, token as Address);
+    return NextResponse.json({ owedRaw });
+}
 
 export async function POST(req: NextRequest) {
     let body: { token?: string; slotIndex?: number; recipient?: string; claimTxHash?: string };

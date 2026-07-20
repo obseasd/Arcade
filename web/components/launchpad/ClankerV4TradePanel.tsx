@@ -310,10 +310,6 @@ export function ClankerV4TradePanel({ token, symbol, image, onTradeSuccess }: Pr
                   : `Sell ${symbol}`}
       </button>
 
-      <div className="mt-3 text-center text-[10px] text-arc-text-faint">
-        Trades on the canonical Uniswap V4 pool via ArcadeV4SwapRouter.
-      </div>
-
       <TxStatus state={tx} className="mt-3" />
     </div>
   );

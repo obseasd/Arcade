@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Address, erc20Abi, formatUnits } from "viem";
 import { useAccount, usePublicClient, useReadContract, useWriteContract } from "wagmi";
@@ -92,6 +92,27 @@ export function V4ClaimCard({
     const timelock = Number((tlQ.data as bigint | undefined) ?? 0n);
     const symbolQ = useReadContract({ address: payload.token, abi: erc20Abi, functionName: "symbol" });
     const tokenSymbol = (symbolQ.data as string | undefined) ?? "tokens";
+
+    // Preview the launch-token side that will be forwarded on claim (CLANKER fees
+    // have a token leg the escrow doesn't hold). Read-only, shown next to the USDC.
+    const [tokenOwed, setTokenOwed] = useState<number | null>(null);
+    useEffect(() => {
+        let alive = true;
+        (async () => {
+            try {
+                const r = await fetch(
+                    `/api/twitter-launch/forward-token?token=${payload.token}&slot=${payload.slotIndex}`,
+                );
+                const j = (await r.json()) as { owedRaw?: string };
+                if (alive && j?.owedRaw) setTokenOwed(Number(formatUnits(BigInt(j.owedRaw), 18)));
+            } catch {
+                /* preview is best-effort */
+            }
+        })();
+        return () => {
+            alive = false;
+        };
+    }, [payload.token, payload.slotIndex]);
 
     const recipientMismatch =
         !!account && account.toLowerCase() !== payload.recipient.toLowerCase();
@@ -227,7 +248,13 @@ export function V4ClaimCard({
                 </div>
                 <div className="mt-2 text-3xl font-semibold tabular-nums">
                     ${Number(formatUnits(liveBal, USDC_DECIMALS)).toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                    <span className="text-arc-text-muted"> USDC</span>
                 </div>
+                {tokenOwed != null && tokenOwed > 0 && (
+                    <div className="mt-1 text-base font-medium tabular-nums text-arc-cta-hover">
+                        + {tokenOwed.toLocaleString(undefined, { maximumFractionDigits: 2 })} {tokenSymbol}
+                    </div>
+                )}
                 <div className="mt-1 text-sm text-arc-text-muted">
                     Verified as <span className="text-arc-text">@{payload.handle}</span>
                     {payload.slotIndex === 1 ? " · reply-to-launch share" : ""}
