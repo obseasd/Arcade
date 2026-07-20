@@ -120,10 +120,21 @@ export async function getReplyLaunchByPool(poolId: string): Promise<ReplyLaunchR
     return { poolId: r.pool_id, opUserId: r.op_user_id, opHandle: r.op_handle, slot1CreditedUsdc: r.slot1_credited_usdc };
 }
 
-/** Record that `totalCreditedUsdc` (cumulative, human USDC) has now been swept
- *  from the operator into the escrow slot 1 for this pool. */
-export async function setSlot1Credited(poolId: string, totalCreditedUsdc: string): Promise<void> {
+/** Record that `totalCreditedMicros` (cumulative raw USDC micros) has now been
+ *  swept from the operator into the escrow slot 1 for this pool. */
+export async function setSlot1Credited(poolId: string, totalCreditedMicros: string): Promise<void> {
     if (!isDbConfigured()) return;
     const sql = getSql();
-    await sql`UPDATE twitter_launches SET slot1_credited_usdc = ${totalCreditedUsdc} WHERE pool_id = ${poolId}`;
+    await sql`UPDATE twitter_launches SET slot1_credited_usdc = ${totalCreditedMicros} WHERE pool_id = ${poolId}`;
+}
+
+/** Every launched reply-launch pool (for the safety-net batch reconciliation). */
+export async function listReplyLaunchPools(): Promise<string[]> {
+    if (!isDbConfigured()) return [];
+    const sql = getSql();
+    const rows = (await sql`
+        SELECT pool_id FROM twitter_launches
+        WHERE is_reply = true AND status = 'launched' AND pool_id IS NOT NULL AND op_user_id IS NOT NULL
+    `) as { pool_id: string }[];
+    return rows.map((r) => r.pool_id);
 }
