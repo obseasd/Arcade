@@ -90,6 +90,34 @@ export async function POST(req: NextRequest) {
         `,
     );
 
+    // --- v2: reply-to-launch (50/50) + since_id polling state ---------------
+    // The original poster of a replied-to tweet gets slot 1 of the launch's
+    // escrow (the launcher keeps slot 0). op_* records who, pool_id ties it to
+    // the on-chain launch, slot1_credited_usdc tracks how much has already been
+    // swept from the operator into the escrow so we never double-credit.
+    await step("v2_is_reply", async () =>
+        sql`ALTER TABLE twitter_launches ADD COLUMN IF NOT EXISTS is_reply BOOLEAN NOT NULL DEFAULT false`,
+    );
+    await step("v2_op_user_id", async () =>
+        sql`ALTER TABLE twitter_launches ADD COLUMN IF NOT EXISTS op_user_id TEXT`,
+    );
+    await step("v2_op_handle", async () =>
+        sql`ALTER TABLE twitter_launches ADD COLUMN IF NOT EXISTS op_handle TEXT`,
+    );
+    await step("v2_slot1_credited", async () =>
+        sql`ALTER TABLE twitter_launches ADD COLUMN IF NOT EXISTS slot1_credited_usdc NUMERIC NOT NULL DEFAULT 0`,
+    );
+    // Key/value state so each poll only fetches tweets newer than the last one
+    // seen (X pay-per-use bills per post returned; since_id keeps that minimal).
+    await step("v2_state_table", async () =>
+        sql`
+            CREATE TABLE IF NOT EXISTS twitter_launch_state (
+                key   TEXT PRIMARY KEY,
+                value TEXT
+            )
+        `,
+    );
+
     const failed = results.filter((r) => !r.ok);
     return NextResponse.json(
         {

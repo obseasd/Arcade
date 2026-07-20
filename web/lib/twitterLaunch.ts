@@ -76,7 +76,7 @@ export interface CriteriaConfig {
  *  accounts that clear these bars. Tunable via env at the cron. */
 export const DEFAULT_CRITERIA: CriteriaConfig = {
     minAccountAgeDays: 30,
-    minFollowers: 50,
+    minFollowers: 100,
     requireVerified: false,
 };
 
@@ -114,17 +114,28 @@ const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000" as const;
  * creator fees to the handle-gated escrow slot. metadataURI is left empty (the
  * cron may pin an image separately).
  */
+export interface LaunchExtras {
+    /** Token metadata URI (ipfs://…) built from the tweet's image; "" if none. */
+    metadataURI?: string;
+    /** Reply-to-launch: route creator2Bps of the creator fee to this address
+     *  (the operator, which later forwards it to the original poster's escrow
+     *  slot 1). Zero disables the split (100% to the launcher). */
+    creator2?: `0x${string}`;
+    creator2Bps?: number;
+}
+
 export function buildCreateLaunchArgs(
     cmd: LaunchCommand,
     handle: string,
+    extras: LaunchExtras = {},
 ): readonly [string, string, string, number, `0x${string}`, number, number, number, number, string, bigint] {
     return [
         cmd.name, // name
         cmd.ticker, // symbol
-        "", // metadataURI
+        extras.metadataURI ?? "", // metadataURI (tweet image, pinned to IPFS)
         1, // mode = CLANKER
-        ZERO_ADDRESS, // creator2
-        0, // creator2Bps
+        extras.creator2 ?? ZERO_ADDRESS, // creator2 (reply-split relay)
+        extras.creator2Bps ?? 0, // creator2Bps
         0, // snipeStartBps (CLANKER rejects > 0)
         0, // snipeDecaySeconds
         TWEET_LAUNCH_DEFAULTS.feeTier,
@@ -132,3 +143,6 @@ export function buildCreateLaunchArgs(
         TWEET_LAUNCH_DEFAULTS.startMcapUsdc,
     ] as const;
 }
+
+/** Reply-split share (bps of the creator fee) routed to the original poster. */
+export const REPLY_SPLIT_BPS = 5000; // 50/50

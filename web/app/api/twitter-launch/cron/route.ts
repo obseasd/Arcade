@@ -17,27 +17,42 @@ import {
     buildCreateLaunchArgs,
     DEFAULT_CRITERIA,
     botHandle,
+    REPLY_SPLIT_BPS,
     type XUser,
     type CriteriaConfig,
+    type LaunchCommand,
 } from "@/lib/twitterLaunch";
+import { hasLaunchIntent, parseLaunchWithClaude } from "@/lib/twitterLaunchParse";
 import {
     isTweetProcessed,
     recordLaunchTweet,
     userLaunchCountSince,
+    getSinceId,
+    setSinceId,
 } from "@/lib/twitterLaunchPersistence";
 import { isDbConfigured } from "@/lib/db";
+import { pinFile, pinJson } from "@/lib/pinata";
 
 /**
- * Tweet-to-launch cron. Reads recent mentions of the bot, validates each author
- * against automated anti-sybil criteria, and RELAYS a CLANKER createLaunch on
- * their behalf (the operator wallet sponsors gas + the 3 USDC creation fee).
- * Creator fees attribute to the author's handle via the escrow; the canonical
- * binding stored in the DB is the numeric user-id.
+ * Tweet-to-launch cron (v2). Reads recent mentions of the bot, validates each
+ * author against automated anti-sybil criteria (followers>=100, age>=30d),
+ * parses the launch command with Claude Haiku (regex fallback), pins the
+ * tweet's image as the token logo, and RELAYS a CLANKER createLaunch on the
+ * author's behalf (the operator sponsors gas + the 3 USDC creation fee).
  *
- * Requires: X_BEARER_TOKEN (X API v2 app-only), COMPOUNDER_OPERATOR_PRIVATE_KEY
- * (relayer, funded + USDC-approved to the hook + escrow.setCrediter(hook) +
- * hook.setTwitterEscrow(escrow) done), KEEPER_CRON_SECRET, the twitter_launches
- * table, and NEXT_PUBLIC_ARCADE_HOOK_ADDRESS. Curated by CRITERIA env below.
+ * Reply-to-launch (50/50): if the launch tweet is a reply, the ORIGINAL POSTER
+ * gets half the creator fee. On-chain, creator2 routes 50% to the operator; the
+ * DB records (poolId -> original poster) so the claim-time reconciliation can
+ * credit the poster's escrow slot 1. The launcher keeps slot 0.
+ *
+ * Cost control: `since_id` makes each poll fetch only NEW tweets (X pay-per-use
+ * bills per post returned). A cheap keyword pre-filter runs before any paid
+ * Claude parse.
+ *
+ * Requires: X_BEARER_TOKEN, COMPOUNDER_OPERATOR_PRIVATE_KEY (funded + USDC-
+ * approved to the hook), ANTHROPIC_API_KEY (else regex-only parse), PINATA_JWT
+ * (else no logo), a cron secret, the twitter_launches schema (migrate v2), and a
+ * configured hook address.
  */
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -64,52 +79,122 @@ interface Mention {
     tweetId: string;
     text: string;
     author: XUser;
+    /** Original poster of the replied-to tweet (reply-to-launch), or null. */
+    opUser: XUser | null;
+    /** First photo attached to the tweet, for the token logo, or null. */
+    imageUrl: string | null;
 }
 
-/** Fetch recent bot mentions containing "launch", with author profiles. */
-async function fetchLaunchMentions(bearer: string): Promise<Mention[]> {
-    const query = encodeURIComponent(`@${botHandle()} launch -is:retweet`);
-    const url =
+interface XUserRaw {
+    id: string;
+    username: string;
+    created_at: string;
+    verified?: boolean;
+    public_metrics?: { followers_count: number };
+}
+
+function toXUser(u: XUserRaw): XUser {
+    return {
+        id: u.id,
+        username: u.username,
+        createdAt: u.created_at,
+        followers: u.public_metrics?.followers_count ?? 0,
+        verified: u.verified,
+    };
+}
+
+/** Fetch recent bot mentions (launch/deploy/create) with author + reply + media
+ *  context, only newer than `sinceId`. */
+async function fetchLaunchMentions(bearer: string, sinceId: string | null): Promise<Mention[]> {
+    const query = encodeURIComponent(`@${botHandle()} (launch OR deploy OR create) -is:retweet`);
+    let url =
         `https://api.twitter.com/2/tweets/search/recent?query=${query}` +
-        `&max_results=20&tweet.fields=author_id,created_at` +
-        `&expansions=author_id&user.fields=created_at,public_metrics,verified,username`;
+        `&max_results=20` +
+        `&tweet.fields=author_id,created_at,referenced_tweets,in_reply_to_user_id,attachments` +
+        `&expansions=author_id,referenced_tweets.id,referenced_tweets.id.author_id,attachments.media_keys` +
+        `&user.fields=created_at,public_metrics,verified,username` +
+        `&media.fields=url,type`;
+    if (sinceId) url += `&since_id=${sinceId}`;
+
     const res = await fetch(url, { headers: { Authorization: `Bearer ${bearer}` } });
     if (!res.ok) throw new Error(`X API ${res.status}: ${(await res.text()).slice(0, 200)}`);
     const body = (await res.json()) as {
-        data?: { id: string; text: string; author_id: string }[];
+        data?: {
+            id: string;
+            text: string;
+            author_id: string;
+            referenced_tweets?: { type: string; id: string }[];
+            attachments?: { media_keys?: string[] };
+        }[];
         includes?: {
-            users?: {
-                id: string;
-                username: string;
-                created_at: string;
-                verified?: boolean;
-                public_metrics?: { followers_count: number };
-            }[];
+            users?: XUserRaw[];
+            tweets?: { id: string; author_id: string }[];
+            media?: { media_key: string; type: string; url?: string }[];
         };
     };
+
     const users = new Map((body.includes?.users ?? []).map((u) => [u.id, u]));
+    const tweets = new Map((body.includes?.tweets ?? []).map((t) => [t.id, t]));
+    const media = new Map((body.includes?.media ?? []).map((m) => [m.media_key, m]));
+    const botLower = botHandle();
+
     const out: Mention[] = [];
     for (const t of body.data ?? []) {
         const u = users.get(t.author_id);
         if (!u) continue;
-        out.push({
-            tweetId: t.id,
-            text: t.text,
-            author: {
-                id: u.id,
-                username: u.username,
-                createdAt: u.created_at,
-                followers: u.public_metrics?.followers_count ?? 0,
-                verified: u.verified,
-            },
-        });
+
+        // Reply target: the author of the replied-to tweet (the original poster).
+        let opUser: XUser | null = null;
+        const repliedTo = (t.referenced_tweets ?? []).find((r) => r.type === "replied_to");
+        if (repliedTo) {
+            const parent = tweets.get(repliedTo.id);
+            const opRaw = parent ? users.get(parent.author_id) : undefined;
+            // Ignore self-replies and replies to the bot itself.
+            if (opRaw && opRaw.id !== u.id && opRaw.username.toLowerCase() !== botLower) {
+                opUser = toXUser(opRaw);
+            }
+        }
+
+        // First photo attachment, for the token logo.
+        let imageUrl: string | null = null;
+        for (const key of t.attachments?.media_keys ?? []) {
+            const m = media.get(key);
+            if (m?.type === "photo" && m.url) {
+                imageUrl = m.url;
+                break;
+            }
+        }
+
+        out.push({ tweetId: t.id, text: t.text, author: toXUser(u), opUser, imageUrl });
     }
     return out;
 }
 
+/** Pin the tweet image + a metadata JSON; returns an ipfs:// URI or "". */
+async function pinLaunchMetadata(
+    imageUrl: string | null,
+    name: string,
+    symbol: string,
+): Promise<string> {
+    if (!imageUrl || !process.env.PINATA_JWT) return "";
+    try {
+        const imgRes = await fetch(imageUrl);
+        if (!imgRes.ok) return "";
+        const buf = await imgRes.arrayBuffer();
+        const { uri: imageUri } = await pinFile(new Uint8Array(buf), `${symbol}.jpg`);
+        const { uri } = await pinJson({
+            name,
+            symbol,
+            description: `Launched from a tweet via @${botHandle()} on Arcade.`,
+            image: imageUri,
+        });
+        return uri;
+    } catch {
+        return ""; // image is best-effort; never block the launch on it
+    }
+}
+
 export async function POST(req: NextRequest) {
-    // Dedicated secret first (so you can set a fresh TWEET_LAUNCH_CRON_SECRET
-    // you control without touching the keeper/compounder crons), then fallbacks.
     const secret =
         process.env.TWEET_LAUNCH_CRON_SECRET ??
         process.env.KEEPER_CRON_SECRET ??
@@ -141,13 +226,23 @@ export async function POST(req: NextRequest) {
 
     const summary = { scanned: 0, launched: 0, rejected: 0, skipped: 0, failed: 0, notes: [] as string[] };
 
+    const sinceId = await getSinceId();
     let mentions: Mention[];
     try {
-        mentions = await fetchLaunchMentions(bearer);
+        mentions = await fetchLaunchMentions(bearer, sinceId);
     } catch (e) {
         return NextResponse.json({ ran: false, reason: e instanceof Error ? e.message : String(e) }, { status: 502 });
     }
     summary.scanned = mentions.length;
+
+    // Advance the since_id cursor to the newest tweet seen (search returns
+    // newest-first), so the next poll skips everything we've already fetched --
+    // even the ones we reject -- keeping X pay-per-use spend minimal.
+    const newestId = mentions.reduce<string | null>((max, m) => {
+        if (!max) return m.tweetId;
+        // tweet ids are monotonic snowflakes; compare as BigInt.
+        return BigInt(m.tweetId) > BigInt(max) ? m.tweetId : max;
+    }, null);
 
     for (const m of mentions) {
         if (summary.launched >= MAX_LAUNCHES_PER_RUN) break;
@@ -156,10 +251,18 @@ export async function POST(req: NextRequest) {
                 summary.skipped++;
                 continue;
             }
-            const cmd = parseLaunchCommand(m.text);
+            // Cheap free pre-filter before any paid Claude call.
+            if (!hasLaunchIntent(m.text, botHandle())) {
+                summary.skipped++;
+                continue;
+            }
+            // NL parse via Claude, falling back to the strict regex parser when
+            // ANTHROPIC_API_KEY is unset or Claude is unavailable.
+            const cmd: LaunchCommand | null =
+                (await parseLaunchWithClaude(m.text)) ?? parseLaunchCommand(m.text);
             if (!cmd) {
                 summary.skipped++;
-                continue; // not a launch command; don't record (avoids table bloat from chatter)
+                continue;
             }
             // Automated anti-sybil gate.
             const gate = passesCriteria(m.author, criteria, now);
@@ -187,8 +290,19 @@ export async function POST(req: NextRequest) {
                 continue;
             }
 
-            // Relay the CLANKER launch (operator sponsors gas + creation fee).
-            const args = buildCreateLaunchArgs(cmd, m.author.username);
+            // Token logo from the tweet image (best-effort).
+            const metadataURI = await pinLaunchMetadata(m.imageUrl, cmd.name, cmd.ticker);
+
+            // Reply-to-launch: route 50% of the creator fee to the operator,
+            // which the claim-time reconciliation forwards to the original
+            // poster's escrow slot 1.
+            const isReply = m.opUser !== null;
+            const args = buildCreateLaunchArgs(cmd, m.author.username, {
+                metadataURI,
+                creator2: isReply ? (account.address as `0x${string}`) : undefined,
+                creator2Bps: isReply ? REPLY_SPLIT_BPS : 0,
+            });
+
             const hash = await walletClient.writeContract({
                 address: hook,
                 abi: ARCADE_HOOK_ABI,
@@ -197,7 +311,6 @@ export async function POST(req: NextRequest) {
             });
             const receipt = await publicClient.waitForTransactionReceipt({ hash });
 
-            // Pull the new token + pool id from the events.
             let token: string | undefined;
             let poolId: string | undefined;
             for (const log of receipt.logs) {
@@ -219,6 +332,9 @@ export async function POST(req: NextRequest) {
                 token,
                 poolId,
                 txHash: hash,
+                isReply,
+                opUserId: m.opUser?.id,
+                opHandle: m.opUser?.username,
             });
             summary.launched++;
         } catch (err) {
@@ -234,6 +350,10 @@ export async function POST(req: NextRequest) {
             }).catch(() => {});
         }
     }
+
+    // Persist the cursor only after processing, so a mid-run crash re-fetches
+    // (idempotency guard dedupes the already-launched ones).
+    if (newestId) await setSinceId(newestId);
 
     return NextResponse.json({ ran: true, ...summary });
 }

@@ -51,18 +51,79 @@ export async function recordLaunchTweet(input: {
     token?: string;
     poolId?: string;
     txHash?: string;
+    /** Reply-to-launch: the original poster gets 50% (escrow slot 1). */
+    isReply?: boolean;
+    opUserId?: string;
+    opHandle?: string;
 }): Promise<void> {
     if (!isDbConfigured()) return;
     const sql = getSql();
     await sql`
-        INSERT INTO twitter_launches (tweet_id, user_id, handle, status, reason, token, pool_id, tx_hash)
+        INSERT INTO twitter_launches
+            (tweet_id, user_id, handle, status, reason, token, pool_id, tx_hash, is_reply, op_user_id, op_handle)
         VALUES (${input.tweetId}, ${input.userId}, ${input.handle}, ${input.status},
-                ${input.reason ?? null}, ${input.token ?? null}, ${input.poolId ?? null}, ${input.txHash ?? null})
+                ${input.reason ?? null}, ${input.token ?? null}, ${input.poolId ?? null}, ${input.txHash ?? null},
+                ${input.isReply ?? false}, ${input.opUserId ?? null}, ${input.opHandle ?? null})
         ON CONFLICT (tweet_id) DO UPDATE SET
             status = EXCLUDED.status,
             reason = EXCLUDED.reason,
             token = COALESCE(EXCLUDED.token, twitter_launches.token),
             pool_id = COALESCE(EXCLUDED.pool_id, twitter_launches.pool_id),
-            tx_hash = COALESCE(EXCLUDED.tx_hash, twitter_launches.tx_hash)
+            tx_hash = COALESCE(EXCLUDED.tx_hash, twitter_launches.tx_hash),
+            is_reply = EXCLUDED.is_reply,
+            op_user_id = COALESCE(EXCLUDED.op_user_id, twitter_launches.op_user_id),
+            op_handle = COALESCE(EXCLUDED.op_handle, twitter_launches.op_handle)
     `;
+}
+
+/** Last processed tweet id, for the X search `since_id` (min posts returned). */
+export async function getSinceId(): Promise<string | null> {
+    if (!isDbConfigured()) return null;
+    const sql = getSql();
+    const rows = (await sql`SELECT value FROM twitter_launch_state WHERE key = 'since_id' LIMIT 1`) as {
+        value: string | null;
+    }[];
+    return rows[0]?.value ?? null;
+}
+
+/** Advance the `since_id` cursor to the newest tweet id seen this run. */
+export async function setSinceId(tweetId: string): Promise<void> {
+    if (!isDbConfigured()) return;
+    const sql = getSql();
+    await sql`
+        INSERT INTO twitter_launch_state (key, value) VALUES ('since_id', ${tweetId})
+        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+    `;
+}
+
+/** A reply-launch whose original poster (slot 1) may be owed escrow credit.
+ *  Used by the on-demand reconciliation at claim time. */
+export interface ReplyLaunchRow {
+    poolId: string;
+    opUserId: string;
+    opHandle: string;
+    slot1CreditedUsdc: string;
+}
+
+/** Look up the reply-launch (slot-1) record for a pool, or null. */
+export async function getReplyLaunchByPool(poolId: string): Promise<ReplyLaunchRow | null> {
+    if (!isDbConfigured()) return null;
+    const sql = getSql();
+    const rows = (await sql`
+        SELECT pool_id, op_user_id, op_handle, slot1_credited_usdc
+        FROM twitter_launches
+        WHERE pool_id = ${poolId} AND is_reply = true AND op_user_id IS NOT NULL
+        LIMIT 1
+    `) as { pool_id: string; op_user_id: string; op_handle: string; slot1_credited_usdc: string }[];
+    const r = rows[0];
+    if (!r) return null;
+    return { poolId: r.pool_id, opUserId: r.op_user_id, opHandle: r.op_handle, slot1CreditedUsdc: r.slot1_credited_usdc };
+}
+
+/** Record that `totalCreditedUsdc` (cumulative, human USDC) has now been swept
+ *  from the operator into the escrow slot 1 for this pool. */
+export async function setSlot1Credited(poolId: string, totalCreditedUsdc: string): Promise<void> {
+    if (!isDbConfigured()) return;
+    const sql = getSql();
+    await sql`UPDATE twitter_launches SET slot1_credited_usdc = ${totalCreditedUsdc} WHERE pool_id = ${poolId}`;
 }
