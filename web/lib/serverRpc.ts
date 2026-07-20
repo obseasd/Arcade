@@ -33,3 +33,27 @@ export function serverPublicClient() {
         ),
     });
 }
+
+// A read-optimised client for simple eth_call reads (balanceOf, a getter). The
+// default arc.network primary rate-limits from Vercel IPs, and its lenient 15s x2
+// retry means ONE throttled read can blow a 30s function budget (observed as
+// intermittent 504s on the claim preview). This orders a higher-throughput
+// endpoint FIRST (thirdweb by default; override with ARC_READ_RPC_URLS) with
+// fast-fail retries so a stalled primary fails over in a few seconds, not 30.
+const READ_RPC_URLS = (
+    process.env.ARC_READ_RPC_URLS ??
+    "https://5042002.rpc.thirdweb.com,https://rpc.testnet.arc.network"
+)
+    .split(",")
+    .map((u) => u.trim())
+    .filter(Boolean);
+
+export function serverReadClient() {
+    return createPublicClient({
+        chain: ARC_CHAIN,
+        transport: fallback(
+            READ_RPC_URLS.map((u) => http(u, { retryCount: 1, retryDelay: 250, timeout: 6_000 })),
+            { retryCount: 1, retryDelay: 200 },
+        ),
+    });
+}

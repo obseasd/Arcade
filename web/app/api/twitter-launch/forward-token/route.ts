@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { isAddress, parseEventLogs, parseAbiItem, type Address, type Hex } from "viem";
 
 import { ADDRESSES } from "@/lib/constants";
-import { serverPublicClient } from "@/lib/serverRpc";
+import { serverReadClient } from "@/lib/serverRpc";
 import { forwardTokenSide, previewTokenSideOwed } from "@/lib/twitterTokenForward";
 
 /**
@@ -46,7 +46,7 @@ export async function GET(req: NextRequest) {
         return NextResponse.json({ error: "invalid token" }, { status: 400 });
     }
 
-    const client = serverPublicClient();
+    const client = serverReadClient();
     let poolIdHex: string;
     try {
         poolIdHex = (await client.readContract({
@@ -87,7 +87,7 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: "invalid claimTxHash" }, { status: 400 });
     }
 
-    const client = serverPublicClient();
+    const client = serverReadClient();
     const escrow = ADDRESSES.twitterEscrow as Address;
 
     // Resolve the pool + verify the Claimed proof.

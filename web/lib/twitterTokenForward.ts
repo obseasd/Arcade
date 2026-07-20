@@ -1,7 +1,7 @@
 import { createWalletClient, http, erc20Abi, type Address, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 
-import { ARC_CHAIN, serverPublicClient } from "@/lib/serverRpc";
+import { ARC_CHAIN, serverPublicClient, serverReadClient } from "@/lib/serverRpc";
 import { getTokenFwd, advanceTokenFwdIf, getReplyLaunchByPool } from "@/lib/twitterLaunchPersistence";
 import { REPLY_SPLIT_BPS } from "@/lib/twitterLaunch";
 
@@ -69,7 +69,7 @@ async function computeOwed(
     const fwd0 = BigInt(cursors.slot0 || "0");
     const fwd1 = BigInt(cursors.slot1 || "0");
 
-    const client = serverPublicClient();
+    const client = serverReadClient();
     const balance = (await client.readContract({
         address: launchToken,
         abi: erc20Abi,

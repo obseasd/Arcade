@@ -53,7 +53,6 @@ export function ClankerV4TradePanel({ token, symbol, image, onTradeSuccess }: Pr
   const [slippageBps, setSlippageBps] = useState(300);
   const [tx, setTx] = useState<TxState>({ status: "idle" });
   const [estimatedOut, setEstimatedOut] = useState(0n);
-  const [quoting, setQuoting] = useState(false);
 
   // The pool's fee tier (10000/20000/30000 = 1/2/3%), set at launch.
   const feeQ = useReadContract({
@@ -118,7 +117,6 @@ export function ClankerV4TradePanel({ token, symbol, image, onTradeSuccess }: Pr
       setEstimatedOut(0n);
       return;
     }
-    setQuoting(true);
     publicClient
       .simulateContract({
         address: ADDRESSES.v4Quoter,
@@ -140,9 +138,6 @@ export function ClankerV4TradePanel({ token, symbol, image, onTradeSuccess }: Pr
       })
       .catch(() => {
         if (!cancelled) setEstimatedOut(0n);
-      })
-      .finally(() => {
-        if (!cancelled) setQuoting(false);
       });
     return () => {
       cancelled = true;
@@ -258,7 +253,7 @@ export function ClankerV4TradePanel({ token, symbol, image, onTradeSuccess }: Pr
 
       <div className="mt-3 rounded-xl border border-arc-border bg-arc-bg-elevated p-3 text-sm">
         <div className="flex justify-between text-arc-text-muted">
-          <span>You receive{quoting ? " (quoting…)" : ""}</span>
+          <span>You receive</span>
           <span className="flex items-center gap-1.5 tabular-nums text-arc-text">
             {side === "buy"
               ? formatToken(estimatedOut, LAUNCHPAD_TOKEN_DECIMALS, 6)
