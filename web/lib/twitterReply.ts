@@ -73,12 +73,19 @@ export async function postLaunchReply(
     token: string,
     name: string,
     ticker: string,
+    opHandle?: string,
 ): Promise<boolean> {
     const creds = writeCreds();
     if (!creds) return false; // write creds not configured -> skip silently
 
     const link = `${APP_ORIGIN}/launchpad/v4hook/${token}`;
-    const text = `${link}\n\n${name} (${ticker}) is live on Arc. Trade it live on Arcade`;
+    let text = `${link}\n\n${name} (${ticker}) is live on Arc. Trade it live on Arcade`;
+    // Reply-to-launch: tell the original poster they earn 50% + give them a
+    // slot-1 claim link (the only surface that reaches the OP's escrow share).
+    if (opHandle) {
+        const h = opHandle.replace(/^@/, "");
+        text += `\n\n@${h} you earn 50% of the creator fees — claim: ${APP_ORIGIN}/claim?token=${token}&slot=1&handle=${h}`;
+    }
     const url = "https://api.twitter.com/2/tweets";
 
     try {

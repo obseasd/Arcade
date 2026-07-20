@@ -367,7 +367,7 @@ export async function POST(req: NextRequest) {
             // Announce the launch: reply to the tweet as the bot with the Arcade
             // link. Best-effort (needs the OAuth 1.0a write creds); never blocks.
             if (token) {
-                await postLaunchReply(m.tweetId, token, cmd.name, cmd.ticker).catch(() => false);
+                await postLaunchReply(m.tweetId, token, cmd.name, cmd.ticker, m.opUser?.username).catch(() => false);
             }
         } catch (err) {
             summary.failed++;

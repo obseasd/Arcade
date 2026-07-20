@@ -438,7 +438,13 @@ function FeesRecipientPanel({
     const isEstimate = poolFee === 0 && !(exactFeesUsd != null && exactFeesUsd > estimated);
     // The recipient (creator) gets 80% of the fee; treasury takes 20% (the V4
     // post-graduation split). "Fees generated" shows the CREATOR portion only.
-    const creatorFeesUsd = feesUsd * 0.8;
+    // The DISPLAYED recipient's share of the 80% creator cut. creator2Bps=10000
+    // ("Another wallet") => recipient IS creator2, gets the full 80%. A partial
+    // creator2Bps (reply-split 5000) => the shown launcher only gets the
+    // remainder (e.g. 40%). Solo => full 80%.
+    const c2bps = fo ? Number(fo.creator2Bps) || 0 : 0;
+    const recipientShare = c2bps >= 10_000 ? 1 : (10_000 - c2bps) / 10_000;
+    const creatorFeesUsd = feesUsd * 0.8 * recipientShare;
     const recipientAddr = fo
         ? fo.creator2 !== zeroAddress && Number(fo.creator2Bps) >= 10_000
             ? fo.creator2
@@ -604,8 +610,10 @@ function TradeCard({
 
     const estimateOut = useMemo(() => {
         if (amountBn === 0n) return 0n;
-        const virtUsdc = 5_000n * 10n ** BigInt(USDC_DECIMALS);
-        const virtToken = 1_000_000_000n * 10n ** BigInt(LAUNCHPAD_TOKEN_DECIMALS);
+        // Must match ArcadeV4Curve VIRTUAL_USDC_RESERVE / VIRTUAL_TOKEN_RESERVE
+        // (5_800e6 / 1_135_000_000e18) or the preview diverges from the on-chain out.
+        const virtUsdc = 5_800n * 10n ** BigInt(USDC_DECIMALS);
+        const virtToken = 1_135_000_000n * 10n ** BigInt(LAUNCHPAD_TOKEN_DECIMALS);
         const currentUsdc = virtUsdc + realUsdcReserve;
         const currentTokens = virtToken - tokensSold;
         const K = virtUsdc * virtToken;
@@ -763,7 +771,7 @@ function TradeCard({
             </button>
 
             <div className="mt-3 text-center text-[10px] text-arc-text-faint">
-                Direct curve trade via ArcadeHook. 1% fee, 80% creator / 20% treasury.
+                Direct curve trade via ArcadeHook. 1% fee, 50% creator / 50% platform.
             </div>
         </div>
     );

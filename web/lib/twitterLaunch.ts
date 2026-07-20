@@ -36,7 +36,9 @@ export function parseLaunchCommand(text: string): LaunchCommand | null {
     if (!text) return null;
     const lower = text.toLowerCase();
     if (!lower.includes(`@${botHandle()}`)) return null; // must mention the bot
-    if (!/\blaunch\b/i.test(text)) return null; // must contain the verb
+    // Match the pre-filter's verb set so a Claude outage (regex fallback) doesn't
+    // silently drop "deploy/create/mint $X" tweets.
+    if (!/\b(launch|deploy|create|mint)\b/i.test(text)) return null;
 
     const tickerMatch = text.match(/\$([A-Za-z][A-Za-z0-9]{0,11})\b/);
     if (!tickerMatch || tickerMatch.index === undefined) return null;
