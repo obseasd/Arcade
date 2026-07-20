@@ -32,6 +32,15 @@ const CLAIMED_EVENT = parseAbiItem(
     "event Claimed(uint256 indexed positionId, uint256 indexed slotIndex, address indexed recipient, address token, uint256 amount)",
 );
 
+/** Reject after `ms` so a hung RPC/DB call degrades gracefully instead of riding
+ *  the request to the platform's 30s FUNCTION_INVOCATION_TIMEOUT (a 504). */
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+    return Promise.race([
+        p,
+        new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`timeout:${label}`)), ms)),
+    ]);
+}
+
 /**
  * Read-only preview of the launch-token amount still owed to (token, slotIndex).
  * No proof needed (nothing is moved); the claim page uses it to show "+ N TICKER"
@@ -47,27 +56,36 @@ export async function GET(req: NextRequest) {
     }
 
     const probe = url.searchParams.get("probe") === "1";
-    const t0 = probe ? performance.now() : 0;
+    const t0 = performance.now();
 
     const client = serverReadClient();
     let poolIdHex: string;
     try {
-        poolIdHex = (await client.readContract({
-            address: ADDRESSES.arcadeHook as Address,
-            abi: HOOK_POOLID_ABI,
-            functionName: "poolIdOf",
-            args: [token as Address],
-        })) as string;
+        poolIdHex = (await withTimeout(
+            client.readContract({
+                address: ADDRESSES.arcadeHook as Address,
+                abi: HOOK_POOLID_ABI,
+                functionName: "poolIdOf",
+                args: [token as Address],
+            }),
+            8_000,
+            "poolIdOf",
+        )) as string;
     } catch (e) {
-        if (probe) return NextResponse.json({ owedRaw: "0", step: "poolIdOf", err: String(e).slice(0, 120) });
-        return NextResponse.json({ owedRaw: "0" });
+        // Timeout or read error: degrade to 0 (never let the function hang to 504).
+        return NextResponse.json({ owedRaw: "0", ...(probe ? { step: "poolIdOf", err: String(e).slice(0, 120) } : {}) });
     }
-    const tPool = probe ? performance.now() : 0;
+    const tPool = performance.now();
     if (!poolIdHex || /^0x0*$/.test(poolIdHex)) {
-        return NextResponse.json({ owedRaw: "0", ...(probe ? { poolMs: tPool - t0, note: "zero pool" } : {}) });
+        return NextResponse.json({ owedRaw: "0", ...(probe ? { poolMs: Math.round(tPool - t0), note: "zero pool" } : {}) });
     }
 
-    const owedRaw = await previewTokenSideOwed(poolIdHex, slotIndex, token as Address);
+    let owedRaw = "0";
+    try {
+        owedRaw = await withTimeout(previewTokenSideOwed(poolIdHex, slotIndex, token as Address), 12_000, "preview");
+    } catch (e) {
+        return NextResponse.json({ owedRaw: "0", ...(probe ? { step: "preview", err: String(e).slice(0, 120), poolMs: Math.round(tPool - t0) } : {}) });
+    }
     if (probe) {
         return NextResponse.json({ owedRaw, poolMs: Math.round(tPool - t0), previewMs: Math.round(performance.now() - tPool) });
     }
