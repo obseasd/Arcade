@@ -1,9 +1,9 @@
-import { createWalletClient, http, parseAbiItem, erc20Abi, type Address, type Hex } from "viem";
+import { createWalletClient, http, erc20Abi, type Address, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 
-import { ARC_CHAIN, serverPublicClient, serverLogsClient } from "@/lib/serverRpc";
-import { ADDRESSES } from "@/lib/constants";
-import { getTokenFwd, advanceTokenFwdIf } from "@/lib/twitterLaunchPersistence";
+import { ARC_CHAIN, serverPublicClient } from "@/lib/serverRpc";
+import { getTokenFwd, advanceTokenFwdIf, getReplyLaunchByPool } from "@/lib/twitterLaunchPersistence";
+import { REPLY_SPLIT_BPS } from "@/lib/twitterLaunch";
 
 /**
  * Token-side fee forwarding. CLANKER fees accrue in BOTH USDC (routed to the
@@ -13,81 +13,89 @@ import { getTokenFwd, advanceTokenFwdIf } from "@/lib/twitterLaunchPersistence";
  * side to the claimant AFTER they've proven ownership (their on-chain USDC
  * claim, verified by the endpoint).
  *
- * Amount owed per slot = Σ RoyaltyPaid(poolId, launchToken).creatorAmount:
- *  - solo launch: slot 0 (launcher) = the full 80% token creator cut.
- *  - reply launch: slot 0 (launcher) = 40% (creatorAmount after the 50/50
- *    creator2 split) and slot 1 (OP) = the creator2 40%, which for 50/50 equals
- *    the same creatorAmount. Both cursors are tracked separately in the DB.
+ * HOW WE KNOW THE AMOUNT OWED, WITHOUT SCANNING LOGS: forwarding TRANSFERS the
+ * token out of the operator, so the operator's remaining balance of a given
+ * launch token IS the un-forwarded token-side fee for that token (the operator
+ * gets no CLANKER allocation and never trades, so it holds nothing else of it;
+ * the treasury 20% goes to the Safe, the USDC side to the escrow). Total ever
+ * accrued = balance + already-forwarded. We split that by the fixed creator2
+ * ratio into the two slots and subtract each slot's forwarded cursor.
+ *
+ *   solo launch (creator2Bps 0): slot 0 (launcher) owns 100% of the token cut.
+ *   reply launch (creator2Bps 5000, both cuts land on the operator): slots 0/1
+ *     each own bps-proportional halves; owed(slot) = slotTotal - slotForwarded.
+ *
+ * This is O(1) reads (one balanceOf), so it never hits the Arc RPC's 10k-block
+ * eth_getLogs cap that made the old log-scan approach time the function out.
  *
  * Idempotent: reserve-then-execute compare-and-set on the DB cursor BEFORE the
  * transfer (rollback on failure), identical to twitterReplyReconcile.
  */
-
-const HOOK_DEPLOY_BLOCK = 52470498n; // deployments.json arcadeHookDeployBlock; BUMP on hook redeploy
-
-const ROYALTY_PAID = parseAbiItem(
-    "event RoyaltyPaid(bytes32 indexed poolId, address indexed creator, uint256 creatorAmount, uint256 treasuryAmount, address currency)",
-);
 
 export type ForwardResult =
     | { ok: true; forwarded: false; reason: string }
     | { ok: true; forwarded: true; amountRaw: string; tx: Hex }
     | { ok: false; error: string };
 
-// Arc's RPCs cap eth_getLogs at a 10_000-block range (and arc.network also rate-
-// limits), so a single deploy-block->latest query silently fails and the caller
-// would read 0 owed. We page the range in <=CHUNK-block windows, a few in
-// parallel, and sum. CHUNK stays under the 10k cap with margin for inclusive
-// bounds.
-const LOG_CHUNK = 9_000n;
-const CHUNK_CONCURRENCY = 12;
+/** The operator EOA that holds token-side fees (createLaunch msg.sender). Derived
+ *  from the operator key; null if the key is unset/malformed. */
+function operatorAddress(): Address | null {
+    const key = process.env.COMPOUNDER_OPERATOR_PRIVATE_KEY as Hex | undefined;
+    if (!key || !/^0x[0-9a-fA-F]{64}$/.test(key)) return null;
+    return privateKeyToAccount(key).address;
+}
 
-/** Accrued token-side creator fee for a pool = Σ RoyaltyPaid.creatorAmount on
- *  the launch-token leg. Shared by the preview and the executing path. Paginated
- *  so it works on the 10k-block-limited Arc RPCs, over the fast logs client. */
-async function accruedTokenSide(poolIdHex: string, launchToken: Address): Promise<bigint> {
-    const client = serverLogsClient();
-    const latest = await client.getBlockNumber();
-
-    // Build the [from,to] windows covering deploy-block..latest.
-    const windows: Array<{ from: bigint; to: bigint }> = [];
-    for (let from = HOOK_DEPLOY_BLOCK; from <= latest; from += LOG_CHUNK + 1n) {
-        const to = from + LOG_CHUNK > latest ? latest : from + LOG_CHUNK;
-        windows.push({ from, to });
-    }
-
-    const want = launchToken.toLowerCase();
-    let accrued = 0n;
-    // Run the windows in bounded-concurrency batches.
-    for (let i = 0; i < windows.length; i += CHUNK_CONCURRENCY) {
-        const batch = windows.slice(i, i + CHUNK_CONCURRENCY);
-        const results = await Promise.all(
-            batch.map((w) =>
-                client.getLogs({
-                    address: ADDRESSES.arcadeHook as Address,
-                    event: ROYALTY_PAID,
-                    args: { poolId: poolIdHex as Hex },
-                    fromBlock: w.from,
-                    toBlock: w.to,
-                }),
-            ),
-        );
-        for (const logs of results) {
-            for (const l of logs) {
-                const currency = (l.args.currency ?? "0x") as string;
-                if (currency.toLowerCase() !== want) continue; // USDC leg
-                accrued += (l.args.creatorAmount ?? 0n) as bigint;
-            }
-        }
-    }
-    return accrued;
+/** creator2 split (bps) for a pool: REPLY_SPLIT_BPS for a reply-launch, else 0. */
+async function creator2BpsFor(poolIdHex: string): Promise<bigint> {
+    const reply = await getReplyLaunchByPool(poolIdHex);
+    return reply ? BigInt(REPLY_SPLIT_BPS) : 0n;
 }
 
 /**
- * Read-only preview of the launch-token amount still owed to (poolId, slotIndex),
- * i.e. accrued token-side creator fee minus what was already forwarded. Does NOT
- * reserve or transfer, so it is safe to call before the user claims (to show the
- * "+ N TICKER" they will receive). Returns "0" on any error / unknown pool.
+ * Compute the launch-token amount owed to (poolId, slotIndex) from the operator's
+ * live balance and the per-slot forwarded cursors. Returns { owed, already } so
+ * the executing path can reserve the exact delta. Owed is clamped to >= 0.
+ */
+async function computeOwed(
+    poolIdHex: string,
+    slotIndex: 0 | 1,
+    launchToken: Address,
+): Promise<{ owed: bigint; already: bigint } | null> {
+    const operator = operatorAddress();
+    if (!operator) return null;
+    const cursors = await getTokenFwd(poolIdHex);
+    if (!cursors) return null;
+
+    const fwd0 = BigInt(cursors.slot0 || "0");
+    const fwd1 = BigInt(cursors.slot1 || "0");
+
+    const client = serverPublicClient();
+    const balance = (await client.readContract({
+        address: launchToken,
+        abi: erc20Abi,
+        functionName: "balanceOf",
+        args: [operator],
+    })) as bigint;
+
+    // Everything ever accrued to the operator for this token = still-held +
+    // already forwarded out.
+    const totalAccrued = balance + fwd0 + fwd1;
+    const bps = await creator2BpsFor(poolIdHex);
+    const slotTotal =
+        slotIndex === 0 ? (totalAccrued * (10_000n - bps)) / 10_000n : (totalAccrued * bps) / 10_000n;
+    const already = slotIndex === 0 ? fwd0 : fwd1;
+    let owed = slotTotal - already;
+    if (owed < 0n) owed = 0n;
+    // Never try to move more than is physically held (guards a slot-race / stray
+    // deposit); the transfer would revert anyway.
+    if (owed > balance) owed = balance;
+    return { owed, already };
+}
+
+/**
+ * Read-only preview of the launch-token amount still owed to (poolId, slotIndex).
+ * Does NOT reserve or transfer, so it is safe to call before the user claims (to
+ * show the "+ N TICKER" they will receive). Returns "0" on any error/unknown pool.
  */
 export async function previewTokenSideOwed(
     poolIdHex: string,
@@ -95,12 +103,8 @@ export async function previewTokenSideOwed(
     launchToken: Address,
 ): Promise<string> {
     try {
-        const cursors = await getTokenFwd(poolIdHex);
-        if (!cursors) return "0";
-        const accrued = await accruedTokenSide(poolIdHex, launchToken);
-        const already = BigInt((slotIndex === 0 ? cursors.slot0 : cursors.slot1) || "0");
-        const owed = accrued - already;
-        return owed > 0n ? owed.toString() : "0";
+        const r = await computeOwed(poolIdHex, slotIndex, launchToken);
+        return r && r.owed > 0n ? r.owed.toString() : "0";
     } catch {
         return "0";
     }
@@ -121,28 +125,22 @@ export async function forwardTokenSide(
         return { ok: false, error: "operator key missing/malformed" };
     }
 
-    const cursors = await getTokenFwd(poolIdHex);
-    if (!cursors) return { ok: true, forwarded: false, reason: "unknown pool" };
-
-    const client = serverPublicClient();
-
-    // Accrued token-side creator fee = Σ RoyaltyPaid(poolId).creatorAmount where
-    // currency == the launch token (the token-denominated leg of CLANKER fees).
-    let accrued: bigint;
+    let computed: { owed: bigint; already: bigint } | null;
     try {
-        accrued = await accruedTokenSide(poolIdHex, launchToken);
+        computed = await computeOwed(poolIdHex, slotIndex, launchToken);
     } catch (e) {
-        return { ok: false, error: `getLogs failed: ${e instanceof Error ? e.message : String(e)}` };
+        return { ok: false, error: `balance read failed: ${e instanceof Error ? e.message : String(e)}` };
     }
+    if (!computed) return { ok: true, forwarded: false, reason: "unknown pool / operator" };
 
-    const already = BigInt((slotIndex === 0 ? cursors.slot0 : cursors.slot1) || "0");
-    const owed = accrued - already;
+    const { owed, already } = computed;
     if (owed <= 0n) return { ok: true, forwarded: false, reason: "nothing new to forward" };
 
     // Reserve the delta atomically BEFORE the transfer (idempotency + concurrency).
     const reserved = await advanceTokenFwdIf(poolIdHex, slotIndex, already.toString(), (already + owed).toString());
     if (!reserved) return { ok: true, forwarded: false, reason: "already forwarded / concurrent run" };
 
+    const client = serverPublicClient();
     const account = privateKeyToAccount(operatorKey);
     const walletClient = createWalletClient({ account, chain: ARC_CHAIN, transport: http() });
     let tx: Hex;
