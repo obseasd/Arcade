@@ -33,13 +33,20 @@ import { reconcileReplySlot } from "@/lib/twitterReplyReconcile";
  * authorize re-checks amount <= balance and recipient == msg.sender on-chain).
  */
 
-const HOOK_POOLID_ABI = [
+const HOOK_ABI = [
     {
         type: "function",
         name: "poolIdOf",
         stateMutability: "view",
         inputs: [{ name: "", type: "address" }],
         outputs: [{ name: "", type: "bytes32" }],
+    },
+    {
+        type: "function",
+        name: "twitterEscrow",
+        stateMutability: "view",
+        inputs: [],
+        outputs: [{ name: "", type: "address" }],
     },
 ] as const;
 
@@ -50,6 +57,7 @@ export interface V4ClaimPayload {
     slotIndex: number;
     recipient: string;
     escrowToken: string; // USDC (the V4 escrow is single-token)
+    escrowAddress: string; // resolved from the hook (env-independent)
     amount: string;
     deadline: string;
     nonce: string;
@@ -94,9 +102,8 @@ export async function buildV4ClaimPayload(args: {
 }): Promise<V4ClaimResult> {
     const { token, slotIndex, recipient, oauthHandle, backendPk } = args;
     const hook = ADDRESSES.arcadeHook as Address;
-    const escrow = ADDRESSES.twitterEscrow as Address;
     const usdc = ADDRESSES.usdc as Address;
-    if (!hook || hook === zeroAddress || !escrow || escrow === zeroAddress) {
+    if (!hook || hook === zeroAddress) {
         return { kind: "not-v4" };
     }
     // V4 only exposes slots 0 (launcher) and 1 (reply-target).
@@ -109,7 +116,7 @@ export async function buildV4ClaimPayload(args: {
     try {
         poolId = (await client.readContract({
             address: hook,
-            abi: HOOK_POOLID_ABI,
+            abi: HOOK_ABI,
             functionName: "poolIdOf",
             args: [token],
         })) as string;
@@ -120,6 +127,22 @@ export async function buildV4ClaimPayload(args: {
     if (!poolId || /^0x0*$/.test(poolId)) return { kind: "not-v4" };
 
     const positionId = BigInt(poolId);
+
+    // The escrow is read FROM THE HOOK (not ADDRESSES.twitterEscrow, which has no
+    // deployments fallback and breaks when NEXT_PUBLIC_TWITTER_ESCROW_ADDRESS is
+    // unset/wrong). This is the same escrow the hook credited, guaranteed.
+    let escrow: Address;
+    try {
+        escrow = (await client.readContract({
+            address: hook,
+            abi: HOOK_ABI,
+            functionName: "twitterEscrow",
+        })) as Address;
+    } catch (e) {
+        console.error("[v4claim] hook.twitterEscrow read failed:", e instanceof Error ? e.message : e);
+        return { kind: "error", error: "v4_poolid_read_failed" };
+    }
+    if (!escrow || escrow === zeroAddress) return { kind: "error", error: "slot_not_attributed" };
 
     // 2) Handle attribution. slot 0 (launcher) is on-chain via the subgraph;
     //    slot 1 (reply-target) is our DB.
@@ -202,6 +225,7 @@ export async function buildV4ClaimPayload(args: {
             slotIndex,
             recipient,
             escrowToken: usdc,
+            escrowAddress: escrow,
             amount: amount.toString(),
             deadline: deadline.toString(),
             nonce,

@@ -60,7 +60,7 @@ export const ADDRESSES = {
    *  mainnet so the picker doesn't show a phantom ETH chip. */
   seedEth: safeAddress(process.env.NEXT_PUBLIC_SEED_ETH_ADDRESS),
   /** ArcadeTwitterEscrow: holds Clanker LP fees attributed to a Twitter @handle. */
-  twitterEscrow: safeAddress(process.env.NEXT_PUBLIC_TWITTER_ESCROW_ADDRESS),
+  twitterEscrow: safeAddress(process.env.NEXT_PUBLIC_TWITTER_ESCROW_ADDRESS ?? DEPLOYMENTS.twitterEscrow),
   /** ArcadeAutoCompounder: V3 LP custody vault that auto-collects fees and
    *  either pushes them to the depositor wallet (RECEIVE mode) or
    *  re-deposits them into the position (COMPOUND mode). Optional — the

@@ -16,6 +16,7 @@ export interface V4ClaimCardPayload {
     slotIndex: number;
     recipient: Address;
     escrowToken: Address;
+    escrowAddress: Address;
     amount: string;
     deadline: string;
     nonce: `0x${string}`;
@@ -40,7 +41,9 @@ export function V4ClaimCard({
     const { isConnected } = useAccount();
     const publicClient = usePublicClient();
     const { writeContractAsync } = useWriteContract();
-    const escrow = ADDRESSES.twitterEscrow as Address;
+    // Escrow comes from the payload (resolved from the hook on the server), NOT
+    // ADDRESSES.twitterEscrow, which breaks when the env is unset/wrong.
+    const escrow = payload.escrowAddress;
 
     const [busy, setBusy] = useState(false);
     const [msg, setMsg] = useState<string | null>(null);
