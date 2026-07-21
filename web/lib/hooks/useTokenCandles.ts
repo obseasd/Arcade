@@ -115,11 +115,12 @@ export function useTokenCandles(args: {
     refetchInterval: source === "v4" ? 2_000 : undefined,
     queryFn: async () => {
       if (!publicClient || !token || mode === undefined) return { trades: [] };
-      const result = await fetchTrades(publicClient, token, mode, pool, source);
-      // Merge in any WS pushes that landed in the cache while the chunked
-      // scan was running. Dedup by (time, price, volume) like appendTrades.
+      // If we already have a cached history, this is a poll: fetch only the most
+      // recent page and merge, instead of re-paginating the full window every 2s.
       const prior = queryClient.getQueryData<FetchResult | undefined>(tradesKey);
       const priorTrades = prior?.trades ?? [];
+      const result = await fetchTrades(publicClient, token, mode, pool, source, priorTrades.length > 0 ? 1 : undefined);
+      // Merge in any WS pushes / prior history. Dedup by (time, price, volume).
       if (priorTrades.length === 0) return result;
       const merged = [...result.trades, ...priorTrades]
         .filter(
@@ -325,12 +326,16 @@ async function fetchTrades(
   mode: number,
   pool?: Address,
   source?: string,
+  maxPages?: number,
 ): Promise<FetchResult> {
   // Prefer the Goldsky subgraph for the historical base when configured. It
   // returns the same Trade shape with complete history + real timestamps; the
   // caller still merges live WS pushes and bucketizes. Any failure falls
   // through to the client RPC scan below so the chart is never blank.
-  const indexed = await fetchTradesFromGoldsky(GOLDSKY_URL, token, mode, pool, { sourceOverride: source });
+  // maxPages: full history on the first load; a single recent page on the 2s
+  // poll (the queryFn merges it into the cached history), so a poll costs ~1
+  // subgraph page instead of re-paginating the whole ~10k-trade window.
+  const indexed = await fetchTradesFromGoldsky(GOLDSKY_URL, token, mode, pool, { sourceOverride: source, maxPages });
   if (indexed && indexed.length > 0) {
     return { trades: indexed };
   }
