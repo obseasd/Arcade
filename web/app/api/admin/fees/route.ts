@@ -1,5 +1,5 @@
-import { createPublicClient, http, parseAbiItem, type Address } from "viem";
-import { arcTestnet } from "@/lib/chains";
+import { parseAbiItem, type Address } from "viem";
+import { serverReadClient } from "@/lib/serverRpc";
 import { bad, ok } from "@/lib/agent/http";
 import deployments from "../../../../public/deployments.json";
 
@@ -22,12 +22,11 @@ export const dynamic = "force-dynamic";
 // give it headroom over the platform default.
 export const maxDuration = 60;
 
-// Block window per eth_getLogs call. Arc public RPC empirically returns
-// silently-empty windows past ~10k blocks under heavier filters, so we keep
-// each call well inside the cap. 45k is a single topic-filtered Transfer
-// scan (one address, one indexed `to`), which is lighter than the 50-address
-// stats scan, so it stays inside the range cap comfortably.
-const BLOCK_WINDOW = 45_000n;
+// Block window per eth_getLogs call. Arc RPCs HARD-CAP getLogs at 10_000 blocks
+// (arc.network returns error -32614, thirdweb silently empties), so 9k stays
+// safely inside the cap. (An earlier 45k value silently over-ranged and every
+// chunk failed -> truncated results.)
+const BLOCK_WINDOW = 9_000n;
 
 // Hard cap on total blocks scanned per request. ~500k blocks at Arc's block
 // time covers roughly the last few days of activity, enough to surface the
@@ -139,13 +138,9 @@ export async function GET() {
         return { reason: "Direct transfer / trade proceeds (not a protocol fee)", isFee: false };
     };
 
-    const client = createPublicClient({
-        chain: arcTestnet,
-        transport: http(
-            process.env.NEXT_PUBLIC_ARC_RPC_URL || "https://rpc.testnet.arc.network",
-            { timeout: 15_000 },
-        ),
-    });
+    // Resilient thirdweb-first fallback client (arc.network rate-limits Vercel's
+    // shared IPs, which was causing chunk failures / truncated results).
+    const client = serverReadClient();
 
     let head: bigint;
     try {
