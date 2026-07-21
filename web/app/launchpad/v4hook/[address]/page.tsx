@@ -41,7 +41,6 @@ import { useTokenImage, useTokenMetadata } from "@/lib/hooks/useTokenImage";
 import { pushToast } from "@/lib/toast";
 import { ClankerV4TradePanel } from "@/components/launchpad/ClankerV4TradePanel";
 import { TokenActivityPanel } from "@/components/launchpad/TokenActivityPanel";
-import { Comments } from "@/components/launchpad/Comments";
 import { TokenIcon } from "@/components/ui/TokenIcon";
 import { Tooltip } from "@/components/ui/Tooltip";
 import { formatAddress, formatToken, formatUSDC } from "@/lib/utils";
@@ -321,8 +320,12 @@ function Inner() {
                         source="v4"
                     />
 
-                    {/* Comments */}
-                    <Comments token={token} />
+                    {/* Comments intentionally omitted for V4-hook tokens: the
+                        on-chain guestbook lives on the legacy ArcadeLaunchpad and
+                        gates postComment on tokens[tokenAddr] registration, which
+                        the hook never populates -> every post reverts
+                        UnknownToken(). Restore with an off-chain store or a
+                        hook-side comment registry. */}
                 </div>
 
                 {/* Right: trade panel + fees/recipient (order-first on mobile) */}
@@ -687,6 +690,12 @@ function TradeCard({
         }
         setSubmitting(true);
         try {
+            // Slippage floor: derive minOut from the on-chain-matching preview and
+            // allow a 3% band for reserve drift between quote and execution. The
+            // hook enforces this via revert Slippage(); 0n (the old MVP value) left
+            // curve trades fully unprotected against front-running.
+            const CURVE_SLIPPAGE_BPS = 300n;
+            const minOut = estimateOut > 0n ? (estimateOut * (10_000n - CURVE_SLIPPAGE_BPS)) / 10_000n : 0n;
             if (tab === "buy") {
                 if (amountBn > usdcBalance) {
                     pushToast({ kind: "error", title: "Insufficient USDC" });
@@ -697,7 +706,7 @@ function TradeCard({
                     address: ADDRESSES.arcadeHook,
                     abi: ARCADE_HOOK_ABI,
                     functionName: "buy",
-                    args: [token, amountBn, 0n],
+                    args: [token, amountBn, minOut],
                 });
                 pushToast({ kind: "info", title: `Buy submitted` });
             } else {
@@ -710,7 +719,7 @@ function TradeCard({
                     address: ADDRESSES.arcadeHook,
                     abi: ARCADE_HOOK_ABI,
                     functionName: "sell",
-                    args: [token, amountBn, 0n],
+                    args: [token, amountBn, minOut],
                 });
                 pushToast({ kind: "info", title: `Sell submitted` });
             }
