@@ -2,6 +2,13 @@ import { Address, createPublicClient, decodeEventLog, http, keccak256, parseAbiI
 import { ADDRESSES } from "./constants";
 import { getLaunchpadAddressList } from "./launchpadGenerations";
 
+/** Dev-only scan telemetry. The stats scan logs per-run counters; keep them off
+ *  prod logs (Vercel log-tier concern, same as bridge audit M-04). The actionable
+ *  "dropped N events" lines stay as console.warn so a decode/outlier regression is
+ *  still visible in prod. */
+const devLog: (...args: unknown[]) => void =
+    process.env.NODE_ENV === "development" ? (...args) => console.log(...args) : () => {};
+
 /**
  * Snapshot of Arcade activity metrics surfaced on /stats.
  *
@@ -981,13 +988,13 @@ async function sumV3SwapVolume(
         }),
     );
     const allLogs = allWindows.flat();
-    console.log(`[stats v3] scanned ${allLogs.length} Swap events`);
+    devLog(`[stats v3] scanned ${allLogs.length} Swap events`);
     if (allLogs.length === 0) return { volume: 0n, complete };
 
     const poolAddrs = Array.from(
         new Set(allLogs.map((l) => l.address.toLowerCase())),
     );
-    console.log(`[stats v3] ${poolAddrs.length} unique pools`);
+    devLog(`[stats v3] ${poolAddrs.length} unique pools`);
 
     // 2. For every pool seen, read token0 + token1 via multicall3.
     //    Unbatched readContract fan-out blew past the cron's 60s
@@ -1048,7 +1055,7 @@ async function sumV3SwapVolume(
             else if (t1 === wusdc) usdcPools.set(slice[j], { side: 1, divisor: WUSDC_SCALE_DIVISOR });
         }
     }
-    console.log(`[stats v3] ${usdcPools.size} USDC-touching pools`);
+    devLog(`[stats v3] ${usdcPools.size} USDC-touching pools`);
     if (usdcPools.size === 0) return { volume: 0n, complete };
 
     // 3. Sum |USDC side amount| across the swap logs we already pulled.
@@ -1099,7 +1106,7 @@ async function sumV3SwapVolume(
         }
     }
     if (droppedCount > 0) {
-        console.log(`[stats v3] dropped ${droppedCount} events (decode mismatch or >$100k outlier)`);
+        console.warn(`[stats v3] dropped ${droppedCount} events (decode mismatch or >$100k outlier)`);
     }
     return { volume: total, complete };
 }
@@ -1161,13 +1168,13 @@ async function sumV2SwapVolume(
         }),
     );
     const allLogs = allWindows.flat();
-    console.log(`[stats v2] scanned ${allLogs.length} Swap events`);
+    devLog(`[stats v2] scanned ${allLogs.length} Swap events`);
     if (allLogs.length === 0) return { volume: 0n, complete };
 
     const pairAddrs = Array.from(
         new Set(allLogs.map((l) => l.address.toLowerCase())),
     );
-    console.log(`[stats v2] ${pairAddrs.length} unique pairs`);
+    devLog(`[stats v2] ${pairAddrs.length} unique pairs`);
 
     const CHUNK = 500;
     const usdcPairs = new Map<string, UsdcSideMeta>();
@@ -1221,7 +1228,7 @@ async function sumV2SwapVolume(
             else if (t1 === wusdc) usdcPairs.set(slice[j], { side: 1, divisor: WUSDC_SCALE_DIVISOR });
         }
     }
-    console.log(`[stats v2] ${usdcPairs.size} USDC-touching pairs`);
+    devLog(`[stats v2] ${usdcPairs.size} USDC-touching pairs`);
     if (usdcPairs.size === 0) return { volume: 0n, complete };
 
     let total = 0n;
@@ -1265,7 +1272,7 @@ async function sumV2SwapVolume(
         }
     }
     if (droppedCount > 0) {
-        console.log(`[stats v2] dropped ${droppedCount} events (decode mismatch or >$100k outlier)`);
+        console.warn(`[stats v2] dropped ${droppedCount} events (decode mismatch or >$100k outlier)`);
     }
     return { volume: total, complete };
 }
