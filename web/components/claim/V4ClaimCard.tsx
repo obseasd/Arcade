@@ -9,6 +9,8 @@ import { ADDRESSES, USDC_DECIMALS } from "@/lib/constants";
 import { TWITTER_ESCROW_V4_ABI } from "@/lib/abis/twitterEscrowV4";
 import { pushToast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
+import { TokenIcon } from "@/components/ui/TokenIcon";
+import { useTokenImage } from "@/lib/hooks/useTokenImage";
 
 /** Permissionless harvest: flush a CLANKER launch's pool LP fees to the escrow. */
 const HOOK_COLLECT_ABI = [
@@ -92,6 +94,7 @@ export function V4ClaimCard({
     const timelock = Number((tlQ.data as bigint | undefined) ?? 0n);
     const symbolQ = useReadContract({ address: payload.token, abi: erc20Abi, functionName: "symbol" });
     const tokenSymbol = (symbolQ.data as string | undefined) ?? "tokens";
+    const { image: tokenImage } = useTokenImage(payload.token);
 
     // Preview the launch-token side that will be forwarded on claim (CLANKER fees
     // have a token leg the escrow doesn't hold). Read-only, shown next to the USDC.
@@ -256,15 +259,19 @@ export function V4ClaimCard({
                 <div className="text-xs uppercase tracking-wider text-arc-text-muted">
                     Claim creator fees
                 </div>
-                <div className="mt-2 text-3xl font-semibold tabular-nums">
-                    ${Number(formatUnits(liveBal, USDC_DECIMALS)).toLocaleString(undefined, { maximumFractionDigits: 2 })}
-                    <span className="text-arc-text-muted"> USDC</span>
+                <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-3xl font-semibold tabular-nums">
+                    <span>
+                        ${Number(formatUnits(liveBal, USDC_DECIMALS)).toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                        <span className="text-arc-text-muted"> USDC</span>
+                    </span>
+                    {tokenOwed != null && tokenOwed > 0 && (
+                        <span className="inline-flex items-center gap-2 text-arc-text">
+                            <TokenIcon symbol={tokenSymbol} image={tokenImage} size={28} />
+                            {tokenOwed.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                            <span className="text-arc-text-muted">{tokenSymbol}</span>
+                        </span>
+                    )}
                 </div>
-                {tokenOwed != null && tokenOwed > 0 && (
-                    <div className="mt-1 text-base font-medium tabular-nums text-arc-cta-hover">
-                        + {tokenOwed.toLocaleString(undefined, { maximumFractionDigits: 2 })} {tokenSymbol}
-                    </div>
-                )}
                 <div className="mt-1 text-sm text-arc-text-muted">
                     Verified as <span className="text-arc-text">@{payload.handle}</span>
                     {payload.slotIndex === 1 ? " · reply-to-launch share" : ""}
