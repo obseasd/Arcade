@@ -115,7 +115,7 @@ export async function fetchTradesFromGoldsky(
 }
 
 /** (blockTime, blockNumber, logIndex) ascending = true on-chain order (matches
- *  the subgraph/Ponder ordering); strips the sort-only fields for bucketize. */
+ *  the subgraph ordering); strips the sort-only fields for bucketize. */
 function finalize(rows: SortRow[]): GoldskyTrade[] {
     rows.sort((a, b) => a.time - b.time || a._bn - b._bn || a._li - b._li);
     return rows.map((r) => ({

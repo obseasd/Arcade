@@ -14,7 +14,7 @@ import deployments from "../../../../public/deployments.json";
  *
  * Arc RPC caps getLogs block ranges, so we scan only the most recent window
  * in safe chunks and surface a partial result rather than 500ing if a chunk
- * fails. Full all-time history needs the Ponder indexer (roadmap item).
+ * fails. Full all-time history is better served by the Goldsky subgraph.
  */
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";

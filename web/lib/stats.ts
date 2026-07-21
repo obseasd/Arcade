@@ -17,9 +17,8 @@ const devLog: (...args: unknown[]) => void =
  * documented in our running-quirks log). Cached for 5 minutes via Next.js
  * fetch revalidation. No external indexer or paid service.
  *
- * Once the Ponder indexer lands (post-mainnet or post-grant), this module
- * swaps its scan strategy for a GraphQL query and the consumers stay
- * unchanged.
+ * Migrating this module to the Goldsky subgraph (already live for charts/stats)
+ * would swap its scan strategy for a GraphQL query with the consumers unchanged.
  */
 export interface StatsSnapshot {
     /** Total unique transactions hitting any tracked Arcade contract. */
@@ -178,8 +177,8 @@ const BLOCK_WINDOW = 5_000n;
 // every metric at zero. 500k blocks at ~0.5s block time covers about
 // the last 70 hours of activity — enough to keep the cron's hourly
 // deltas honest while leaving the older history to the Postgres
-// time-series that survives the rolling window. The Ponder indexer
-// roadmap replaces this scan entirely with a precise sum and lets us
+// time-series that survives the rolling window. The Goldsky subgraph
+// would replace this scan entirely with a precise sum and let us
 // raise (or drop) the cap freely.
 const MAX_TOTAL_BLOCKS = 500_000n;
 

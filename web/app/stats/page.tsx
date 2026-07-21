@@ -35,7 +35,7 @@ export const metadata = {
  * The fallback path bootstraps the DB on first attach so the page never
  * shows zeros while we wait for the next hourly cron tick.
  *
- * MVP estimation: until a real indexer (Ponder) lands, the USDC gas
+ * MVP estimation: without a per-transaction indexer, the USDC gas
  * number is an estimate (txCount * average gas cost). We surface this
  * disclosure inline so the dashboard never overstates reality.
  */

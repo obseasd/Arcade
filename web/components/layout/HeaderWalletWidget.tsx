@@ -396,9 +396,9 @@ export function HeaderWalletWidget() {
 
 /**
  * Compact recent-activity list pulled from in-app localStorage (bridge
- * history + pending Twitter claims). Until the Ponder indexer lands this
- * is what we can show without a heavy RPC scan; once the indexer is up
- * this component swaps to a GraphQL feed.
+ * history + pending Twitter claims). Until this is wired to the Goldsky
+ * subgraph (live for charts/stats) it is what we can show without a heavy RPC
+ * scan; migrating it swaps to a GraphQL feed.
  */
 function ActivityFeed({ address, onLinkClick }: { address: Address; onLinkClick: () => void }) {
     const [bridges, setBridges] = useState<HistoryEntry[]>([]);

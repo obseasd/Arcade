@@ -26,8 +26,8 @@ import { useWatchEvent } from "./useWatchEvent";
  *   - ERC20 `name` / `symbol` directly from the token
  *   - One-shot getLogs scan for `TokenLaunched(metadataURI, ...)` so the UI
  *     can render token cards with their off-chain metadata. Bounded by the
- *     same 50k-block chunk strategy the V2 indexer uses; once the ArcLens
- *     Ponder indexer is live (Milestone 3) this hook can be deprecated.
+ *     same 50k-block chunk strategy the V2 scan uses; once this is migrated to
+ *     the Goldsky subgraph (already live for charts/stats) this hook can be dropped.
  *
  * Gated behind `V4_HOOK_ENABLED` so it's a no-op when the address is unset.
  */

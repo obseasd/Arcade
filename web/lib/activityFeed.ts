@@ -7,8 +7,8 @@
  * row here on success (the panels that submit txs call `addActivity` in
  * their success branch, alongside their toast).
  *
- * Once the Ponder indexer lands, this module stays for offline / pre-
- * indexer state, but the widget will hydrate from GraphQL as the source
+ * The Goldsky subgraph (now live) is the GraphQL source; this module stays for
+ * offline / pre-hydration state, but the widget hydrates from GraphQL as the source
  * of truth and the localStorage path becomes a fallback.
  */
 

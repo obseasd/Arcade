@@ -161,7 +161,7 @@ function MyTokensPageInner() {
     // V4 holdings. Batch-read balanceOf(account) for every registered V4
     // token; filter out the zeros so we only show what the user actually
     // owns. Cheap on testnet (<= a few dozen V4 launches); when this gets
-    // expensive the ArcLens Ponder indexer can replace the multicall.
+    // expensive the Goldsky subgraph can replace the multicall.
     const v4BalanceCalls = useReadContracts({
         contracts: account
             ? v4Tokens.map((t) => ({
@@ -1384,7 +1384,7 @@ const TIME_OPTIONS: { value: ActivityTimeFilter; label: string }[] = [
  * Maps Uniswap's category vocabulary onto the in-app activity feed. Many
  * Uniswap categories (Wraps, Approvals, Added/Removed liquidity, etc.) have
  * no equivalent on-chain action we track client-side yet, so they currently
- * return zero matches; the Ponder indexer will fill them in.
+ * return zero matches; the Goldsky subgraph will fill them in.
  */
 function matchesActivityType(item: UnifiedActivityItem, filter: ActivityTypeFilter): boolean {
     if (filter === "all") return true;
@@ -1948,8 +1948,8 @@ function TransactionDetailsModal({
 }
 
 // Shared Overview/Activity helpers, single source of truth for merging
-// the three localStorage feeds. Once Ponder is wired this collapses to a
-// single GraphQL query and these adapters can be deleted.
+// the three localStorage feeds. Once wired to the Goldsky subgraph this
+// collapses to a single GraphQL query and these adapters can be deleted.
 function buildActivity(account: Address): UnifiedActivityItem[] {
     const bridges = loadBridgeHistory(account);
     const claims = listPendingClaims(account);
