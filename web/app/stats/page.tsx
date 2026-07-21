@@ -333,13 +333,12 @@ export default async function StatsPage({
                     </li>
                     <li>
                         USDC gas paid is an estimate: transaction count multiplied
-                        by an empirical average of gasUsed and gasPrice on Arc.
-                        Once the Ponder indexer lands, this becomes a precise sum
-                        of every transaction&apos;s gasUsed * effectiveGasPrice.
+                        by an empirical average of gasUsed and gasPrice on Arc. It is
+                        not a per-transaction sum of gasUsed * effectiveGasPrice.
                     </li>
                     <li>
                         Token-launch count includes both the V2 bonding-curve
-                        launchpad and the V4 launchpad prototype (when deployed).
+                        launchpad and the V4 hook launchpad.
                     </li>
                     <li>
                         The page is rendered server-side and cached for 30
