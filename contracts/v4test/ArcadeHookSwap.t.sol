@@ -651,7 +651,7 @@ contract ArcadeHookSwapTest is Test {
         (address tokenAddr,) = _launchPump();
         // Set min absurdly high; should revert before transferring USDC.
         vm.prank(ALICE);
-        vm.expectRevert(ArcadeHook.ZeroAmount.selector); // reused for slippage
+        vm.expectRevert(ArcadeHook.Slippage.selector);
         hook.buy(tokenAddr, 100e6, type(uint256).max);
     }
 
@@ -662,7 +662,7 @@ contract ArcadeHookSwapTest is Test {
 
         vm.startPrank(ALICE);
         IERC20(tokenAddr).approve(address(hook), tokensReceived);
-        vm.expectRevert(ArcadeHook.ZeroAmount.selector);
+        vm.expectRevert(ArcadeHook.Slippage.selector);
         hook.sell(tokenAddr, tokensReceived, type(uint256).max);
         vm.stopPrank();
     }

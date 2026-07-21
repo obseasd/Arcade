@@ -93,9 +93,12 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
     // -------------------------------------------------------------------
 
     struct CurveState {
-        uint128 virtualUsdcReserve; // 5_000e6 at init, immutable per pool
-        uint128 realUsdcReserve; // climbs to 20_000e6 at graduation
-        uint128 tokensSold; // climbs to CURVE_SUPPLY
+        // Stored at init = ArcadeV4Curve.VIRTUAL_USDC_RESERVE (5_800e6), but
+        // INFORMATIONAL ONLY: the curve math reads the library constant, never
+        // this field. Kept for off-chain readers; do not compute against it.
+        uint128 virtualUsdcReserve;
+        uint128 realUsdcReserve; // climbs to ~14_209e6 at graduation (GRADUATION_USDC)
+        uint128 tokensSold; // climbs to CURVE_SUPPLY (806M)
         uint8 mode; // LaunchMode cast
         uint8 status; // 0=Curving, 1=GraduationStarted, 2=Graduated
         address creator;
@@ -152,10 +155,18 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
     ///         in beforeInitialize: exactly one of (currency0, currency1)
     ///         MUST equal USDC.
     Currency public immutable USDC;
-    /// @notice Recipient of locked LP claim tokens. Owns ERC-6909 receipts
-    ///         minted in afterAddLiquidity for graduation-seed and
-    ///         CLANKER_V3-init positions. Has no transfer surface, so the
-    ///         receipts are effectively burned.
+    /// @notice Configured recipient of locked LP claim tokens. NOTE: the
+    ///         graduation-seed / CLANKER-init position is added by the hook
+    ///         itself via POOL_MANAGER.modifyLiquidity, so v4-core keys the
+    ///         position to the HOOK (address(this)), and `noSelfCall` skips the
+    ///         hook's own afterAddLiquidity, so NO ERC-6909 receipt is minted to
+    ///         this vault and the `positions`/`locked` bookkeeping never runs for
+    ///         the seed. The LP is nonetheless unremovable: there is no
+    ///         negative-delta modifyLiquidity path anywhere in the hook, so the
+    ///         position can never be withdrawn. This immutable + the
+    ///         `positions`/beforeRemoveLiquidity guard are retained defensively
+    ///         but are inert for the seed; do NOT rely on "the vault holds the
+    ///         receipts" as the lock proof.
     address public immutable LOCKED_VAULT;
     /// @notice Treasury that receives creation fees + post-graduation royalty
     ///         + anti-sniper skims. Owner-mutable post-bootstrap (see setTreasury).
@@ -298,6 +309,7 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
     error LiquidityNotPermitted();
     error HookNotImplemented();
     error ZeroAmount();
+    error Slippage(); // curve buy/sell output below the caller's min
     error InvalidMode();
     error InvalidFeeTier();
     error InvalidStartMcap();
@@ -948,7 +960,7 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
             ArcadeV4Curve.simulateBuy(state.tokensSold, state.realUsdcReserve, amountIn);
 
         if (r.tokensOut == 0) revert ZeroAmount();
-        if (r.tokensOut < minTokensOut) revert ZeroAmount(); // slippage guard
+        if (r.tokensOut < minTokensOut) revert Slippage(); // slippage guard
 
         // Pull only what the curve actually accepts. In the cap (graduation)
         // path actualGross < amountIn and the residual stays with the buyer
@@ -1013,7 +1025,7 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         ArcadeV4Curve.SellResult memory r =
             ArcadeV4Curve.simulateSell(state.tokensSold, state.realUsdcReserve, tokensIn);
         if (r.usdcOut == 0) revert ZeroAmount();
-        if (r.usdcOut < minUsdcOut) revert ZeroAmount();
+        if (r.usdcOut < minUsdcOut) revert Slippage();
 
         IERC20(token).safeTransferFrom(msg.sender, address(this), tokensIn);
 
