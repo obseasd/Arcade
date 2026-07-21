@@ -225,8 +225,11 @@ export async function GET(req: NextRequest) {
     clearTimeout(meT);
   }
   if (!meRes.ok) return redirectBackWithError(origin, "me_failed");
-  const meJson = (await meRes.json()) as { data?: { username?: string } };
+  const meJson = (await meRes.json()) as { data?: { username?: string; id?: string } };
   const rawOauthHandle = meJson.data?.username;
+  // Canonical claim key: the numeric user-id (handles rename/recycle). Passed to
+  // the V4 claim so attribution binds to the id, not the @handle.
+  const oauthUserId = meJson.data?.id;
   // Audit Twitter Escrow C-2: normalise the handle through NFKC, strip
   // zero-width characters, and gate against Twitter's strict character
   // set so a Unicode homoglyph (Cyrillic 'е' in 'еlonmusk', emoji
@@ -247,6 +250,7 @@ export async function GET(req: NextRequest) {
       slotIndex,
       recipient: recipient as Address,
       oauthHandle,
+      oauthUserId,
       backendPk,
     });
     if (v4.kind === "error") return redirectBackWithError(origin, v4.error);

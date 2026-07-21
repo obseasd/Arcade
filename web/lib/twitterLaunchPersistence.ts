@@ -136,6 +136,24 @@ export interface ReplyLaunchRow {
     slot1CreditedUsdc: string;
 }
 
+/** The launcher (slot-0) binding for a pool: the NUMERIC user-id is the canonical
+ *  claim key (handles rename/recycle). Used to gate the V4 claim on the user-id,
+ *  not the @handle. Returns null if the pool isn't a recorded tweet-launch. */
+export async function getLaunchByPool(
+    poolId: string,
+): Promise<{ userId: string; handle: string } | null> {
+    if (!isDbConfigured()) return null;
+    const sql = getSql();
+    const rows = (await sql`
+        SELECT user_id, handle FROM twitter_launches
+        WHERE pool_id = ${poolId} AND status = 'launched' AND user_id IS NOT NULL
+        ORDER BY created_at ASC
+        LIMIT 1
+    `) as { user_id: string; handle: string }[];
+    const r = rows[0];
+    return r ? { userId: r.user_id, handle: r.handle } : null;
+}
+
 /** Look up the reply-launch (slot-1) record for a pool, or null. */
 export async function getReplyLaunchByPool(poolId: string): Promise<ReplyLaunchRow | null> {
     if (!isDbConfigured()) return null;

@@ -11,7 +11,7 @@ import {
     TWITTER_ESCROW_V4_CLAIM_TYPES,
     TWITTER_ESCROW_V4_DOMAIN_VERSION,
 } from "@/lib/abis/twitterEscrowV4";
-import { getReplyLaunchByPool } from "@/lib/twitterLaunchPersistence";
+import { getLaunchByPool, getReplyLaunchByPool } from "@/lib/twitterLaunchPersistence";
 import { reconcileReplySlot } from "@/lib/twitterReplyReconcile";
 
 /**
@@ -21,11 +21,15 @@ import { reconcileReplySlot } from "@/lib/twitterReplyReconcile";
  * with a 7-field Claim at domain version "4". This module builds a V4 claim
  * payload; the callback falls through to it when the token is a hook launch.
  *
- * Handle attribution differs by slot:
- *  - slot 0 (launcher): on-chain, via the subgraph HandleAttribution(poolId).
- *  - slot 1 (reply-target): off-chain, via our DB (op_handle). Before signing we
- *    reconcile the slot so its escrow balance reflects the operator's accrued
- *    half (idempotent; the launcher's slot 0 is credited directly by the hook).
+ * Attribution binds to the NUMERIC Twitter user-id (recorded at launch in
+ * twitter_launches.user_id / op_user_id), NOT the @handle -- handles rename and
+ * recycle, so a handle-only gate would let a recycled handle claim someone else's
+ * fees. The @handle is display + a fallback when no user-id was recorded.
+ *  - slot 0 (launcher): user_id from the DB (getLaunchByPool); handle fallback via
+ *    the subgraph HandleAttribution(poolId).
+ *  - slot 1 (reply-target): op_user_id from the DB. Before signing we reconcile the
+ *    slot so its escrow balance reflects the operator's accrued half (idempotent;
+ *    the launcher's slot 0 is credited directly by the hook).
  *
  * SECURITY: identical gates to the V3 path apply upstream in the callback (state
  * HMAC, per-IP + per-slot rate limit, OAuth). Here we additionally: normalise
@@ -99,9 +103,12 @@ export async function buildV4ClaimPayload(args: {
     slotIndex: number;
     recipient: Address;
     oauthHandle: string;
+    /** OAuth numeric Twitter user-id (from /users/me data.id). Canonical claim
+     *  key — handles rename/recycle, ids do not. */
+    oauthUserId?: string;
     backendPk: `0x${string}`;
 }): Promise<V4ClaimResult> {
-    const { token, slotIndex, recipient, oauthHandle, backendPk } = args;
+    const { token, slotIndex, recipient, oauthHandle, oauthUserId, backendPk } = args;
     const hook = ADDRESSES.arcadeHook as Address;
     const usdc = ADDRESSES.usdc as Address;
     if (!hook || hook === zeroAddress) {
@@ -135,24 +142,43 @@ export async function buildV4ClaimPayload(args: {
     const escrow = ADDRESSES.twitterEscrow as Address;
     if (!escrow || escrow === zeroAddress) return { kind: "error", error: "slot_not_attributed" };
 
-    // 2) Handle attribution. slot 0 (launcher) is on-chain via the subgraph;
-    //    slot 1 (reply-target) is our DB.
-    let expected: string | undefined;
+    // 2) Attribution gate. CANONICAL key = the NUMERIC Twitter user-id recorded at
+    //    launch (twitter_launches.user_id / op_user_id). A handle-only gate lets a
+    //    RECYCLED handle claim someone else's fees and locks a RENAMED owner out of
+    //    their own (handles rename/recycle; ids don't). We compare the OAuth
+    //    user-id against the recorded id; the handle is kept only as a fallback for
+    //    a pool with no recorded user-id (e.g. DB unavailable) so a legit claimant
+    //    isn't hard-locked out.
+    let expectedUserId: string | undefined;
+    let expectedHandle: string | undefined;
     if (slotIndex === 0) {
-        expected = await handleFromSubgraph(poolId);
+        const row = await getLaunchByPool(poolId);
+        expectedUserId = row?.userId;
+        expectedHandle = row?.handle ?? (await handleFromSubgraph(poolId));
     } else {
         const row = await getReplyLaunchByPool(poolId);
         if (!row) return { kind: "error", error: "slot_not_attributed" };
-        expected = row.opHandle;
+        expectedUserId = row.opUserId;
+        expectedHandle = row.opHandle;
     }
-    const expNorm = normaliseHandle(expected);
-    if (!expNorm) {
-        console.error("[v4claim] no attributed handle (poolId=" + poolId + ", slot=" + slotIndex + ", raw=" + String(expected) + ")");
-        return { kind: "error", error: "slot_not_attributed" };
-    }
-    if (expNorm !== oauthHandle) {
-        console.error("[v4claim] handle mismatch: attributed=" + expNorm + " oauth=" + oauthHandle);
-        return { kind: "error", error: "handle_mismatch" };
+
+    if (expectedUserId) {
+        // Authoritative: the OAuth numeric user-id MUST equal the recorded one.
+        if (!oauthUserId || oauthUserId !== expectedUserId) {
+            console.error("[v4claim] user-id mismatch: attributed=" + expectedUserId + " oauth=" + String(oauthUserId));
+            return { kind: "error", error: "handle_mismatch" };
+        }
+    } else {
+        // Fallback (no recorded user-id): compare the normalised handle.
+        const expNorm = normaliseHandle(expectedHandle);
+        if (!expNorm) {
+            console.error("[v4claim] no attributed handle/user-id (poolId=" + poolId + ", slot=" + slotIndex + ")");
+            return { kind: "error", error: "slot_not_attributed" };
+        }
+        if (expNorm !== oauthHandle) {
+            console.error("[v4claim] handle mismatch (no user-id): attributed=" + expNorm + " oauth=" + oauthHandle);
+            return { kind: "error", error: "handle_mismatch" };
+        }
     }
 
     // 2.5) ONLY NOW (handle proven) fund slot 1 on-demand. Audit fix: running
