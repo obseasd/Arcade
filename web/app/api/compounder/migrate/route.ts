@@ -4,11 +4,18 @@ import { getSql, isDbConfigured } from "@/lib/db";
 /**
  * Idempotent migration runner for the compounder schema.
  *
- * Applies migrations 003 (UNIQUE(tx_hash) partial index) and 004
- * (chain_block_at column + min_fee_micros widen) directly via the
- * serverless Neon driver. Both migrations are written with IF NOT
- * EXISTS / IF EXISTS guards so re-running them is a no-op on a fully
- * migrated DB.
+ * Applies migrations 003+005 (uniqueness index, now composite
+ * (tx_hash, token_id) per 005 — supersedes the destructive (tx_hash)-only
+ * dedup/index of 003) and 004 (chain_block_at column + min_fee_micros
+ * widen) directly via the serverless Neon driver. All steps use IF NOT
+ * EXISTS / IF EXISTS guards so re-running is a no-op on a migrated DB.
+ *
+ * 005 is REQUIRED for the batched cron: it bundles up to N positions into
+ * ONE Multicall3 tx, so N event rows share a tx_hash. The old (tx_hash)-only
+ * unique index rejected N-1 of them (dropping per-position fee rows ->
+ * "Total earned" undercounts to $0). The composite (tx_hash, token_id) key
+ * fixes that. (This runner previously applied ONLY 003+004, re-breaking the
+ * headline — fixed 2026-07-21.)
  *
  * Why this exists: the original migration runner was a separate
  * GitHub Actions step that never wired into the Vercel deploy. The
@@ -78,10 +85,10 @@ export async function POST(req: NextRequest) {
         }
     }
 
-    // Migration 003 step 1: dedup any duplicate tx_hash rows that
-    // accumulated from cron retries before the UNIQUE constraint
-    // existed. Pick the lowest id per tx_hash as canonical.
-    await step("003_dedup_duplicate_tx_hash", async () =>
+    // Migration 005 step 1 (supersedes 003's tx_hash-only dedup, which was
+    // DESTRUCTIVE post-batch): dedup by (tx_hash, token_id), keeping the
+    // lowest id per pair. Keeps one row per position per (batch) tx.
+    await step("005_dedup_tx_hash_token", async () =>
         sql`
             DELETE FROM compounder_events e1
              WHERE e1.tx_hash IS NOT NULL
@@ -89,16 +96,23 @@ export async function POST(req: NextRequest) {
                     SELECT MIN(e2.id)
                       FROM compounder_events e2
                      WHERE e2.tx_hash = e1.tx_hash
+                       AND e2.token_id = e1.token_id
                )
         `,
     );
 
-    // Migration 003 step 2: partial UNIQUE index on tx_hash. Required
-    // by insertEvent's ON CONFLICT (tx_hash) DO UPDATE clause.
-    await step("003_unique_tx_hash_index", async () =>
+    // Migration 005 step 2: drop the old (tx_hash)-only unique index (from
+    // 003) which rejects legitimate batch rows sharing a tx_hash.
+    await step("005_drop_old_tx_hash_index", async () =>
+        sql`DROP INDEX IF EXISTS uq_compounder_events_tx_hash`,
+    );
+
+    // Migration 005 step 3: composite UNIQUE index required by insertEvent's
+    // ON CONFLICT (tx_hash, token_id) DO UPDATE clause (batch-safe).
+    await step("005_unique_tx_hash_token_index", async () =>
         sql`
-            CREATE UNIQUE INDEX IF NOT EXISTS uq_compounder_events_tx_hash
-                ON compounder_events (tx_hash)
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_compounder_events_tx_hash_token
+                ON compounder_events (tx_hash, token_id)
                 WHERE tx_hash IS NOT NULL
         `,
     );
