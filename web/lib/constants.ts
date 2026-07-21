@@ -42,9 +42,11 @@ export const ADDRESSES = {
   v3Router: safeAddress(process.env.NEXT_PUBLIC_V3_ROUTER_ADDRESS ?? DEPLOYMENTS.v3Router),
   v3Quoter: safeAddress(process.env.NEXT_PUBLIC_V3_QUOTER_ADDRESS ?? DEPLOYMENTS.v3Quoter),
   v3Locker: safeAddress(process.env.NEXT_PUBLIC_V3_LOCKER_ADDRESS ?? DEPLOYMENTS.v3Locker),
-  /** ArcadeV3PositionManager (Uniswap V3 NPM rebrand). Optional - the V3
-   *  branch of /positions/add is gated when zeroAddress. */
-  v3PositionManager: safeAddress(process.env.NEXT_PUBLIC_V3_NPM_ADDRESS),
+  /** ArcadeV3PositionManager (Uniswap V3 NPM rebrand). Deployed; the V3
+   *  positions/add tab gates off only if this is zeroAddress, so it carries the
+   *  deployments.json fallback like the other core addresses (a missing Vercel
+   *  env must not dark the whole V3 tab). */
+  v3PositionManager: safeAddress(process.env.NEXT_PUBLIC_V3_NPM_ADDRESS ?? DEPLOYMENTS.v3PositionManager),
   /** ArcadeV3Zap: single-asset zap into a max-range V3 position. Optional -
    *  the Single Asset tab on /positions/add v3 surfaces only when this is
    *  set. Mirrors Hyperswap's max-range-only constraint (full-range
@@ -63,9 +65,10 @@ export const ADDRESSES = {
   twitterEscrow: safeAddress(process.env.NEXT_PUBLIC_TWITTER_ESCROW_ADDRESS ?? DEPLOYMENTS.twitterEscrow),
   /** ArcadeAutoCompounder: V3 LP custody vault that auto-collects fees and
    *  either pushes them to the depositor wallet (RECEIVE mode) or
-   *  re-deposits them into the position (COMPOUND mode). Optional — the
-   *  Auto-management section on /positions is hidden when zeroAddress. */
-  autoCompounder: safeAddress(process.env.NEXT_PUBLIC_AUTO_COMPOUNDER_ADDRESS),
+   *  re-deposits them into the position (COMPOUND mode). Deployed; carries the
+   *  deployments.json fallback so a missing Vercel env doesn't hide the whole
+   *  Auto-management section. */
+  autoCompounder: safeAddress(process.env.NEXT_PUBLIC_AUTO_COMPOUNDER_ADDRESS ?? DEPLOYMENTS.autoCompounder),
   /** ArcadeIdentityIssuer: on-chain tier verifier wrapping the ERC-8004
    *  Identity Registry. Audit 2026-06-18 H-09 fix. When zeroAddress, the
    *  Identity mint UI falls back to direct Registry.mint (client-side
