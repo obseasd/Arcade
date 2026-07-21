@@ -1,5 +1,9 @@
 # Deploy gen 9 — runbook
 
+> ⚠️ SUPERSEDED (historical). Superseded by the 2026-07-16 Safe-governed
+> generation. Addresses/steps below are stale; `web/public/deployments.json` is
+> the ONLY source of truth for live addresses (RULE 1). Kept for the method.
+
 > Last verified 2026-06-11. Builds on `DEPLOY_GEN8.md`. Use this checklist
 > top-to-bottom — every step has a rollback note in case something goes
 > sideways mid-deploy.

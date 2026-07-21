@@ -1,5 +1,12 @@
 # V4 ArcadeHook sunset plan (audit A-8)
 
+> ⚠️ SUPERSEDED / HISTORICAL (2026-06-10). This was written when the hook was
+> "partially complete". The hook is now SHIPPED (curve + graduation + fee +
+> anti-sniper, tested, deployed — see `web/public/deployments.json`), so the
+> "partially complete" framing and the T+0..T+365 sunset timeline below no longer
+> reflect reality. Kept for the strategic reasoning only. Trust deployments.json
+> for live addresses.
+
 > Strategy doc — pre-mainnet artifact. Owned by the protocol lead.
 > Updated 2026-06-10 alongside the gen 8 audit batch.
 

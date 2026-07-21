@@ -7,8 +7,10 @@
 > follow this spec verbatim. Curve math MUST replicate
 > `contracts/test/fixtures/curve-vectors.json` bit-identically.
 >
-> Status: design freeze. No production Solidity is written against this
-> spec until V2 mainnet has stabilised (per Phase 0 of the migration plan).
+> Status: SHIPPED. This spec is implemented by `contracts/v4src/ArcadeHook.sol`
+> (curve + graduation + 80/20 post-grad fee + anti-sniper), tested, and deployed
+> (see `web/public/deployments.json` -> `arcadeHook`). The document is kept as the
+> design reference; deployed addresses live in deployments.json, not here.
 
 ## 1. Scope
 
@@ -506,9 +508,12 @@ Fee harvesting on locked positions:
 - This routes through `beforeRemoveLiquidity` which allows when `liquidityDelta=0 && sender=self`
 - Fees accrue to the hook, then split per Section 8
 
-## 10. Anti-sniper tax (frozen, port from existing prototype)
+## 10. Anti-sniper tax
 
-Reuses semantics of `contracts/v4src/ArcadeAntiSniperHook.sol`:
+Implemented in `ArcadeHook` (`currentSnipeBps`, decaying skim on graduated buys);
+the interface lives in `contracts/v4src/interfaces/ILaunchpadSnipe.sol`. (The
+original `ArcadeAntiSniperHook.sol` prototype it was ported from has been deleted.)
+Semantics:
 
 ```solidity
 function currentSnipeBps(address token) internal view returns (uint16) {
@@ -619,9 +624,9 @@ spec but inform implementation:
 
 - `contracts/src/launchpad/ArcadeLaunchpad.sol` (V2 curve math source)
 - `contracts/test/fixtures/curve-vectors.json` (test vectors locked)
-- `contracts/v4src/ArcadeV4Launchpad.sol` (prototype scaffold)
-- `contracts/v4src/ArcadeAntiSniperHook.sol` (anti-sniper port source)
-- `contracts/v4src/ArcadeV4SwapRouter.sol` (router reuse target)
+- `contracts/v4src/ArcadeHook.sol` (the shipped hook: curve + graduation + fee + anti-sniper)
+- `contracts/v4src/interfaces/ILaunchpadSnipe.sol` (anti-sniper interface; the old ArcadeAntiSniperHook.sol prototype was deleted)
+- `contracts/v4src/ArcadeV4SwapRouter.sol` (canonical swap router)
 - `v4-migration-scoping.md` (the phased migration plan)
 - Cork Protocol post-mortem (callback access control)
 - Bunni V2 post-mortem (rounding direction in custom curve)
