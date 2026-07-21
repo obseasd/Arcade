@@ -180,7 +180,7 @@ export function useTokenTrades(args: {
     // live-push below never fires for them. Poll the Goldsky subgraph every 5s so
     // OTHER traders' fills appear near-real-time on the token page (the user's own
     // trade already refetches instantly via the panel's onTradeSuccess).
-    refetchInterval: source === "v4" ? 5_000 : undefined,
+    refetchInterval: source === "v4" ? 2_000 : undefined,
     queryFn: async () => {
       if (!publicClient || !token || mode === undefined) {
         return { trades: [], latestBlock: 0n };
