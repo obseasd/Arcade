@@ -18,6 +18,9 @@ import deployments from "../../../../public/deployments.json";
  */
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+// Chunked getLogs across a 500k-block window for the treasury scan + RoyaltyPaid;
+// give it headroom over the platform default.
+export const maxDuration = 60;
 
 // Block window per eth_getLogs call. Arc public RPC empirically returns
 // silently-empty windows past ~10k blocks under heavier filters, so we keep
@@ -46,6 +49,16 @@ const TRANSFER_EVENT = parseAbiItem(
 // it shares a tx with one of these (fee audit 2026-07-02 LOW-1).
 const TOKEN_CREATED_EVENT = parseAbiItem(
     "event TokenCreated(address indexed token, address indexed creator, uint8 mode, address creator2, uint16 creator2ShareBps, string name, string symbol, string metadataURI)",
+);
+
+// V4 hook post-graduation protocol fee. RoyaltyPaid logs treasuryAmount (the 20%
+// protocol cut) EXPLICITLY, so we sum that instead of scanning USDC transfers to
+// hook.TREASURY -- the treasury is the operator EOA which also TRADES, so a
+// transfer-based scan would over-count its trade proceeds as fees. Currency-
+// filtered to USDC (the always-USDC capture). Curve-platform / migration /
+// creation fees are separate and not summed here (noted in the response).
+const ROYALTY_PAID_EVENT = parseAbiItem(
+    "event RoyaltyPaid(bytes32 indexed poolId, address indexed creator, uint256 creatorAmount, uint256 treasuryAmount, address currency)",
 );
 
 const lc = (a: string) => a.toLowerCase();
@@ -177,10 +190,35 @@ export async function GET() {
         }
     }
 
+    // V4 hook post-graduation protocol fees: scan RoyaltyPaid on the hook and
+    // sum treasuryAmount for USDC-denominated royalties. Independent of the
+    // treasury address, so it works even though hook.TREASURY is the operator EOA.
+    const usdcLc = lc(usdc);
+    type RoyaltyLog = Awaited<ReturnType<typeof scanRoyalty>>[number];
+    const scanRoyalty = (from: bigint, to: bigint) =>
+        client.getLogs({
+            address: addrs.arcadeHook as Address,
+            event: ROYALTY_PAID_EVENT,
+            fromBlock: from,
+            toBlock: to,
+        });
+    const royaltyLogs: RoyaltyLog[] = [];
+    if (addrs.arcadeHook) {
+        for (let from = fromBlock; from <= head; from += BLOCK_WINDOW) {
+            const to = from + BLOCK_WINDOW - 1n > head ? head : from + BLOCK_WINDOW - 1n;
+            try {
+                royaltyLogs.push(...(await scanRoyalty(from, to)));
+            } catch (e) {
+                truncated = true;
+                console.warn(`[admin/fees] RoyaltyPaid getLogs ${from}..${to} failed:`, e);
+            }
+        }
+    }
+
     // Resolve block timestamps once per unique block (cheap dedupe).
-    const uniqueBlocks = Array.from(new Set(logs.map((l) => l.blockNumber))).filter(
-        (b): b is bigint => b !== null,
-    );
+    const uniqueBlocks = Array.from(
+        new Set([...logs.map((l) => l.blockNumber), ...royaltyLogs.map((l) => l.blockNumber)]),
+    ).filter((b): b is bigint => b !== null);
     const tsByBlock = new Map<bigint, number>();
     await Promise.all(
         uniqueBlocks.map(async (b) => {
@@ -221,27 +259,48 @@ export async function GET() {
 
     let feeRaw = 0n; // only recognized protocol fees
     let grossRaw = 0n; // every inbound transfer (incl. trades / direct)
-    const items = logs
+    const treasuryItems = logs.map((l) => {
+        const amount = l.args.value ?? 0n;
+        const fromAddr = (l.args.from ?? "0x0000000000000000000000000000000000000000") as string;
+        const block = l.blockNumber ?? 0n;
+        const txHash = l.transactionHash ?? "";
+        const { reason, isFee } = classify(fromAddr, amount, txHash);
+        grossRaw += amount;
+        if (isFee) feeRaw += amount;
+        return {
+            txHash,
+            block: Number(block),
+            timestamp: tsByBlock.get(block) ?? 0,
+            amountUsdc: fmtUsdc(amount),
+            from: fromAddr,
+            reason,
+            isFee,
+        };
+    });
+
+    // V4 post-grad protocol fees, from RoyaltyPaid.treasuryAmount (USDC only).
+    let v4FeeRaw = 0n;
+    const v4Items = royaltyLogs
+        .filter((l) => lc((l.args.currency ?? "0x") as string) === usdcLc)
         .map((l) => {
-            const amount = l.args.value ?? 0n;
-            const fromAddr = (l.args.from ?? "0x0000000000000000000000000000000000000000") as string;
+            const amount = (l.args.treasuryAmount ?? 0n) as bigint;
             const block = l.blockNumber ?? 0n;
-            const txHash = l.transactionHash ?? "";
-            const { reason, isFee } = classify(fromAddr, amount, txHash);
+            v4FeeRaw += amount;
+            feeRaw += amount;
             grossRaw += amount;
-            if (isFee) feeRaw += amount;
             return {
                 txHash: l.transactionHash ?? "",
                 block: Number(block),
                 timestamp: tsByBlock.get(block) ?? 0,
                 amountUsdc: fmtUsdc(amount),
-                from: fromAddr,
-                reason,
-                isFee,
+                from: (addrs.arcadeHook ?? "") as string,
+                reason: "V4 hook post-grad protocol fee (RoyaltyPaid treasury cut)",
+                isFee: true,
             };
         })
-        .sort((a, b) => b.block - a.block);
+        .filter((i) => i.amountUsdc !== "0.000000");
 
+    const items = [...treasuryItems, ...v4Items].sort((a, b) => b.block - a.block);
     const feeCount = items.filter((i) => i.isFee).length;
 
     return ok({
@@ -253,13 +312,15 @@ export async function GET() {
         // transfer (which on testnet includes the treasury EOA's own trades).
         totalUsdc: fmtUsdc(feeRaw),
         grossUsdc: fmtUsdc(grossRaw),
+        // V4 post-grad protocol fees (from RoyaltyPaid), broken out of the total.
+        v4FeesUsdc: fmtUsdc(v4FeeRaw),
         count: feeCount,
         grossCount: items.length,
         truncated,
         baselineBlock: Number(BASELINE_BLOCK),
         note: "Reset baseline: only fees at/after block " +
             BASELINE_BLOCK.toString() +
-            " are counted (fresh start). Headline = recognized protocol fees (transfers from the launchpad / locker / compounder / V4 hook to this treasury). CAVEAT: the V4 hook's TREASURY is currently the operator EOA, not this governance treasury, so V4 launchpad fees (curve platform, post-grad royalty, migration) do NOT land here yet — re-point via hook.setTreasury to capture them. Rolling recent window; full history via the Goldsky subgraph.",
+            " are counted (fresh start). Headline = V2/V3 protocol fees (transfers from the launchpad / locker / compounder to the governance treasury) PLUS V4 post-grad protocol fees (RoyaltyPaid.treasuryAmount from the hook, which land on the operator EOA, not this treasury). V4 curve-platform / migration / creation fees are NOT yet summed (they also route to the operator and can't be cleanly separated from its trades via transfers). Rolling recent window; full history via the Goldsky subgraph.",
         items,
     });
 }

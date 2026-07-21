@@ -41,6 +41,7 @@ interface FeesResponse {
     toBlock: number;
     totalUsdc: string;
     grossUsdc: string;
+    v4FeesUsdc?: string;
     count: number;
     grossCount: number;
     truncated: boolean;
@@ -300,6 +301,15 @@ function FeesBody() {
                             {data.fromBlock.toLocaleString("en-US")} to{" "}
                             {data.toBlock.toLocaleString("en-US")}
                         </div>
+                        {data.v4FeesUsdc && (
+                            <div className="mt-2 text-xs text-arc-text-faint">
+                                of which V4 hook post-grad protocol fees:{" "}
+                                <span className="tabular-nums text-arc-cta-hover">
+                                    ${formatTwo(data.v4FeesUsdc)}
+                                </span>{" "}
+                                (RoyaltyPaid treasury cut; lands on the operator EOA).
+                            </div>
+                        )}
                         <div className="mt-2 text-xs text-arc-text-faint">
                             Total inbound USDC (incl. trades / direct):{" "}
                             <span className="tabular-nums text-arc-text-muted">
