@@ -56,6 +56,10 @@ export async function fetchTradesFromGoldsky(
     // (launchpad Buy/Sell). For V3 we pin the exact pool the client charts (the
     // permissionless factory can index several USDC pools for one token).
     const source = opts?.sourceOverride ?? (mode === 2 ? "v3" : "curve");
+    // ArcadeHook (V4) tokens emit "v4curve" for pre-graduation curve trades and
+    // "v4" only for post-graduation pool swaps, so a bare source:"v4" charts a
+    // blank curve phase. Match BOTH (the trade feed already does).
+    const sourceFilter = source === "v4" ? `source_in: ["v4", "v4curve"]` : `source: "${source}"`;
     const wherePool =
         source === "v3" && pool && pool.toLowerCase() !== ZERO_ADDR
             ? `, pool: "${pool.toLowerCase()}"`
@@ -67,7 +71,7 @@ export async function fetchTradesFromGoldsky(
         let cursor: string | null = null;
         for (let page = 0; page < maxPages; page++) {
             const bound = cursor === null ? "" : `, blockNumber_lte: "${cursor}"`;
-            const query = `{ trades(first: ${pageSize}, orderBy: blockNumber, orderDirection: desc, where: { token: "${token.toLowerCase()}", source: "${source}"${wherePool}${bound} }) { blockTime blockNumber logIndex price volumeUsdc isBuy } }`;
+            const query = `{ trades(first: ${pageSize}, orderBy: blockNumber, orderDirection: desc, where: { token: "${token.toLowerCase()}", ${sourceFilter}${wherePool}${bound} }) { blockTime blockNumber logIndex price volumeUsdc isBuy } }`;
             const res = await fetch(url, {
                 method: "POST",
                 headers: { "content-type": "application/json" },

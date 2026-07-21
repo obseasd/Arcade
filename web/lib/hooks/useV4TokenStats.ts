@@ -75,8 +75,8 @@ export function useV4TokenStats(token: Address | undefined): V4TokenStats {
       if (entity) return entity;
       // Fallback (pre-redeploy): sum the recent trades client-side.
       const q = `{
-        latest: trades(first: 1, orderBy: blockNumber, orderDirection: desc, where: { token: "${tokenKey}", source: "v4" }) { price }
-        vol: trades(first: 1000, orderBy: blockNumber, orderDirection: desc, where: { token: "${tokenKey}", source: "v4" }) { volumeUsdc isBuy }
+        latest: trades(first: 1, orderBy: blockNumber, orderDirection: desc, where: { token: "${tokenKey}", source_in: ["v4", "v4curve"] }) { price }
+        vol: trades(first: 1000, orderBy: blockNumber, orderDirection: desc, where: { token: "${tokenKey}", source_in: ["v4", "v4curve"] }) { volumeUsdc isBuy }
       }`;
       const res = await fetch(GOLDSKY_URL, {
         method: "POST",

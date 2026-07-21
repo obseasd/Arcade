@@ -25,23 +25,23 @@ function safeAddress(v: string | undefined): Address {
 }
 
 export const ADDRESSES = {
-  usdc: safeAddress(process.env.NEXT_PUBLIC_USDC_ADDRESS),
-  factory: safeAddress(process.env.NEXT_PUBLIC_V2_FACTORY_ADDRESS),
-  router: safeAddress(process.env.NEXT_PUBLIC_V2_ROUTER_ADDRESS),
+  usdc: safeAddress(process.env.NEXT_PUBLIC_USDC_ADDRESS ?? DEPLOYMENTS.USDC),
+  factory: safeAddress(process.env.NEXT_PUBLIC_V2_FACTORY_ADDRESS ?? DEPLOYMENTS.v2Factory),
+  router: safeAddress(process.env.NEXT_PUBLIC_V2_ROUTER_ADDRESS ?? DEPLOYMENTS.v2Router),
   /** ArcadeV2Zap: single-asset add-liquidity helper. Optional - the Single
    *  Asset tab in /positions/add is hidden when this is zeroAddress. */
   v2Zap: safeAddress(process.env.NEXT_PUBLIC_V2_ZAP_ADDRESS),
-  launchpad: safeAddress(process.env.NEXT_PUBLIC_LAUNCHPAD_ADDRESS),
-  multiSwap: safeAddress(process.env.NEXT_PUBLIC_MULTISWAP_ADDRESS),
+  launchpad: safeAddress(process.env.NEXT_PUBLIC_LAUNCHPAD_ADDRESS ?? DEPLOYMENTS.launchpad),
+  multiSwap: safeAddress(process.env.NEXT_PUBLIC_MULTISWAP_ADDRESS ?? DEPLOYMENTS.multiSwap),
   // Post-migration trading wrappers (buyMigrated / sellMigrated /
   // swapMigratedRoute), extracted from the launchpad for EIP-170. The migrated
   // routes in TradePanel + SwapCard target THIS, not the launchpad.
-  migratedRouter: safeAddress(process.env.NEXT_PUBLIC_MIGRATED_ROUTER_ADDRESS),
+  migratedRouter: safeAddress(process.env.NEXT_PUBLIC_MIGRATED_ROUTER_ADDRESS ?? DEPLOYMENTS.migratedRouter),
   // Uniswap V3 fork (CLANKER_V3 locked-LP tokens)
-  v3Factory: safeAddress(process.env.NEXT_PUBLIC_V3_FACTORY_ADDRESS),
-  v3Router: safeAddress(process.env.NEXT_PUBLIC_V3_ROUTER_ADDRESS),
-  v3Quoter: safeAddress(process.env.NEXT_PUBLIC_V3_QUOTER_ADDRESS),
-  v3Locker: safeAddress(process.env.NEXT_PUBLIC_V3_LOCKER_ADDRESS),
+  v3Factory: safeAddress(process.env.NEXT_PUBLIC_V3_FACTORY_ADDRESS ?? DEPLOYMENTS.v3Factory),
+  v3Router: safeAddress(process.env.NEXT_PUBLIC_V3_ROUTER_ADDRESS ?? DEPLOYMENTS.v3Router),
+  v3Quoter: safeAddress(process.env.NEXT_PUBLIC_V3_QUOTER_ADDRESS ?? DEPLOYMENTS.v3Quoter),
+  v3Locker: safeAddress(process.env.NEXT_PUBLIC_V3_LOCKER_ADDRESS ?? DEPLOYMENTS.v3Locker),
   /** ArcadeV3PositionManager (Uniswap V3 NPM rebrand). Optional - the V3
    *  branch of /positions/add is gated when zeroAddress. */
   v3PositionManager: safeAddress(process.env.NEXT_PUBLIC_V3_NPM_ADDRESS),
@@ -51,9 +51,9 @@ export const ADDRESSES = {
    *  positions split half-and-half by value, narrow ranges need a closed
    *  form). */
   v3Zap: safeAddress(process.env.NEXT_PUBLIC_V3_ZAP_ADDRESS),
-  tokenVault: safeAddress(process.env.NEXT_PUBLIC_TOKEN_VAULT_ADDRESS),
+  tokenVault: safeAddress(process.env.NEXT_PUBLIC_TOKEN_VAULT_ADDRESS ?? DEPLOYMENTS.tokenVault),
   /** WETH on Arc, used as the paired token for POOL_WETH Clanker launches. */
-  weth: safeAddress(process.env.NEXT_PUBLIC_WETH_ADDRESS),
+  weth: safeAddress(process.env.NEXT_PUBLIC_WETH_ADDRESS ?? DEPLOYMENTS.WETH),
   /** SeedETH (testnet ERC20 symbol "ETH"). Lives across V2 factory
    *  generations as a plain ERC20; pin it in token pickers so the user can
    *  pair it without pasting the address. Optional — keep zeroAddress on
