@@ -32,6 +32,11 @@ const BLOCK_WINDOW = 45_000n;
 // the indexer.
 const MAX_TOTAL_BLOCKS = 500_000n;
 
+// Fresh-start baseline: never count fees before this block, so the dashboard
+// reads $0 at reset and only accrues from here. Bump ADMIN_FEES_BASELINE_BLOCK
+// (env) to reset again without a code change. Set 2026-07-21 to "now".
+const BASELINE_BLOCK = BigInt(process.env.ADMIN_FEES_BASELINE_BLOCK ?? "52951264");
+
 const TRANSFER_EVENT = parseAbiItem(
     "event Transfer(address indexed from, address indexed to, uint256 value)",
 );
@@ -102,6 +107,14 @@ export async function GET() {
         }
         if (f === lc(addrs.v3Locker)) return { reason: "Locked-LP protocol fee", isFee: true };
         if (f === lc(addrs.autoCompounder)) return { reason: "Auto-compounder protocol fee", isFee: true };
+        // V4 hook protocol fees (curve platform 50%, post-grad treasury 20%,
+        // migration fee). NOTE: only captured here if the hook's TREASURY is set
+        // to `treasury` (deployments.treasury). It currently points at the
+        // operator EOA instead, so these land elsewhere until re-pointed via
+        // hook.setTreasury(Safe) -- see the fee-destination audit.
+        if (addrs.arcadeHook && f === lc(addrs.arcadeHook)) {
+            return { reason: "V4 hook fee (curve platform / royalty / migration)", isFee: true };
+        }
         if (
             creationFeeRaw > 0n &&
             amount === creationFeeRaw &&
@@ -131,7 +144,10 @@ export async function GET() {
             retryable: true,
         });
     }
-    const fromBlock = head > MAX_TOTAL_BLOCKS ? head - MAX_TOTAL_BLOCKS : 0n;
+    // Rolling window, floored at the fresh-start baseline so nothing before the
+    // reset is ever counted.
+    const windowStart = head > MAX_TOTAL_BLOCKS ? head - MAX_TOTAL_BLOCKS : 0n;
+    const fromBlock = windowStart > BASELINE_BLOCK ? windowStart : BASELINE_BLOCK;
 
     // Topic-filtered Transfer scan: indexed `to == treasury`. We pass the
     // `args.to` filter so the RPC narrows at the topics[2] level and we only
@@ -240,7 +256,10 @@ export async function GET() {
         count: feeCount,
         grossCount: items.length,
         truncated,
-        note: "Headline = recognized protocol fees (transfers from the launchpad / locker / compounder). Other inbound USDC is listed but excluded: on testnet the treasury is the deployer EOA, so it also receives trade proceeds and direct transfers. Recent window only; full all-time history ships with the indexer.",
+        baselineBlock: Number(BASELINE_BLOCK),
+        note: "Reset baseline: only fees at/after block " +
+            BASELINE_BLOCK.toString() +
+            " are counted (fresh start). Headline = recognized protocol fees (transfers from the launchpad / locker / compounder / V4 hook to this treasury). CAVEAT: the V4 hook's TREASURY is currently the operator EOA, not this governance treasury, so V4 launchpad fees (curve platform, post-grad royalty, migration) do NOT land here yet — re-point via hook.setTreasury to capture them. Rolling recent window; full history via the Goldsky subgraph.",
         items,
     });
 }
