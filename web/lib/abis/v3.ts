@@ -195,6 +195,12 @@ export const V3_LOCKER_ABI = [
   },
 ] as const;
 
+/**
+ * Canonical IUniswapV3Pool subset used across the app (the single source of
+ * truth; lib/abis/v3-npm.ts re-exports this). Superset of everything any caller
+ * needs: slot0/token0/token1/liquidity/fee/tickSpacing for pricing +
+ * feeGrowthGlobal0/1X128, ticks(), positions() for pending-fee math.
+ */
 export const V3_POOL_ABI = [
   {
     type: "function",
@@ -215,6 +221,7 @@ export const V3_POOL_ABI = [
   { type: "function", name: "token1", stateMutability: "view", inputs: [], outputs: [{ type: "address" }] },
   { type: "function", name: "liquidity", stateMutability: "view", inputs: [], outputs: [{ type: "uint128" }] },
   { type: "function", name: "fee", stateMutability: "view", inputs: [], outputs: [{ type: "uint24" }] },
+  { type: "function", name: "tickSpacing", stateMutability: "view", inputs: [], outputs: [{ type: "int24" }] },
   {
     type: "function",
     name: "feeGrowthGlobal0X128",

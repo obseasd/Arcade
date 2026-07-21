@@ -11,7 +11,6 @@ import { AUTO_COMPOUNDER_ABI, modeLabelFromId, type CompounderModeId } from "@/l
 import { pushToast } from "@/lib/toast";
 
 import { V3_FACTORY_ABI, V3_NPM_ABI, V3_POOL_ABI } from "@/lib/abis/v3-npm";
-import { V3_POOL_ABI as V3_POOL_ABI_FULL } from "@/lib/abis/v3";
 import { ADDRESSES, USDC_DECIMALS } from "@/lib/constants";
 import { arcTestnet } from "@/lib/chains";
 import { AutoTokenIcon } from "@/components/ui/AutoTokenIcon";
@@ -484,29 +483,29 @@ export function V3Positions({
     const feeGrowthQ = useReadContracts({
         contracts: positionSlots.flatMap((s) => [
             {
-                // V3_POOL_ABI_FULL because the trimmed v3-npm V3_POOL_ABI
-                // doesn't include feeGrowthGlobal*/ticks — using it here
-                // made every read fail silently and pendingByTokenId
-                // stayed empty, surfacing as Total earned = 0 even when
-                // the position had fees on chain.
+                // feeGrowthGlobal*/ticks/positions live on the canonical
+                // V3_POOL_ABI (v3.ts, re-exported by v3-npm). Reading them off a
+                // trimmed ABI used to fail silently -> pendingByTokenId empty ->
+                // Total earned = 0 despite on-chain fees. The merged ABI prevents
+                // that class of bug.
                 address: s.poolAddr,
-                abi: V3_POOL_ABI_FULL,
+                abi: V3_POOL_ABI,
                 functionName: "feeGrowthGlobal0X128" as const,
             },
             {
                 address: s.poolAddr,
-                abi: V3_POOL_ABI_FULL,
+                abi: V3_POOL_ABI,
                 functionName: "feeGrowthGlobal1X128" as const,
             },
             {
                 address: s.poolAddr,
-                abi: V3_POOL_ABI_FULL,
+                abi: V3_POOL_ABI,
                 functionName: "ticks" as const,
                 args: [s.tickLower] as const,
             },
             {
                 address: s.poolAddr,
-                abi: V3_POOL_ABI_FULL,
+                abi: V3_POOL_ABI,
                 functionName: "ticks" as const,
                 args: [s.tickUpper] as const,
             },

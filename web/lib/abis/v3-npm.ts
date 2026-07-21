@@ -168,70 +168,18 @@ export const V3_NPM_ABI = [
 ] as const;
 
 /**
- * Subset of IUniswapV3Pool we need from the frontend: slot0 to read the
- * current tick + sqrtPriceX96, plus liquidity and tickSpacing for math.
+ * V3 pool ABI. Re-exported from ./v3, which holds the single canonical superset
+ * (this file previously kept a trimmed 6-member copy; merged so callers here get
+ * the same slot0/liquidity/tickSpacing/fee/token0/token1 PLUS the pending-fee
+ * math members feeGrowthGlobal0/1X128 / ticks() / positions() with no drift).
+ *
+ * Note: the NPM also inherits Multicall.sol (bundle collect()/decreaseLiquidity()
+ * into ONE tx). We deliberately do NOT expose `multicall(bytes[])` in an ABI here
+ * because wagmi v2's typed writeContract excludes bytes[]-returning Multicall
+ * calls; ClaimAllFeesModal encodes the multicall calldata inline and sends it via
+ * walletClient.sendTransaction instead.
  */
-export const V3_POOL_ABI = [
-    {
-        type: "function",
-        name: "slot0",
-        stateMutability: "view",
-        inputs: [],
-        outputs: [
-            { name: "sqrtPriceX96", type: "uint160" },
-            { name: "tick", type: "int24" },
-            { name: "observationIndex", type: "uint16" },
-            { name: "observationCardinality", type: "uint16" },
-            { name: "observationCardinalityNext", type: "uint16" },
-            { name: "feeProtocol", type: "uint8" },
-            { name: "unlocked", type: "bool" },
-        ],
-    },
-    {
-        type: "function",
-        name: "liquidity",
-        stateMutability: "view",
-        inputs: [],
-        outputs: [{ type: "uint128" }],
-    },
-    {
-        type: "function",
-        name: "tickSpacing",
-        stateMutability: "view",
-        inputs: [],
-        outputs: [{ type: "int24" }],
-    },
-    {
-        type: "function",
-        name: "fee",
-        stateMutability: "view",
-        inputs: [],
-        outputs: [{ type: "uint24" }],
-    },
-    {
-        type: "function",
-        name: "token0",
-        stateMutability: "view",
-        inputs: [],
-        outputs: [{ type: "address" }],
-    },
-    {
-        type: "function",
-        name: "token1",
-        stateMutability: "view",
-        inputs: [],
-        outputs: [{ type: "address" }],
-    },
-    // Note: the NPM also inherits Multicall.sol (lets you bundle
-    // collect() / decreaseLiquidity() / etc into ONE tx). We don't add
-    // the `multicall(bytes[])` entry to this ABI because wagmi v2's
-    // typed writeContract excludes it from its writable union (known
-    // issue with bytes[]-returning Multicall.sol-style calls). The
-    // ClaimAllFeesModal handles batching by encoding the multicall
-    // calldata inline and sending it via walletClient.sendTransaction
-    // - bypasses both the wagmi type layer and viem's runtime ABI
-    // matching.
-] as const;
+export { V3_POOL_ABI } from "./v3";
 
 export const V3_FACTORY_ABI = [
     {

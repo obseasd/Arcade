@@ -7,8 +7,8 @@ import {
     type Hex,
     type PublicClient,
 } from "viem";
-import { V3_NPM_ABI, V3_POOL_ABI } from "@/lib/abis/v3-npm";
-import { V3_POOL_ABI as V3_POOL_ABI_FULL } from "@/lib/abis/v3";
+import { V3_NPM_ABI } from "@/lib/abis/v3-npm";
+import { V3_POOL_ABI } from "@/lib/abis/v3";
 import { V3_FACTORY_ABI } from "@/lib/abis/v3-npm";
 import { ADDRESSES } from "@/lib/constants";
 import { computePendingFees } from "@/lib/v3-fee-math";
@@ -137,18 +137,18 @@ export async function GET(req: NextRequest) {
 
     const feeGrowthGlobal0X128 = (await client.readContract({
         address: pool,
-        abi: V3_POOL_ABI_FULL,
+        abi: V3_POOL_ABI,
         functionName: "feeGrowthGlobal0X128",
     })) as bigint;
     const feeGrowthGlobal1X128 = (await client.readContract({
         address: pool,
-        abi: V3_POOL_ABI_FULL,
+        abi: V3_POOL_ABI,
         functionName: "feeGrowthGlobal1X128",
     })) as bigint;
 
     const lowerTick = (await client.readContract({
         address: pool,
-        abi: V3_POOL_ABI_FULL,
+        abi: V3_POOL_ABI,
         functionName: "ticks",
         args: [tickLower],
     })) as readonly [
@@ -160,7 +160,7 @@ export async function GET(req: NextRequest) {
     ];
     const upperTick = (await client.readContract({
         address: pool,
-        abi: V3_POOL_ABI_FULL,
+        abi: V3_POOL_ABI,
         functionName: "ticks",
         args: [tickUpper],
     })) as readonly [
