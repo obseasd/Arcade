@@ -330,7 +330,12 @@ function Inner() {
 
                 {/* Right: trade panel + fees/recipient (order-first on mobile) */}
                 <div className="order-first space-y-6 lg:order-none">
-                    {isClanker ? (
+                    {isClanker || status === ARCADE_HOOK_STATUS.GRADUATED ? (
+                        // CLANKER trades on the V4 pool from launch; a GRADUATED PUMP
+                        // also trades on its (now-live) V4 pool via the router, so it
+                        // stays tradable on its own page instead of dead-ending. The
+                        // panel gates on the fee READ resolving, so a PUMP pool's
+                        // legit fee=0 no longer sticks on "Loading pool".
                         <ClankerV4TradePanel token={token} symbol={symbol} image={image} />
                     ) : (
                         <TradeCard

@@ -63,6 +63,10 @@ export function ClankerV4TradePanel({ token, symbol, image, onTradeSuccess }: Pr
     query: { enabled: token !== zeroAddress },
   });
   const fee = Number((feeQ.data as bigint | number | undefined) ?? 0);
+  // A graduated PUMP pool has poolFeeOf === 0 by design (the hook captures the
+  // fee itself), so "fee is 0" is a VALID loaded state, not a still-loading one.
+  // Gate on whether the read has RESOLVED, not on the value being non-zero.
+  const feeReady = feeQ.data !== undefined;
 
   // Canonical PoolKey (currencies sorted by address, exactly like the hook).
   const poolKey = useMemo(() => {
@@ -113,7 +117,7 @@ export function ClankerV4TradePanel({ token, symbol, image, onTradeSuccess }: Pr
   // so we simulate it. Debounced via the amount/side/fee deps.
   useEffect(() => {
     let cancelled = false;
-    if (!publicClient || amountRaw === 0n || fee === 0) {
+    if (!publicClient || amountRaw === 0n || !feeReady) {
       setEstimatedOut(0n);
       return;
     }
@@ -153,7 +157,7 @@ export function ClankerV4TradePanel({ token, symbol, image, onTradeSuccess }: Pr
   const { writeContractAsync } = useWriteContract();
 
   const onTrade = async () => {
-    if (!account || amountRaw === 0n || fee === 0) return;
+    if (!account || amountRaw === 0n || !feeReady) return;
     setTx({ status: "pending", message: "Approving…" });
     try {
       if (allowance < amountRaw) {
@@ -289,12 +293,12 @@ export function ClankerV4TradePanel({ token, symbol, image, onTradeSuccess }: Pr
       <button
         type="button"
         onClick={onTrade}
-        disabled={!account || amountRaw === 0n || fee === 0 || tx.status === "pending"}
+        disabled={!account || amountRaw === 0n || !feeReady || tx.status === "pending"}
         className="arc-button-primary mt-4 w-full py-3 text-base"
       >
         {!account
           ? "Connect wallet"
-          : fee === 0
+          : !feeReady
             ? "Loading pool…"
             : amountRaw === 0n
               ? "Enter amount"
