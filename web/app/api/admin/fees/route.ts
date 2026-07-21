@@ -62,6 +62,13 @@ const ROYALTY_PAID_EVENT = parseAbiItem(
 
 const lc = (a: string) => a.toLowerCase();
 
+// Warm-instance cache. This route is UNAUTHENTICATED (the /admin/fees client page
+// calls it directly from the browser) and each miss runs several chunked getLogs
+// passes, so cache the result briefly to cap the RPC cost from repeated/abusive
+// hits without breaking the page. Fee data moves slowly; 60s is plenty.
+let feesCache: { at: number; payload: Record<string, unknown> } | null = null;
+const FEES_TTL_MS = 60_000;
+
 /** Format a 6-decimal USDC raw bigint into a human string (e.g. "12.50"). */
 function fmtUsdc(raw: bigint): string {
     const neg = raw < 0n;
@@ -73,6 +80,9 @@ function fmtUsdc(raw: bigint): string {
 }
 
 export async function GET() {
+    if (feesCache && Date.now() - feesCache.at < FEES_TTL_MS) {
+        return ok({ ...feesCache.payload, cached: true });
+    }
     const addrs = deployments.addresses;
     const treasury = addrs.treasury as Address | undefined;
     const usdc = addrs.USDC as Address | undefined;
@@ -298,7 +308,7 @@ export async function GET() {
     const items = [...treasuryItems, ...v4Items].sort((a, b) => b.block - a.block);
     const feeCount = items.filter((i) => i.isFee).length;
 
-    return ok({
+    const payload = {
         ok: true,
         treasury,
         fromBlock: Number(fromBlock),
@@ -317,5 +327,8 @@ export async function GET() {
             BASELINE_BLOCK.toString() +
             " are counted (fresh start). Headline = V2/V3 protocol fees (transfers from the launchpad / locker / compounder to the governance treasury) PLUS V4 post-grad protocol fees (RoyaltyPaid.treasuryAmount from the hook, which land on the operator EOA, not this treasury). V4 curve-platform / migration / creation fees are NOT yet summed (they also route to the operator and can't be cleanly separated from its trades via transfers). Rolling recent window; full history via the Goldsky subgraph.",
         items,
-    });
+    };
+    // Only cache complete scans; a truncated (partial) result shouldn't stick.
+    if (!truncated) feesCache = { at: Date.now(), payload };
+    return ok(payload);
 }
