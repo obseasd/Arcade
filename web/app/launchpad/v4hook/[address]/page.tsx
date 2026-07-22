@@ -184,11 +184,19 @@ function Inner() {
     const isGraduatedPump = isPump && status === ARCADE_HOOK_STATUS.GRADUATED;
     const showMarketStats = isClanker || isGraduatedPump;
 
-    // Market cap uses the traded price when available, else the pool's SEED price
-    // (StateView.getSlot0) so a freshly-launched token shows a real mcap before
-    // its first trade instead of a dash.
+    // Price source:
+    //  - Curving PUMP: no pool exists yet, so use the last CURVE trade price
+    //    (stats.priceUsd), falling back to the seed pool price.
+    //  - CLANKER / graduated PUMP: the live V4 pool is authoritative, so read
+    //    the pool spot (StateView.getSlot0) FIRST. Otherwise a just-graduated
+    //    token shows the average price of the final curve buy (e.g. $18k mcap)
+    //    instead of the pool's real opening spot (~$60k) -- the curve's marginal
+    //    price at graduation, which is where the pool actually seeds. (Audit
+    //    2026-07-22: display-only, the pool value + quotes were always correct.)
     const poolPrice = useV4PoolPrice(valid ? token : undefined);
-    const effectivePrice = stats.priceUsd ?? poolPrice;
+    const effectivePrice = showMarketStats
+        ? (poolPrice ?? stats.priceUsd)
+        : (stats.priceUsd ?? poolPrice);
     const mcapLabel = effectivePrice
         ? `$${(effectivePrice * Number(LAUNCHPAD_TOTAL_SUPPLY)).toLocaleString(undefined, { maximumFractionDigits: 0 })}`
         : "-";
