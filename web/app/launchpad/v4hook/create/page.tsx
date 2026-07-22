@@ -6,7 +6,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useState, Suspense } from "react";
 import { Address, decodeEventLog, isAddress, parseUnits, zeroAddress } from "viem";
-import { useAccount, usePublicClient, useWriteContract } from "wagmi";
+import { useAccount, usePublicClient, useReadContract, useWriteContract } from "wagmi";
 
 import {
     ARCADE_HOOK_ABI,
@@ -171,6 +171,19 @@ function Inner() {
 
     const { ensureAllowance } = useApproveIfNeeded(ADDRESSES.usdc, ADDRESSES.arcadeHook);
     const { writeContractAsync } = useWriteContract();
+
+    // The "Twitter @" recipient only works if the hook has an escrow wired; else
+    // createLaunch silently routes the fees to the launcher wallet instead. Read
+    // it so we can disable the option rather than mislead the creator. (CLANKER
+    // audit M-2.)
+    const escrowQ = useReadContract({
+        address: ADDRESSES.arcadeHook,
+        abi: ARCADE_HOOK_ABI,
+        functionName: "twitterEscrow",
+        query: { enabled: ADDRESSES.arcadeHook !== zeroAddress },
+    });
+    const twitterEscrowWired =
+        escrowQ.data !== undefined && (escrowQ.data as Address) !== zeroAddress;
 
     // Route the creator cut. "other" wallet => 100% of the creator cut to that
     // address via the creator2 split (createLaunch always records creator ==
@@ -579,13 +592,20 @@ function Inner() {
                                     { k: "wallet", label: "My wallet" },
                                     { k: "other", label: "Another wallet" },
                                     { k: "twitter", label: "Twitter @" },
-                                ] as const).map((opt) => (
+                                ] as const).map((opt) => {
+                                    // Disable Twitter @ when the hook has no escrow wired,
+                                    // otherwise the fees would silently route to the wallet.
+                                    const disabled = opt.k === "twitter" && !twitterEscrowWired;
+                                    return (
                                     <button
                                         key={opt.k}
                                         type="button"
+                                        disabled={disabled}
+                                        title={disabled ? "Twitter escrow not configured on this hook" : undefined}
                                         onClick={() => setRecipientMode(opt.k)}
                                         className={cn(
                                             "rounded-lg border px-3 py-2 text-xs font-medium transition",
+                                            disabled && "cursor-not-allowed opacity-40",
                                             recipientMode === opt.k
                                                 ? "border-arc-cta-hover bg-arc-cta/10 text-arc-text"
                                                 : "border-arc-border bg-arc-bg text-arc-text-muted hover:border-arc-cta-hover",
@@ -593,7 +613,8 @@ function Inner() {
                                     >
                                         {opt.label}
                                     </button>
-                                ))}
+                                    );
+                                })}
                             </div>
 
                             {recipientMode === "wallet" && (

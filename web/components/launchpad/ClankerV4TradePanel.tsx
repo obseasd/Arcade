@@ -49,6 +49,8 @@ const VIRT_TOKEN = 1_135_000_000n * 10n ** BigInt(LAUNCHPAD_TOKEN_DECIMALS);
 const CURVE_K = VIRT_USDC * VIRT_TOKEN;
 // 3% slippage floor on curve trades (the hook enforces minOut via Slippage()).
 const CURVE_SLIPPAGE_BPS = 300n;
+// Gas buffer kept back on a MAX USDC buy (USDC is Arc's native gas token).
+const GAS_BUFFER_USDC = 250_000n; // 0.25 USDC
 
 /** Constant-product curve preview, net of the 1% curve fee, matching the hook. */
 function previewCurveOut(
@@ -249,7 +251,7 @@ export function ClankerV4TradePanel({ token, symbol, image, curve, onTradeSucces
         const receipt = await publicClient.waitForTransactionReceipt({ hash });
         if (receipt.status !== "success") {
           throw new Error(
-            `${side === "buy" ? "Buy" : "Sell"} reverted on-chain (tx ${hash.slice(0, 10)}…). Common causes: slippage too tight, price moved, deadline.`,
+            `${side === "buy" ? "Buy" : "Sell"} reverted on-chain (tx ${hash.slice(0, 10)}…). Likely slippage too tight, the price moved, or (on a fresh CLANKER launch) the anti-snipe buy cap. Try a smaller amount.`,
           );
         }
       }
@@ -285,7 +287,13 @@ export function ClankerV4TradePanel({ token, symbol, image, curve, onTradeSucces
       });
     } catch (e: unknown) {
       const err = e as { shortMessage?: string; message?: string };
-      setTx({ status: "error", message: err?.shortMessage || err?.message || "Trade failed" });
+      const raw = err?.shortMessage || err?.message || "Trade failed";
+      // Map the launch-window anti-snipe cap revert to a clear message instead of
+      // an opaque hex selector. (CLANKER audit M-1.)
+      const msg = /BuyExceedsCap/i.test(raw)
+        ? "This buy exceeds the launch-window anti-snipe cap. Try a smaller amount, or wait for the launch window to end."
+        : raw;
+      setTx({ status: "error", message: msg });
     }
   };
 
@@ -337,7 +345,18 @@ export function ClankerV4TradePanel({ token, symbol, image, curve, onTradeSucces
         symbol={side === "buy" ? "USDC" : symbol}
         image={side === "sell" ? image : undefined}
         balanceLabel={account ? `Balance: ${inBalanceFmt}` : undefined}
-        onMax={account && inBalance ? () => setAmount(formatUnits(inBalance, sideDecimals)) : undefined}
+        onMax={
+          account && inBalance
+            ? () => {
+                // USDC is the native gas token on Arc, so a full-balance MAX buy
+                // leaves nothing to pay for the tx. Keep a small buffer on the buy
+                // side; sell (token) side takes the full balance. (PUMP audit M4.)
+                const spendable =
+                  side === "buy" && inBalance > GAS_BUFFER_USDC ? inBalance - GAS_BUFFER_USDC : inBalance;
+                setAmount(formatUnits(spendable, sideDecimals));
+              }
+            : undefined
+        }
       />
 
       <div className="mt-3 rounded-xl border border-arc-border bg-arc-bg-elevated p-3 text-sm">

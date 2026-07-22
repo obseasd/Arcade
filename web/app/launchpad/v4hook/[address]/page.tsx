@@ -120,6 +120,17 @@ function Inner() {
     });
     const poolFee = Number((feeQ.data as bigint | number | undefined) ?? 0);
 
+    // Live dynamic fee (bps): graduated PUMP decays 1% -> 0.30% with market cap;
+    // poolFeeOf is 0 for PUMP so this is the only source of its real swap fee.
+    const dynFeeQ = useReadContract({
+        address: ADDRESSES.arcadeHook,
+        abi: ARCADE_HOOK_ABI,
+        functionName: "currentFeeBps",
+        args: valid ? [token] : undefined,
+        query: { enabled: valid, refetchInterval: 30_000 },
+    });
+    const dynFeeBps = Number((dynFeeQ.data as bigint | number | undefined) ?? 0);
+
     // Anti-sniper config (per token): startBps, decaySeconds, launchedAt.
     const snipeQ = useReadContract({
         address: ADDRESSES.arcadeHook,
@@ -167,6 +178,11 @@ function Inner() {
     const symbol = (symbolQ.data as string | undefined) ?? "?";
     const isClanker = mode === ARCADE_HOOK_MODE.CLANKER || mode === ARCADE_HOOK_MODE.CLANKER_V3;
     const isPump = mode === ARCADE_HOOK_MODE.PUMP;
+    // A graduated PUMP trades on its live V4 pool exactly like CLANKER, so its
+    // stats should read like a live market (fee + pool value), not frozen curve
+    // progress. (PUMP audit M2.)
+    const isGraduatedPump = isPump && status === ARCADE_HOOK_STATUS.GRADUATED;
+    const showMarketStats = isClanker || isGraduatedPump;
 
     // Market cap uses the traded price when available, else the pool's SEED price
     // (StateView.getSlot0) so a freshly-launched token shows a real mcap before
@@ -284,15 +300,31 @@ function Inner() {
                                 value={mcapLabel}
                                 hint="Latest indexed price multiplied by the 1B total supply. Equal to FDV since all tokens are circulating from launch."
                             />
-                            {isClanker ? (
+                            {showMarketStats ? (
                                 <>
-                                    <Stat label="Swap fee" value={poolFee > 0 ? `${poolFee / 10_000}%` : "-"} hint="Fixed CLANKER tier. 80% creator / 20% treasury." />
                                     <Stat
-                                        label="Liquidity"
-                                        value={liquidityUsd > 0 ? `$${liquidityUsd.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : "Locked"}
-                                        hint="USDC currently in the locked single-sided V4 pool (net bought). The LP position itself is locked permanently."
+                                        label="Swap fee"
+                                        value={
+                                            isClanker
+                                                ? poolFee > 0 ? `${poolFee / 10_000}%` : "-"
+                                                : dynFeeBps > 0 ? `${(dynFeeBps / 100).toFixed(2)}%` : "1% -> 0.30%"
+                                        }
+                                        hint={
+                                            isClanker
+                                                ? "Fixed CLANKER tier. 80% creator / 20% treasury."
+                                                : "Live dynamic fee: decays from 1% to 0.30% as market cap grows. 80% creator / 20% treasury."
+                                        }
                                     />
-                                    <Stat label="Type" value="Direct (V4)" hint="No bonding curve: tradable on the canonical V4 pool from launch." />
+                                    <Stat
+                                        label="Pool value"
+                                        value={liquidityUsd > 0 ? `$${liquidityUsd.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : "Locked"}
+                                        hint="Total value in the V4 pool (USDC net bought plus the token side at the current price). The LP is locked permanently."
+                                    />
+                                    <Stat
+                                        label="Type"
+                                        value={isClanker ? "Direct (V4)" : "Graduated (V4)"}
+                                        hint={isClanker ? "No bonding curve: tradable on the canonical V4 pool from launch." : "This PUMP graduated: it now trades on its locked full-range V4 pool."}
+                                    />
                                 </>
                             ) : (
                                 <>
