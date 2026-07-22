@@ -91,8 +91,11 @@ export function useTokenHolders(
   const countQ = useQuery<number | null>({
     queryKey: ["arcade", "holder-count", token?.toLowerCase() ?? null],
     enabled: !!GOLDSKY_URL && !!token,
-    staleTime: 60_000,
-    refetchInterval: 120_000,
+    // Was 60s stale / 120s poll -> the holder count lagged a full 1-2 min behind
+    // a trade. The subgraph count query is a single cheap GraphQL call, so poll it
+    // fast (matching the trades feed's responsiveness).
+    staleTime: 10_000,
+    refetchInterval: 12_000,
     queryFn: async () => {
       if (!GOLDSKY_URL || !token) return null;
       try {
@@ -118,7 +121,12 @@ export function useTokenHolders(
     // useReadContract for totalSupply transitions from undefined -> N.
     queryKey: ["arcade", "token-holders", token?.toLowerCase() ?? null],
     enabled: !!publicClient && !!token,
-    staleTime: SCAN_STALE_MS,
+    // Poll the holder list every ~12s (was 90s stale, no interval -> the list
+    // lagged over a minute). The normal path is a single cheap subgraph query;
+    // the heavy on-chain Transfer scan only runs on a subgraph miss (rare), so
+    // the faster cadence does not add RPC load in practice.
+    staleTime: 10_000,
+    refetchInterval: 12_000,
     gcTime: SCAN_STALE_MS * 5,
     queryFn: async () => {
       if (!publicClient || !token) return [];
