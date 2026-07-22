@@ -35,6 +35,7 @@ import {BeforeSwapDelta, BeforeSwapDeltaLibrary, toBeforeSwapDelta} from "v4-cor
 import {SwapParams, ModifyLiquidityParams} from "v4-core/types/PoolOperation.sol";
 
 import {ArcadeV4Math} from "./libraries/ArcadeV4Math.sol";
+import {ArcadeHookLib} from "./libraries/ArcadeHookLib.sol";
 
 /**
  * @title ArcadeHook
@@ -600,7 +601,7 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         // CLANKER: seed the full supply single-sided into a locked V4 LP at the
         // starting market cap. No bonding curve -- the pool is live immediately.
         if (mode == uint8(LaunchMode.CLANKER)) {
-            _launchDirect(tokenAddr, key, poolId, startMcap);
+            ArcadeHookLib.launchDirect(POOL_MANAGER, USDC, clankerPos, tokenAddr, key, poolId, startMcap);
         }
 
         // PUMP optional CREATOR BUY: an atomic first purchase in the SAME tx as
@@ -924,8 +925,10 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         if (fee > maxTake) fee = maxTake;
         if (fee + snipeSkim > maxTake) snipeSkim = maxTake - fee;
 
-        _payAntiSnipe(poolId, USDC, snipeSkim, amount);
-        _distributeFee(poolId, USDC, fee, state.mode, true);
+        ArcadeHookLib.payAntiSnipe(POOL_MANAGER, feeOwners, pendingTokenWithdrawals, poolId, USDC, snipeSkim, amount);
+        ArcadeHookLib.distributeFee(
+            POOL_MANAGER, feeOwners, pendingTokenWithdrawals, TREASURY, poolId, USDC, fee, state.mode, true
+        );
 
         // Positive specified delta = the hook takes this many USDC units off
         // the specified side, so the swapper pays for everything taken above.
@@ -1031,7 +1034,19 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         // with refund == 0, and gating on refund would leave the launch
         // permanently stuck at the cap (every later buy reverts ZeroAmount, so
         // _graduate becomes unreachable and the AMM pool is never seeded).
-        if (ArcadeV4Curve.isGraduated(state.tokensSold)) _graduate(token, state);
+        if (ArcadeV4Curve.isGraduated(state.tokensSold)) {
+            ArcadeHookLib.graduate(
+                POOL_MANAGER,
+                USDC,
+                TREASURY,
+                pendingTokenWithdrawals,
+                feeObs,
+                snipeConfigs,
+                state,
+                _buildPoolKey(token),
+                token
+            );
+        }
 
         return (r.tokensOut, r.actualGross);
     }
@@ -1167,9 +1182,13 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         uint256 maxTake = (amount * MAX_TOTAL_TAKE_BPS) / 10_000;
         if (fee > maxTake) fee = maxTake;
         if (fee + snipeSkim > maxTake) snipeSkim = maxTake - fee;
-        _payAntiSnipe(poolId, feeCurrency, snipeSkim, amount);
+        ArcadeHookLib.payAntiSnipe(
+            POOL_MANAGER, feeOwners, pendingTokenWithdrawals, poolId, feeCurrency, snipeSkim, amount
+        );
 
-        _distributeFee(poolId, feeCurrency, fee, state.mode, true);
+        ArcadeHookLib.distributeFee(
+            POOL_MANAGER, feeOwners, pendingTokenWithdrawals, TREASURY, poolId, feeCurrency, fee, state.mode, true
+        );
 
         // Advance the price oracle AFTER taking the fee, so this swap's own
         // price impact never influences the fee it just paid.
@@ -1178,82 +1197,6 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         // Return the total taken on the unspecified side so the swapper pays.
         uint256 totalTaken = fee + snipeSkim;
         return (IHooks.afterSwap.selector, int128(int256(totalTaken)));
-    }
-
-    /// @dev Route anti-sniper auction proceeds to the launch CREATOR. The
-    ///      anti-sniper is a descending-tax dutch auction on the first
-    ///      post-graduation buys; the premium a sniper pays for early access
-    ///      accrues to the creator/community (Clanker's model), not the
-    ///      protocol -- it turns extractable sniping into creator revenue and
-    ///      removes any protocol incentive to keep the tax high. Blocklist-safe
-    ///      (a hostile creator recipient credits a pending pull, never bricks
-    ///      the swap). No-op when the skim is zero.
-    function _payAntiSnipe(PoolId poolId, Currency currency, uint256 snipeSkim, uint256 amount) internal {
-        if (snipeSkim == 0) return;
-        _safeTake(currency, feeOwners[poolId].creator, snipeSkim);
-        emit AntiSnipeApplied(poolId, msg.sender, snipeSkim, uint16((snipeSkim * 10_000) / amount));
-    }
-
-    /// @dev Split `fee` (already computed, in `feeCurrency`) 80/20
-    ///      creator/treasury and route it via _safeTake. The creator cut
-    ///      flows through the optional creator2 split (CLANKER only) and the
-    ///      Twitter-escrow slot when wired, falling back to a direct creator
-    ///      take if the escrow reverts. Every take is blocklist-safe so a
-    ///      hostile recipient credits a pending pull instead of bricking the
-    ///      swap (CSEC-001). Shared by before/afterSwap so the split is
-    ///      identical no matter which side USDC lands on.
-    ///      `allowEscrow` gates the Twitter-escrow route: true for USDC fees
-    ///      (the escrow pins one token per slot = USDC); false for a CLANKER
-    ///      collect's TOKEN-side fee, which always goes direct to the creator.
-    function _distributeFee(PoolId poolId, Currency feeCurrency, uint256 fee, uint8 mode, bool allowEscrow)
-        internal
-    {
-        if (fee == 0) return;
-        FeeOwner memory fo = feeOwners[poolId];
-        uint256 creatorCut = (fee * POST_GRAD_CREATOR_BPS) / 10_000;
-        uint256 treasuryCut = fee - creatorCut;
-
-        // Optional creator2 split (CLANKER only, when configured).
-        if (fo.creator2 != address(0) && fo.creator2Bps > 0 && mode == uint8(LaunchMode.CLANKER)) {
-            uint256 creator2Cut = (creatorCut * fo.creator2Bps) / 10_000;
-            if (creator2Cut > 0) {
-                _safeTake(feeCurrency, fo.creator2, creator2Cut);
-                creatorCut -= creator2Cut;
-            }
-        }
-
-        // Route the creator cut. Twitter-escrow slot if the launch attributed
-        // fees to a handle (USDC only), else direct to the creator.
-        if (creatorCut > 0) {
-            if (allowEscrow && fo.twitterEscrow != address(0)) {
-                address feeTokenAddr = Currency.unwrap(feeCurrency);
-                uint256 positionId = _positionIdForEscrow(poolId);
-                // Deliver the USDC to the escrow FIRST, then credit the slot.
-                // The escrow verifies delivery with a balance-diff, so crediting
-                // before the transfer would always fail; delivering first means
-                // a credit can never book more than actually arrived (no
-                // books-exceed-balance drain across slots).
-                _safeTake(feeCurrency, fo.twitterEscrow, creatorCut);
-                try IArcadeTwitterEscrowV3Min(fo.twitterEscrow).creditSlot(
-                    positionId, fo.slotIndex, feeTokenAddr, creatorCut
-                ) {
-                    // credited to the handle slot
-                } catch {
-                    // Misconfig (hook not allow-listed as a crediter) or the
-                    // take pended: the USDC sits at the escrow un-earmarked
-                    // (rescuable by the escrow owner) or in this hook's pending
-                    // ledger. Never lost; surfaced for ops via the event. (The
-                    // escrow's creditSlot is deliberately NOT pausable, so an
-                    // escrow pause never routes fees through this path.)
-                    emit EscrowCreditFailed(positionId, fo.slotIndex, creatorCut);
-                }
-            } else {
-                _safeTake(feeCurrency, fo.creator, creatorCut);
-            }
-        }
-        if (treasuryCut > 0) _safeTake(feeCurrency, TREASURY, treasuryCut);
-
-        emit RoyaltyPaid(poolId, fo.creator, creatorCut, treasuryCut, Currency.unwrap(feeCurrency));
     }
 
     /// @dev The trading-fee rate (bps) for a graduated pool, by mode. PUMP uses
@@ -1366,13 +1309,6 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         return (usdcIsCurrency0 && params.zeroForOne) || (!usdcIsCurrency0 && !params.zeroForOne);
     }
 
-    /// @dev positionId passed to the Twitter escrow's creditSlot. The escrow
-    ///      treats this as opaque so we just use the PoolId as the identifier
-    ///      (unique per launch, stable for the life of the pool).
-    function _positionIdForEscrow(PoolId poolId) internal pure returns (uint256) {
-        return uint256(PoolId.unwrap(poolId));
-    }
-
     /// @dev Internal copy of currentSnipeBps that avoids an external self-call.
     function _currentSnipeBps(address token) internal view returns (uint256) {
         SnipeConfig memory cfg = snipeConfigs[token];
@@ -1443,219 +1379,25 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
     // Graduation
     // -------------------------------------------------------------------
 
-    /// @dev Atomic curve -> AMM migration. Triggered from `buy` when the
-    ///      simulateBuy result reports a refund > 0 (cap path).
-    ///
-    ///      Sequence (frozen per V4_HOOK_SPEC.md Section 5):
-    ///        1. Status flip to GraduationStarted so any other in-flight call
-    ///           sees the transient state and reverts cleanly.
-    ///        2. Take MIGRATION_FEE (2_500 USDC) off the top to TREASURY.
-    ///        3. Compute the V4 init price from the seed reserves.
-    ///        4. Initialise the V4 pool at that price.
-    ///        5. Unlock the manager and add full-range LP via `unlockCallback`.
-    ///        6. Status flip to Graduated. The buy that triggered graduation
-    ///           returns normally to the caller after this completes.
-    /// @dev CLANKER direct launch: initialise the V4 pool at the starting market
-    ///      cap and seed the FULL supply as a SINGLE-SIDED locked position (all
-    ///      token, 0 USDC). No bonding curve -- buyers push the price up from the
-    ///      start FDV. The hook owns the position (locked like the graduation
-    ///      seed). The pool is Graduated (fee-capturing) from the first swap.
-    ///      Single-sided orientation: the launch token sits entirely on its side
-    ///      of the current tick so it is released (sold for USDC) only as the
-    ///      price rises -- token=currency0 -> position [startTick, maxTick];
-    ///      token=currency1 -> position [minTick, startTick].
-    function _launchDirect(address token, PoolKey memory key, PoolId poolId, uint256 startMcap) internal {
-        bool usdcIsCurrency0 = Currency.unwrap(key.currency0) == Currency.unwrap(USDC);
-        uint256 supply = ArcadeV4Curve.TOTAL_SUPPLY;
-
-        // Start price = FDV `startMcap` over the full supply. Same amount->price
-        // convention as _graduate (USDC amount in the USDC currency slot).
-        (uint256 amount0, uint256 amount1) =
-            usdcIsCurrency0 ? (startMcap, supply) : (supply, startMcap);
-        uint160 startSqrt = ArcadeV4Math.sqrtPriceX96FromAmounts(amount0, amount1);
-        POOL_MANAGER.initialize(key, startSqrt);
-
-        // Align the start tick so the full-supply position sits ENTIRELY on the
-        // launch token's side of the current price (never straddling, which
-        // would need USDC the hook doesn't hold). token=currency1 -> [minTick,
-        // edge]; token=currency0 -> [edge, maxTick]. (See ArcadeV4Math.)
-        int24 spacing = key.tickSpacing;
-        int24 aligned = ArcadeV4Math.seedEdgeTick(startSqrt, spacing, usdcIsCurrency0);
-        (int24 minT, int24 maxT) = ArcadeV4Math.fullRange(spacing);
-
-        // Record the exact position range so collectFees can address it later
-        // (modifyLiquidity keys the position by its tick range).
-        uint64 nowTs = uint64(block.timestamp);
-        if (usdcIsCurrency0) {
-            clankerPos[token] = ClankerPos({tickLower: minT, tickUpper: aligned, seeded: true, launchedAt: nowTs});
-        } else {
-            clankerPos[token] = ClankerPos({tickLower: aligned, tickUpper: maxT, seeded: true, launchedAt: nowTs});
-        }
-
-        POOL_MANAGER.unlock(abi.encode(uint8(1), token, supply, uint256(0), aligned));
-
-        // CLANKER uses the native pool LP fee (no PUMP oracle). Anti-sniper clock
-        // was stamped at createLaunch (the pool is live now).
-        emit Graduated(poolId, 0, supply);
-    }
-
-    function _graduate(address token, CurveState storage state) internal {
-        state.status = uint8(Status.GraduationStarted);
-
-        uint256 totalUsdc = state.realUsdcReserve;
-        uint256 lpUsdc = ArcadeV4Curve.graduationLiquidityUsdc(totalUsdc);
-        if (lpUsdc == 0) revert ZeroAmount();
-        uint256 lpTokens = ArcadeV4Curve.MIGRATION_LP_TOKENS;
-
-        // Migration fee off the top -> treasury. Via pull-payment escape so
-        // a USDC-blocked treasury can't DoS graduation; the value still
-        // lands, just sits in pendingTokenWithdrawals until pulled.
-        _safePayUsdc(TREASURY, ArcadeV4Curve.MIGRATION_FEE);
-
-        PoolKey memory key = _buildPoolKey(token);
-        bool usdcIsCurrency0 = Currency.unwrap(key.currency0) == Currency.unwrap(USDC);
-        (uint256 amount0, uint256 amount1) =
-            usdcIsCurrency0 ? (lpUsdc, lpTokens) : (lpTokens, lpUsdc);
-
-        // The V4 init price MUST match the reserve ratio or the AMM will
-        // start in an arb-able state and our LP gets one-sided.
-        uint160 sqrtPriceX96 = ArcadeV4Math.sqrtPriceX96FromAmounts(amount0, amount1);
-        POOL_MANAGER.initialize(key, sqrtPriceX96);
-
-        // Hand off to the unlock callback which adds the LP + settles both
-        // sides (kind 0 = graduation, full-range two-sided). The hook owns the
-        // LP position; no external surface can remove it (beforeRemoveLiquidity
-        // + noSelfCall), so it is permanently locked.
-        POOL_MANAGER.unlock(abi.encode(uint8(0), token, amount0, amount1, int24(0)));
-
-        state.status = uint8(Status.Graduated);
-
-        // Start the anti-sniper decay clock NOW: the AMM pool goes live at
-        // graduation, so this is the first moment afterSwap can tax a buy.
-        // (createLaunch deliberately left launchedAt == 0.) Only touch it if a
-        // config exists (startBps > 0); an unconfigured token stays untaxed.
-        if (snipeConfigs[token].startBps > 0) {
-            snipeConfigs[token].launchedAt = uint64(block.timestamp);
-        }
-
-        // Seed the PUMP fee oracle at the graduation price. The pool is now
-        // initialised + seeded, so slot0 reads the graduation tick. The EMA
-        // starts AT the graduation mcap tick, so the very first post-grad swaps
-        // pay PUMP_FEE_MAX (1%); the fee only decays as the EMA climbs.
-        PoolId pid = key.toId();
-        int24 gmt = _mcapTick(pid, usdcIsCurrency0);
-        feeObs[pid] = FeeObs({
-            emaTickE3: int64(int256(gmt) * 1_000),
-            gradMcapTick: gmt,
-            lastTs: uint32(block.timestamp),
-            init: true
-        });
-
-        emit Graduated(pid, totalUsdc, lpTokens);
-    }
-
     /// @inheritdoc IUnlockCallback
+    /// @dev Thin entrypoint. The full LP-add / graduation-seed / CLANKER-harvest
+    ///      body lives in ArcadeHookLib (delegatecalled, so address(this) stays
+    ///      the hook and PoolManager sees the hook as the unlocker). Storage
+    ///      mappings are passed by reference; behaviour is byte-identical to the
+    ///      former inline implementation.
     function unlockCallback(bytes calldata data) external override returns (bytes memory) {
         if (msg.sender != address(POOL_MANAGER)) revert NotPoolManager();
-        (uint8 kind, address token, uint256 amount0, uint256 amount1, int24 startTick) =
-            abi.decode(data, (uint8, address, uint256, uint256, int24));
-
-        PoolKey memory key = _buildPoolKey(token);
-        int24 spacing = key.tickSpacing;
-
-        // kind 2 = CLANKER fee harvest. modifyLiquidity with delta=0 realises the
-        // LP fees accrued to the locked position (returned as `feesAccrued`,
-        // positive to the hook). Split each currency 80/20: USDC via the
-        // escrow-aware path, the launch token direct to the creator.
-        if (kind == 2) {
-            ClankerPos memory pos = clankerPos[token];
-            (, BalanceDelta feesAccrued) = POOL_MANAGER.modifyLiquidity(
-                key,
-                ModifyLiquidityParams({
-                    tickLower: pos.tickLower,
-                    tickUpper: pos.tickUpper,
-                    liquidityDelta: 0,
-                    salt: bytes32(0)
-                }),
-                ""
-            );
-            PoolId poolId = key.toId();
-            uint8 mode = curveStates[poolId].mode;
-            bool usdcIsCurrency0 = Currency.unwrap(key.currency0) == Currency.unwrap(USDC);
-            uint256 fee0 = feesAccrued.amount0() > 0 ? uint256(uint128(feesAccrued.amount0())) : 0;
-            uint256 fee1 = feesAccrued.amount1() > 0 ? uint256(uint128(feesAccrued.amount1())) : 0;
-            // USDC side -> escrow-aware; token side -> creator-direct (escrow
-            // pins one token per slot = USDC).
-            if (usdcIsCurrency0) {
-                _distributeFee(poolId, key.currency0, fee0, mode, true); // USDC
-                _distributeFee(poolId, key.currency1, fee1, mode, false); // token
-            } else {
-                _distributeFee(poolId, key.currency0, fee0, mode, false); // token
-                _distributeFee(poolId, key.currency1, fee1, mode, true); // USDC
-            }
-            emit FeeHarvested(PoolId.unwrap(poolId), fee0, fee1);
-            return "";
-        }
-
-        int24 tickLower;
-        int24 tickUpper;
-        uint128 liquidity;
-
-        if (kind == 0) {
-            // Graduation: full-range two-sided position at the reserve ratio.
-            (tickLower, tickUpper) = ArcadeV4Math.fullRange(spacing);
-            uint160 sqrtPriceX96 = ArcadeV4Math.sqrtPriceX96FromAmounts(amount0, amount1);
-            liquidity = ArcadeV4Math.liquidityForAmounts(sqrtPriceX96, tickLower, tickUpper, amount0, amount1);
-        } else {
-            // CLANKER direct: SINGLE-SIDED position of the full supply (amount0),
-            // all on the launch token's side of `startTick`, so no USDC is
-            // needed. token=currency0 -> [startTick, maxTick] (all currency0);
-            // token=currency1 -> [minTick, startTick] (all currency1).
-            bool usdcIsCurrency0 = Currency.unwrap(key.currency0) == Currency.unwrap(USDC);
-            uint256 supply = amount0;
-            (int24 minT, int24 maxT) = ArcadeV4Math.fullRange(spacing);
-            if (usdcIsCurrency0) {
-                // launch token = currency1: position below the start.
-                tickLower = minT;
-                tickUpper = startTick;
-                liquidity = ArcadeV4Math.liquidityForAmount1(tickLower, tickUpper, supply);
-            } else {
-                // launch token = currency0: position above the start.
-                tickLower = startTick;
-                tickUpper = maxT;
-                liquidity = ArcadeV4Math.liquidityForAmount0(tickLower, tickUpper, supply);
-            }
-        }
-
-        (BalanceDelta callerDelta,) = POOL_MANAGER.modifyLiquidity(
-            key,
-            ModifyLiquidityParams({
-                tickLower: tickLower,
-                tickUpper: tickUpper,
-                liquidityDelta: int256(uint256(liquidity)),
-                salt: bytes32(0)
-            }),
-            ""
+        return ArcadeHookLib.unlockCallback(
+            POOL_MANAGER,
+            USDC,
+            TREASURY,
+            data,
+            clankerPos,
+            curveStates,
+            feeOwners,
+            poolFeeOf,
+            pendingTokenWithdrawals
         );
-
-        // Settle each side the hook owes (negative delta). For the direct seed
-        // only the token side is owed (USDC delta is 0), so this naturally
-        // settles single-sided.
-        int128 d0 = callerDelta.amount0();
-        int128 d1 = callerDelta.amount1();
-        if (d0 < 0) _settleSide(key.currency0, uint256(uint128(-d0)));
-        if (d1 < 0) _settleSide(key.currency1, uint256(uint128(-d1)));
-
-        return "";
-    }
-
-    /// @dev Pay `amount` of `currency` to the PoolManager, balancing the
-    ///      modifyLiquidity delta.
-    function _settleSide(Currency currency, uint256 amount) internal {
-        if (amount == 0) return;
-        POOL_MANAGER.sync(currency);
-        IERC20(Currency.unwrap(currency)).safeTransfer(address(POOL_MANAGER), amount);
-        POOL_MANAGER.settle();
     }
 
     /// @dev Canonical PoolKey for a launch. Sorts the currencies by address
@@ -1709,43 +1451,8 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         uint256 platformCut = fee / 2; // 50/50
         uint256 creatorCut = fee - platformCut;
 
-        if (platformCut > 0) _safePayUsdc(TREASURY, platformCut);
-        if (creatorCut > 0) _safePayUsdc(creator, creatorCut);
-    }
-
-    /// @dev Best-effort USDC payout from the hook's own balance. If the
-    ///      transfer reverts or returns false (USDC blocklist, receiver
-    ///      rejects, etc.) the amount is credited to
-    ///      `pendingTokenWithdrawals[USDC][to]` instead. CSEC-001: keeps a
-    ///      single blocked recipient from DOSing every curve trade or
-    ///      graduation. The recipient pulls later via `claimPendingToken`.
-    function _safePayUsdc(address to, uint256 amount) internal {
-        if (amount == 0 || to == address(0)) return;
-        address usdcAddr = Currency.unwrap(USDC);
-        try IERC20(usdcAddr).transfer(to, amount) returns (bool ok) {
-            if (ok) return;
-        } catch {
-            // fall through to credit
-        }
-        pendingTokenWithdrawals[usdcAddr][to] += amount;
-        emit TokenCredited(usdcAddr, to, amount);
-    }
-
-    /// @dev Best-effort PoolManager.take. If the recipient rejects the
-    ///      transfer (USDC blocklist, contract receive hook revert, etc.)
-    ///      the funds are taken to the hook instead and credited as a
-    ///      pending pull-payment. CSEC-001 applied to the V4 royalty path.
-    function _safeTake(Currency currency, address to, uint256 amount) internal {
-        if (amount == 0 || to == address(0)) return;
-        try POOL_MANAGER.take(currency, to, amount) {
-            return;
-        } catch {
-            // Fall through: take to the hook, credit the recipient.
-        }
-        POOL_MANAGER.take(currency, address(this), amount);
-        address tokenAddr = Currency.unwrap(currency);
-        pendingTokenWithdrawals[tokenAddr][to] += amount;
-        emit TokenCredited(tokenAddr, to, amount);
+        if (platformCut > 0) ArcadeHookLib.safePayUsdc(USDC, pendingTokenWithdrawals, TREASURY, platformCut);
+        if (creatorCut > 0) ArcadeHookLib.safePayUsdc(USDC, pendingTokenWithdrawals, creator, creatorCut);
     }
 
 }
