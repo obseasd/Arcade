@@ -14,6 +14,7 @@ import {
     USYC_TELLER_ADDRESS,
 } from "@/lib/abis/usyc";
 import { useApproveIfNeeded } from "@/lib/hooks/useApproveIfNeeded";
+import { addActivity } from "@/lib/activityFeed";
 import { pushToast } from "@/lib/toast";
 import { cn, formatUSDC } from "@/lib/utils";
 
@@ -54,10 +55,10 @@ export default function EarnPage() {
     const usdcBal = (usdc.data as bigint | undefined) ?? 0n;
     const usycBal = (usyc.data as bigint | undefined) ?? 0n;
 
-    // Protocol treasury USYC position — idle protocol capital put to work in
+    // Protocol treasury USYC position - idle protocol capital put to work in
     // USYC yield instead of sitting dormant. previewRedeem gives the current
     // USDC value of the treasury's shares; because USYC's price accrues, that
-    // value sits above the nominal share count — the visible yield.
+    // value sits above the nominal share count - the visible yield.
     const treasuryUsyc = useReadContract({
         address: USYC_ADDRESS,
         abi: USYC_ABI,
@@ -185,7 +186,7 @@ export default function EarnPage() {
                 </div>
             </div>
 
-            {/* Protocol treasury yield — idle protocol capital working in USYC. */}
+            {/* Protocol treasury yield - idle protocol capital working in USYC. */}
             {treasuryUsycBal > 0n && (
                 <div className="arc-card mt-4 overflow-hidden">
                     <div className="flex items-start gap-4 p-5">
@@ -203,7 +204,7 @@ export default function EarnPage() {
                                 Arcade routes idle protocol capital into USYC (Circle /
                                 Hashnote tokenized T-Bills) instead of leaving it
                                 dormant. The position accrues yield as USYC&apos;s price
-                                grows — the current value sits above the share count.
+                                grows - the current value sits above the share count.
                             </p>
                         </div>
                     </div>
@@ -288,6 +289,7 @@ function UsycActions({
         if (!account || !publicClient || amountRaw <= 0n) return;
         setBusy(true);
         try {
+            let txHash: `0x${string}`;
             if (isDeposit) {
                 // ERC-4626 deposit: approve USDC to the Teller, then
                 // deposit(assets, receiver) mints USYC shares to the user.
@@ -300,6 +302,7 @@ function UsycActions({
                 });
                 const r = await publicClient.waitForTransactionReceipt({ hash });
                 if (r.status !== "success") throw new Error("reverted");
+                txHash = hash;
             } else {
                 // ERC-4626 redeem: burn the user's own USYC shares for USDC.
                 // owner == caller, so no USYC approval is needed.
@@ -311,11 +314,22 @@ function UsycActions({
                 });
                 const r = await publicClient.waitForTransactionReceipt({ hash });
                 if (r.status !== "success") throw new Error("reverted");
+                txHash = hash;
             }
             pushToast({
                 kind: "info",
                 title: isDeposit ? "Deposited into USYC" : "Redeemed to USDC",
                 message: `${amount} ${inSym} converted to ${outSym}.`,
+            });
+            // Surface earn actions in the personal activity feed (localStorage
+            // log; the subgraph does not index USYC vault deposits/redeems).
+            addActivity({
+                type: isDeposit ? "deposit" : "withdraw",
+                account,
+                token: USYC_ADDRESS,
+                label: isDeposit ? "Deposited into USYC" : "Redeemed to USDC",
+                value: `${amount} ${inSym}`,
+                txHash,
             });
             setAmount("");
             onDone();

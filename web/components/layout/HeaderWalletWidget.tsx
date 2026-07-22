@@ -31,6 +31,10 @@ import {
     loadActivity,
     type ActivityEntry,
 } from "@/lib/activityFeed";
+import {
+    useAccountActivity,
+    accountActivityToEntry,
+} from "@/lib/hooks/useAccountActivity";
 import { pushToast } from "@/lib/toast";
 import { cn, formatAgo, formatUSDC } from "@/lib/utils";
 import { TokenIcon } from "@/components/ui/TokenIcon";
@@ -404,6 +408,9 @@ function ActivityFeed({ address, onLinkClick }: { address: Address; onLinkClick:
     const [bridges, setBridges] = useState<HistoryEntry[]>([]);
     const [claims, setClaims] = useState<PendingTwitterClaim[]>([]);
     const [appActivity, setAppActivity] = useState<ActivityEntry[]>([]);
+    // Cross-device / backend-visible trades from the subgraph (the localStorage
+    // log only sees THIS browser). Soft-fails to [] so it can only add rows.
+    const subgraphActivity = useAccountActivity(address);
 
     useEffect(() => {
         const refresh = () => {
@@ -428,6 +435,24 @@ function ActivityFeed({ address, onLinkClick }: { address: Address; onLinkClick:
         };
     }, [address]);
 
+    // Merge the subgraph trades with the localStorage log, de-duplicated by
+    // txHash (each tx shows once; the localStorage row stays as the offline /
+    // optimistic fallback when the subgraph hasn't indexed the tx yet).
+    const mergedApp = useMemo(() => {
+        const seen = new Set<string>();
+        const out: ActivityEntry[] = [];
+        const push = (e: ActivityEntry) => {
+            const key = e.txHash ? e.txHash.toLowerCase() : e.id;
+            if (seen.has(key)) return;
+            seen.add(key);
+            out.push(e);
+        };
+        // Subgraph first so it wins as the source of truth on a txHash clash.
+        for (const s of subgraphActivity) push(accountActivityToEntry(s, address));
+        for (const a of appActivity) push(a);
+        return out.sort((a, b) => b.timestamp - a.timestamp);
+    }, [subgraphActivity, appActivity, address]);
+
     // Merge + sort by recency. Cap at 3 rows so the panel stays compact.
     const items = useMemo(() => {
         const all = [
@@ -441,14 +466,14 @@ function ActivityFeed({ address, onLinkClick }: { address: Address; onLinkClick:
                 ts: c.savedAt * 1000,
                 row: c,
             })),
-            ...appActivity.slice(0, 3).map((a) => ({
+            ...mergedApp.slice(0, 3).map((a) => ({
                 kind: "app" as const,
                 ts: a.timestamp,
                 row: a,
             })),
         ];
         return all.sort((a, b) => b.ts - a.ts).slice(0, 3);
-    }, [bridges, claims, appActivity]);
+    }, [bridges, claims, mergedApp]);
 
     if (items.length === 0) {
         return (

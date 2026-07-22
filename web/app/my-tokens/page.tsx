@@ -63,6 +63,11 @@ import { useV4TokenStats } from "@/lib/hooks/useV4TokenStats";
 import { loadBridgeHistory, type HistoryEntry } from "@/lib/bridgeHistory";
 import { listPendingClaims, type PendingTwitterClaim } from "@/lib/pendingClaims";
 import { iconForActivity, loadActivity, type ActivityEntry } from "@/lib/activityFeed";
+import {
+    useAccountActivity,
+    accountActivityToEntry,
+    type AccountActivityItem,
+} from "@/lib/hooks/useAccountActivity";
 import { pushToast } from "@/lib/toast";
 import { cn, formatAddress, formatAgo, formatToken, formatUSDC } from "@/lib/utils";
 
@@ -546,7 +551,11 @@ function OverviewTab({
         }
         return generatePlaceholderSeries(currentUsd);
     }, [pf.hasData, pf.series, currentUsd]);
-    const activityCount = useMemo(() => buildActivity(account).length, [account]);
+    const subgraphApp = useSubgraphActivityEntries(account);
+    const activityCount = useMemo(
+        () => buildActivity(account, subgraphApp).length,
+        [account, subgraphApp],
+    );
 
     // Change over the reconstructed curve (start -> now). Not a strict 24h
     // window, but real once trade history exists.
@@ -1429,7 +1438,11 @@ function ActivityTab({ account }: { account: Address }) {
     const [timeFilter, setTimeFilter] = useState<ActivityTimeFilter>("all");
     const [search, setSearch] = useState("");
 
-    const allItems = useMemo(() => buildActivity(account), [account]);
+    const subgraphApp = useSubgraphActivityEntries(account);
+    const allItems = useMemo(
+        () => buildActivity(account, subgraphApp),
+        [account, subgraphApp],
+    );
     const items = useMemo(
         () =>
             allItems.filter(
@@ -1850,11 +1863,11 @@ function AddressPopover({
             <div className="my-3 border-t border-arc-border/40" />
             <div className="flex items-center justify-between text-sm">
                 <span className="text-arc-text-faint">Balance</span>
-                <span className="font-medium text-arc-text-muted">—</span>
+                <span className="font-medium text-arc-text-muted">-</span>
             </div>
             <div className="mt-1.5 flex items-center justify-between text-sm">
                 <span className="text-arc-text-faint">1D change</span>
-                <span className="font-medium text-arc-text-muted">—</span>
+                <span className="font-medium text-arc-text-muted">-</span>
             </div>
         </div>
     );
@@ -1874,7 +1887,7 @@ function TransactionDetailsModal({
 }) {
     const shortHash = item.txHash
         ? `${item.txHash.slice(0, 6)}...${item.txHash.slice(-4)}`
-        : "—";
+        : "-";
     const headerLabel =
         item.kind === "claim"
             ? "Claim confirmed"
@@ -1912,7 +1925,7 @@ function TransactionDetailsModal({
                 <div className="space-y-2 text-sm">
                     <div className="flex items-center justify-between">
                         <span className="text-arc-text-faint">Network cost</span>
-                        <span className="text-arc-text">—</span>
+                        <span className="text-arc-text">-</span>
                     </div>
                     <div className="flex items-center justify-between">
                         <span className="text-arc-text-faint">Transaction</span>
@@ -1950,10 +1963,30 @@ function TransactionDetailsModal({
 // Shared Overview/Activity helpers, single source of truth for merging
 // the three localStorage feeds. Once wired to the Goldsky subgraph this
 // collapses to a single GraphQL query and these adapters can be deleted.
-function buildActivity(account: Address): UnifiedActivityItem[] {
+function buildActivity(
+    account: Address,
+    // Cross-device / backend-visible trades from the subgraph, already adapted
+    // to ActivityEntry. Merged with the localStorage log and de-duplicated by
+    // txHash so each tx shows once; the localStorage row stays the offline /
+    // optimistic fallback until the subgraph indexes the tx. Defaults to [] so
+    // existing non-hydrated callers keep working unchanged.
+    subgraphApp: ActivityEntry[] = [],
+): UnifiedActivityItem[] {
     const bridges = loadBridgeHistory(account);
     const claims = listPendingClaims(account);
     const app = loadActivity(account);
+
+    const seen = new Set<string>();
+    const mergedApp: ActivityEntry[] = [];
+    const pushApp = (e: ActivityEntry) => {
+        const key = e.txHash ? e.txHash.toLowerCase() : e.id;
+        if (seen.has(key)) return;
+        seen.add(key);
+        mergedApp.push(e);
+    };
+    // Subgraph first so it wins as the source of truth on a txHash clash.
+    for (const s of subgraphApp) pushApp(s);
+    for (const a of app) pushApp(a);
 
     // bridges fan out: every entry produces the Bridge (burn) row, and any
     // entry whose attestation landed AND was minted on the dst chain also
@@ -1961,10 +1994,19 @@ function buildActivity(account: Address): UnifiedActivityItem[] {
     const items: UnifiedActivityItem[] = [
         ...bridges.flatMap((b) => bridgeToUnified(b)),
         ...claims.map((c) => claimToUnified(c)),
-        ...app.map((a) => appToUnified(a)),
+        ...mergedApp.map((a) => appToUnified(a)),
     ];
     items.sort((a, b) => b.ts - a.ts);
     return items;
+}
+
+/** Shared adapter: subgraph items -> ActivityEntry[] for buildActivity. */
+function useSubgraphActivityEntries(account: Address): ActivityEntry[] {
+    const subgraph: AccountActivityItem[] = useAccountActivity(account);
+    return useMemo(
+        () => subgraph.map((s) => accountActivityToEntry(s, account)),
+        [subgraph, account],
+    );
 }
 
 function bridgeToUnified(b: HistoryEntry): UnifiedActivityItem[] {
@@ -2049,7 +2091,9 @@ function appToUnified(a: ActivityEntry): UnifiedActivityItem {
     // drop the TO/FROM caption since it's noise. Sends always show the
     // recipient address (counterparty) as TO. Everything else falls back
     // to the standard counterparty rendering.
-    const swapTypes = new Set(["swap", "buy", "sell", "multiswap"]);
+    // deposit/withdraw (USYC vault) carry a txHash and no counterparty, so they
+    // render the "TRANSACTION" address column like swaps.
+    const swapTypes = new Set(["swap", "buy", "sell", "multiswap", "deposit", "withdraw"]);
     const selfActionTypes = new Set(["launch", "claim-fees", "add-liquidity"]);
     const addressColumnKind: UnifiedActivityItem["addressColumnKind"] =
         a.type === "send"
@@ -2088,7 +2132,11 @@ function capitalize(s: string): string {
 
 // Compact list version used on the Overview tab.
 function ActivityList({ account, limit }: { account: Address; limit: number }) {
-    const items = useMemo(() => buildActivity(account).slice(0, limit), [account, limit]);
+    const subgraphApp = useSubgraphActivityEntries(account);
+    const items = useMemo(
+        () => buildActivity(account, subgraphApp).slice(0, limit),
+        [account, limit, subgraphApp],
+    );
     if (items.length === 0) {
         return <div className="text-[11px] text-arc-text-faint">No activity yet.</div>;
     }

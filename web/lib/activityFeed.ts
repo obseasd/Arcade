@@ -15,8 +15,8 @@
 import type { Address } from "viem";
 
 // Audit F-7: scope per-account so wallet A's history can't be read out
-// of the same browser by wallet B (the sibling persistence modules —
-// pendingBridge, pendingClaims, bridgeHistory — already key by account).
+// of the same browser by wallet B (the sibling persistence modules -
+// pendingBridge, pendingClaims, bridgeHistory - already key by account).
 // The pre-fix single-key bucket leaked metadata (counterparty addresses,
 // amounts, timestamps) cross-account on shared devices.
 const STORAGE_KEY_BASE = "arcade:activity-feed:v1";
@@ -48,7 +48,10 @@ export type ActivityType =
     | "claim-fees"
     | "add-liquidity"
     | "remove-liquidity"
-    | "send";
+    | "send"
+    // Earn (USYC ERC-4626 vault): deposit = USDC -> USYC, withdraw = USYC -> USDC.
+    | "deposit"
+    | "withdraw";
 
 export interface ActivityEntry {
     id: string;
@@ -77,9 +80,9 @@ interface OmitId {
 }
 
 // Audit 2026-06-11 UX C-3: per-entry schema validation matching the
-// pendingClaims hardening pattern (FSEC-006). A corrupted row — written
+// pendingClaims hardening pattern (FSEC-006). A corrupted row - written
 // by an old schema, XSS, partial quota-exceeded write, manual user
-// fiddling, or a malformed broadcast — used to crash /my-tokens when
+// fiddling, or a malformed broadcast - used to crash /my-tokens when
 // `capitalize(a.type)` hit a null or undefined `type`. Now every entry
 // loaded from disk is validated and dropped silently if it doesn't match
 // the expected shape. Keeps the feed self-healing across schema bumps.
@@ -91,7 +94,10 @@ const ALLOWED_TYPES: ReadonlySet<ActivityType> = new Set([
     "multiswap",
     "claim-fees",
     "add-liquidity",
+    "remove-liquidity",
     "send",
+    "deposit",
+    "withdraw",
 ]);
 
 function isValidEntry(v: unknown): v is ActivityEntry {
@@ -184,6 +190,8 @@ export function iconForActivity(type: ActivityType): string {
         case "claim-fees":
         case "add-liquidity":
         case "remove-liquidity":
+        case "deposit":
+        case "withdraw":
             return "/contract.png";
         case "swap":
         case "multiswap":
