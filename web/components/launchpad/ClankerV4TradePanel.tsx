@@ -14,6 +14,7 @@ import { TxStatus, type TxState } from "@/components/ui/TxStatus";
 import { useApproveIfNeeded } from "@/lib/hooks/useApproveIfNeeded";
 import { pushToast } from "@/lib/toast";
 import { addActivity } from "@/lib/activityFeed";
+import { addOptimisticTrade } from "@/lib/optimisticTrades";
 import { reportReferralTrade } from "@/lib/referral";
 import { cn, formatToken, formatUSDC } from "@/lib/utils";
 
@@ -260,6 +261,18 @@ export function ClankerV4TradePanel({ token, symbol, image, curve, onTradeSucces
       usdcBalance.refetch();
       tokenBalance.refetch();
       onTradeSuccess?.();
+      // Optimistic row so the token page shows this trade instantly, before the
+      // subgraph indexes it. Amounts use the quote (estimatedOut); the subgraph
+      // row (true fill) supersedes it by txHash once indexed.
+      addOptimisticTrade({
+        token,
+        txHash: hash,
+        wallet: account,
+        type: side,
+        usdcRaw: side === "buy" ? amountRaw : estimatedOut,
+        tokenRaw: side === "buy" ? estimatedOut : amountRaw,
+        timeMs: Date.now(),
+      });
       const outTokenSymbol = side === "buy" ? symbol : "USDC";
       const outDecimals = side === "buy" ? LAUNCHPAD_TOKEN_DECIMALS : USDC_DECIMALS;
       const outFormatted =

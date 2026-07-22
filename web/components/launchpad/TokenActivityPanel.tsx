@@ -1,10 +1,11 @@
 "use client";
 
 import { Activity, Users, ExternalLink, BadgeDollarSign, Rocket } from "lucide-react";
-import { useState, useMemo } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { Address, zeroHash } from "viem";
 import { useReadContract } from "wagmi";
 import { useTokenTrades, type Trade } from "@/lib/hooks/useTokenTrades";
+import { getOptimisticTrades, subscribeOptimisticTrades, type OptimisticTrade } from "@/lib/optimisticTrades";
 import { useTokenHolders, type Holder } from "@/lib/hooks/useTokenHolders";
 import { useTokenClaims, type ClaimRow } from "@/lib/hooks/useTokenClaims";
 import { useTokenGraduation, type GraduationRow as GraduationRowType } from "@/lib/hooks/useTokenGraduation";
@@ -116,14 +117,40 @@ function TransactionsTab({
   // One-off "graduated to the AMM" milestone (PUMP only, V4).
   const graduation = useTokenGraduation(token, source === "v4");
 
+  // Optimistic own-trades: show a trade the user just made INSTANTLY, before the
+  // subgraph indexes it (which can lag). Deduped by txHash against the subgraph
+  // trades below, so the real indexed row supersedes it the moment it lands.
+  const [optimistic, setOptimistic] = useState<OptimisticTrade[]>(() => getOptimisticTrades(token));
+  useEffect(() => {
+    const update = () => setOptimistic(getOptimisticTrades(token));
+    update();
+    return subscribeOptimisticTrades(update);
+  }, [token]);
+
   const nowSec = Math.floor(Date.now() / 1000);
   const items = useMemo(() => {
     const t = trades.map((tr) => ({ kind: "trade" as const, time: nowSec - tr.blocksAgo, trade: tr }));
+    // Drop any optimistic row the subgraph has already indexed (txHash match).
+    const indexed = new Set(trades.map((tr) => tr.txHash.toLowerCase()));
+    const o = optimistic
+      .filter((op) => !indexed.has(op.txHash.toLowerCase()))
+      .map((op) => ({
+        kind: "trade" as const,
+        time: Math.floor(op.timeMs / 1000),
+        trade: {
+          txHash: op.txHash,
+          wallet: op.wallet,
+          type: op.type,
+          usdcRaw: op.usdcRaw,
+          tokenRaw: op.tokenRaw,
+          blocksAgo: Math.max(0, nowSec - Math.floor(op.timeMs / 1000)),
+        } as Trade,
+      }));
     const c = claims.map((cl) => ({ kind: "claim" as const, time: cl.blockTime, claim: cl }));
     const g = graduation ? [{ kind: "graduation" as const, time: graduation.blockTime, graduation }] : [];
-    return [...t, ...c, ...g].sort((a, b) => b.time - a.time);
+    return [...o, ...t, ...c, ...g].sort((a, b) => b.time - a.time);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [trades, claims, graduation]);
+  }, [trades, claims, graduation, optimistic]);
 
   if (isLoading && items.length === 0) {
     return (
