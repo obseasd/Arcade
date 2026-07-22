@@ -40,6 +40,7 @@ import {
   HandleAttribution,
   EscrowSlot,
   Claim,
+  Graduation,
   FeeStats,
   LockerPosition,
   LockerRecipientEarning,
@@ -1030,6 +1031,17 @@ export function handleGraduatedV4(event: Graduated): void {
     const g = loadGlobal();
     g.graduatedCount = g.graduatedCount + 1;
     g.save();
+    // Milestone row for the activity feed (Graduated(poolId, totalUsdc, lpTokens)).
+    const grad = new Graduation(
+      event.transaction.hash.toHexString() + "-" + event.logIndex.toString(),
+    );
+    grad.token = p.token;
+    grad.poolId = event.params.poolId;
+    grad.usdcRaised = usdcVolume(event.params.finalUsdcReserve);
+    grad.blockTime = event.block.timestamp.toI32();
+    grad.blockNumber = event.block.number;
+    grad.txHash = event.transaction.hash;
+    grad.save();
   }
 }
 

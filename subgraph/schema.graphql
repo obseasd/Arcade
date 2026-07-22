@@ -228,6 +228,19 @@ type Claim @entity(immutable: true) {
   txHash: Bytes!
 }
 
+# One row per PUMP graduation (Graduated event). Queried by token so the activity
+# feed can show "graduated to the AMM" as a milestone row. Immutable.
+type Graduation @entity(immutable: true) {
+  # txHash-logIndex.
+  id: ID!
+  token: Bytes!
+  poolId: Bytes!
+  usdcRaised: BigDecimal!
+  blockTime: Int!
+  blockNumber: BigInt!
+  txHash: Bytes!
+}
+
 # V4 post-graduation fee running totals (id = "v4"), for /stats revenue reads.
 type FeeStats @entity(immutable: false) {
   id: ID!
