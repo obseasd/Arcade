@@ -31,6 +31,23 @@ const CLANKER_DEFAULT_START_MCAP = 35_000;
 const CLANKER_MIN_START_MCAP = 1_000;
 const CLANKER_MAX_START_MCAP = 10_000_000;
 
+// Curve virtuals: MUST mirror ArcadeV4Curve VIRTUAL_USDC_RESERVE /
+// VIRTUAL_TOKEN_RESERVE (5_800e6 / 1_135_000_000e18) and the 1% curve fee, so
+// the creator-buy minOut matches the on-chain out.
+const CURVE_VIRT_USDC = 5_800n * 10n ** 6n;
+const CURVE_VIRT_TOKEN = 1_135_000_000n * 10n ** 18n;
+const CURVE_K = CURVE_VIRT_USDC * CURVE_VIRT_TOKEN;
+/** Tokens out for a buy of `usdcInRaw` against the fresh (empty) curve. */
+function initialCurveTokensOut(usdcInRaw: bigint): bigint {
+    if (usdcInRaw <= 0n) return 0n;
+    const netIn = (usdcInRaw * 9_900n) / 10_000n;
+    const newUsdc = CURVE_VIRT_USDC + netIn;
+    if (newUsdc === 0n) return 0n;
+    const newToken = CURVE_K / newUsdc;
+    if (CURVE_VIRT_TOKEN <= newToken) return 0n;
+    return CURVE_VIRT_TOKEN - newToken;
+}
+
 /** Fallback inline-encode the image as a downscaled JPEG data URL when Pinata
  * is not reachable. Mirrors the V2 launchpad's encodeInlineDataUrl so the V4
  * create flow stays usable on environments without PINATA_JWT. */
@@ -135,6 +152,20 @@ function Inner() {
     // Snipe config. Both zero means no anti-sniper.
     const [snipeStartBps, setSnipeStartBps] = useState(0);
     const [snipeDecayMinutes, setSnipeDecayMinutes] = useState(10);
+
+    // PUMP-only optional "creator buy": USDC the launcher spends on the curve
+    // immediately after createLaunch (the classic pump.fun dev-buy). createLaunch
+    // has no atomic buy param, so this is a SECOND tx right after; the approval
+    // below covers both the 3 USDC fee and this amount.
+    const [creatorBuy, setCreatorBuy] = useState("");
+    const creatorBuyRaw = (() => {
+        try {
+            if (isClanker || !creatorBuy || Number(creatorBuy) <= 0) return 0n;
+            return parseUnits(creatorBuy, 6);
+        } catch {
+            return 0n;
+        }
+    })();
 
     const [txState, setTxState] = useState<TxState>({ status: "idle" });
 
@@ -262,8 +293,17 @@ function Inner() {
         }
 
         try {
-            setTxState({ status: "pending", message: "Approving 3 USDC creation fee..." });
-            await ensureAllowance(CREATION_FEE_USDC);
+            // Approve the fee PLUS the optional creator-buy up front (same spender
+            // = the hook), so the dev-buy that follows createLaunch needs no second
+            // approval.
+            const approveTotal = CREATION_FEE_USDC + creatorBuyRaw;
+            setTxState({
+                status: "pending",
+                message: creatorBuyRaw > 0n
+                    ? "Approving fee + creator buy..."
+                    : "Approving 3 USDC creation fee...",
+            });
+            await ensureAllowance(approveTotal);
 
             setTxState({ status: "pending", message: "Submitting createLaunch..." });
             // Anti-sniper rides the hook fee-take, which a CLANKER single-sided
@@ -334,6 +374,34 @@ function Inner() {
                 }
             }
             if (!newToken) throw new Error("TokenLaunched event not found in receipt");
+
+            // Optional PUMP creator buy: spend `creatorBuyRaw` USDC on the fresh
+            // curve as a second tx. minOut derived from the curve at its initial
+            // (empty) state with 10% slippage, so a sniper wedging in between the
+            // two txs makes the dev-buy revert (creator keeps the USDC) rather
+            // than fill at a blown price.
+            if (creatorBuyRaw > 0n) {
+                try {
+                    setTxState({ status: "pending", message: "Creator buy: purchasing on the curve..." });
+                    const minOut = (initialCurveTokensOut(creatorBuyRaw) * 90n) / 100n;
+                    const buyHash = await writeContractAsync({
+                        address: ADDRESSES.arcadeHook,
+                        abi: ARCADE_HOOK_ABI,
+                        functionName: "buy",
+                        args: [newToken, creatorBuyRaw, minOut],
+                    });
+                    await publicClient.waitForTransactionReceipt({ hash: buyHash });
+                } catch (buyErr) {
+                    // The launch already succeeded; surface the buy failure but
+                    // still route to the token page so the creator can retry there.
+                    const bm = buyErr instanceof Error ? buyErr.message : String(buyErr);
+                    pushToast({
+                        kind: "error",
+                        title: "Creator buy failed",
+                        message: `Launch succeeded; the dev-buy did not (${bm.slice(0, 100)}). Buy from the token page.`,
+                    });
+                }
+            }
 
             setTxState({
                 status: "success",
@@ -659,10 +727,58 @@ function Inner() {
                 </div>
                 )}
 
+                {/* Creator buy (PUMP only) -------------------------------- */}
+                {!isClanker && (
+                <div className="space-y-2 rounded-xl border border-arc-border bg-arc-bg-elevated p-4">
+                    <span className="text-sm font-medium text-arc-text">
+                        Creator buy (optional)
+                    </span>
+                    <label className="block text-sm">
+                        <span className="text-arc-text-muted">USDC to buy at launch</span>
+                        <div className="mt-1 flex items-center gap-2 rounded-lg border border-arc-border bg-arc-bg px-3 py-2">
+                            <input
+                                type="text"
+                                inputMode="decimal"
+                                value={creatorBuy}
+                                onChange={(e) => setCreatorBuy(e.target.value.replace(/[^0-9.]/g, ""))}
+                                placeholder="0.0"
+                                className="w-full bg-transparent text-sm tabular-nums focus:outline-none"
+                            />
+                            <span className="shrink-0 text-xs text-arc-text-faint">USDC</span>
+                        </div>
+                    </label>
+                    {creatorBuyRaw > 0n && (
+                        <p className="text-xs text-arc-text-muted">
+                            ≈ {(Number(initialCurveTokensOut(creatorBuyRaw)) / 1e18).toLocaleString(undefined, { maximumFractionDigits: 0 })}{" "}
+                            {symbol || "tokens"} on the first buy.
+                        </p>
+                    )}
+                    <p className="text-xs text-arc-text-faint">
+                        Buy a bag of your own token in the same flow (a second tx right after
+                        the launch, approved together). Grabs supply before anyone else and
+                        seeds the curve. Reverts harmlessly if a sniper front-runs it.
+                    </p>
+                </div>
+                )}
+
                 {/* Fee summary --------------------------------------------- */}
-                <div className="flex items-center justify-between rounded-lg border border-arc-border bg-arc-bg-elevated px-3 py-2 text-sm">
-                    <span className="text-arc-text-muted">Creation fee</span>
-                    <span>{formatUSDC(CREATION_FEE_USDC)} USDC</span>
+                <div className="space-y-1 rounded-lg border border-arc-border bg-arc-bg-elevated px-3 py-2 text-sm">
+                    <div className="flex items-center justify-between">
+                        <span className="text-arc-text-muted">Creation fee</span>
+                        <span>{formatUSDC(CREATION_FEE_USDC)} USDC</span>
+                    </div>
+                    {creatorBuyRaw > 0n && (
+                        <>
+                            <div className="flex items-center justify-between">
+                                <span className="text-arc-text-muted">Creator buy</span>
+                                <span>{formatUSDC(creatorBuyRaw)} USDC</span>
+                            </div>
+                            <div className="flex items-center justify-between border-t border-arc-border pt-1 font-medium">
+                                <span className="text-arc-text-muted">Total</span>
+                                <span>{formatUSDC(CREATION_FEE_USDC + creatorBuyRaw)} USDC</span>
+                            </div>
+                        </>
+                    )}
                 </div>
 
                 {/* Submit -------------------------------------------------- */}
@@ -677,7 +793,7 @@ function Inner() {
                 >
                     {txState.status === "pending"
                         ? "Submitting..."
-                        : `Create launch (pays ${formatUSDC(CREATION_FEE_USDC)} USDC)`}
+                        : `Create launch (pays ${formatUSDC(CREATION_FEE_USDC + creatorBuyRaw)} USDC)`}
                 </button>
 
                 <TxStatus state={txState} />

@@ -21,6 +21,9 @@ export interface V4TokenStats {
    *  card "age" -- the on-chain event scan in useArcadeHookTokens is flaky and
    *  deploy-lagged, so prefer this when present. 0 = miss. */
   createdAtSec: number;
+  /** metadataURI from the subgraph Token entity. Used to skip the flaky
+   *  per-token getLogs scan when resolving the token image/description. */
+  metadataURI?: string;
   isLoading: boolean;
 }
 
@@ -30,6 +33,7 @@ interface StatsResult {
   usdcLiquidity: number;
   feesUsdc?: number;
   createdAtSec: number;
+  metadataURI?: string;
 }
 
 /** O(1) read of the per-token aggregates the subgraph now maintains. Returns
@@ -37,11 +41,11 @@ interface StatsResult {
  *  back to summing recent trades. */
 async function statsFromTokenEntity(url: string, tokenKey: string): Promise<StatsResult | null> {
   try {
-    const q = `{ token(id: "${tokenKey}") { totalVolumeUsdc feesUsdc lastPriceUsdc usdcLiquidity createdAt } }`;
+    const q = `{ token(id: "${tokenKey}") { totalVolumeUsdc feesUsdc lastPriceUsdc usdcLiquidity createdAt metadataURI } }`;
     const res = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ query: q }) });
     if (!res.ok) return null;
     const json = (await res.json()) as {
-      data?: { token?: { totalVolumeUsdc?: string; feesUsdc?: string; lastPriceUsdc?: string; usdcLiquidity?: string; createdAt?: string | number } | null };
+      data?: { token?: { totalVolumeUsdc?: string; feesUsdc?: string; lastPriceUsdc?: string; usdcLiquidity?: string; createdAt?: string | number; metadataURI?: string } | null };
     };
     const t = json?.data?.token;
     // totalVolumeUsdc is non-null in the new schema; its absence means the field
@@ -54,6 +58,7 @@ async function statsFromTokenEntity(url: string, tokenKey: string): Promise<Stat
       usdcLiquidity: Math.max(0, Number(t.usdcLiquidity) || 0),
       feesUsdc: t.feesUsdc != null ? Number(t.feesUsdc) : undefined,
       createdAtSec: Number(t.createdAt) || 0,
+      metadataURI: t.metadataURI || undefined,
     };
   } catch {
     return null;
@@ -119,6 +124,7 @@ export function useV4TokenStats(token: Address | undefined): V4TokenStats {
     usdcLiquidity: data?.usdcLiquidity ?? 0,
     feesUsdc: data?.feesUsdc,
     createdAtSec: data?.createdAtSec ?? 0,
+    metadataURI: data?.metadataURI,
     isLoading: isLoading || isFetching,
   };
 }

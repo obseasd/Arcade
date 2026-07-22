@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import {
     ArrowLeft,
@@ -16,8 +16,9 @@ import Link from "next/link";
 import dynamic from "next/dynamic";
 import { useParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
-import { Address, erc20Abi, formatUnits, isAddress, parseUnits, zeroAddress } from "viem";
-import { useAccount, useReadContract, useWriteContract } from "wagmi";
+import { useQueryClient } from "@tanstack/react-query";
+import { Address, erc20Abi, isAddress, zeroAddress } from "viem";
+import { useReadContract } from "wagmi";
 
 import {
     ARCADE_HOOK_ABI,
@@ -33,17 +34,15 @@ import {
     USDC_DECIMALS,
     V4_HOOK_ENABLED,
 } from "@/lib/constants";
-import { useApproveIfNeeded } from "@/lib/hooks/useApproveIfNeeded";
 import { useArcadeHookCurveState } from "@/lib/hooks/useArcadeHookTokens";
 import { useV4TokenStats } from "@/lib/hooks/useV4TokenStats";
 import { useV4PoolPrice } from "@/lib/hooks/useV4PoolPrice";
 import { useTokenImage, useTokenMetadata } from "@/lib/hooks/useTokenImage";
-import { pushToast } from "@/lib/toast";
 import { ClankerV4TradePanel } from "@/components/launchpad/ClankerV4TradePanel";
 import { TokenActivityPanel } from "@/components/launchpad/TokenActivityPanel";
 import { TokenIcon } from "@/components/ui/TokenIcon";
 import { Tooltip } from "@/components/ui/Tooltip";
-import { formatAddress, formatToken, formatUSDC } from "@/lib/utils";
+import { formatAddress, formatUSDC } from "@/lib/utils";
 
 // PriceChart pulls lightweight-charts (~50 kB); defer it out of the initial
 // route bundle, matching the legacy launchpad token page.
@@ -54,8 +53,8 @@ const PriceChart = dynamic(
 
 // Fee split is 80% creator / 20% treasury for BOTH live modes (2026-07-17 model).
 const MODE_LABEL: Record<number, string> = {
-    [ARCADE_HOOK_MODE.PUMP]: "PUMP · bonding curve",
-    [ARCADE_HOOK_MODE.CLANKER]: "CLANKER · direct launch",
+    [ARCADE_HOOK_MODE.PUMP]: "PUMP Â· bonding curve",
+    [ARCADE_HOOK_MODE.CLANKER]: "CLANKER Â· direct launch",
     [ARCADE_HOOK_MODE.CLANKER_V3]: "CLANKER V3 (locked LP)",
 };
 
@@ -81,6 +80,7 @@ export default function ArcadeHookTokenPage() {
 
 function Inner() {
     const params = useParams();
+    const queryClient = useQueryClient();
     const addrParam = (params.address as string) ?? "";
     const valid = isAddress(addrParam);
     const token = valid ? (addrParam as Address) : (zeroAddress as Address);
@@ -102,8 +102,13 @@ function Inner() {
         query: { enabled: valid },
     });
 
-    const { metadata } = useTokenMetadata(valid ? token : undefined);
-    const { image } = useTokenImage(valid ? token : undefined);
+    const stats = useV4TokenStats(valid ? token : undefined);
+    // Resolve image/description from the subgraph metadataURI when available
+    // (skips the flaky per-token getLogs scan that left the icon a placeholder);
+    // fall back to the scan only until the subgraph has indexed the token.
+    const metadataURIOverride = stats.metadataURI || undefined;
+    const { metadata } = useTokenMetadata(valid ? token : undefined, metadataURIOverride);
+    const { image } = useTokenImage(valid ? token : undefined, metadataURIOverride);
 
     const feeQ = useReadContract({
         address: ADDRESSES.arcadeHook,
@@ -133,15 +138,28 @@ function Inner() {
         return () => clearInterval(t);
     }, []);
 
-    const snipe = useMemo(() => {
-        if (snipeStartBps === 0 || snipeDecaySeconds === 0 || snipeLaunchedAt === 0) {
-            return { active: false, remainingSec: 0, currentBps: 0 };
+    // Anti-snipe timeline. The hook only sets `launchedAt` at GRADUATION (0 while
+    // the PUMP curve is still bonding), because the tax rides the post-graduation
+    // V4-router pool that does not exist yet. So a configured-but-not-graduated
+    // token is PENDING (arms at graduation), NOT expired -- the old "expired"
+    // label wrongly implied the window had already lapsed at launch.
+    const snipe = useMemo<{
+        kind: "none" | "pending" | "active" | "ended";
+        remainingSec: number;
+        currentBps: number;
+    }>(() => {
+        if (snipeStartBps === 0 || snipeDecaySeconds === 0) {
+            return { kind: "none", remainingSec: 0, currentBps: 0 };
+        }
+        if (snipeLaunchedAt === 0) {
+            // Configured, but the curve has not graduated yet -> window not armed.
+            return { kind: "pending", remainingSec: 0, currentBps: 0 };
         }
         const elapsed = nowSec - snipeLaunchedAt;
-        if (elapsed >= snipeDecaySeconds) return { active: false, remainingSec: 0, currentBps: 0 };
+        if (elapsed >= snipeDecaySeconds) return { kind: "ended", remainingSec: 0, currentBps: 0 };
         const remainingSec = snipeDecaySeconds - Math.max(0, elapsed);
         const currentBps = Math.round((snipeStartBps * remainingSec) / snipeDecaySeconds);
-        return { active: true, remainingSec, currentBps };
+        return { kind: "active", remainingSec, currentBps };
     }, [snipeStartBps, snipeDecaySeconds, snipeLaunchedAt, nowSec]);
 
     const name = (nameQ.data as string | undefined) ?? "Unnamed";
@@ -149,7 +167,6 @@ function Inner() {
     const isClanker = mode === ARCADE_HOOK_MODE.CLANKER || mode === ARCADE_HOOK_MODE.CLANKER_V3;
     const isPump = mode === ARCADE_HOOK_MODE.PUMP;
 
-    const stats = useV4TokenStats(valid ? token : undefined);
     // Market cap uses the traded price when available, else the pool's SEED price
     // (StateView.getSlot0) so a freshly-launched token shows a real mcap before
     // its first trade instead of a dash.
@@ -225,7 +242,13 @@ function Inner() {
                                     )}
                                     <StatusBadge status={status} isClanker={isClanker} />
                                     {snipeStartBps > 0 && (
-                                        <SnipePill active={snipe.active} currentBps={snipe.currentBps} remainingSec={snipe.remainingSec} />
+                                        <SnipePill
+                                            kind={snipe.kind}
+                                            startBps={snipeStartBps}
+                                            decaySeconds={snipeDecaySeconds}
+                                            currentBps={snipe.currentBps}
+                                            remainingSec={snipe.remainingSec}
+                                        />
                                     )}
                                 </div>
                                 <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-arc-text-muted">
@@ -330,22 +353,23 @@ function Inner() {
 
                 {/* Right: trade panel + fees/recipient (order-first on mobile) */}
                 <div className="order-first space-y-6 lg:order-none">
-                    {isClanker || status === ARCADE_HOOK_STATUS.GRADUATED ? (
-                        // CLANKER trades on the V4 pool from launch; a GRADUATED PUMP
-                        // also trades on its (now-live) V4 pool via the router, so it
-                        // stays tradable on its own page instead of dead-ending. The
-                        // panel gates on the fee READ resolving, so a PUMP pool's
-                        // legit fee=0 no longer sticks on "Loading pool".
-                        <ClankerV4TradePanel token={token} symbol={symbol} image={image} />
-                    ) : (
-                        <TradeCard
-                            token={token}
-                            symbol={symbol}
-                            status={status}
-                            tokensSold={tokensSold}
-                            realUsdcReserve={realUsdcReserve}
-                        />
-                    )}
+                    {/* One panel for every venue. CLANKER + graduated PUMP trade on
+                        the canonical V4 pool via the router; a still-curving PUMP
+                        passes its curve state so the SAME panel routes to the hook's
+                        bonding-curve buy/sell. onTradeSuccess invalidates the reads
+                        so balances, curve progress and holders refresh in place
+                        (no manual page refresh to sell or see new holders). */}
+                    <ClankerV4TradePanel
+                        token={token}
+                        symbol={symbol}
+                        image={image}
+                        curve={
+                            isPump && status !== ARCADE_HOOK_STATUS.GRADUATED
+                                ? { tokensSold, realUsdcReserve }
+                                : undefined
+                        }
+                        onTradeSuccess={() => queryClient.invalidateQueries()}
+                    />
                     <FeesRecipientPanel
                         token={token}
                         poolFee={poolFee}
@@ -482,7 +506,7 @@ function FeesRecipientPanel({
                             href={`/claim?token=${token}&slot=0${handle ? `&handle=${handle}` : ""}`}
                             className="mt-1 inline-flex items-center gap-1 text-sm font-medium text-arc-cta-hover hover:underline"
                         >
-                            @{handle ?? "twitter"} · verify &amp; claim
+                            @{handle ?? "twitter"} Â· verify &amp; claim
                         </Link>
                     </>
                 ) : recipientAddr ? (
@@ -571,19 +595,55 @@ function StatusBadge({ status, isClanker }: { status: number | undefined; isClan
     return null;
 }
 
-function SnipePill({ active, currentBps, remainingSec }: { active: boolean; currentBps: number; remainingSec: number }) {
-    if (!active) {
+function SnipePill({
+    kind,
+    startBps,
+    decaySeconds,
+    currentBps,
+    remainingSec,
+}: {
+    kind: "none" | "pending" | "active" | "ended";
+    startBps: number;
+    decaySeconds: number;
+    currentBps: number;
+    remainingSec: number;
+}) {
+    if (kind === "none") return null;
+
+    // Configured but the curve has not graduated yet: the tax arms AT graduation.
+    if (kind === "pending") {
         return (
-            <span className="inline-flex items-center gap-1 rounded-full border border-arc-text-faint/30 bg-arc-text-faint/10 px-2 py-0.5 text-[10px] uppercase tracking-wider text-arc-text-faint">
-                <ShieldOff className="h-3 w-3" /> Snipe expired
-            </span>
+            <Tooltip
+                content={`Anti-snipe armed for graduation: the first buyers on the V4 pool pay a ${(startBps / 100).toFixed(0)}% tax that decays to 0 over ${formatRemaining(decaySeconds)} after this token graduates. It has NOT started yet (the curve is still bonding).`}
+            >
+                <span className="inline-flex cursor-help items-center gap-1 rounded-full border border-arc-cta-hover/40 bg-arc-cta-hover/10 px-2 py-0.5 text-[10px] uppercase tracking-wider text-arc-cta-hover">
+                    <ShieldCheck className="h-3 w-3" /> Snipe guard Â· at graduation
+                </span>
+            </Tooltip>
         );
     }
+
+    // Window elapsed after graduation.
+    if (kind === "ended") {
+        return (
+            <Tooltip
+                content={`Anti-snipe finished: a ${(startBps / 100).toFixed(0)}% early-buyer tax ran for ${formatRemaining(decaySeconds)} after graduation and has now decayed to 0. Trading is untaxed by the guard.`}
+            >
+                <span className="inline-flex cursor-help items-center gap-1 rounded-full border border-arc-text-faint/30 bg-arc-text-faint/10 px-2 py-0.5 text-[10px] uppercase tracking-wider text-arc-text-faint">
+                    <ShieldOff className="h-3 w-3" /> Snipe guard Â· ended
+                </span>
+            </Tooltip>
+        );
+    }
+
+    // Live: currently taxing early buyers.
     return (
-        <span className="inline-flex items-center gap-1 rounded-full border border-arc-warn/40 bg-arc-warn/10 px-2 py-0.5 text-[10px] uppercase tracking-wider text-arc-warn">
-            <ShieldCheck className="h-3 w-3" /> Snipe {(currentBps / 100).toFixed(2)}%
-            <Clock className="ml-0.5 h-3 w-3" /> {formatRemaining(remainingSec)}
-        </span>
+        <Tooltip content={`Early-buyer tax live: currently ${(currentBps / 100).toFixed(2)}%, decaying to 0 in ${formatRemaining(remainingSec)}.`}>
+            <span className="inline-flex cursor-help items-center gap-1 rounded-full border border-arc-warn/40 bg-arc-warn/10 px-2 py-0.5 text-[10px] uppercase tracking-wider text-arc-warn">
+                <ShieldCheck className="h-3 w-3" /> Snipe {(currentBps / 100).toFixed(2)}%
+                <Clock className="ml-0.5 h-3 w-3" /> {formatRemaining(remainingSec)}
+            </span>
+        </Tooltip>
     );
 }
 
@@ -596,248 +656,4 @@ function formatRemaining(seconds: number): string {
     const hours = Math.floor(minutes / 60);
     const m = minutes % 60;
     return m > 0 ? `${hours}h ${m}m` : `${hours}h`;
-}
-
-// -------------------------------------------------------------------
-// Trade card (PUMP bonding curve: direct hook buy/sell during Curving)
-// -------------------------------------------------------------------
-
-function TradeCard({
-    token,
-    symbol,
-    status,
-    tokensSold,
-    realUsdcReserve,
-}: {
-    token: Address;
-    symbol: string;
-    status: number | undefined;
-    tokensSold: bigint;
-    realUsdcReserve: bigint;
-}) {
-    const { address: account } = useAccount();
-    const [tab, setTab] = useState<"buy" | "sell">("buy");
-    const [amountStr, setAmountStr] = useState("");
-    const [submitting, setSubmitting] = useState(false);
-
-    const isCurving = status === ARCADE_HOOK_STATUS.CURVING;
-    const isGraduated = status === ARCADE_HOOK_STATUS.GRADUATED;
-
-    const usdcBalQ = useReadContract({
-        address: ADDRESSES.usdc,
-        abi: erc20Abi,
-        functionName: "balanceOf",
-        args: account ? [account] : undefined,
-        query: { enabled: !!account },
-    });
-    const tokenBalQ = useReadContract({
-        address: token,
-        abi: erc20Abi,
-        functionName: "balanceOf",
-        args: account ? [account] : undefined,
-        query: { enabled: !!account },
-    });
-    const usdcBalance = (usdcBalQ.data as bigint | undefined) ?? 0n;
-    const tokenBalance = (tokenBalQ.data as bigint | undefined) ?? 0n;
-
-    const buyApprove = useApproveIfNeeded(ADDRESSES.usdc, ADDRESSES.arcadeHook);
-    const sellApprove = useApproveIfNeeded(token, ADDRESSES.arcadeHook);
-
-    const { writeContractAsync } = useWriteContract();
-
-    const inputDecimals = tab === "buy" ? USDC_DECIMALS : LAUNCHPAD_TOKEN_DECIMALS;
-    const amountBn = useMemo(() => {
-        try {
-            if (!amountStr || Number(amountStr) <= 0) return 0n;
-            return parseUnits(amountStr, inputDecimals);
-        } catch {
-            return 0n;
-        }
-    }, [amountStr, inputDecimals]);
-
-    const estimateOut = useMemo(() => {
-        if (amountBn === 0n) return 0n;
-        // Must match ArcadeV4Curve VIRTUAL_USDC_RESERVE / VIRTUAL_TOKEN_RESERVE
-        // (5_800e6 / 1_135_000_000e18) or the preview diverges from the on-chain out.
-        const virtUsdc = 5_800n * 10n ** BigInt(USDC_DECIMALS);
-        const virtToken = 1_135_000_000n * 10n ** BigInt(LAUNCHPAD_TOKEN_DECIMALS);
-        const currentUsdc = virtUsdc + realUsdcReserve;
-        const currentTokens = virtToken - tokensSold;
-        const K = virtUsdc * virtToken;
-        if (tab === "buy") {
-            const netIn = (amountBn * 9_900n) / 10_000n;
-            const newUsdc = currentUsdc + netIn;
-            if (newUsdc === 0n) return 0n;
-            const newToken = K / newUsdc;
-            if (currentTokens <= newToken) return 0n;
-            return currentTokens - newToken;
-        }
-        const newToken = currentTokens + amountBn;
-        if (newToken === 0n) return 0n;
-        const newUsdc = K / newToken;
-        if (currentUsdc <= newUsdc) return 0n;
-        const grossOut = currentUsdc - newUsdc;
-        return (grossOut * 9_900n) / 10_000n;
-    }, [amountBn, realUsdcReserve, tokensSold, tab]);
-
-    const onSubmit = async () => {
-        if (!account) {
-            pushToast({ kind: "error", title: "Connect wallet first" });
-            return;
-        }
-        if (amountBn === 0n) {
-            pushToast({ kind: "error", title: "Enter an amount" });
-            return;
-        }
-        if (!isCurving) {
-            pushToast({ kind: "error", title: "Curve closed", message: "This token has graduated. Trade via the V4 router." });
-            return;
-        }
-        setSubmitting(true);
-        try {
-            // Slippage floor: derive minOut from the on-chain-matching preview and
-            // allow a 3% band for reserve drift between quote and execution. The
-            // hook enforces this via revert Slippage(); 0n (the old MVP value) left
-            // curve trades fully unprotected against front-running.
-            const CURVE_SLIPPAGE_BPS = 300n;
-            const minOut = estimateOut > 0n ? (estimateOut * (10_000n - CURVE_SLIPPAGE_BPS)) / 10_000n : 0n;
-            if (tab === "buy") {
-                if (amountBn > usdcBalance) {
-                    pushToast({ kind: "error", title: "Insufficient USDC" });
-                    return;
-                }
-                await buyApprove.ensureAllowance(amountBn);
-                await writeContractAsync({
-                    address: ADDRESSES.arcadeHook,
-                    abi: ARCADE_HOOK_ABI,
-                    functionName: "buy",
-                    args: [token, amountBn, minOut],
-                });
-                pushToast({ kind: "info", title: `Buy submitted` });
-            } else {
-                if (amountBn > tokenBalance) {
-                    pushToast({ kind: "error", title: `Insufficient ${symbol}` });
-                    return;
-                }
-                await sellApprove.ensureAllowance(amountBn);
-                await writeContractAsync({
-                    address: ADDRESSES.arcadeHook,
-                    abi: ARCADE_HOOK_ABI,
-                    functionName: "sell",
-                    args: [token, amountBn, minOut],
-                });
-                pushToast({ kind: "info", title: `Sell submitted` });
-            }
-            setAmountStr("");
-        } catch (e) {
-            const msg = e instanceof Error ? e.message : "Tx failed";
-            pushToast({ kind: "error", title: "Failed", message: msg.slice(0, 120) });
-        } finally {
-            setSubmitting(false);
-        }
-    };
-
-    const cta = () => {
-        if (!account) return "Connect wallet";
-        if (isGraduated) return "Curve graduated - use V4 router";
-        if (status === ARCADE_HOOK_STATUS.GRADUATION_STARTED) return "Mid-graduation, retry";
-        if (amountBn === 0n) return tab === "buy" ? "Enter USDC amount" : `Enter ${symbol} amount`;
-        if (submitting) return "Submitting...";
-        return tab === "buy" ? `Buy ${symbol}` : `Sell ${symbol}`;
-    };
-
-    const ctaDisabled = !account || !isCurving || amountBn === 0n || submitting;
-
-    return (
-        <div className="arc-card flex flex-col p-5">
-            <div className="mb-4 flex items-center gap-1 rounded-xl border border-arc-border bg-arc-bg-elevated p-1">
-                {(["buy", "sell"] as const).map((t) => (
-                    <button
-                        type="button"
-                        key={t}
-                        onClick={() => {
-                            setTab(t);
-                            setAmountStr("");
-                        }}
-                        className={
-                            "flex-1 rounded-lg px-3 py-1.5 text-sm font-semibold transition-colors " +
-                            (tab === t ? "bg-arc-cta text-white" : "text-arc-text-muted hover:text-arc-text")
-                        }
-                    >
-                        {t === "buy" ? "Buy" : "Sell"}
-                    </button>
-                ))}
-            </div>
-
-            <div className="rounded-2xl border border-arc-border bg-white/[0.015] p-4">
-                <div className="mb-3 flex items-center justify-between text-xs text-arc-text-muted">
-                    <span>{tab === "buy" ? "Spend" : "Sell"}</span>
-                    <span>
-                        {tab === "buy"
-                            ? `${formatUSDC(usdcBalance, USDC_DECIMALS, 2)} USDC`
-                            : `${formatToken(tokenBalance, LAUNCHPAD_TOKEN_DECIMALS, 4)} ${symbol}`}
-                    </span>
-                </div>
-                <input
-                    type="text"
-                    inputMode="decimal"
-                    value={amountStr}
-                    onChange={(e) => setAmountStr(e.target.value.replace(/[^0-9.]/g, ""))}
-                    placeholder="0.0"
-                    className="arc-input w-full bg-transparent text-3xl font-medium leading-tight sm:text-4xl"
-                    aria-label="Amount"
-                />
-                <div className="mt-2 flex items-center justify-between text-[11px]">
-                    <span className="text-arc-text-faint">{tab === "buy" ? "USDC" : symbol}</span>
-                    <div className="flex gap-1.5">
-                        <QuickBtn onClick={() => setAmountStr(formatUnits(tab === "buy" ? usdcBalance / 2n : tokenBalance / 2n, inputDecimals))}>
-                            HALF
-                        </QuickBtn>
-                        <QuickBtn onClick={() => setAmountStr(formatUnits(tab === "buy" ? usdcBalance : tokenBalance, inputDecimals))}>
-                            MAX
-                        </QuickBtn>
-                    </div>
-                </div>
-            </div>
-
-            <div className="mt-4 rounded-xl border border-arc-border bg-arc-bg-elevated px-4 py-3 text-xs text-arc-text-muted">
-                <div className="flex items-center justify-between">
-                    <span>Estimated out (1% fee included)</span>
-                    <span className="text-arc-text tabular-nums">
-                        {tab === "buy"
-                            ? `${formatToken(estimateOut, LAUNCHPAD_TOKEN_DECIMALS, 4)} ${symbol}`
-                            : `${formatUSDC(estimateOut, USDC_DECIMALS, 2)} USDC`}
-                    </span>
-                </div>
-                <div className="mt-1 text-[10px] text-arc-text-faint">
-                    Slippage 0% (no min-out guard in MVP). On-chain math is canonical.
-                </div>
-            </div>
-
-            <button
-                type="button"
-                onClick={onSubmit}
-                disabled={ctaDisabled}
-                className={"arc-button-primary mt-5 w-full py-3 text-base font-semibold " + (ctaDisabled ? "cursor-not-allowed opacity-50" : "")}
-            >
-                {cta()}
-            </button>
-
-            <div className="mt-3 text-center text-[10px] text-arc-text-faint">
-                Direct curve trade via ArcadeHook. 1% fee, 50% creator / 50% platform.
-            </div>
-        </div>
-    );
-}
-
-function QuickBtn({ onClick, children }: { onClick?: () => void; children: React.ReactNode }) {
-    return (
-        <button
-            type="button"
-            onClick={onClick}
-            className="rounded-md bg-arc-surface px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-arc-text-muted hover:bg-arc-cta hover:text-white"
-        >
-            {children}
-        </button>
-    );
 }

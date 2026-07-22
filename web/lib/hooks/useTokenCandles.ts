@@ -104,7 +104,7 @@ export function useTokenCandles(args: {
     [token, mode, pool, source],
   );
 
-  const { data, isLoading, isFetching } = useQuery<FetchResult>({
+  const { data, isLoading } = useQuery<FetchResult>({
     queryKey: tradesKey,
     enabled: !!publicClient && !!token && mode !== undefined,
     staleTime: SCAN_STALE_MS,
@@ -304,8 +304,11 @@ export function useTokenCandles(args: {
 
   return {
     candles,
-    isLoading:
-      !!token && mode !== undefined && (isLoading || isFetching),
+    // Only the INITIAL load (react-query isLoading = pending with no cached
+    // data). Do NOT fold in isFetching: the 2s V4 poll sets isFetching true on
+    // every tick, which made a token with no trades flicker between "Loading
+    // chart…" and "No trades yet" every 2 seconds.
+    isLoading: !!token && mode !== undefined && isLoading,
   };
 }
 

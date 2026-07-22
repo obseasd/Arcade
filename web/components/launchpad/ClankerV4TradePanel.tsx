@@ -17,11 +17,22 @@ import { addActivity } from "@/lib/activityFeed";
 import { reportReferralTrade } from "@/lib/referral";
 import { cn, formatToken, formatUSDC } from "@/lib/utils";
 
+/** Bonding-curve state for a still-curving PUMP token. When passed, the panel
+ *  trades on the ArcadeHook curve (hook.buy/sell) instead of the V4 router, so
+ *  PUMP gets the exact same UI as CLANKER pre-graduation. */
+export interface CurveTradeState {
+  tokensSold: bigint;
+  realUsdcReserve: bigint;
+}
+
 interface Props {
-  /** The CLANKER V4 token (mode = CLANKER). */
+  /** The V4 token (CLANKER, or a still-curving / graduated PUMP). */
   token: Address;
   symbol: string;
   image?: string;
+  /** Present => trade on the bonding curve (PUMP pre-graduation). Absent =>
+   *  trade on the canonical V4 pool via the router (CLANKER / graduated PUMP). */
+  curve?: CurveTradeState;
   /** Fired after a successful trade so the parent can refetch derived state. */
   onTradeSuccess?: () => void;
 }
@@ -31,19 +42,55 @@ interface Props {
 // on-chain from poolFeeOf(token).
 const TICK_SPACING = 200;
 
+// Curve virtuals: MUST mirror ArcadeV4Curve VIRTUAL_USDC_RESERVE /
+// VIRTUAL_TOKEN_RESERVE or the preview diverges from the on-chain out.
+const VIRT_USDC = 5_800n * 10n ** BigInt(USDC_DECIMALS);
+const VIRT_TOKEN = 1_135_000_000n * 10n ** BigInt(LAUNCHPAD_TOKEN_DECIMALS);
+const CURVE_K = VIRT_USDC * VIRT_TOKEN;
+// 3% slippage floor on curve trades (the hook enforces minOut via Slippage()).
+const CURVE_SLIPPAGE_BPS = 300n;
+
+/** Constant-product curve preview, net of the 1% curve fee, matching the hook. */
+function previewCurveOut(
+  side: "buy" | "sell",
+  amountRaw: bigint,
+  curve: CurveTradeState,
+): bigint {
+  if (amountRaw === 0n) return 0n;
+  const currentUsdc = VIRT_USDC + curve.realUsdcReserve;
+  const currentTokens = VIRT_TOKEN - curve.tokensSold;
+  if (side === "buy") {
+    const netIn = (amountRaw * 9_900n) / 10_000n;
+    const newUsdc = currentUsdc + netIn;
+    if (newUsdc === 0n) return 0n;
+    const newToken = CURVE_K / newUsdc;
+    if (currentTokens <= newToken) return 0n;
+    return currentTokens - newToken;
+  }
+  const newToken = currentTokens + amountRaw;
+  if (newToken === 0n) return 0n;
+  const newUsdc = CURVE_K / newToken;
+  if (currentUsdc <= newUsdc) return 0n;
+  const grossOut = currentUsdc - newUsdc;
+  return (grossOut * 9_900n) / 10_000n;
+}
+
 /**
- * Buy/sell a CLANKER V4 token on the canonical Uniswap V4 pool via the
- * ArcadeV4SwapRouter. CLANKER launches have NO bonding curve: the full supply
- * is seeded single-sided in a locked V4 LP at creation, tradable immediately.
- * Trading therefore goes through the V4 router (exactInputSingle), NOT the
- * hook's curve buy/sell (which only exists for PUMP pre-graduation).
+ * Buy/sell a V4 token with a single UI for both trading venues:
  *
- * PoolKey mirrors the hook exactly: currencies sorted (USDC, token), fee =
- * poolFeeOf(token) (the 1/2/3% tier), tickSpacing 200, hooks = arcadeHook. The
- * router pulls the input via transferFrom(payer), so approval targets the
- * router. sqrtPriceLimitX96 = 0 => the callback resolves it to the full range.
+ * - CLANKER, or a GRADUATED PUMP (`curve` absent): trades on the canonical
+ *   Uniswap V4 pool via the ArcadeV4SwapRouter (exactInputSingle). Quote comes
+ *   from the V4 quoter simulate; approval targets the router.
+ * - A still-curving PUMP (`curve` present): trades on the ArcadeHook bonding
+ *   curve (hook.buy/sell). Quote is the constant-product preview; approval
+ *   targets the hook.
+ *
+ * Keeping one component means PUMP and CLANKER share the exact same panel
+ * (balance, slippage selector, fee row, tx status) instead of the old bespoke
+ * MVP curve card.
  */
-export function ClankerV4TradePanel({ token, symbol, image, onTradeSuccess }: Props) {
+export function ClankerV4TradePanel({ token, symbol, image, curve, onTradeSuccess }: Props) {
+  const curveMode = !!curve;
   const { address: account } = useAccount();
   const publicClient = usePublicClient();
   const [side, setSide] = useState<"buy" | "sell">("buy");
@@ -52,21 +99,22 @@ export function ClankerV4TradePanel({ token, symbol, image, onTradeSuccess }: Pr
   // drift between quote and execution; 3% default mirrors the V3 CLANKER panel.
   const [slippageBps, setSlippageBps] = useState(300);
   const [tx, setTx] = useState<TxState>({ status: "idle" });
-  const [estimatedOut, setEstimatedOut] = useState(0n);
+  const [routerOut, setRouterOut] = useState(0n);
 
-  // The pool's fee tier (10000/20000/30000 = 1/2/3%), set at launch.
+  // The pool's fee tier (10000/20000/30000 = 1/2/3%), set at launch. Only used
+  // by the router path; the curve runs the dynamic 1% fee (poolFeeOf === 0).
   const feeQ = useReadContract({
     address: ADDRESSES.arcadeHook,
     abi: ARCADE_HOOK_ABI,
     functionName: "poolFeeOf",
     args: [token],
-    query: { enabled: token !== zeroAddress },
+    query: { enabled: token !== zeroAddress && !curveMode },
   });
   const fee = Number((feeQ.data as bigint | number | undefined) ?? 0);
   // A graduated PUMP pool has poolFeeOf === 0 by design (the hook captures the
   // fee itself), so "fee is 0" is a VALID loaded state, not a still-loading one.
-  // Gate on whether the read has RESOLVED, not on the value being non-zero.
-  const feeReady = feeQ.data !== undefined;
+  // Curve mode never waits on the fee read.
+  const feeReady = curveMode || feeQ.data !== undefined;
 
   // Canonical PoolKey (currencies sorted by address, exactly like the hook).
   const poolKey = useMemo(() => {
@@ -113,12 +161,17 @@ export function ClankerV4TradePanel({ token, symbol, image, onTradeSuccess }: Pr
     }
   }, [amount, side]);
 
-  // Off-chain quote. The V4 quoter isn't `view` (it reverts to unwind state),
-  // so we simulate it. Debounced via the amount/side/fee deps.
+  // Curve preview is synchronous (constant product). Router quote is async (the
+  // V4 quoter isn't `view` -- it reverts to unwind state -- so we simulate it).
+  const curveOut = useMemo(
+    () => (curve ? previewCurveOut(side, amountRaw, curve) : 0n),
+    [curve, side, amountRaw],
+  );
   useEffect(() => {
+    if (curveMode) return; // curve path doesn't use the quoter
     let cancelled = false;
     if (!publicClient || amountRaw === 0n || !feeReady) {
-      setEstimatedOut(0n);
+      setRouterOut(0n);
       return;
     }
     publicClient
@@ -126,33 +179,31 @@ export function ClankerV4TradePanel({ token, symbol, image, onTradeSuccess }: Pr
         address: ADDRESSES.v4Quoter,
         abi: V4_QUOTER_ABI,
         functionName: "quoteExactInputSingle",
-        args: [
-          {
-            poolKey,
-            zeroForOne,
-            exactAmount: amountRaw,
-            hookData: "0x",
-          },
-        ],
+        args: [{ poolKey, zeroForOne, exactAmount: amountRaw, hookData: "0x" }],
       })
       .then((res) => {
         if (cancelled) return;
         const out = (res.result as readonly [bigint, bigint])[0];
-        setEstimatedOut(out);
+        setRouterOut(out);
       })
       .catch(() => {
-        if (!cancelled) setEstimatedOut(0n);
+        if (!cancelled) setRouterOut(0n);
       });
     return () => {
       cancelled = true;
     };
-  }, [publicClient, amountRaw, zeroForOne, fee, poolKey]);
+  }, [curveMode, publicClient, amountRaw, zeroForOne, fee, poolKey, feeReady]);
 
-  const minOut = (estimatedOut * BigInt(10_000 - slippageBps)) / 10_000n;
+  const estimatedOut = curveMode ? curveOut : routerOut;
+  const slipBps = curveMode ? CURVE_SLIPPAGE_BPS : BigInt(10_000 - slippageBps);
+  const minOut = curveMode
+    ? (estimatedOut * (10_000n - CURVE_SLIPPAGE_BPS)) / 10_000n
+    : (estimatedOut * slipBps) / 10_000n;
 
+  const spender = curveMode ? ADDRESSES.arcadeHook : ADDRESSES.v4Router;
   const { allowance, ensureAllowance } = useApproveIfNeeded(
     side === "buy" ? ADDRESSES.usdc : token,
-    ADDRESSES.v4Router,
+    spender,
   );
   const { writeContractAsync } = useWriteContract();
 
@@ -164,12 +215,19 @@ export function ClankerV4TradePanel({ token, symbol, image, onTradeSuccess }: Pr
         await ensureAllowance(amountRaw);
       }
       setTx({ status: "pending", message: "Submitting trade…" });
-      const hash = await writeContractAsync({
-        address: ADDRESSES.v4Router,
-        abi: V4_ROUTER_ABI,
-        functionName: "exactInputSingle",
-        args: [poolKey, zeroForOne, amountRaw, minOut, account, 0n],
-      });
+      const hash = curveMode
+        ? await writeContractAsync({
+            address: ADDRESSES.arcadeHook,
+            abi: ARCADE_HOOK_ABI,
+            functionName: side === "buy" ? "buy" : "sell",
+            args: [token, amountRaw, minOut],
+          })
+        : await writeContractAsync({
+            address: ADDRESSES.v4Router,
+            abi: V4_ROUTER_ABI,
+            functionName: "exactInputSingle",
+            args: [poolKey, zeroForOne, amountRaw, minOut, account, 0n],
+          });
       if (publicClient) {
         const receipt = await publicClient.waitForTransactionReceipt({ hash });
         if (receipt.status !== "success") {
@@ -224,6 +282,9 @@ export function ClankerV4TradePanel({ token, symbol, image, onTradeSuccess }: Pr
       : formatToken(inBalance, LAUNCHPAD_TOKEN_DECIMALS, 4)
     : "0";
 
+  // Fee row label: curve runs the dynamic 1% fee; router shows the static tier.
+  const feeLabel = curveMode ? "1% (curve)" : fee > 0 ? `${fee / 10_000}%` : "…";
+
   return (
     <div className="arc-card p-5">
       <div className="mb-4 grid grid-cols-2 gap-1 rounded-xl border border-arc-border bg-arc-bg-elevated p-1">
@@ -267,26 +328,30 @@ export function ClankerV4TradePanel({ token, symbol, image, onTradeSuccess }: Pr
           </span>
         </div>
         <div className="mt-1 flex justify-between text-xs text-arc-text-faint">
-          <span>Fee tier</span>
-          <span className="tabular-nums">{fee > 0 ? `${fee / 10_000}%` : "…"}</span>
+          <span>Fee</span>
+          <span className="tabular-nums">{feeLabel}</span>
         </div>
         <div className="mt-1 flex justify-between text-xs text-arc-text-faint">
           <span>Slippage tolerance</span>
-          <span className="flex gap-1">
-            {[50, 100, 300].map((bps) => (
-              <button
-                type="button"
-                key={bps}
-                onClick={() => setSlippageBps(bps)}
-                className={cn(
-                  "rounded px-1.5 py-0.5",
-                  slippageBps === bps ? "bg-arc-primary text-white" : "hover:text-arc-text",
-                )}
-              >
-                {bps / 100}%
-              </button>
-            ))}
-          </span>
+          {curveMode ? (
+            <span className="tabular-nums">3%</span>
+          ) : (
+            <span className="flex gap-1">
+              {[50, 100, 300].map((bps) => (
+                <button
+                  type="button"
+                  key={bps}
+                  onClick={() => setSlippageBps(bps)}
+                  className={cn(
+                    "rounded px-1.5 py-0.5",
+                    slippageBps === bps ? "bg-arc-primary text-white" : "hover:text-arc-text",
+                  )}
+                >
+                  {bps / 100}%
+                </button>
+              ))}
+            </span>
+          )}
         </div>
       </div>
 

@@ -29,10 +29,10 @@ function ageString(createdAtSec: number): string {
  * "Graduated"); PUMP shows its bonding-curve progress.
  */
 export function V4TokenCard({ token, priority }: { token: ArcadeHookTokenInfo; priority?: boolean }) {
-  // The hook surface already carries the metadataURI (from TokenLaunched), so
-  // pass it straight through -- no per-token event scan needed for the logo.
-  const { image } = useTokenImage(token.address, token.metadataURI || undefined);
   const stats = useV4TokenStats(token.address);
+  // Prefer the hook-cached metadataURI (from TokenLaunched); fall back to the
+  // subgraph's when the on-chain scan came up empty, so the logo still resolves.
+  const { image } = useTokenImage(token.address, token.metadataURI || stats.metadataURI || undefined);
   const symbol = token.symbol ?? "?";
   // Prefer the subgraph launch time (reliable) over the flaky on-chain event
   // scan; fall back to the scan only when the subgraph hasn't indexed it yet.

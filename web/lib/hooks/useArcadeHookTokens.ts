@@ -284,7 +284,11 @@ export function useArcadeHookCurveState(token: Address | undefined): {
         abi: ARCADE_HOOK_ABI,
         functionName: "getCurveState",
         args: poolIdQ.data ? [poolIdQ.data as `0x${string}`] : undefined,
-        query: { enabled: enabled && !!poolIdQ.data },
+        // Poll so the token page reflects live curve progress and, crucially,
+        // flips to GRADUATED on its own the moment the bond completes -- without
+        // this the status/reserve froze at the mount value and the user had to
+        // hard-refresh to see the token had graduated.
+        query: { enabled: enabled && !!poolIdQ.data, refetchInterval: 5_000 },
     });
     const curve = stateQ.data as
         | {
