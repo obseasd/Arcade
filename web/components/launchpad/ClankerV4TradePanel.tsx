@@ -7,7 +7,7 @@ import { useAccount, usePublicClient, useReadContract, useWriteContract } from "
 import { ARCADE_HOOK_ABI } from "@/lib/abis/arcadeHook";
 import { V4_ROUTER_ABI } from "@/lib/abis/v4Router";
 import { V4_QUOTER_ABI } from "@/lib/abis/v4Quoter";
-import { ADDRESSES, LAUNCHPAD_TOKEN_DECIMALS, USDC_DECIMALS } from "@/lib/constants";
+import { ADDRESSES, LAUNCHPAD_TOKEN_DECIMALS, USDC_DECIMALS, V4_HOOK_CURVE_SUPPLY } from "@/lib/constants";
 import { AmountInput } from "@/components/ui/AmountInput";
 import { TokenIcon } from "@/components/ui/TokenIcon";
 import { TxStatus, type TxState } from "@/components/ui/TxStatus";
@@ -65,7 +65,14 @@ function previewCurveOut(
     if (newUsdc === 0n) return 0n;
     const newToken = CURVE_K / newUsdc;
     if (currentTokens <= newToken) return 0n;
-    return currentTokens - newToken;
+    const desiredOut = currentTokens - newToken;
+    // Cap at the curve's remaining capacity, exactly like the on-chain
+    // simulateBuy (a buy that crosses CURVE_SUPPLY only fills `maxOut`). Without
+    // this the preview overstates the fill near graduation and the derived
+    // minOut exceeds what the curve delivers -> the graduating buy reverts
+    // Slippage(). (PUMP audit H1.)
+    const maxOut = V4_HOOK_CURVE_SUPPLY > curve.tokensSold ? V4_HOOK_CURVE_SUPPLY - curve.tokensSold : 0n;
+    return desiredOut > maxOut ? maxOut : desiredOut;
   }
   const newToken = currentTokens + amountRaw;
   if (newToken === 0n) return 0n;
@@ -115,6 +122,17 @@ export function ClankerV4TradePanel({ token, symbol, image, curve, onTradeSucces
   // fee itself), so "fee is 0" is a VALID loaded state, not a still-loading one.
   // Curve mode never waits on the fee read.
   const feeReady = curveMode || feeQ.data !== undefined;
+
+  // Graduated PUMP has poolFeeOf === 0 but a LIVE dynamic fee (1% -> 0.30% with
+  // market cap). Read it so the fee row shows the real rate instead of "…".
+  const dynFeeQ = useReadContract({
+    address: ADDRESSES.arcadeHook,
+    abi: ARCADE_HOOK_ABI,
+    functionName: "currentFeeBps",
+    args: [token],
+    query: { enabled: token !== zeroAddress && !curveMode && feeReady && fee === 0 },
+  });
+  const dynFeeBps = Number((dynFeeQ.data as bigint | number | undefined) ?? 0);
 
   // Canonical PoolKey (currencies sorted by address, exactly like the hook).
   const poolKey = useMemo(() => {
@@ -195,10 +213,9 @@ export function ClankerV4TradePanel({ token, symbol, image, curve, onTradeSucces
   }, [curveMode, publicClient, amountRaw, zeroForOne, fee, poolKey, feeReady]);
 
   const estimatedOut = curveMode ? curveOut : routerOut;
-  const slipBps = curveMode ? CURVE_SLIPPAGE_BPS : BigInt(10_000 - slippageBps);
   const minOut = curveMode
     ? (estimatedOut * (10_000n - CURVE_SLIPPAGE_BPS)) / 10_000n
-    : (estimatedOut * slipBps) / 10_000n;
+    : (estimatedOut * BigInt(10_000 - slippageBps)) / 10_000n;
 
   const spender = curveMode ? ADDRESSES.arcadeHook : ADDRESSES.v4Router;
   const { allowance, ensureAllowance } = useApproveIfNeeded(
@@ -282,8 +299,15 @@ export function ClankerV4TradePanel({ token, symbol, image, curve, onTradeSucces
       : formatToken(inBalance, LAUNCHPAD_TOKEN_DECIMALS, 4)
     : "0";
 
-  // Fee row label: curve runs the dynamic 1% fee; router shows the static tier.
-  const feeLabel = curveMode ? "1% (curve)" : fee > 0 ? `${fee / 10_000}%` : "…";
+  // Fee row label: curve = dynamic 1% fee; CLANKER = static tier; graduated PUMP
+  // = the live dynamic fee (poolFeeOf is 0, so read currentFeeBps).
+  const feeLabel = curveMode
+    ? "1% (curve)"
+    : fee > 0
+      ? `${fee / 10_000}%`
+      : dynFeeBps > 0
+        ? `${(dynFeeBps / 100).toFixed(2)}% (dynamic)`
+        : "…";
 
   return (
     <div className="arc-card p-5">
@@ -358,7 +382,7 @@ export function ClankerV4TradePanel({ token, symbol, image, curve, onTradeSucces
       <button
         type="button"
         onClick={onTrade}
-        disabled={!account || amountRaw === 0n || !feeReady || tx.status === "pending"}
+        disabled={!account || amountRaw === 0n || !feeReady || estimatedOut === 0n || tx.status === "pending"}
         className="arc-button-primary mt-4 w-full py-3 text-base"
       >
         {!account
@@ -367,11 +391,13 @@ export function ClankerV4TradePanel({ token, symbol, image, curve, onTradeSucces
             ? "Loading pool…"
             : amountRaw === 0n
               ? "Enter amount"
-              : tx.status === "pending"
-                ? `${side === "buy" ? "Buying" : "Selling"}…`
-                : side === "buy"
-                  ? `Buy ${symbol}`
-                  : `Sell ${symbol}`}
+              : estimatedOut === 0n
+                ? "No quote (retry)"
+                : tx.status === "pending"
+                  ? `${side === "buy" ? "Buying" : "Selling"}…`
+                  : side === "buy"
+                    ? `Buy ${symbol}`
+                    : `Sell ${symbol}`}
       </button>
 
       <TxStatus state={tx} className="mt-3" />

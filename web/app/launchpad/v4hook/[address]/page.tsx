@@ -18,7 +18,7 @@ import { useParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Address, erc20Abi, isAddress, zeroAddress } from "viem";
-import { useReadContract } from "wagmi";
+import { useReadContract, useWriteContract, usePublicClient } from "wagmi";
 
 import {
     ARCADE_HOOK_ABI,
@@ -34,6 +34,7 @@ import {
     USDC_DECIMALS,
     V4_HOOK_ENABLED,
 } from "@/lib/constants";
+import { pushToast } from "@/lib/toast";
 import { useArcadeHookCurveState } from "@/lib/hooks/useArcadeHookTokens";
 import { useV4TokenStats } from "@/lib/hooks/useV4TokenStats";
 import { useV4PoolPrice } from "@/lib/hooks/useV4PoolPrice";
@@ -53,8 +54,8 @@ const PriceChart = dynamic(
 
 // Fee split is 80% creator / 20% treasury for BOTH live modes (2026-07-17 model).
 const MODE_LABEL: Record<number, string> = {
-    [ARCADE_HOOK_MODE.PUMP]: "PUMP Â· bonding curve",
-    [ARCADE_HOOK_MODE.CLANKER]: "CLANKER Â· direct launch",
+    [ARCADE_HOOK_MODE.PUMP]: "PUMP · bonding curve",
+    [ARCADE_HOOK_MODE.CLANKER]: "CLANKER · direct launch",
     [ARCADE_HOOK_MODE.CLANKER_V3]: "CLANKER V3 (locked LP)",
 };
 
@@ -489,6 +490,40 @@ function FeesRecipientPanel({
             : fo.creator
         : undefined;
 
+    // CLANKER creators realize their 80% fee cut only when collectFees(token)
+    // runs -- it's permissionless and always pays the configured recipient, so
+    // a wallet-recipient creator can harvest right here instead of the fees
+    // sitting locked in the LP forever. Only shown once the position is seeded.
+    const clankerPosQ = useReadContract({
+        address: ADDRESSES.arcadeHook,
+        abi: ARCADE_HOOK_ABI,
+        functionName: "clankerPos",
+        args: [token],
+        query: { enabled: token !== zeroAddress },
+    });
+    const seeded = Boolean((clankerPosQ.data as readonly [number, number, boolean] | undefined)?.[2]);
+    const publicClient = usePublicClient();
+    const { writeContractAsync } = useWriteContract();
+    const [collecting, setCollecting] = useState(false);
+    const onCollect = async () => {
+        setCollecting(true);
+        try {
+            const hash = await writeContractAsync({
+                address: ADDRESSES.arcadeHook,
+                abi: ARCADE_HOOK_ABI,
+                functionName: "collectFees",
+                args: [token],
+            });
+            if (publicClient) await publicClient.waitForTransactionReceipt({ hash });
+            pushToast({ kind: "info", title: "Fees collected", message: "Harvested to the creator recipient." });
+        } catch (e) {
+            const msg = e instanceof Error ? e.message : "Failed";
+            pushToast({ kind: "error", title: "Collect failed", message: msg.slice(0, 140) });
+        } finally {
+            setCollecting(false);
+        }
+    };
+
     return (
         <div className="arc-card space-y-3 p-5">
             <div className="flex items-center justify-between text-sm">
@@ -506,7 +541,7 @@ function FeesRecipientPanel({
                             href={`/claim?token=${token}&slot=0${handle ? `&handle=${handle}` : ""}`}
                             className="mt-1 inline-flex items-center gap-1 text-sm font-medium text-arc-cta-hover hover:underline"
                         >
-                            @{handle ?? "twitter"} Â· verify &amp; claim
+                            @{handle ?? "twitter"} · verify &amp; claim
                         </Link>
                     </>
                 ) : recipientAddr ? (
@@ -522,6 +557,24 @@ function FeesRecipientPanel({
                     <div className="mt-1 text-sm text-arc-text-faint">-</div>
                 )}
             </div>
+            {seeded && (
+                <div className="border-t border-arc-border pt-3">
+                    <button
+                        type="button"
+                        onClick={onCollect}
+                        disabled={collecting}
+                        className={
+                            "w-full rounded-lg border border-arc-border bg-arc-surface px-4 py-2 text-sm font-medium transition-colors hover:border-arc-cta-hover " +
+                            (collecting ? "cursor-not-allowed opacity-50" : "")
+                        }
+                    >
+                        {collecting ? "Collecting..." : "Collect fees"}
+                    </button>
+                    <p className="mt-1 text-[10px] text-arc-text-faint">
+                        Harvests the locked LP's accrued fees to the recipient above. Permissionless: anyone can trigger it.
+                    </p>
+                </div>
+            )}
         </div>
     );
 }
@@ -617,7 +670,7 @@ function SnipePill({
                 content={`Anti-snipe armed for graduation: the first buyers on the V4 pool pay a ${(startBps / 100).toFixed(0)}% tax that decays to 0 over ${formatRemaining(decaySeconds)} after this token graduates. It has NOT started yet (the curve is still bonding).`}
             >
                 <span className="inline-flex cursor-help items-center gap-1 rounded-full border border-arc-cta-hover/40 bg-arc-cta-hover/10 px-2 py-0.5 text-[10px] uppercase tracking-wider text-arc-cta-hover">
-                    <ShieldCheck className="h-3 w-3" /> Snipe guard Â· at graduation
+                    <ShieldCheck className="h-3 w-3" /> Snipe guard · at graduation
                 </span>
             </Tooltip>
         );
@@ -630,7 +683,7 @@ function SnipePill({
                 content={`Anti-snipe finished: a ${(startBps / 100).toFixed(0)}% early-buyer tax ran for ${formatRemaining(decaySeconds)} after graduation and has now decayed to 0. Trading is untaxed by the guard.`}
             >
                 <span className="inline-flex cursor-help items-center gap-1 rounded-full border border-arc-text-faint/30 bg-arc-text-faint/10 px-2 py-0.5 text-[10px] uppercase tracking-wider text-arc-text-faint">
-                    <ShieldOff className="h-3 w-3" /> Snipe guard Â· ended
+                    <ShieldOff className="h-3 w-3" /> Snipe guard · ended
                 </span>
             </Tooltip>
         );
