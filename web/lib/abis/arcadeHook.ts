@@ -300,6 +300,7 @@ export const ARCADE_HOOK_ABI = [
             { name: "feeTier", type: "uint8" },
             { name: "twitterHandle", type: "string" },
             { name: "startMcapUsdc", type: "uint256" },
+            { name: "creatorBuyUsdc", type: "uint256" },
         ],
         outputs: [
             { name: "tokenAddr", type: "address" },

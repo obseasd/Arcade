@@ -361,6 +361,10 @@ function Inner() {
                     // seeded at, in USDC micro-units. PUMP ignores it (bonding
                     // curve sets its own start price).
                     isClanker ? parseUnits(String(startMcap), 6) : 0n,
+                    // PUMP: optional creator buy, executed ATOMICALLY inside
+                    // createLaunch (the provable first buy, unbypassable). 0 on
+                    // CLANKER (the hook reverts a creator-buy there).
+                    creatorBuyRaw,
                 ],
             });
 
@@ -388,33 +392,9 @@ function Inner() {
             }
             if (!newToken) throw new Error("TokenLaunched event not found in receipt");
 
-            // Optional PUMP creator buy: spend `creatorBuyRaw` USDC on the fresh
-            // curve as a second tx. minOut derived from the curve at its initial
-            // (empty) state with 10% slippage, so a sniper wedging in between the
-            // two txs makes the dev-buy revert (creator keeps the USDC) rather
-            // than fill at a blown price.
-            if (creatorBuyRaw > 0n) {
-                try {
-                    setTxState({ status: "pending", message: "Creator buy: purchasing on the curve..." });
-                    const minOut = (initialCurveTokensOut(creatorBuyRaw) * 90n) / 100n;
-                    const buyHash = await writeContractAsync({
-                        address: ADDRESSES.arcadeHook,
-                        abi: ARCADE_HOOK_ABI,
-                        functionName: "buy",
-                        args: [newToken, creatorBuyRaw, minOut],
-                    });
-                    await publicClient.waitForTransactionReceipt({ hash: buyHash });
-                } catch (buyErr) {
-                    // The launch already succeeded; surface the buy failure but
-                    // still route to the token page so the creator can retry there.
-                    const bm = buyErr instanceof Error ? buyErr.message : String(buyErr);
-                    pushToast({
-                        kind: "error",
-                        title: "Creator buy failed",
-                        message: `Launch succeeded; the dev-buy did not (${bm.slice(0, 100)}). Buy from the token page.`,
-                    });
-                }
-            }
+            // The creator buy (PUMP) now runs ATOMICALLY inside createLaunch via
+            // the creatorBuyUsdc arg above -- provable first buy, unbypassable, one
+            // tx. No second tx here anymore.
 
             setTxState({
                 status: "success",
