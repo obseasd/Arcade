@@ -1,12 +1,13 @@
 "use client";
 
-import { Activity, Users, ExternalLink, BadgeDollarSign } from "lucide-react";
+import { Activity, Users, ExternalLink, BadgeDollarSign, Rocket } from "lucide-react";
 import { useState, useMemo } from "react";
 import { Address, zeroHash } from "viem";
 import { useReadContract } from "wagmi";
 import { useTokenTrades, type Trade } from "@/lib/hooks/useTokenTrades";
 import { useTokenHolders, type Holder } from "@/lib/hooks/useTokenHolders";
 import { useTokenClaims, type ClaimRow } from "@/lib/hooks/useTokenClaims";
+import { useTokenGraduation, type GraduationRow as GraduationRowType } from "@/lib/hooks/useTokenGraduation";
 import { ARCADE_HOOK_ABI } from "@/lib/abis/arcadeHook";
 import { ADDRESSES } from "@/lib/constants";
 import { arcTestnet } from "@/lib/chains";
@@ -112,14 +113,17 @@ function TransactionsTab({
   const poolIdHex = poolIdQ.data as `0x${string}` | undefined;
   const positionId = poolIdHex && poolIdHex !== zeroHash ? BigInt(poolIdHex) : undefined;
   const claims = useTokenClaims(positionId, source === "v4");
+  // One-off "graduated to the AMM" milestone (PUMP only, V4).
+  const graduation = useTokenGraduation(token, source === "v4");
 
   const nowSec = Math.floor(Date.now() / 1000);
   const items = useMemo(() => {
     const t = trades.map((tr) => ({ kind: "trade" as const, time: nowSec - tr.blocksAgo, trade: tr }));
     const c = claims.map((cl) => ({ kind: "claim" as const, time: cl.blockTime, claim: cl }));
-    return [...t, ...c].sort((a, b) => b.time - a.time);
+    const g = graduation ? [{ kind: "graduation" as const, time: graduation.blockTime, graduation }] : [];
+    return [...t, ...c, ...g].sort((a, b) => b.time - a.time);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [trades, claims]);
+  }, [trades, claims, graduation]);
 
   if (isLoading && items.length === 0) {
     return (
@@ -159,8 +163,10 @@ function TransactionsTab({
           {items.map((it) =>
             it.kind === "trade" ? (
               <TradeRow key={`t-${it.trade.txHash}`} trade={it.trade} symbol={symbol} explorerUrl={explorerUrl} />
-            ) : (
+            ) : it.kind === "claim" ? (
               <ClaimRow key={`c-${it.claim.txHash}`} claim={it.claim} nowSec={nowSec} explorerUrl={explorerUrl} />
+            ) : (
+              <GraduationRow key={`g-${it.graduation.txHash}`} graduation={it.graduation} nowSec={nowSec} explorerUrl={explorerUrl} />
             ),
           )}
         </div>
@@ -251,6 +257,40 @@ function ClaimRow({
       <span className="text-right text-[10px] text-arc-text-faint">{fmtAgo(seconds)}</span>
       <a
         href={`${explorerUrl}/tx/${claim.txHash}`}
+        target="_blank"
+        rel="noopener noreferrer"
+        aria-label="View transaction"
+        className="text-arc-text-faint hover:text-arc-cta-hover"
+      >
+        <ExternalLink className="h-3 w-3" />
+      </a>
+    </div>
+  );
+}
+
+function GraduationRow({
+  graduation,
+  nowSec,
+  explorerUrl,
+}: {
+  graduation: GraduationRowType;
+  nowSec: number;
+  explorerUrl: string;
+}) {
+  const seconds = Math.max(0, nowSec - graduation.blockTime);
+  return (
+    <div className="grid grid-cols-[60px_minmax(0,1fr)_100px_100px_80px_20px] items-center gap-2 px-1 py-2 text-xs tabular-nums">
+      <span className="flex items-center justify-center gap-0.5 rounded-md bg-arc-success/15 px-1.5 py-0.5 text-center text-[10px] font-semibold uppercase text-arc-success">
+        <Rocket className="h-3 w-3" /> Grad
+      </span>
+      <span className="truncate text-[11px] text-arc-text-muted">Graduated to the AMM</span>
+      <span className="text-right text-arc-success">
+        ${graduation.usdcRaised.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+      </span>
+      <span className="text-right text-arc-text-faint">raised</span>
+      <span className="text-right text-[10px] text-arc-text-faint">{fmtAgo(seconds)}</span>
+      <a
+        href={`${explorerUrl}/tx/${graduation.txHash}`}
         target="_blank"
         rel="noopener noreferrer"
         aria-label="View transaction"
