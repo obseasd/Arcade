@@ -457,6 +457,10 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
      *                          hook to have a `twitterEscrow` wired. Emitted
      *                          (not stored) so the backend binds poolId<->handle.
      *                          Empty string (or PUMP) = fees go direct.
+     * @param creatorBuyUsdc    PUMP only: optional USDC the launcher buys on the
+     *                          curve ATOMICALLY in this same tx (the first buy,
+     *                          unbypassable). 0 = no creator buy. Reverts on
+     *                          CLANKER. Approve CREATION_FEE + creatorBuyUsdc.
      */
     function createLaunch(
         string calldata name,
@@ -469,7 +473,8 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         uint32 snipeDecaySeconds,
         uint8 feeTier,
         string calldata twitterHandle,
-        uint256 startMcapUsdc
+        uint256 startMcapUsdc,
+        uint256 creatorBuyUsdc
     ) external nonReentrant whenNotPaused returns (address tokenAddr, PoolId poolId) {
         if (bytes(name).length == 0 || bytes(symbol).length == 0) revert EmptyName();
         // Two modes: PUMP(0) = bonding curve -> graduate; CLANKER(1) = DIRECT
@@ -491,6 +496,10 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         if (mode == uint8(LaunchMode.PUMP) && (creator2 != address(0) || creator2Bps > 0)) {
             revert InvalidFeeOwner();
         }
+        // The atomic creator-buy is a PUMP-curve feature (CLANKER has no curve;
+        // its launcher buys on the router post-seed). Reject it on CLANKER rather
+        // than silently ignore USDC the caller approved. (Creator-buy 2026-07-22.)
+        if (mode != uint8(LaunchMode.PUMP) && creatorBuyUsdc > 0) revert InvalidMode();
 
         // CLANKER creators pick a fixed fee tier (1/2/3 = 1%/2%/3%) and a
         // starting market cap for the single-sided seed. PUMP ignores both and
@@ -592,6 +601,20 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         // starting market cap. No bonding curve -- the pool is live immediately.
         if (mode == uint8(LaunchMode.CLANKER)) {
             _launchDirect(tokenAddr, key, poolId, startMcap);
+        }
+
+        // PUMP optional CREATOR BUY: an atomic first purchase in the SAME tx as
+        // the launch. Because it runs inline here -- before createLaunch returns
+        // and thus before any other account can call buy() -- the creator is
+        // provably the first buyer and no bot can wedge ahead of it. Curve buys
+        // carry no anti-snipe tax (that only exists post-graduation), so the
+        // creator pays the normal 1% curve fee only. minTokensOut = 0 is safe:
+        // the buy is atomic against a fresh, deterministic curve, so there is no
+        // price to front-run. Pulls creatorBuyUsdc from the creator (approve
+        // CREATION_FEE + creatorBuyUsdc up front).
+        if (mode == uint8(LaunchMode.PUMP) && creatorBuyUsdc > 0) {
+            CurveState storage freshState = curveStates[poolId];
+            _doCurveBuy(tokenAddr, poolId, freshState, msg.sender, creatorBuyUsdc, 0);
         }
 
         // NOTE: the V4 pool itself is NOT initialised here. During the Curving
@@ -956,6 +979,24 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         if (state.status == uint8(Status.Graduated)) revert LiquidityNotPermitted();
         if (state.mode == uint8(LaunchMode.CLANKER_V3)) revert InvalidMode();
 
+        return _doCurveBuy(token, poolId, state, msg.sender, amountIn, minTokensOut);
+    }
+
+    /**
+     * @dev Core bonding-curve buy, shared by the public {buy} and the atomic
+     *      creator-buy inside {createLaunch}. Assumes the caller already checked
+     *      status/mode. NOT nonReentrant itself: both call sites are external
+     *      nonReentrant functions, and USDC + ArcadeLaunchToken have no transfer
+     *      callbacks, so the pre-state-update transfers cannot be re-entered.
+     */
+    function _doCurveBuy(
+        address token,
+        PoolId poolId,
+        CurveState storage state,
+        address buyer,
+        uint256 amountIn,
+        uint256 minTokensOut
+    ) internal returns (uint256 tokensOut, uint256 actualGross) {
         ArcadeV4Curve.BuyResult memory r =
             ArcadeV4Curve.simulateBuy(state.tokensSold, state.realUsdcReserve, amountIn);
 
@@ -965,23 +1006,24 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         // Pull only what the curve actually accepts. In the cap (graduation)
         // path actualGross < amountIn and the residual stays with the buyer
         // automatically since we never transferFrom'd it.
-        IERC20(Currency.unwrap(USDC)).safeTransferFrom(msg.sender, address(this), r.actualGross);
+        IERC20(Currency.unwrap(USDC)).safeTransferFrom(buyer, address(this), r.actualGross);
 
         // Distribute the curve fee out of the hook's accumulating balance.
         _distributeCurveFee(state.mode, r.fee, state.creator, state.creator2, state.creator2Bps);
 
         // Ship launch tokens to the buyer from the hook's balance.
-        IERC20(token).safeTransfer(msg.sender, r.tokensOut);
+        IERC20(token).safeTransfer(buyer, r.tokensOut);
 
         // NOTE: the transfers above run BEFORE this state update (not CEI). This
-        // is safe ONLY because (a) `nonReentrant` guards buy(), and (b) USDC and
-        // ArcadeLaunchToken have no transfer callbacks, so no re-entrant read of
-        // the stale reserves is possible. Do NOT introduce a callback-bearing
-        // fee currency or launch token without moving these effects earlier.
+        // is safe ONLY because (a) both entry points are `nonReentrant`, and (b)
+        // USDC and ArcadeLaunchToken have no transfer callbacks, so no re-entrant
+        // read of the stale reserves is possible. Do NOT introduce a
+        // callback-bearing fee currency or launch token without moving these
+        // effects earlier.
         state.tokensSold += uint128(r.tokensOut);
         state.realUsdcReserve += uint128(r.actualGross - r.fee);
 
-        emit CurveBuy(poolId, msg.sender, r.actualGross, r.tokensOut);
+        emit CurveBuy(poolId, buyer, r.actualGross, r.tokensOut);
 
         // The curve is exhausted when tokensSold reaches CURVE_SUPPLY. Graduate
         // on that, NOT on `refund > 0`: an exact-fill buy (newUsdcReserve lands

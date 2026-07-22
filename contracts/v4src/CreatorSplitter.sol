@@ -20,7 +20,8 @@ interface IArcadeHookLaunch {
         uint32 snipeDecaySeconds,
         uint8 feeTier,
         string calldata twitterHandle,
-        uint256 startMcapUsdc
+        uint256 startMcapUsdc,
+        uint256 creatorBuyUsdc
     ) external returns (address tokenAddr, bytes32 poolId);
 }
 
@@ -125,8 +126,10 @@ contract CreatorSplitter is ReentrancyGuard {
         launched = true;
         // Approve exactly our balance (the factory funded the creation fee).
         USDC.forceApprove(address(HOOK), USDC.balanceOf(address(this)));
+        // creatorBuyUsdc = 0: the splitter launches on behalf of a creator and
+        // holds only the creation fee, so there is no atomic dev-buy here.
         (token, pid) = HOOK.createLaunch(
-            name, symbol, metadataURI, mode, address(0), 0, snipeStartBps, snipeDecaySeconds, feeTier, "", startMcapUsdc
+            name, symbol, metadataURI, mode, address(0), 0, snipeStartBps, snipeDecaySeconds, feeTier, "", startMcapUsdc, 0
         );
         launchToken = token;
         poolId = pid;

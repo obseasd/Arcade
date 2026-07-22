@@ -103,14 +103,14 @@ contract ArcadeHookSwapTest is Test {
     /// @dev Spawn a launch in PUMP mode.
     function _launchPump() internal returns (address tokenAddr, PoolKey memory key) {
         vm.prank(CREATOR);
-        (tokenAddr,) = hook.createLaunch("PumpToken", "PUMP", "ipfs://demo", 0, address(0), 0, 0, 0, 0, "", 0);
+        (tokenAddr,) = hook.createLaunch("PumpToken", "PUMP", "ipfs://demo", 0, address(0), 0, 0, 0, 0, "", 0, 0);
         key = _buildKey(tokenAddr);
     }
 
     /// @dev CLANKER variant with 70/30 split.
     function _launchClanker() internal returns (address tokenAddr, PoolKey memory key) {
         vm.prank(CREATOR);
-        (tokenAddr,) = hook.createLaunch("ClankerTok", "CLNK", "ipfs://demo", 1, address(0), 0, 0, 0, 1, "", 0);
+        (tokenAddr,) = hook.createLaunch("ClankerTok", "CLNK", "ipfs://demo", 1, address(0), 0, 0, 0, 1, "", 0, 0);
         key = _buildKey(tokenAddr);
     }
 
@@ -318,7 +318,7 @@ contract ArcadeHookSwapTest is Test {
     {
         vm.prank(CREATOR);
         (tokenAddr,) =
-            hook.createLaunch("SnipePump", "SNP", "ipfs://demo", 0, address(0), 0, startBps, decaySeconds, 0, "", 0);
+            hook.createLaunch("SnipePump", "SNP", "ipfs://demo", 0, address(0), 0, startBps, decaySeconds, 0, "", 0, 0);
         key = _buildKey(tokenAddr);
         vm.warp(block.timestamp + uint256(decaySeconds) + 3_600);
         usdc.mint(ALICE, 100_000e6);
@@ -456,7 +456,7 @@ contract ArcadeHookSwapTest is Test {
     function test_createLaunch_rejectsClankerV3Mode() public {
         vm.prank(CREATOR);
         vm.expectRevert(ArcadeHook.InvalidMode.selector);
-        hook.createLaunch("V3", "V3", "ipfs://x", 2, address(0), 0, 0, 0, 0, "", 0);
+        hook.createLaunch("V3", "V3", "ipfs://x", 2, address(0), 0, 0, 0, 0, "", 0, 0);
     }
 
     function test_postGradFee_PUMP_splits80_20_inUsdcOnSell() public {
@@ -774,7 +774,7 @@ contract ArcadeHookSwapTest is Test {
     /// and the pool is live (Graduated) immediately -- no curve buy to graduate.
     function _graduateClankerTier(uint8 tier) internal returns (address tokenAddr, PoolKey memory key) {
         vm.prank(CREATOR);
-        (tokenAddr,) = hook.createLaunch("ClkTier", "CLK", "ipfs://demo", 1, address(0), 0, 0, 0, tier, "", 0);
+        (tokenAddr,) = hook.createLaunch("ClkTier", "CLK", "ipfs://demo", 1, address(0), 0, 0, 0, tier, "", 0, 0);
         key = _buildKey(tokenAddr);
     }
 
@@ -783,7 +783,7 @@ contract ArcadeHookSwapTest is Test {
     function test_clankerDirect_singleSidedLiveAtCreation() public {
         uint256 creatorUsdcBefore = usdc.balanceOf(CREATOR);
         vm.prank(CREATOR);
-        (address token,) = hook.createLaunch("D", "D", "ipfs://d", 1, address(0), 0, 0, 0, 2, "", 0);
+        (address token,) = hook.createLaunch("D", "D", "ipfs://d", 1, address(0), 0, 0, 0, 2, "", 0, 0);
 
         // Creator paid ONLY the 3 USDC creation fee -- no LP capital.
         assertEq(creatorUsdcBefore - usdc.balanceOf(CREATOR), 3e6, "creator paid only the creation fee");
@@ -813,7 +813,7 @@ contract ArcadeHookSwapTest is Test {
             [uint256(1_232e6), 1_475e6, 1_630e6, 1_663e6, 1_875e6, 100_000e6];
         for (uint256 i = 0; i < mcaps.length; i++) {
             vm.prank(CREATOR);
-            hook.createLaunch("B", "B", "ipfs://b", 1, address(0), 0, 0, 0, 1, "", mcaps[i]);
+            hook.createLaunch("B", "B", "ipfs://b", 1, address(0), 0, 0, 0, 1, "", mcaps[i], 0);
             // Single-sided: the seed pulled NO USDC out of the hook.
             assertEq(usdc.balanceOf(address(hook)), hookUsdcBefore, "no USDC pulled into CLANKER LP");
         }
@@ -836,10 +836,10 @@ contract ArcadeHookSwapTest is Test {
     function test_createLaunch_clankerRevertsInvalidStartMcap() public {
         vm.prank(CREATOR);
         vm.expectRevert(ArcadeHook.InvalidStartMcap.selector);
-        hook.createLaunch("X", "X", "ipfs://x", 1, address(0), 0, 0, 0, 1, "", 999e6); // below $1k
+        hook.createLaunch("X", "X", "ipfs://x", 1, address(0), 0, 0, 0, 1, "", 999e6, 0); // below $1k
         vm.prank(CREATOR);
         vm.expectRevert(ArcadeHook.InvalidStartMcap.selector);
-        hook.createLaunch("Y", "Y", "ipfs://y", 1, address(0), 0, 0, 0, 1, "", 10_000_001e6); // above $10M
+        hook.createLaunch("Y", "Y", "ipfs://y", 1, address(0), 0, 0, 0, 1, "", 10_000_001e6, 0); // above $10M
     }
 
     /// Anti-sniper cannot work on the single-sided CLANKER pool -> a snipe config
@@ -847,7 +847,7 @@ contract ArcadeHookSwapTest is Test {
     function test_createLaunch_clankerRejectsSnipeConfig() public {
         vm.prank(CREATOR);
         vm.expectRevert(ArcadeHook.InvalidSnipeBps.selector);
-        hook.createLaunch("S", "S", "ipfs://s", 1, address(0), 0, 1_000, 600, 1, "", 0);
+        hook.createLaunch("S", "S", "ipfs://s", 1, address(0), 0, 1_000, 600, 1, "", 0, 0);
     }
 
     /// creator2 is a CLANKER-only split; PUMP would ignore it everywhere, so a
@@ -855,7 +855,7 @@ contract ArcadeHookSwapTest is Test {
     function test_createLaunch_pumpRejectsCreator2() public {
         vm.prank(CREATOR);
         vm.expectRevert(ArcadeHook.InvalidFeeOwner.selector);
-        hook.createLaunch("P", "P", "ipfs://p", 0, address(0xBEEF), 2_000, 0, 0, 0, "", 0);
+        hook.createLaunch("P", "P", "ipfs://p", 0, address(0xBEEF), 2_000, 0, 0, 0, "", 0, 0);
     }
 
     // --- CLANKER anti-snipe first-window buy cap ---
@@ -970,11 +970,11 @@ contract ArcadeHookSwapTest is Test {
     function test_createLaunch_revertsOnInvalidClankerTier() public {
         vm.prank(CREATOR);
         vm.expectRevert(ArcadeHook.InvalidFeeTier.selector);
-        hook.createLaunch("X", "X", "ipfs://x", 1, address(0), 0, 0, 0, 0, "", 0);
+        hook.createLaunch("X", "X", "ipfs://x", 1, address(0), 0, 0, 0, 0, "", 0, 0);
 
         vm.prank(CREATOR);
         vm.expectRevert(ArcadeHook.InvalidFeeTier.selector);
-        hook.createLaunch("Y", "Y", "ipfs://y", 1, address(0), 0, 0, 0, 4, "", 0);
+        hook.createLaunch("Y", "Y", "ipfs://y", 1, address(0), 0, 0, 0, 4, "", 0, 0);
     }
 
     /// PUMP ignores the fee-tier argument entirely: its fee is the mcap-decaying
@@ -982,7 +982,7 @@ contract ArcadeHookSwapTest is Test {
     /// are NOT creator-customisable (only CLANKER's are).
     function test_createLaunch_pumpIgnoresFeeTier() public {
         vm.prank(CREATOR);
-        (address token,) = hook.createLaunch("P", "P", "ipfs://p", 0, address(0), 0, 0, 0, 3, "", 0);
+        (address token,) = hook.createLaunch("P", "P", "ipfs://p", 0, address(0), 0, 0, 0, 3, "", 0, 0);
         vm.prank(ALICE);
         hook.buy(token, 30_000e6, 0);
         // Dynamic fee starts at 1% at graduation, NOT tier 3's 3%.
@@ -1011,7 +1011,7 @@ contract ArcadeHookSwapTest is Test {
         // at createLaunch; ALICE buys via V4 and the creator cut of that swap
         // routes to the handle-gated escrow slot.
         vm.prank(CREATOR);
-        (address token,) = hook.createLaunch("Clk", "CLK", "ipfs://x", 1, address(0), 0, 0, 0, 1, "arcade", 0);
+        (address token,) = hook.createLaunch("Clk", "CLK", "ipfs://x", 1, address(0), 0, 0, 0, 1, "arcade", 0, 0);
         PoolKey memory key = _buildKey(token);
 
         uint256 poolId = uint256(PoolId.unwrap(key.toId()));
@@ -1036,7 +1036,7 @@ contract ArcadeHookSwapTest is Test {
     function test_escrow_pumpIgnoresHandle() public {
         _wireEscrow();
         vm.prank(CREATOR);
-        (address token,) = hook.createLaunch("P", "P", "ipfs://p", 0, address(0), 0, 0, 0, 0, "arcade", 0);
+        (address token,) = hook.createLaunch("P", "P", "ipfs://p", 0, address(0), 0, 0, 0, 0, "arcade", 0, 0);
         PoolKey memory key = _buildKey(token);
         vm.prank(ALICE);
         hook.buy(token, 30_000e6, 0);
