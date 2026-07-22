@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getAggregateStats, type StatsSnapshot } from "@/lib/stats";
+import { getAggregateStats, getGoldskyStats, type StatsSnapshot } from "@/lib/stats";
 import {
     getLatestPersistedSnapshot,
     insertSnapshot,
@@ -44,19 +44,20 @@ export async function GET(req: NextRequest) {
         return NextResponse.json(serialise(persisted, "db"));
     }
 
-    // Cold path: DB empty or not configured. Run the live scan, return
-    // it, and try to write it back so the next read is fast. We do not
-    // block the response on the insert (fire-and-forget) because a slow
-    // DB shouldn't slow the user-facing response.
-    const snapshot = await getAggregateStats();
+    // Cold path: DB empty or not configured. Prefer the Goldsky subgraph (ONE
+    // GraphQL query, complete history) over the 500k-block x ~50-contract RPC
+    // scan, which is now only the last resort when the subgraph is unset/behind.
+    // Write whichever we got back so the next read hits the fast DB path.
+    const goldsky = await getGoldskyStats().catch(() => null);
+    const snapshot = goldsky ?? (await getAggregateStats());
     void insertSnapshot(snapshot, "fallback").catch(() => {
         // Already logged inside insertSnapshot; swallow here so a
         // misconfigured DB does not bubble up to the caller.
     });
-    return NextResponse.json(serialise(snapshot, "live"));
+    return NextResponse.json(serialise(snapshot, goldsky ? "subgraph" : "live"));
 }
 
-function serialise(snap: StatsSnapshot, source: "db" | "live") {
+function serialise(snap: StatsSnapshot, source: "db" | "live" | "subgraph") {
     return {
         ...snap,
         asOfBlock: snap.asOfBlock.toString(),

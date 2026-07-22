@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getAggregateStats } from "@/lib/stats";
+import { getAggregateStats, getGoldskyStats } from "@/lib/stats";
 import { insertSnapshot, lastCronSnapshotIso } from "@/lib/statsPersistence";
 import { isDbConfigured } from "@/lib/db";
 
@@ -100,18 +100,25 @@ export async function POST(req: NextRequest) {
         }
     }
 
-    // Full-scope RPC scan (includes V2 pairs). The Goldsky subgraph is a strict
-    // subset (Launchpad + V3 only), so it must NOT feed the persisted headline
-    // history -- it would lower the monotonic MAX's source coverage over time.
-    let snap;
-    try {
-        snap = await getAggregateStats();
-    } catch (err) {
-        console.error("[stats-cron] getAggregateStats threw:", err);
-        return NextResponse.json(
-            { persisted: false, error: "scan-failed" },
-            { status: 500 },
-        );
+    // Prefer the Goldsky subgraph: it now indexes the full trade surface
+    // (Launchpad curve + V2 pairs + V3 pools + V4 hook, all feeding
+    // Global.totalVolumeUsdc via recordTrade), so it is no longer the "V3-only
+    // subset" the old comment warned about, and it has complete all-time history
+    // instead of the RPC scan's ~70h window. The RPC scan (getAggregateStats)
+    // stays as the fallback when the subgraph is unset/behind. insertSnapshot
+    // takes a monotonic MAX, so a transiently-lower value can never regress the
+    // persisted headline either way.
+    let snap = await getGoldskyStats().catch(() => null);
+    if (!snap) {
+        try {
+            snap = await getAggregateStats();
+        } catch (err) {
+            console.error("[stats-cron] getAggregateStats threw:", err);
+            return NextResponse.json(
+                { persisted: false, error: "scan-failed" },
+                { status: 500 },
+            );
+        }
     }
 
     const persisted = await insertSnapshot(snap, "cron");
