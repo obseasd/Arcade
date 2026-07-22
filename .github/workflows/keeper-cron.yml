@@ -1,0 +1,39 @@
+name: keeper-cron
+
+# Triggers the self-hosted keeper (limit orders + DCA via Orbs dTWAP, and CCTP
+# bridge-and-buy relays) on a schedule. The route at /api/keeper/cron is POST +
+# Bearer auth, which Vercel's native GET cron cannot call, so an external
+# scheduler drives it. GitHub Actions cron granularity is 5 min (best-effort;
+# can be delayed under load). For tighter/guaranteed cadence use a paid
+# scheduler (cron-job.org, Upstash QStash, a VPS crontab) hitting the same URL.
+#
+# Required repo secrets (Settings -> Secrets and variables -> Actions):
+#   KEEPER_ENDPOINT_URL  = https://<your-app>.vercel.app/api/keeper/cron
+#   KEEPER_CRON_SECRET   = the same value set as KEEPER_CRON_SECRET in Vercel
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}
+
+# Never run two ticks at once (a fill signs on a shared nonce).
+concurrency:
+  group: keeper-cron
+  cancel-in-progress: false
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    steps:
+      - name: POST /api/keeper/cron
+        env:
+          KEEPER_URL: ${{ secrets.KEEPER_ENDPOINT_URL }}
+          KEEPER_SECRET: ${{ secrets.KEEPER_CRON_SECRET }}
+        run: |
+          if [ -z "$KEEPER_URL" ] || [ -z "$KEEPER_SECRET" ]; then
+            echo "Missing KEEPER_ENDPOINT_URL or KEEPER_CRON_SECRET repo secret" >&2
+            exit 1
+          fi
+          curl -sS -X POST "$KEEPER_URL" \
+            -H "Authorization: Bearer $KEEPER_SECRET" \
+            -H "content-type: application/json" \
+            --max-time 90 --fail-with-body
