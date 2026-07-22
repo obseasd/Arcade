@@ -18,7 +18,14 @@ export interface ReferredStat {
     verified: boolean;
 }
 export interface ReferralStats {
-    /** VERIFIED rows only. This is the number a user reads as "what I am owed". */
+    /**
+     * DB-derived ESTIMATE on signature-verified rows. This is NOT what a claim
+     * pays: the claim recomputes from ON-CHAIN Memo attribution (see
+     * getVerifiedEarningsUsdMicros in referralPayout.ts), a different and
+     * stricter source. Surfaced as an "estimate" in the UI, never as "claimable"
+     * (audit C-1: the two used to be shown interchangeably, so a user saw
+     * "Pending $50" then "Nothing to claim").
+     */
     totalPendingUsdMicros: string;
     totalClaimedUsdMicros: string;
     /** ALL rows: volume is what the downline traded, not money owed. */
@@ -30,6 +37,16 @@ export interface ReferralStats {
     referredCount: number;
     /** Both tiers, each flagged. */
     referred: ReferredStat[];
+    /**
+     * The REAL, claim-backing numbers, computed from on-chain Memo attribution +
+     * indexed volume by the SAME code path the /claim route pays from (audit
+     * C-1). Present ONLY on the authenticated POST /stats response (that on-chain
+     * scan is too heavy for the unauthenticated GET), so both are optional and
+     * undefined on the coarse GET. `claimableUsdMicros` = verified earnings minus
+     * already-claimed; it is the figure the UI shows as "Claimable".
+     */
+    verifiedEarningsUsdMicros?: string;
+    claimableUsdMicros?: string;
 }
 
 /**
@@ -224,7 +241,7 @@ export async function getReferralStats(referrer: string): Promise<ReferralStats>
         `) as { claimed: string | number }[];
         totalClaimed = BigInt(claimedRows[0]?.claimed ?? 0);
     } catch {
-        /* referral_claims (007) not applied yet — treat as 0 */
+        /* referral_claims (007) not applied yet - treat as 0 */
     }
 
     return {

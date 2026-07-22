@@ -1,17 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import { rateLimit, rejectCrossOrigin } from "@/lib/apiGuard";
 import { trackReferralTrade } from "@/lib/referralPersistence";
+import { computeReferralEarningsMicros } from "@/lib/referralPayout";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// Referral economics (Phase 1 estimate; Phase 2's indexer computes the
-// exact protocol fee per trade on-chain):
-//   protocol fee ≈ PROTOCOL_FEE_BPS of swap volume (e.g. the V2 feeTo skim
-//   is 1/6 of the 0.30% LP fee ≈ 0.05%). The referrer earns
-//   REFERRAL_SHARE_BPS (10%) of THAT. So earned = volume * 5 * 1000 / 1e8.
-const PROTOCOL_FEE_BPS = 5n; // 0.05% of volume goes to the protocol
-const REFERRAL_SHARE_BPS = 1000n; // referrer gets 10% of the protocol cut
+// Referral economics: the DISPLAY-ONLY accrual written here MUST use the exact
+// same basis as the payout (audit C-3). It previously hardcoded 5 bps while the
+// payout used 15, so the dashboard "earned" and the claim amount disagreed.
+// computeReferralEarningsMicros derives from the single canonical PROTOCOL_FEE_BPS
+// / REFERRAL_SHARE_BPS in referralPayout.ts -- so the estimate shown here tracks
+// the payout basis by construction. This number is still a DISPLAY estimate:
+// real payouts recompute from on-chain Memo attribution + indexed volume, never
+// this table (see the security note below).
 
 /**
  * POST /api/referral/track  { trader, volumeUsdMicros }
@@ -22,7 +24,7 @@ const REFERRAL_SHARE_BPS = 1000n; // referrer gets 10% of the protocol cut
  * caller controls `trader` + `volumeUsdMicros` freely. A malicious caller
  * can inflate ANY referred wallet's accrual to an arbitrary (bounded)
  * number, and an honest report can be replayed (no tx-hash dedup yet). This
- * is acceptable ONLY because in Phase 1 the accrual is DISPLAY-ONLY — no
+ * is acceptable ONLY because in Phase 1 the accrual is DISPLAY-ONLY - no
  * money moves. The Phase 2 payout MUST recompute earnings exclusively from
  * on-chain events keyed by UNIQUE tx hashes, capped at fees actually
  * collected from each referred wallet, with sybil/circularity netting. It
@@ -58,7 +60,7 @@ export async function POST(req: NextRequest) {
     // Strict base-10 integer only (BigInt() would otherwise swallow hex /
     // whitespace), and a sane per-trade ceiling so a forged report can't
     // write an absurd accrual. NOTE: this number is DISPLAY-ONLY in Phase 1;
-    // Phase 2 must NOT pay out from it — see audit note above.
+    // Phase 2 must NOT pay out from it - see audit note above.
     const rawVol = String(volumeUsdMicros);
     if (!/^[0-9]+$/.test(rawVol)) {
         return NextResponse.json({ error: "volumeUsdMicros must be a base-10 integer" }, { status: 400 });
@@ -70,7 +72,7 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: "volume exceeds per-trade ceiling" }, { status: 400 });
     }
 
-    const earned = (volume * PROTOCOL_FEE_BPS * REFERRAL_SHARE_BPS) / 100_000_000n;
+    const earned = computeReferralEarningsMicros(volume);
     try {
         const tracked = await trackReferralTrade(trader, volume, earned);
         return NextResponse.json({ ok: true, tracked });

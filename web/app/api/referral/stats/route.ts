@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getReferralStats } from "@/lib/referralPersistence";
-import { verifyClaimSignature } from "@/lib/referralPayout";
+import {
+    verifyClaimSignature,
+    getVerifiedEarningsUsdMicros,
+    getClaimedUsdMicros,
+} from "@/lib/referralPayout";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -10,8 +14,8 @@ export const dynamic = "force-dynamic";
  * POST /api/referral/stats { referrer, deadline, signature } → FULL detail
  *
  * Audit 2026-07-08 (MEDIUM): the old unauthenticated GET returned the queried
- * address's entire downline — every referred wallet address plus its per-wallet
- * trading volume — so anyone could crawl the whole referral graph and read
+ * address's entire downline - every referred wallet address plus its per-wallet
+ * trading volume - so anyone could crawl the whole referral graph and read
  * per-wallet volumes (PII/BI leak; the who-referred-whom edges are off-chain
  * first-touch DB data, not derivable on-chain).
  *
@@ -75,7 +79,7 @@ export async function POST(req: NextRequest) {
     if (deadlineSec < BigInt(Math.floor(Date.now() / 1000))) {
         return NextResponse.json({ error: "signature expired" }, { status: 401 });
     }
-    // Proves the caller controls `referrer` — same gate as /claim. Stops a
+    // Proves the caller controls `referrer` - same gate as /claim. Stops a
     // third party from reading someone else's downline.
     const authed = await verifyClaimSignature({ referrer, deadline: deadlineSec, signature });
     if (!authed) {
@@ -83,7 +87,21 @@ export async function POST(req: NextRequest) {
     }
     try {
         const stats = await getReferralStats(referrer);
-        return NextResponse.json(stats);
+        // The caller PROVED control of `referrer`, so it is safe (and correct)
+        // to attach the REAL claim-backing numbers here (audit C-1). These come
+        // from the same on-chain Memo + indexed-volume path the /claim route
+        // pays from, so the dashboard's "Claimable" now equals what a claim
+        // actually settles -- not the looser DB estimate in totalPendingUsdMicros.
+        // Done only on this authenticated POST because the on-chain scan is far
+        // too heavy for the unauthenticated GET.
+        const verified = await getVerifiedEarningsUsdMicros(referrer);
+        const claimed = await getClaimedUsdMicros(referrer);
+        const claimable = verified > claimed ? verified - claimed : 0n;
+        return NextResponse.json({
+            ...stats,
+            verifiedEarningsUsdMicros: verified.toString(),
+            claimableUsdMicros: claimable.toString(),
+        });
     } catch (e) {
         return NextResponse.json(
             { error: e instanceof Error ? e.message : "stats failed" },

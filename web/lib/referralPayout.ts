@@ -30,7 +30,14 @@ import { scanReferralAttribution } from "@/lib/referralOnchain";
 // Clamped to [0, 100] bps: 100 bps (1%) is the curve's full TRADE_FEE_BPS, so
 // the protocol PORTION can never exceed it. Prevents a misconfigured env from
 // over-crediting (defensive; the funded budget wallet is still the hard cap).
-const PROTOCOL_FEE_BPS = (() => {
+// CANONICAL fee basis for the ENTIRE referral system (audit C-3). Every place
+// that turns trade volume into a referral "earned" number -- the payout math
+// here AND the display accrual in /api/referral/track -- MUST derive from this
+// one constant (via computeReferralEarningsMicros) so the number a user SEES
+// can never disagree with the number a claim PAYS. Before this, /track used a
+// hardcoded 5 bps while the payout used 15, so the dashboard showed one figure
+// and the claim settled another.
+export const PROTOCOL_FEE_BPS = (() => {
     let v = 15n;
     try {
         v = BigInt(process.env.REFERRAL_PROTOCOL_FEE_BPS ?? "15");
@@ -40,7 +47,7 @@ const PROTOCOL_FEE_BPS = (() => {
     if (v < 0n) return 0n;
     return v > 100n ? 100n : v;
 })();
-const REFERRAL_SHARE_BPS = 1000n; // 10%
+export const REFERRAL_SHARE_BPS = 1000n; // 10%
 // Cap the wallets summed per claim so a huge downlist can't blow the request.
 const MAX_REFERRED_WALLETS = 500;
 
@@ -48,10 +55,10 @@ const MAX_REFERRED_WALLETS = 500;
  * Referral PAYOUT layer (Phase 2). Disabled by default and built so the two
  * indexer/operator-dependent pieces are the ONLY things left to wire:
  *
- *   1. getVerifiedEarningsUsdMicros() — recompute earnings from ON-CHAIN
+ *   1. getVerifiedEarningsUsdMicros() - recompute earnings from ON-CHAIN
  *      events (NOT the forgeable referral_activity table). This is the audit
  *      C-1/H-1 fix: without it, payout = treasury drain.
- *   2. sendUsdcFromTreasury() — the actual USDC transfer from a payout
+ *   2. sendUsdcFromTreasury() - the actual USDC transfer from a payout
  *      signer.
  *
  * Until BOTH are wired and REFERRAL_PAYOUT_ENABLED is set, every claim path

@@ -9,7 +9,7 @@ import { arcTestnet } from "@/lib/chains";
 import type { ReferralStats } from "@/lib/referralPersistence";
 import { formatAddress } from "@/lib/utils";
 
-// Format USD micros entirely in BigInt — going through Number(...)/1e6 loses
+// Format USD micros entirely in BigInt - going through Number(...)/1e6 loses
 // precision (and can print Infinity) above ~$9M (audit M-5).
 const fmtUsd = (micros: string) => {
     const m = BigInt(micros);
@@ -23,13 +23,13 @@ const fmtUsd = (micros: string) => {
 };
 
 // Hide referred wallets that haven't traded a meaningful amount yet (< $0.01
-// volume) — a wallet that connected via the link but never swapped.
+// volume) - a wallet that connected via the link but never swapped.
 const MIN_VOLUME_MICROS = 10_000n; // $0.01
 
 /**
  * Referrals dashboard (portfolio tab). Shows the wallet's shareable referral
  * link plus claimed / pending totals and a per-referred-wallet breakdown
- * (volume, tx count, earned). Read-only — earnings accrue server-side and a
+ * (volume, tx count, earned). Read-only - earnings accrue server-side and a
  * payout/claim flow lands in Phase 2.
  */
 export function ReferralsPanel({ account }: { account: Address | undefined }) {
@@ -44,7 +44,7 @@ export function ReferralsPanel({ account }: { account: Address | undefined }) {
     // On-chain referral anchoring. If the connected wallet arrived through
     // someone's link (?ref=), it can sign a Memo tx to make that first-touch
     // link unforgeable on-chain (see referralOnchain.ts). This is the referred
-    // user's own action — nobody can register it on their behalf.
+    // user's own action - nobody can register it on their behalf.
     const { writeContractAsync } = useWriteContract();
     const publicClient = usePublicClient();
     const [myReferrer, setMyReferrer] = useState<Address | null>(null);
@@ -124,7 +124,9 @@ export function ReferralsPanel({ account }: { account: Address | undefined }) {
             );
             await publicClient.waitForTransactionReceipt({ hash });
             setConfirmState("done");
-            setConfirmMsg("Referral anchored on-chain — it can no longer be overwritten.");
+            setConfirmMsg(
+                "Referral anchored on-chain - your referrer is now payable and it can no longer be overwritten.",
+            );
         } catch (e) {
             setConfirmState("idle");
             setConfirmMsg(
@@ -218,7 +220,7 @@ export function ReferralsPanel({ account }: { account: Address | undefined }) {
             });
             const data = await res.json();
             if (data.enabled === false) {
-                setClaimMsg("Payouts open at mainnet — earnings are still being verified on-chain.");
+                setClaimMsg("Payouts open at mainnet - earnings are still being verified on-chain.");
             } else if (data.ok && data.claimed === "0") {
                 setClaimMsg("Nothing to claim yet.");
             } else if (data.ok && data.txHash) {
@@ -267,16 +269,17 @@ export function ReferralsPanel({ account }: { account: Address | undefined }) {
                 </div>
             </div>
 
-            {/* Your referrer — anchor first-touch on-chain (unforgeable) */}
+            {/* Your referrer - anchor first-touch on-chain (unforgeable) */}
             {myReferrer && (
                 <div className="rounded-2xl border border-arc-border bg-white/[0.015] p-5">
                     <div className="text-sm font-semibold text-arc-text">Your referrer</div>
                     <p className="mt-1 text-xs text-arc-text-muted">
                         You were referred by{" "}
-                        <span className="text-arc-text">{formatAddress(myReferrer)}</span>. Anchor
-                        it on-chain so the attribution is{" "}
-                        <span className="text-arc-text">unforgeable</span> and ready for payouts —
-                        one tiny transaction, and only you can sign it.
+                        <span className="text-arc-text">{formatAddress(myReferrer)}</span>. The
+                        signature you may have approved at connect only records the link for
+                        display. Only this{" "}
+                        <span className="text-arc-text">on-chain confirmation</span> makes your
+                        referrer actually payable - one tiny transaction, and only you can sign it.
                     </p>
                     <div className="mt-3 flex flex-wrap items-center gap-2">
                         <button
@@ -298,23 +301,63 @@ export function ReferralsPanel({ account }: { account: Address | undefined }) {
                 </div>
             )}
 
-            {/* Totals. Proven attribution only — see getReferralStats. */}
+            {/* Totals.
+                CLAIMABLE is the real, claim-backing number: verified from
+                on-chain confirmations by the same path the Claim button pays
+                from (audit C-1). It is only known after the signed reveal, since
+                computing it scans the chain -- until then we show "-" rather
+                than a DB estimate dressed up as money.
+                ESTIMATED is the DB accrual on reported trades. It is NOT what a
+                claim pays and is labelled as an estimate so the two can never be
+                confused. */}
             <div className="grid grid-cols-3 gap-3">
                 <Stat label="Claimed" value={fmtUsd(stats?.totalClaimedUsdMicros ?? "0")} className="text-arc-success" />
-                <Stat label="Pending" value={fmtUsd(stats?.totalPendingUsdMicros ?? "0")} className="text-arc-warn" />
+                <Stat
+                    label="Claimable"
+                    value={
+                        stats?.claimableUsdMicros != null
+                            ? fmtUsd(stats.claimableUsdMicros)
+                            : "-"
+                    }
+                    className="text-arc-warn"
+                    hint={
+                        stats?.claimableUsdMicros != null
+                            ? "verified on-chain - what a claim pays"
+                            : "reveal below to compute your verified amount"
+                    }
+                />
                 <Stat label="Referred volume" value={fmtUsd(stats?.totalVolumeUsdMicros ?? "0")} />
             </div>
-            {(stats?.unverifiedCount ?? 0) > 0 && (
+            {/* The DB estimate, shown apart and honestly. Only the on-chain
+                confirmation (the "Confirm on-chain" action) makes earnings
+                actually claimable; a referral that was only registered or
+                signed at connect accrues this estimate but pays nothing until
+                it is anchored on-chain. */}
+            {(BigInt(stats?.totalPendingUsdMicros ?? "0") > 0n ||
+                (stats?.unverifiedCount ?? 0) > 0) && (
                 <div className="rounded-2xl border border-arc-border bg-white/[0.015] px-5 py-3 text-xs text-arc-text-muted">
-                    {stats!.unverifiedCount} referred wallet
-                    {stats!.unverifiedCount > 1 ? "s have" : " has"} not confirmed the referral
-                    yet, so {fmtUsd(stats!.unverifiedPendingUsdMicros)} is not counted above.
-                    Confirming is free and takes one signature at connect — anyone can claim a
-                    referral they didn&apos;t make, so only a confirmed one earns.
+                    Estimated from reported trades:{" "}
+                    <span className="text-arc-text">
+                        {fmtUsd(
+                            (
+                                BigInt(stats?.totalPendingUsdMicros ?? "0") +
+                                BigInt(stats?.unverifiedPendingUsdMicros ?? "0")
+                            ).toString(),
+                        )}
+                    </span>
+                    . This is an estimate, not a balance: earnings become claimable
+                    only once the referred wallet confirms the referral on-chain.
+                    {(stats?.unverifiedCount ?? 0) > 0 && (
+                        <>
+                            {" "}
+                            {stats!.unverifiedCount} referred wallet
+                            {stats!.unverifiedCount > 1 ? "s have" : " has"} not confirmed yet.
+                        </>
+                    )}
                 </div>
             )}
 
-            {/* Claim (Phase 2 — disabled until on-chain verification is wired) */}
+            {/* Claim (Phase 2 - disabled until on-chain verification is wired) */}
             <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-arc-border bg-white/[0.015] px-5 py-4">
                 <div className="text-xs text-arc-text-muted">
                     {claimMsg ?? "Earnings become claimable once verified on-chain."}
@@ -348,7 +391,8 @@ export function ReferralsPanel({ account }: { account: Address | undefined }) {
                                 <div>
                                     You have {knownCount} referred wallet
                                     {knownCount > 1 ? "s" : ""}. Sign to reveal the
-                                    details — only you can view your own downline.
+                                    details and compute your verified on-chain claimable -
+                                    only you can view your own downline.
                                 </div>
                                 <button
                                     type="button"
@@ -410,11 +454,22 @@ export function ReferralsPanel({ account }: { account: Address | undefined }) {
     );
 }
 
-function Stat({ label, value, className }: { label: string; value: string; className?: string }) {
+function Stat({
+    label,
+    value,
+    className,
+    hint,
+}: {
+    label: string;
+    value: string;
+    className?: string;
+    hint?: string;
+}) {
     return (
         <div className="rounded-2xl border border-arc-border bg-white/[0.015] p-4">
             <div className="text-xs uppercase tracking-wider text-arc-text-muted">{label}</div>
             <div className={`mt-1 text-xl font-semibold ${className ?? "text-arc-text"}`}>{value}</div>
+            {hint && <div className="mt-1 text-[11px] leading-tight text-arc-text-muted">{hint}</div>}
         </div>
     );
 }

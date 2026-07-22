@@ -14,6 +14,7 @@ const NAV_ITEMS = [
   { href: "/explore", label: "Explore" },
   { href: "/positions", label: "Positions" },
   { href: "/bridge", label: "Bridge" },
+  { href: "/referrals", label: "Referrals" },
   // Earn is intentionally NOT in the main nav -- it is reached from the $
   // shortcut in the wallet menu (HeaderWalletWidget). Do not re-add here.
 ];

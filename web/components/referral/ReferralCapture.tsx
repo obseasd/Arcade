@@ -1,6 +1,9 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+import { X } from "lucide-react";
 import { useAccount, useSignTypedData } from "wagmi";
 import {
     captureReferralFromUrl,
@@ -9,6 +12,10 @@ import {
     hasSettledReferralProof,
     getStoredReferrer,
 } from "@/lib/referral";
+import { formatAddress } from "@/lib/utils";
+
+// One dismissal per referrer so the banner never nags after it's been seen.
+const DISMISS_KEY = (ref: string) => `arcade.referrer.ack.dismissed.${ref.toLowerCase()}`;
 
 /**
  * Headless component mounted once in the root layout. Captures a ?ref=
@@ -34,15 +41,38 @@ import {
 export function ReferralCapture() {
     const { address } = useAccount();
     const { signTypedDataAsync } = useSignTypedData();
+    const pathname = usePathname();
     // Guards against React StrictMode's double-invoked effect and against a
     // re-render firing a second wallet popup for the same account.
     const askedFor = useRef<string | null>(null);
 
+    // Landing acknowledgement (audit U-1/U-2): a user arriving via ?ref=0x...
+    // should immediately SEE they were referred and what makes it count, rather
+    // than that living only in a buried dashboard tab.
+    const [ackReferrer, setAckReferrer] = useState<string | null>(null);
+
     // Capture the referrer from the URL as early as possible (before the
     // user navigates away from the landing URL that carried ?ref=).
     useEffect(() => {
-        captureReferralFromUrl();
+        const ref = captureReferralFromUrl();
+        if (!ref) return;
+        try {
+            if (localStorage.getItem(DISMISS_KEY(ref)) === null) setAckReferrer(ref);
+        } catch {
+            /* no storage -> just don't show the banner */
+        }
     }, []);
+
+    const dismissAck = useCallback(() => {
+        if (ackReferrer) {
+            try {
+                localStorage.setItem(DISMISS_KEY(ackReferrer), "1");
+            } catch {
+                /* ignore */
+            }
+        }
+        setAckReferrer(null);
+    }, [ackReferrer]);
 
     // Register the stored referrer once a wallet is connected, then prove it.
     useEffect(() => {
@@ -71,5 +101,42 @@ export function ReferralCapture() {
         };
     }, [address, signTypedDataAsync]);
 
-    return null;
+    // Hide once the referrer is the connected wallet (self-referral, never
+    // valid) or while already on the referrals dashboard (the CTA target).
+    const showAck =
+        ackReferrer !== null &&
+        ackReferrer.toLowerCase() !== (address ?? "").toLowerCase() &&
+        pathname !== "/referrals";
+
+    if (!showAck) return null;
+
+    return (
+        <div className="fixed inset-x-3 bottom-3 z-50 mx-auto max-w-md sm:inset-x-auto sm:right-4">
+            <div className="flex items-start gap-3 rounded-2xl border border-arc-border bg-arc-bg-elevated/95 p-4 shadow-arc-card backdrop-blur-xl">
+                <div className="min-w-0 flex-1 text-xs text-arc-text-muted">
+                    <div className="text-sm font-semibold text-arc-text">You were referred</div>
+                    <p className="mt-1">
+                        by <span className="text-arc-text">{formatAddress(ackReferrer!)}</span>.
+                        Confirm it on-chain so they can earn from your trades - one tiny
+                        transaction only you can sign.
+                    </p>
+                    <Link
+                        href="/referrals"
+                        onClick={dismissAck}
+                        className="arc-button-primary mt-3 inline-block px-3 py-1.5 text-xs"
+                    >
+                        Confirm referral
+                    </Link>
+                </div>
+                <button
+                    type="button"
+                    onClick={dismissAck}
+                    aria-label="Dismiss"
+                    className="shrink-0 rounded-lg p-1 text-arc-text-muted transition-colors hover:bg-white/5 hover:text-arc-text"
+                >
+                    <X className="h-4 w-4" />
+                </button>
+            </div>
+        </div>
+    );
 }
