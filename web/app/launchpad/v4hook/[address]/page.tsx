@@ -408,6 +408,7 @@ function Inner() {
                         poolFee={poolFee}
                         totalVolumeUsdc={stats.totalVolumeUsdc}
                         exactFeesUsd={stats.feesUsdc}
+                        isCurvePhase={isPump && status === ARCADE_HOOK_STATUS.CURVING}
                     />
                 </div>
             </div>
@@ -449,11 +450,13 @@ function FeesRecipientPanel({
     poolFee,
     totalVolumeUsdc,
     exactFeesUsd,
+    isCurvePhase,
 }: {
     token: Address;
     poolFee: number;
     totalVolumeUsdc: number;
     exactFeesUsd?: number;
+    isCurvePhase: boolean;
 }) {
     const poolIdQ = useReadContract({
         address: ADDRESSES.arcadeHook,
@@ -515,7 +518,12 @@ function FeesRecipientPanel({
     // remainder (e.g. 40%). Solo => full 80%.
     const c2bps = fo ? Number(fo.creator2Bps) || 0 : 0;
     const recipientShare = c2bps >= 10_000 ? 1 : (10_000 - c2bps) / 10_000;
-    const creatorFeesUsd = feesUsd * 0.8 * recipientShare;
+    // Creator's share of the fee: the PUMP bonding CURVE splits 50/50
+    // platform/creator, but the post-graduation AMM (and CLANKER) splits 80/20
+    // creator/treasury. Use the right split for the phase so a curving PUMP does
+    // not overstate the creator cut. (PUMP audit L1.)
+    const creatorFeePortion = isCurvePhase ? 0.5 : 0.8;
+    const creatorFeesUsd = feesUsd * creatorFeePortion * recipientShare;
     const recipientAddr = fo
         ? fo.creator2 !== zeroAddress && Number(fo.creator2Bps) >= 10_000
             ? fo.creator2
