@@ -1,10 +1,13 @@
 "use client";
 
-import { Activity, Users, ExternalLink } from "lucide-react";
+import { Activity, Users, ExternalLink, BadgeDollarSign } from "lucide-react";
 import { useState, useMemo } from "react";
-import { Address } from "viem";
+import { Address, zeroHash } from "viem";
+import { useReadContract } from "wagmi";
 import { useTokenTrades, type Trade } from "@/lib/hooks/useTokenTrades";
 import { useTokenHolders, type Holder } from "@/lib/hooks/useTokenHolders";
+import { useTokenClaims, type ClaimRow } from "@/lib/hooks/useTokenClaims";
+import { ARCADE_HOOK_ABI } from "@/lib/abis/arcadeHook";
 import { ADDRESSES } from "@/lib/constants";
 import { arcTestnet } from "@/lib/chains";
 import { formatToken, formatUSDC, formatAddress, cn } from "@/lib/utils";
@@ -97,7 +100,28 @@ function TransactionsTab({
   const { trades, isLoading } = useTokenTrades({ token, mode, pool, launchpad: launchpadAddress, source });
   const explorerUrl = arcTestnet.blockExplorers?.default.url ?? "https://testnet.arcscan.app";
 
-  if (isLoading && trades.length === 0) {
+  // Creator-fee claims (V4 only): read poolIdOf(token) -> positionId, then the
+  // subgraph Claim rows, interleaved into the feed by time alongside trades.
+  const poolIdQ = useReadContract({
+    address: ADDRESSES.arcadeHook,
+    abi: ARCADE_HOOK_ABI,
+    functionName: "poolIdOf",
+    args: [token],
+    query: { enabled: source === "v4" },
+  });
+  const poolIdHex = poolIdQ.data as `0x${string}` | undefined;
+  const positionId = poolIdHex && poolIdHex !== zeroHash ? BigInt(poolIdHex) : undefined;
+  const claims = useTokenClaims(positionId, source === "v4");
+
+  const nowSec = Math.floor(Date.now() / 1000);
+  const items = useMemo(() => {
+    const t = trades.map((tr) => ({ kind: "trade" as const, time: nowSec - tr.blocksAgo, trade: tr }));
+    const c = claims.map((cl) => ({ kind: "claim" as const, time: cl.blockTime, claim: cl }));
+    return [...t, ...c].sort((a, b) => b.time - a.time);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [trades, claims]);
+
+  if (isLoading && items.length === 0) {
     return (
       <div className="space-y-2">
         {[...Array(6)].map((_, i) => (
@@ -106,10 +130,10 @@ function TransactionsTab({
       </div>
     );
   }
-  if (trades.length === 0) {
+  if (items.length === 0) {
     return (
       <div className="py-10 text-center text-xs text-arc-text-muted">
-        No trades yet. Live feed will populate as soon as the first one lands.
+        No activity yet. Live feed will populate as soon as the first trade or claim lands.
       </div>
     );
   }
@@ -132,9 +156,13 @@ function TransactionsTab({
           <div />
         </div>
         <div className="max-h-[420px] divide-y divide-arc-border/40 overflow-y-auto">
-          {trades.map((t) => (
-            <TradeRow key={t.txHash} trade={t} symbol={symbol} explorerUrl={explorerUrl} />
-          ))}
+          {items.map((it) =>
+            it.kind === "trade" ? (
+              <TradeRow key={`t-${it.trade.txHash}`} trade={it.trade} symbol={symbol} explorerUrl={explorerUrl} />
+            ) : (
+              <ClaimRow key={`c-${it.claim.txHash}`} claim={it.claim} nowSec={nowSec} explorerUrl={explorerUrl} />
+            ),
+          )}
         </div>
       </div>
     </div>
@@ -182,6 +210,47 @@ function TradeRow({
       </span>
       <a
         href={`${explorerUrl}/tx/${trade.txHash}`}
+        target="_blank"
+        rel="noopener noreferrer"
+        aria-label="View transaction"
+        className="text-arc-text-faint hover:text-arc-cta-hover"
+      >
+        <ExternalLink className="h-3 w-3" />
+      </a>
+    </div>
+  );
+}
+
+function ClaimRow({
+  claim,
+  nowSec,
+  explorerUrl,
+}: {
+  claim: ClaimRow;
+  nowSec: number;
+  explorerUrl: string;
+}) {
+  const seconds = Math.max(0, nowSec - claim.blockTime);
+  return (
+    <div className="grid grid-cols-[60px_minmax(0,1fr)_100px_100px_80px_20px] items-center gap-2 px-1 py-2 text-xs tabular-nums">
+      <span className="flex items-center justify-center gap-0.5 rounded-md bg-arc-cta-hover/15 px-1.5 py-0.5 text-center text-[10px] font-semibold uppercase text-arc-cta-hover">
+        <BadgeDollarSign className="h-3 w-3" /> Claim
+      </span>
+      <a
+        href={`${explorerUrl}/address/${claim.recipient}`}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="truncate font-mono text-[11px] text-arc-text-muted hover:text-arc-text"
+      >
+        {formatAddress(claim.recipient)} claimed fees
+      </a>
+      <span className="text-right text-arc-cta-hover">
+        ${claim.amountUsdc.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+      </span>
+      <span className="text-right text-arc-text-faint">fees</span>
+      <span className="text-right text-[10px] text-arc-text-faint">{fmtAgo(seconds)}</span>
+      <a
+        href={`${explorerUrl}/tx/${claim.txHash}`}
         target="_blank"
         rel="noopener noreferrer"
         aria-label="View transaction"

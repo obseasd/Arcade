@@ -39,6 +39,7 @@ import {
   V4Pool,
   HandleAttribution,
   EscrowSlot,
+  Claim,
   FeeStats,
   LockerPosition,
   LockerRecipientEarning,
@@ -1103,6 +1104,20 @@ export function handleEscrowCredited(event: Credited): void {
 }
 
 export function handleEscrowClaimed(event: Claimed): void {
+  // One immutable row per claim, queryable by positionId for the activity feed.
+  const claim = new Claim(
+    event.transaction.hash.toHexString() + "-" + event.logIndex.toString(),
+  );
+  claim.positionId = event.params.positionId;
+  claim.slotIndex = event.params.slotIndex;
+  claim.recipient = event.params.recipient;
+  claim.token = event.params.token;
+  claim.amountUsdc = usdcVolume(event.params.amount);
+  claim.blockTime = event.block.timestamp.toI32();
+  claim.blockNumber = event.block.number;
+  claim.txHash = event.transaction.hash;
+  claim.save();
+
   const id = escrowSlotId(event.params.positionId, event.params.slotIndex, event.params.token);
   let s = EscrowSlot.load(id);
   if (s == null) {

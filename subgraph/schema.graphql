@@ -212,6 +212,22 @@ type EscrowSlot @entity(immutable: false) {
   lastUpdate: Int!
 }
 
+# One row per creator-fee CLAIM (escrow Claimed event). Queried by positionId
+# (= uint256(poolId), which the token page already derives) so the activity feed
+# can show "@handle claimed $X" alongside trades. Immutable.
+type Claim @entity(immutable: true) {
+  # txHash-logIndex.
+  id: ID!
+  positionId: BigInt!
+  slotIndex: BigInt!
+  recipient: Bytes!
+  token: Bytes!
+  amountUsdc: BigDecimal!
+  blockTime: Int!
+  blockNumber: BigInt!
+  txHash: Bytes!
+}
+
 # V4 post-graduation fee running totals (id = "v4"), for /stats revenue reads.
 type FeeStats @entity(immutable: false) {
   id: ID!
