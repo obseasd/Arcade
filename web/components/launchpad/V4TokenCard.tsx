@@ -34,6 +34,9 @@ export function V4TokenCard({ token, priority }: { token: ArcadeHookTokenInfo; p
   const { image } = useTokenImage(token.address, token.metadataURI || undefined);
   const stats = useV4TokenStats(token.address);
   const symbol = token.symbol ?? "?";
+  // Prefer the subgraph launch time (reliable) over the flaky on-chain event
+  // scan; fall back to the scan only when the subgraph hasn't indexed it yet.
+  const createdAtSec = stats.createdAtSec > 0 ? stats.createdAtSec : token.createdAt;
 
   const isClanker =
     token.mode === ARCADE_HOOK_MODE.CLANKER || token.mode === ARCADE_HOOK_MODE.CLANKER_V3;
@@ -73,7 +76,7 @@ export function V4TokenCard({ token, priority }: { token: ArcadeHookTokenInfo; p
           </div>
           <div className="mt-0.5 text-xs text-arc-text-muted">
             by {formatAddress(token.creator)}
-            {token.createdAt > 0 && <> · {ageString(token.createdAt)}</>}
+            {createdAtSec > 0 && <> · {ageString(createdAtSec)}</>}
           </div>
           <div className="mt-2 flex flex-wrap items-center gap-2 gap-y-1">
             <span className={cn("rounded-full border px-2 py-0.5 text-[10px] font-medium", status.className)}>

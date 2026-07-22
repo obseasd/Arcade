@@ -17,6 +17,10 @@ export interface V4TokenStats {
   /** EXACT swap fees generated (subgraph Token.feesUsdc). Undefined pre-redeploy
    *  or when the token has no indexed fee events yet -> caller estimates. */
   feesUsdc?: number;
+  /** Launch time (unix seconds) from Token.createdAt. Reliable source for the
+   *  card "age" -- the on-chain event scan in useArcadeHookTokens is flaky and
+   *  deploy-lagged, so prefer this when present. 0 = miss. */
+  createdAtSec: number;
   isLoading: boolean;
 }
 
@@ -25,6 +29,7 @@ interface StatsResult {
   totalVolumeUsdc: number;
   usdcLiquidity: number;
   feesUsdc?: number;
+  createdAtSec: number;
 }
 
 /** O(1) read of the per-token aggregates the subgraph now maintains. Returns
@@ -32,11 +37,11 @@ interface StatsResult {
  *  back to summing recent trades. */
 async function statsFromTokenEntity(url: string, tokenKey: string): Promise<StatsResult | null> {
   try {
-    const q = `{ token(id: "${tokenKey}") { totalVolumeUsdc feesUsdc lastPriceUsdc usdcLiquidity } }`;
+    const q = `{ token(id: "${tokenKey}") { totalVolumeUsdc feesUsdc lastPriceUsdc usdcLiquidity createdAt } }`;
     const res = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ query: q }) });
     if (!res.ok) return null;
     const json = (await res.json()) as {
-      data?: { token?: { totalVolumeUsdc?: string; feesUsdc?: string; lastPriceUsdc?: string; usdcLiquidity?: string } | null };
+      data?: { token?: { totalVolumeUsdc?: string; feesUsdc?: string; lastPriceUsdc?: string; usdcLiquidity?: string; createdAt?: string | number } | null };
     };
     const t = json?.data?.token;
     // totalVolumeUsdc is non-null in the new schema; its absence means the field
@@ -48,6 +53,7 @@ async function statsFromTokenEntity(url: string, tokenKey: string): Promise<Stat
       totalVolumeUsdc: Number(t.totalVolumeUsdc) || 0,
       usdcLiquidity: Math.max(0, Number(t.usdcLiquidity) || 0),
       feesUsdc: t.feesUsdc != null ? Number(t.feesUsdc) : undefined,
+      createdAtSec: Number(t.createdAt) || 0,
     };
   } catch {
     return null;
@@ -69,7 +75,7 @@ export function useV4TokenStats(token: Address | undefined): V4TokenStats {
     staleTime: 10_000,
     refetchInterval: 15_000,
     queryFn: async () => {
-      if (!GOLDSKY_URL || !tokenKey) return { totalVolumeUsdc: 0, usdcLiquidity: 0 };
+      if (!GOLDSKY_URL || !tokenKey) return { totalVolumeUsdc: 0, usdcLiquidity: 0, createdAtSec: 0 };
       // Prefer the O(1) per-token aggregates the subgraph maintains.
       const entity = await statsFromTokenEntity(GOLDSKY_URL, tokenKey);
       if (entity) return entity;
@@ -83,7 +89,7 @@ export function useV4TokenStats(token: Address | undefined): V4TokenStats {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ query: q }),
       });
-      if (!res.ok) return { totalVolumeUsdc: 0, usdcLiquidity: 0 };
+      if (!res.ok) return { totalVolumeUsdc: 0, usdcLiquidity: 0, createdAtSec: 0 };
       const json = (await res.json()) as {
         data?: {
           latest?: { price: string | number }[];
@@ -103,6 +109,7 @@ export function useV4TokenStats(token: Address | undefined): V4TokenStats {
         priceUsd: Number.isFinite(p) && p > 0 ? p : undefined,
         totalVolumeUsdc,
         usdcLiquidity: Math.max(0, netUsdc),
+        createdAtSec: 0,
       };
     },
   });
@@ -111,6 +118,7 @@ export function useV4TokenStats(token: Address | undefined): V4TokenStats {
     totalVolumeUsdc: data?.totalVolumeUsdc ?? 0,
     usdcLiquidity: data?.usdcLiquidity ?? 0,
     feesUsdc: data?.feesUsdc,
+    createdAtSec: data?.createdAtSec ?? 0,
     isLoading: isLoading || isFetching,
   };
 }
