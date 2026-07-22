@@ -4,7 +4,7 @@ import { ArrowLeft, Lock, Image as ImageIcon, Upload } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useState, Suspense } from "react";
+import { useRef, useState, Suspense } from "react";
 import { Address, decodeEventLog, isAddress, parseUnits, zeroAddress } from "viem";
 import { useAccount, usePublicClient, useReadContract, useWriteContract } from "wagmi";
 
@@ -168,6 +168,13 @@ function Inner() {
     })();
 
     const [txState, setTxState] = useState<TxState>({ status: "idle" });
+    // Anti-double-deploy: `submitted` latches TRUE the instant the createLaunch tx
+    // is broadcast (hash obtained), and permanently locks the submit button. A
+    // flaky RPC on the receipt wait no longer lets the user resubmit (which used to
+    // deploy a SECOND token + pay the fee twice). `submittingRef` is the synchronous
+    // guard against a rapid double-click before the first render disables the button.
+    const [submitted, setSubmitted] = useState(false);
+    const submittingRef = useRef(false);
 
     const { ensureAllowance } = useApproveIfNeeded(ADDRESSES.usdc, ADDRESSES.arcadeHook);
     const { writeContractAsync } = useWriteContract();
@@ -296,6 +303,9 @@ function Inner() {
     const previewSrc = imagePreview || resolveIpfs(image) || image;
 
     const onCreate = async () => {
+        // Hard guard: never let a second createLaunch fire while one is in flight
+        // or after one has already been submitted (double-deploy protection).
+        if (submittingRef.current || submitted) return;
         if (!isConnected || !account) {
             pushToast({ kind: "error", title: "Connect wallet first" });
             return;
@@ -304,6 +314,7 @@ function Inner() {
             pushToast({ kind: "error", title: "ArcadeHook address not configured" });
             return;
         }
+        submittingRef.current = true;
 
         try {
             // Approve the fee PLUS the optional creator-buy up front (same spender
@@ -368,9 +379,26 @@ function Inner() {
                 ],
             });
 
+            // The createLaunch tx is now broadcast. LATCH the lock immediately: from
+            // here on the launch is committed on-chain, so any failure below must
+            // NOT re-enable a resubmit (that deployed a 2nd token on flaky RPC).
+            setSubmitted(true);
             setTxState({ status: "pending", message: "Waiting for confirmation..." });
             if (!publicClient) throw new Error("public client unavailable");
-            const receipt = await publicClient.waitForTransactionReceipt({ hash });
+            let receipt;
+            try {
+                receipt = await publicClient.waitForTransactionReceipt({ hash });
+            } catch {
+                // RPC flaked on the wait, but the tx is already submitted. Do NOT
+                // invite a resubmit -- send the user to the launchpad to find it.
+                setTxState({
+                    status: "success",
+                    hash,
+                    message: "Launch submitted. Open the launchpad in a moment to find your token (do not resubmit).",
+                });
+                setTimeout(() => router.push("/launchpad"), 1500);
+                return;
+            }
 
             // Pull the new token address out of the TokenLaunched event.
             let newToken: Address | undefined;
@@ -405,7 +433,16 @@ function Inner() {
             setTimeout(() => router.push(`/launchpad/v4hook/${newToken}`), 800);
         } catch (e: unknown) {
             const msg = e instanceof Error ? e.message : String(e);
-            setTxState({ status: "error", message: msg });
+            // If we already broadcast (submitted), the button stays locked; warn
+            // that the token may already be live rather than inviting a resubmit.
+            setTxState({
+                status: "error",
+                message: submitted
+                    ? `Submitted, but a later step failed (${msg.slice(0, 100)}). Check the launchpad before retrying - the token may already be live.`
+                    : msg,
+            });
+        } finally {
+            submittingRef.current = false;
         }
     };
 
@@ -755,9 +792,8 @@ function Inner() {
                         </p>
                     )}
                     <p className="text-xs text-arc-text-faint">
-                        Buy a bag of your own token in the same flow (a second tx right after
-                        the launch, approved together). Grabs supply before anyone else and
-                        seeds the curve. Reverts harmlessly if a sniper front-runs it.
+                        Your buy runs in the SAME transaction as the launch, so it is the
+                        provable first buy on the curve - no bot can front-run it.
                     </p>
                 </div>
                 )}
@@ -785,16 +821,18 @@ function Inner() {
                 {/* Submit -------------------------------------------------- */}
                 <button type="button"
                     onClick={onCreate}
-                    disabled={!formValid || txState.status === "pending"}
+                    disabled={!formValid || txState.status === "pending" || submitted}
                     className={cn(
                         "arc-button-primary w-full py-3 text-sm font-semibold",
-                        (!formValid || txState.status === "pending") &&
+                        (!formValid || txState.status === "pending" || submitted) &&
                             "cursor-not-allowed opacity-50",
                     )}
                 >
-                    {txState.status === "pending"
-                        ? "Submitting..."
-                        : `Create launch (pays ${formatUSDC(CREATION_FEE_USDC + creatorBuyRaw)} USDC)`}
+                    {submitted
+                        ? "Launch submitted"
+                        : txState.status === "pending"
+                            ? "Submitting..."
+                            : `Create launch (pays ${formatUSDC(CREATION_FEE_USDC + creatorBuyRaw)} USDC)`}
                 </button>
 
                 <TxStatus state={txState} />
