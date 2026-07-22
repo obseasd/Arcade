@@ -11,6 +11,17 @@ import { LAUNCHPAD_CURVE_SUPPLY, LAUNCHPAD_TOTAL_SUPPLY, FEATURED_TOKENS } from 
 import { formatAddress } from "@/lib/utils";
 import { cn } from "@/lib/utils";
 
+/** Compact "Xs/m/h/d ago" from a unix-seconds timestamp. */
+function ageString(createdAtSec: number): string {
+  const s = Math.max(0, Math.floor(Date.now() / 1000) - createdAtSec);
+  if (s < 60) return `${s}s ago`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
+}
+
 /**
  * Launchpad grid card for an ArcadeHook (V4) token. Same visual language as the
  * legacy TokenCard, but links to the /launchpad/v4hook detail and reflects the
@@ -60,7 +71,10 @@ export function V4TokenCard({ token, priority }: { token: ArcadeHookTokenInfo; p
             <div className="truncate font-semibold">{token.name ?? "Unnamed"}</div>
             <div className="rounded-md bg-arc-surface-2 px-1.5 py-0.5 text-xs text-arc-text-muted">${symbol}</div>
           </div>
-          <div className="mt-0.5 text-xs text-arc-text-muted">by {formatAddress(token.creator)}</div>
+          <div className="mt-0.5 text-xs text-arc-text-muted">
+            by {formatAddress(token.creator)}
+            {token.createdAt > 0 && <> · {ageString(token.createdAt)}</>}
+          </div>
           <div className="mt-2 flex flex-wrap items-center gap-2 gap-y-1">
             <span className={cn("rounded-full border px-2 py-0.5 text-[10px] font-medium", status.className)}>
               {status.label}

@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { Search } from "lucide-react";
 import { PlusIcon } from "@/components/ui/MaskIcon";
-import { FEATURED_TOKENS, LAUNCHPAD_CURVE_SUPPLY, LAUNCHPAD_TOTAL_SUPPLY, V4_HOOK_ENABLED } from "@/lib/constants";
+import { FEATURED_TOKENS, LAUNCHPAD_CURVE_SUPPLY, LAUNCHPAD_TOTAL_SUPPLY, LaunchMode, V4_HOOK_ENABLED } from "@/lib/constants";
 import { useLaunchpadTokens, LaunchpadTokenInfo } from "@/lib/hooks/useLaunchpadTokens";
 import { getLaunchpadGenerations } from "@/lib/launchpadGenerations";
 import { useArcadeHookTokens } from "@/lib/hooks/useArcadeHookTokens";
@@ -99,7 +99,10 @@ export default function LaunchpadIndexPage() {
     } else if (filter === "migrating") {
       list = list.filter((t) => !t.migrated && (t.tokensSold * 100n) / LAUNCHPAD_CURVE_SUPPLY > 80n);
     } else if (filter === "migrated") {
-      list = list.filter((t) => t.migrated);
+      // "Migrated" = a PUMP that graduated off its bonding curve into an AMM.
+      // CLANKER launches are direct (no curve, no migration), so they never
+      // belong here even if their state carries a migrated-like flag.
+      list = list.filter((t) => t.migrated && t.mode === LaunchMode.PUMP);
     }
 
     // Sort. The main "all" view is ordered by market-cap proxy

@@ -54,12 +54,17 @@ export interface ArcadeHookTokenInfo {
     snipeLaunchedAt: bigint;
     /** Per-event metadataURI (ipfs:// or data:). */
     metadataURI: string;
+    /** Launch time (unix seconds), estimated from the TokenLaunched block. 0 if
+     *  the launch event fell outside the scan window. */
+    createdAt: number;
     name?: string;
     symbol?: string;
 }
 
 interface EventCache {
     metadata: Map<string, string>;
+    /** token(lowercase) -> launch unix seconds (estimated from block number). */
+    createdAt?: Map<string, number>;
 }
 
 export function useArcadeHookTokens(): {
@@ -164,7 +169,9 @@ export function useArcadeHookTokens(): {
         let cancelled = false;
         (async () => {
             try {
-                const latest = await publicClient.getBlockNumber();
+                const latestBlk = await publicClient.getBlock();
+                const latest = latestBlk.number as bigint;
+                const latestTs = Number(latestBlk.timestamp);
                 // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 const launchLogs = await scanLogsChunked<any>(
                     publicClient,
@@ -173,12 +180,19 @@ export function useArcadeHookTokens(): {
                     { chunk: CHUNK_SMALL, maxBack: MAX_BACK_BLOCKS, label: "hook.TokenLaunched" },
                 );
                 const metadata = new Map<string, string>();
+                const createdAt = new Map<string, number>();
                 for (const log of launchLogs) {
                     const tokenAddr = (log.args.token as string).toLowerCase();
                     const uri = (log.args.metadataURI as string) ?? "";
                     if (!metadata.has(tokenAddr)) metadata.set(tokenAddr, uri);
+                    // Estimate launch time from the block number (Arc ~1s blocks),
+                    // avoiding a getBlock per token. Keep the earliest sighting.
+                    const bn = log.blockNumber as bigint | undefined;
+                    if (bn !== undefined && !createdAt.has(tokenAddr)) {
+                        createdAt.set(tokenAddr, latestTs - Number(latest - bn));
+                    }
                 }
-                if (!cancelled) setCache({ metadata });
+                if (!cancelled) setCache({ metadata, createdAt });
             } catch {
                 /* swallow - UI renders empty metadata in this case */
             }
@@ -227,6 +241,7 @@ export function useArcadeHookTokens(): {
                 snipeDecaySeconds: Number(snipe?.[1] ?? 0),
                 snipeLaunchedAt: snipe?.[2] ?? 0n,
                 metadataURI: cache.metadata.get(lower) ?? "",
+                createdAt: cache.createdAt?.get(lower) ?? 0,
                 name,
                 symbol,
             };
