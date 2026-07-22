@@ -13,6 +13,7 @@ import { getSql, isDbConfigured } from "@/lib/db";
 import { arcTestnet } from "@/lib/chains";
 import { ADDRESSES } from "@/lib/constants";
 import { scanReferralAttribution } from "@/lib/referralOnchain";
+import { getReferralBaselines } from "@/lib/referralPersistence";
 
 /**
  * Earnings model (Phase 2). Referral pays 10% of the PROTOCOL fee a referred
@@ -115,45 +116,77 @@ export async function getVerifiedReferredWallets(
         .filter((w) => w !== norm(referrer));
 }
 
-/**
- * Sum the on-chain USDC trade volume (micros) of a set of wallets, read from the
- * Goldsky subgraph's per-Trader running totals. Objective on-chain data -- NOT
- * the forgeable referral_activity table. Returns 0 if the subgraph is unset.
- */
-async function getWalletsVolumeMicros(wallets: string[]): Promise<bigint> {
-    const url = process.env.NEXT_PUBLIC_GOLDSKY_URL;
-    if (!url || wallets.length === 0) return 0n;
-    const ids = wallets.slice(0, MAX_REFERRED_WALLETS).map((w) => `"${norm(w)}"`).join(",");
-    const query = `{ traders(first: ${MAX_REFERRED_WALLETS}, where: { id_in: [${ids}] }) { id totalVolumeUsdc } }`;
+/** Parse a 6-dp decimal string ("123.456789") to exact micros, trimming any
+ *  stray extra fractional digit. Returns 0n on a malformed value. */
+function usdcStringToMicros(v: string): bigint {
+    const [wholePart, fracRaw] = String(v ?? "0").split(".");
+    const frac = (fracRaw ?? "").slice(0, 6);
     try {
-        const res = await fetch(url, {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ query }),
-        });
-        if (!res.ok) return 0n;
-        const json = (await res.json()) as {
-            data?: { traders?: { totalVolumeUsdc: string }[] };
-        };
-        const rows = json?.data?.traders;
-        if (!Array.isArray(rows)) return 0n;
-        let total = 0n;
-        for (const r of rows) {
-            // totalVolumeUsdc is a 6-dp decimal string; parse to micros exactly.
-            // Guard against a stray extra fractional digit by trimming to 6dp.
-            const v = String(r.totalVolumeUsdc ?? "0");
-            const [wholePart, fracRaw] = v.split(".");
-            const frac = (fracRaw ?? "").slice(0, 6);
-            try {
-                total += parseUnits(`${wholePart || "0"}.${frac || "0"}`, 6);
-            } catch {
-                /* skip a malformed row */
-            }
-        }
-        return total;
+        return parseUnits(`${wholePart || "0"}.${frac || "0"}`, 6);
     } catch {
         return 0n;
     }
+}
+
+// Cap the per-wallet trade pagination so a hyperactive wallet can't make a claim
+// scan unbounded. 5 pages x 1000 = up to 5000 most-recent trades summed (skip
+// stays within the subgraph's skip ceiling); older trades beyond that are not
+// counted, which can only UNDER-credit, never over-pay.
+const VOL_PAGE = 1000;
+const VOL_MAX_PAGES = 5;
+
+/**
+ * Sum a single wallet's on-chain USDC trade volume (micros) SINCE `sinceUnix`,
+ * read from the Goldsky Trade entity (blockTime-windowed). This is the
+ * post-referral window: only volume the wallet traded after it was referred
+ * counts, even if its Memo verification landed later (audit C-2). `sinceUnix = 0`
+ * counts all of the wallet's history (used only when no baseline is known).
+ */
+async function getWalletVolumeSinceMicros(wallet: string, sinceUnix: number): Promise<bigint> {
+    const url = process.env.NEXT_PUBLIC_GOLDSKY_URL;
+    if (!url) return 0n;
+    const w = norm(wallet);
+    const since = Math.max(0, Math.floor(sinceUnix));
+    let total = 0n;
+    try {
+        for (let page = 0; page < VOL_MAX_PAGES; page++) {
+            const query = `{ trades(first: ${VOL_PAGE}, skip: ${page * VOL_PAGE}, orderBy: blockNumber, orderDirection: desc, where: { trader: "${w}", blockTime_gte: ${since} }) { volumeUsdc } }`;
+            const res = await fetch(url, {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ query }),
+            });
+            if (!res.ok) break;
+            const json = (await res.json()) as { data?: { trades?: { volumeUsdc: string }[] } };
+            const rows = json?.data?.trades;
+            if (!Array.isArray(rows) || rows.length === 0) break;
+            for (const r of rows) total += usdcStringToMicros(r.volumeUsdc);
+            if (rows.length < VOL_PAGE) break;
+        }
+    } catch {
+        return 0n;
+    }
+    return total;
+}
+
+/**
+ * Sum the post-referral USDC volume (micros) across a referrer's verified
+ * wallets. Each wallet is windowed by its own "referred since" baseline
+ * (`baselines`), so pre-referral trades never count (audit C-2). A wallet with
+ * no baseline (Memo-tagged but never touched the link) falls back to its full
+ * history -- rare, and the normal UI always writes a first-touch row.
+ */
+async function getWalletsVolumeMicros(
+    wallets: string[],
+    baselines: Map<string, number>,
+): Promise<bigint> {
+    if (wallets.length === 0) return 0n;
+    let total = 0n;
+    for (const wallet of wallets.slice(0, MAX_REFERRED_WALLETS)) {
+        const since = baselines.get(norm(wallet)) ?? 0;
+        total += await getWalletVolumeSinceMicros(wallet, since);
+    }
+    return total;
 }
 
 /**
@@ -178,7 +211,10 @@ export async function getVerifiedEarningsUsdMicros(
     const wallets = await getVerifiedReferredWallets(publicClient, referrer);
     if (wallets.length === 0) return 0n;
 
-    const volumeMicros = await getWalletsVolumeMicros(wallets);
+    // Window each wallet by its "referred since" time so pre-referral volume is
+    // never credited (audit C-2). Baselines come from referrals.created_at.
+    const baselines = await getReferralBaselines(referrer);
+    const volumeMicros = await getWalletsVolumeMicros(wallets, baselines);
     return computeReferralEarningsMicros(volumeMicros);
 }
 

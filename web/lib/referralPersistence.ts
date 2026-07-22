@@ -168,6 +168,33 @@ export async function trackReferralTrade(
  * the squatter's dashboard, which is the entire point of the attack. They are
  * returned, but apart, and never as "pending".
  */
+/**
+ * Per-referred-wallet "referred since" timestamps (unix seconds) for a referrer,
+ * from `referrals.created_at` (the server-set first-touch time). Used to window
+ * the payout so a referrer is credited only for volume the wallet traded AFTER
+ * it was referred, even if the on-chain Memo verification happens later. Server
+ * timestamps can't be backdated by a client, so this also defends the
+ * "tag an already-active wallet to farm its lifetime volume" vector (audit C-2).
+ * Returns an empty map when the DB is unset.
+ */
+export async function getReferralBaselines(referrer: string): Promise<Map<string, number>> {
+    const out = new Map<string, number>();
+    if (!isDbConfigured() || !isAddr(referrer)) return out;
+    const ref = norm(referrer);
+    const sql = getSql();
+    const rows = (await sql`
+        SELECT referred_address AS address,
+               EXTRACT(EPOCH FROM created_at)::bigint AS since
+        FROM referrals
+        WHERE referrer_address = ${ref}
+    `) as { address: string; since: string | number }[];
+    for (const r of rows) {
+        const since = Number(r.since);
+        if (Number.isFinite(since) && since > 0) out.set(norm(r.address), since);
+    }
+    return out;
+}
+
 export async function getReferralStats(referrer: string): Promise<ReferralStats> {
     const empty: ReferralStats = {
         totalPendingUsdMicros: "0",
