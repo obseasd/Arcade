@@ -150,8 +150,10 @@ function Inner() {
     const [startMcap, setStartMcap] = useState(CLANKER_DEFAULT_START_MCAP);
 
     // Snipe config. Both zero means no anti-sniper.
+    // Anti-sniper OFF by default: both the starting rate and the decay window
+    // start at 0 so a PUMP launches with no tax unless the creator opts in.
     const [snipeStartBps, setSnipeStartBps] = useState(0);
-    const [snipeDecayMinutes, setSnipeDecayMinutes] = useState(10);
+    const [snipeDecayMinutes, setSnipeDecayMinutes] = useState(0);
 
     // PUMP-only optional "creator buy": USDC the launcher spends on the curve
     // immediately after createLaunch (the classic pump.fun dev-buy). createLaunch
@@ -223,6 +225,9 @@ function Inner() {
         symbol.trim().length > 0 &&
         snipeStartBps >= 0 &&
         snipeStartBps <= MAX_SNIPE_BPS &&
+        // A non-zero anti-sniper rate REQUIRES a non-zero decay window (the hook
+        // reverts otherwise); a zero rate ignores the window.
+        (snipeStartBps === 0 || snipeDecayMinutes > 0) &&
         (mode === ARCADE_HOOK_MODE.PUMP || mode === ARCADE_HOOK_MODE.CLANKER) &&
         recipientValid &&
         startMcapValid &&
@@ -739,7 +744,15 @@ function Inner() {
                             max={MAX_SNIPE_BPS}
                             step={100}
                             value={snipeStartBps}
-                            onChange={(e) => setSnipeStartBps(Number(e.target.value))}
+                            onChange={(e) => {
+                                const v = Number(e.target.value);
+                                setSnipeStartBps(v);
+                                // Enabling the tax needs a non-zero decay window (the
+                                // hook reverts snipeStartBps>0 with decay==0). Auto-set
+                                // a sane 10 min the first time it is turned on.
+                                if (v > 0 && snipeDecayMinutes === 0) setSnipeDecayMinutes(10);
+                                if (v === 0) setSnipeDecayMinutes(0);
+                            }}
                             className="mt-2 w-full"
                         />
                     </label>
@@ -749,7 +762,7 @@ function Inner() {
                         </span>
                         <input
                             type="range"
-                            min={1}
+                            min={0}
                             max={MAX_SNIPE_DECAY_MINUTES}
                             step={1}
                             value={snipeDecayMinutes}
