@@ -6,10 +6,14 @@ import {
     getClaimedUsdMicros,
     getPerWalletVolumeSinceMicros,
     computeReferralEarningsMicros,
+    getConfirmedReferredWallets,
 } from "@/lib/referralPayout";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+// The authenticated POST runs the on-chain Memo scan (~200 getLogs windows,
+// ~14s cold, then cached). The default 10s function budget would abort it.
+export const maxDuration = 30;
 
 /**
  * GET  /api/referral/stats?referrer=0x...   → COARSE aggregates only
@@ -100,6 +104,45 @@ export async function POST(req: NextRequest) {
         const claimed = await getClaimedUsdMicros(referrer);
         const claimable = verified > claimed ? verified - claimed : 0n;
 
+        // CONFIRMED status comes from ON-CHAIN Memo attribution, not the DB
+        // `verified` column. That column is only ever set by a signed register,
+        // a path the client no longer walks, so it is permanently false and the
+        // dashboard showed every wallet "unconfirmed" even after the user signed
+        // the on-chain Memo. Worse, a wallet that confirmed on-chain but whose DB
+        // registration never persisted (reported live: 0xf351..) was absent from
+        // the list entirely. On-chain is the same source the payout trusts, so
+        // the list and the money now agree by construction.
+        let confirmedSet = new Set<string>();
+        try {
+            const confirmed = await getConfirmedReferredWallets(referrer);
+            confirmedSet = new Set(confirmed.map((w) => w.toLowerCase()));
+        } catch {
+            // On-chain scan unreachable: fall back to the DB `verified` flags
+            // below rather than dropping everyone's confirmed status.
+        }
+
+        // Union DB rows with on-chain-confirmed wallets missing from the DB.
+        type Row = (typeof stats.referred)[number];
+        const byAddr = new Map<string, Row>();
+        for (const r of stats.referred) {
+            byAddr.set(r.address.toLowerCase(), {
+                ...r,
+                verified: confirmedSet.size > 0 ? confirmedSet.has(r.address.toLowerCase()) : r.verified,
+            });
+        }
+        for (const w of confirmedSet) {
+            if (!byAddr.has(w)) {
+                byAddr.set(w, {
+                    address: w,
+                    volumeUsdMicros: "0",
+                    txCount: 0,
+                    earnedUsdMicros: "0",
+                    verified: true,
+                });
+            }
+        }
+        let referred = [...byAddr.values()];
+
         // Per-wallet volume: DISPLAY it from the subgraph, not from the DB.
         // `referral_activity.volume` is a fire-and-forget POST from the referred
         // user's browser, so it silently misses any trade where the tab closed,
@@ -108,7 +151,6 @@ export async function POST(req: NextRequest) {
         // "inactive" -- reported live: a verified referred wallet with ~300 USDC
         // of volume never appeared. The subgraph is the same source the claimable
         // is computed from, so the list and the money now agree.
-        let referred = stats.referred;
         try {
             const byWallet = await getPerWalletVolumeSinceMicros(
                 referrer,
@@ -129,11 +171,21 @@ export async function POST(req: NextRequest) {
             // Subgraph unreachable: fall back to the DB figures rather than
             // showing an empty downline.
         }
+        // Confirmed first, then by volume.
+        referred.sort((a, b) => {
+            if (a.verified !== b.verified) return a.verified ? -1 : 1;
+            const av = BigInt(a.volumeUsdMicros || "0");
+            const bv = BigInt(b.volumeUsdMicros || "0");
+            return bv > av ? 1 : bv < av ? -1 : 0;
+        });
         const totalVolume = referred.reduce((a, r) => a + BigInt(r.volumeUsdMicros || "0"), 0n);
+        const verifiedCount = referred.filter((r) => r.verified).length;
 
         return NextResponse.json({
             ...stats,
             referred,
+            referredCount: verifiedCount,
+            unverifiedCount: referred.length - verifiedCount,
             totalVolumeUsdMicros: totalVolume.toString(),
             verifiedEarningsUsdMicros: verified.toString(),
             claimableUsdMicros: claimable.toString(),

@@ -229,13 +229,44 @@ export async function getPerWalletVolumeSinceMicros(
  * against) is a follow-up; the verified-wallet requirement already forces a
  * sybil to emit a per-wallet on-chain Memo tag (real gas per fake wallet).
  */
+/**
+ * The referrer's on-chain-CONFIRMED referred wallets (lowercased), read from
+ * Memo attribution and CACHED. Exported so the DASHBOARD can mark exactly these
+ * wallets "confirmed" and surface ones that confirmed on-chain but never landed
+ * a DB row -- the DB `verified` column is only set by a signed register, a path
+ * the client no longer walks, so on-chain is the single source of truth for who
+ * is payable.
+ *
+ * The scan is ~200 getLogs windows (~14s) because Arc has no memo index yet and
+ * caps getLogs at ~10k blocks; both the earnings math and the dashboard list
+ * need it, so it is memoised per referrer for CONFIRMED_TTL_MS to make repeat
+ * dashboard loads instant and to collapse the two callers into ONE scan. A new
+ * confirmation is rare and shows up within the TTL, which is an acceptable lag
+ * for a display+accrual read (the /claim route can force a fresh scan if we ever
+ * need to-the-second freshness).
+ */
+const CONFIRMED_TTL_MS = 5 * 60 * 1000;
+const confirmedCache = new Map<string, { wallets: string[]; exp: number }>();
+
+export async function getConfirmedReferredWallets(referrer: string): Promise<string[]> {
+    if (!isAddr(referrer)) return [];
+    const key = norm(referrer);
+    const now = Date.now();
+    const hit = confirmedCache.get(key);
+    if (hit && hit.exp > now) return hit.wallets;
+    const publicClient = createPublicClient({ chain: arcTestnet, transport: http() });
+    const wallets = await getVerifiedReferredWallets(publicClient, referrer);
+    confirmedCache.set(key, { wallets, exp: now + CONFIRMED_TTL_MS });
+    return wallets;
+}
+
 export async function getVerifiedEarningsUsdMicros(
     referrer: string,
 ): Promise<bigint> {
     if (!isAddr(referrer)) return 0n;
-    // A server-side reader to resolve the on-chain verified attribution.
-    const publicClient = createPublicClient({ chain: arcTestnet, transport: http() });
-    const wallets = await getVerifiedReferredWallets(publicClient, referrer);
+    // Reuse the cached, consolidated on-chain scan (same source the dashboard's
+    // confirmed list uses) so a stats load does ONE scan, not two.
+    const wallets = await getConfirmedReferredWallets(referrer);
     if (wallets.length === 0) return 0n;
 
     // Window each wallet by its "referred since" time so pre-referral volume is

@@ -51,9 +51,23 @@ const MEMO_EVENT_TOPIC0 = toEventSelector(
 );
 
 /** Arc `eth_getLogs` window (documented range cap; mirror stats.ts). */
-const BLOCK_WINDOW = 45_000n;
+// Arc's eth_getLogs rejects ranges wider than ~10k blocks with an opaque "HTTP
+// request failed" / "Request exceeds defined limit" (verified on-chain
+// 2026-07-23: 10k OK, 20k+ errors). The old 45k window therefore FAILED every
+// call, and because a failed window was swallowed as [], the whole scan
+// silently returned zero attributions -- so no referred wallet was ever seen as
+// confirmed and nobody could be paid, even though the Memos were on-chain and
+// valid. Stay comfortably under the limit.
+const BLOCK_WINDOW = 10_000n;
 /** How far back to scan for referral tags (bounded until the indexer lands). */
 const MAX_SCAN_BLOCKS = 2_000_000n;
+/** Concurrent getLogs in flight. 2M / 10k = ~200 windows; firing them all at
+ *  once rate-limits the public RPC, serialising them takes over a minute.
+ *  Measured on-chain: 40-wide clears the full 2M scan in ~14s. */
+const SCAN_CONCURRENCY = 40;
+/** Per-window retries: Arc getLogs is transiently flaky even within the range
+ *  limit ("HTTP request failed" on a window that succeeds on retry). */
+const WINDOW_RETRIES = 3;
 
 /**
  * writeContract args to register `referrer` as the caller's first-touch
@@ -157,10 +171,16 @@ export async function scanReferralAttribution(
         windows.push({ from: f, to });
     }
 
-    const perWindow = await Promise.all(
-        windows.map(async ({ from: f, to }) => {
+    const scanWindow = async ({ from: f, to }: { from: bigint; to: bigint }) => {
+        for (let attempt = 0; attempt < WINDOW_RETRIES; attempt++) {
             try {
-                // Raw-topic filter: topic0 = Memo, topic3 = our referral memoId.
+                // topic0 = Memo. We pass topic3 = our memoId as a HINT, but Arc's
+                // getLogs does NOT honour indexed-topic filters beyond topic0
+                // (verified on-chain 2026-07-23: the filtered and unfiltered
+                // counts are identical), so every Memo in range comes back and we
+                // re-filter by memoId in JS below. Without that re-check, long
+                // non-referral memos (agent payloads, order refs) would be decoded
+                // into bogus attributions.
                 return await publicClient.getLogs({
                     address: MEMO_ADDRESS,
                     fromBlock: f,
@@ -168,15 +188,30 @@ export async function scanReferralAttribution(
                     topics: [MEMO_EVENT_TOPIC0, null, null, REFERRAL_MEMO_ID],
                 });
             } catch {
-                return [];
+                // transient: retry; only give up (and return []) after the last
+                // attempt. A silently-dropped window under-credits attribution.
             }
-        }),
-    );
+        }
+        return [] as Awaited<ReturnType<typeof publicClient.getLogs>>;
+    };
 
+    // Bounded-concurrency pool over the windows.
+    const perWindow: Awaited<ReturnType<typeof publicClient.getLogs>>[] = [];
+    for (let i = 0; i < windows.length; i += SCAN_CONCURRENCY) {
+        const batch = windows.slice(i, i + SCAN_CONCURRENCY);
+        const res = await Promise.all(batch.map(scanWindow));
+        perWindow.push(...res);
+    }
+
+    const refIdLc = REFERRAL_MEMO_ID.toLowerCase();
     // First-touch: keep the earliest tag per referred wallet.
     const firstByReferred = new Map<string, OnchainReferral>();
     for (const logs of perWindow) {
         for (const log of logs) {
+            // Enforce the memoId in JS: Arc returned every memo regardless of the
+            // topic3 filter, so this is what actually keeps non-referral memos
+            // out of attribution.
+            if ((log.topics?.[3] ?? "").toLowerCase() !== refIdLc) continue;
             const decoded = decodeMemoLog(log);
             if (!decoded) continue;
             const { referred, referrer, blockNumber } = decoded;
