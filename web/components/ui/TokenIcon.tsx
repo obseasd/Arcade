@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { cn } from "@/lib/utils";
 import { TokenLogo } from "./TokenLogo";
 import { resolveIpfs, ipfsGatewayUrls } from "@/lib/metadata";
@@ -44,11 +44,33 @@ function imageCandidates(image: string): string[] {
   return [resolveIpfs(image)];
 }
 
+/** A gateway that has not delivered the image within this window is treated as
+ *  too slow and we move to the next candidate. onError alone is not enough: a
+ *  throttled public gateway often answers eventually (10-15s) rather than
+ *  failing, which left the token logo blank for that whole time. */
+const SLOW_GATEWAY_MS = 2_500;
+
 export function TokenIcon({ symbol, image, size = 32, className, priority }: Props) {
   const candidates = useMemo(() => (image ? imageCandidates(image) : []), [image]);
-  // Index into the gateway fallback list; advanced by onError. Reset implicitly
-  // when `candidates` identity changes (new token) via the key on <img>.
+  // Index into the gateway fallback list; advanced by onError OR by the
+  // slow-gateway timeout below.
   const [idx, setIdx] = useState(0);
+  const [loaded, setLoaded] = useState(false);
+
+  // New token / new image: restart at the primary gateway.
+  useEffect(() => {
+    setIdx(0);
+    setLoaded(false);
+  }, [candidates]);
+
+  // Slow-gateway timeout. Only armed while a NEXT candidate exists, so the last
+  // gateway keeps unlimited time and we never drop an image that would have
+  // loaded a bit later.
+  useEffect(() => {
+    if (loaded || idx >= candidates.length - 1) return;
+    const t = setTimeout(() => setIdx((i) => (i === idx ? i + 1 : i)), SLOW_GATEWAY_MS);
+    return () => clearTimeout(t);
+  }, [idx, loaded, candidates.length]);
 
   const cleanSymbol = symbol?.replace(/^\$+/, "");
   const pngLogo = cleanSymbol ? PNG_LOGOS[cleanSymbol.toUpperCase()] : undefined;
@@ -69,6 +91,7 @@ export function TokenIcon({ symbol, image, size = 32, className, priority }: Pro
         height={size}
         style={{ width: size, height: size }}
         loading={priority ? "eager" : "lazy"}
+        onLoad={() => setLoaded(true)}
         onError={() => setIdx((i) => i + 1)}
         className={cn("shrink-0 rounded-full object-cover", className)}
       />

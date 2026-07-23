@@ -15,6 +15,9 @@ export interface GoldskyTrade {
     price: number;
     volumeUsdc: number;
     isBuy?: boolean;
+    /** Originating tx hash (from the entity id `${txHash}-${logIndex}`). Used to
+     *  dedupe an optimistic own-trade once the subgraph indexes the real one. */
+    txHash?: string;
 }
 
 const ZERO_ADDR = "0x0000000000000000000000000000000000000000";
@@ -23,6 +26,7 @@ export const GOLDSKY_PAGE = 1000;
 export const GOLDSKY_MAX_PAGES = 10; // 10k most-recent trades
 
 interface GoldskyRow {
+    id: string;
     blockTime: string | number;
     blockNumber: string | number;
     logIndex: string | number;
@@ -71,7 +75,7 @@ export async function fetchTradesFromGoldsky(
         let cursor: string | null = null;
         for (let page = 0; page < maxPages; page++) {
             const bound = cursor === null ? "" : `, blockNumber_lte: "${cursor}"`;
-            const query = `{ trades(first: ${pageSize}, orderBy: blockNumber, orderDirection: desc, where: { token: "${token.toLowerCase()}", ${sourceFilter}${wherePool}${bound} }) { blockTime blockNumber logIndex price volumeUsdc isBuy } }`;
+            const query = `{ trades(first: ${pageSize}, orderBy: blockNumber, orderDirection: desc, where: { token: "${token.toLowerCase()}", ${sourceFilter}${wherePool}${bound} }) { id blockTime blockNumber logIndex price volumeUsdc isBuy } }`;
             const res = await fetch(url, {
                 method: "POST",
                 headers: { "content-type": "application/json" },
@@ -100,6 +104,8 @@ export async function fetchTradesFromGoldsky(
                     price,
                     volumeUsdc,
                     isBuy: typeof r.isBuy === "boolean" ? r.isBuy : undefined,
+                    // Entity id is `${txHash}-${logIndex}`.
+                    txHash: String(r.id ?? "").split("-")[0] || undefined,
                     _bn: bn,
                     _li: Number(r.logIndex),
                 });
@@ -127,5 +133,6 @@ function finalize(rows: SortRow[]): GoldskyTrade[] {
         price: r.price,
         volumeUsdc: r.volumeUsdc,
         isBuy: r.isBuy,
+        txHash: r.txHash,
     }));
 }

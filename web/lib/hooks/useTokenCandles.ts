@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Address } from "viem";
 import { usePublicClient, useReadContract } from "wagmi";
 import { ADDRESSES } from "@/lib/constants";
@@ -9,6 +9,11 @@ import { BUY_EVT, SELL_EVT, V3_SWAP_EVT } from "@/lib/eventSignatures";
 import { CHUNK_LARGE, MAX_BACK_CANDLES, scanLogsChunked } from "@/lib/eventScan";
 import { fetchTradesFromGoldsky } from "@/lib/goldskyTrades";
 import { useWatchEvent } from "./useWatchEvent";
+import {
+  getOptimisticTrades,
+  subscribeOptimisticTrades,
+  type OptimisticTrade,
+} from "@/lib/optimisticTrades";
 
 const EARLY_EXIT_TRADES = 500;
 const Q192 = 2n ** 192n;
@@ -42,6 +47,9 @@ const BUCKET_SIZE: Record<Timeframe, number> = {
 };
 
 interface Trade {
+  /** Originating tx hash when known (subgraph rows + optimistic own-trades).
+   *  Used to drop an optimistic trade once the indexed one arrives. */
+  txHash?: string;
   time: number;
   price: number;
   volumeUsdc: number;
@@ -297,10 +305,46 @@ export function useTokenCandles(args: {
     onLogs: onCurveLog,
   });
 
+  // Optimistic own-trades: the Goldsky subgraph runs ~1-3 min behind Arc's ~1s
+  // blocks, so a trade the user just made would not reach the chart for minutes.
+  // These are REAL confirmed trades (real price + volume), merged in and dropped
+  // by txHash the moment the indexed row arrives -- so no double-counting.
+  const [optimistic, setOptimistic] = useState<OptimisticTrade[]>(() =>
+    token ? getOptimisticTrades(token) : [],
+  );
+  useEffect(() => {
+    if (!token) return;
+    const update = () => setOptimistic(getOptimisticTrades(token));
+    update();
+    return subscribeOptimisticTrades(update);
+  }, [token]);
+
   const candles = useMemo<Candle[]>(() => {
     if (!data) return [];
-    return bucketize(data.trades, BUCKET_SIZE[timeframe], data.initialPrice);
-  }, [data, timeframe]);
+    let all = data.trades;
+    if (optimistic.length > 0) {
+      const indexed = new Set(
+        data.trades.map((t) => t.txHash?.toLowerCase()).filter(Boolean) as string[],
+      );
+      const extra: Trade[] = [];
+      for (const o of optimistic) {
+        if (indexed.has(o.txHash.toLowerCase())) continue;
+        if (o.tokenRaw <= 0n) continue;
+        // usdcRaw is 6dp, tokenRaw 18dp -> (usdcRaw*1e18)/tokenRaw == price*1e6.
+        const price = Number((o.usdcRaw * 10n ** 18n) / o.tokenRaw) / 1e6;
+        if (!Number.isFinite(price) || price <= 0) continue;
+        extra.push({
+          txHash: o.txHash,
+          time: Math.floor(o.timeMs / 1000),
+          price,
+          volumeUsdc: Number(o.usdcRaw) / 1e6,
+          isBuy: o.type === "buy",
+        });
+      }
+      if (extra.length > 0) all = [...data.trades, ...extra].sort((a, b) => a.time - b.time);
+    }
+    return bucketize(all, BUCKET_SIZE[timeframe], data.initialPrice);
+  }, [data, timeframe, optimistic]);
 
   return {
     candles,
