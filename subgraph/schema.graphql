@@ -306,3 +306,20 @@ type Referrer @entity(immutable: false) {
   payoutCount: Int!
   lastPaidAt: Int!
 }
+
+# First-touch referral attribution, read off the Memo predeploy. id = the
+# referred wallet (the Memo SENDER, unforgeable). This replaces the app's
+# ~200-window eth_getLogs scan of the Memo contract: Arc caps getLogs at ~10k
+# blocks and rate-limits it from serverless IPs, so that scan returned nothing
+# from Vercel and no referral was ever seen as confirmed. Indexing it here makes
+# "who did X refer, confirmed on-chain?" a single instant query.
+#
+# `mutable` so first-touch is enforced in the handler (the first tag wins; later
+# tags for the same referred wallet are ignored). Self-referral is dropped.
+type ReferralAttribution @entity(immutable: false) {
+  id: ID! # referred wallet (lowercased hex)
+  referrer: Bytes!
+  blockNumber: BigInt!
+  blockTime: Int!
+  txHash: Bytes!
+}

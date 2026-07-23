@@ -254,10 +254,54 @@ export async function getConfirmedReferredWallets(referrer: string): Promise<str
     const now = Date.now();
     const hit = confirmedCache.get(key);
     if (hit && hit.exp > now) return hit.wallets;
-    const publicClient = createPublicClient({ chain: arcTestnet, transport: http() });
-    const wallets = await getVerifiedReferredWallets(publicClient, referrer);
+
+    // Prefer the SUBGRAPH: once the Memo data source is deployed and synced,
+    // attribution is a single indexed query, which removes the ~200-window
+    // getLogs scan that Arc rate-limits from serverless IPs (the reason
+    // production showed 0 confirmed). Fall back to the on-chain scan when the
+    // subgraph has no ReferralAttribution entity yet (pre-redeploy) so this keeps
+    // working through the transition.
+    let wallets = await getConfirmedFromSubgraph(referrer);
+    if (wallets === null) {
+        const publicClient = createPublicClient({ chain: arcTestnet, transport: http() });
+        wallets = await getVerifiedReferredWallets(publicClient, referrer);
+    }
     confirmedCache.set(key, { wallets, exp: now + CONFIRMED_TTL_MS });
     return wallets;
+}
+
+/**
+ * Confirmed referred wallets from the subgraph's ReferralAttribution entity.
+ * Returns null (not []) when the entity is absent -- i.e. the Memo data source
+ * has not been deployed/backfilled yet -- so the caller knows to fall back to
+ * the on-chain scan rather than treating "no data yet" as "nobody confirmed".
+ */
+async function getConfirmedFromSubgraph(referrer: string): Promise<string[] | null> {
+    const url = process.env.NEXT_PUBLIC_GOLDSKY_URL;
+    if (!url) return null;
+    const query = `{ referralAttributions(first: 1000, where: { referrer: "${norm(
+        referrer,
+    )}" }) { id } }`;
+    try {
+        const res = await fetch(url, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ query }),
+        });
+        if (!res.ok) return null;
+        const json = (await res.json()) as {
+            data?: { referralAttributions?: { id: string }[] };
+            errors?: unknown;
+        };
+        // A schema without the entity yet returns a GraphQL error, not data:
+        // treat that as "not deployed" and fall back, don't report zero.
+        if (json.errors || !json.data || !Array.isArray(json.data.referralAttributions)) {
+            return null;
+        }
+        return json.data.referralAttributions.map((a) => norm(a.id));
+    } catch {
+        return null;
+    }
 }
 
 export async function getVerifiedEarningsUsdMicros(

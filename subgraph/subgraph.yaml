@@ -296,6 +296,33 @@ dataSources:
         - event: Swap(indexed bytes32,indexed address,int128,int128,uint160,uint128,int24,uint24)
           handler: handleV4Swap
       file: ./src/mappings.ts
+
+  # Transaction Memo predeploy. We watch ALL Memo events (graph-node matches by
+  # event signature = topic0; Arc ignores the indexed memoId topic filter anyway)
+  # and the handler keeps only our referral memoId, recording first-touch
+  # attribution. startBlock is the current gen's block: referral confirms only
+  # began with this launchpad generation, and scanning the whole memo history
+  # would index every unrelated payment memo on the chain.
+  - kind: ethereum
+    name: MemoContract
+    network: arc-testnet
+    source:
+      address: "0x5294E9927c3306DcBaDb03fe70b92e01cCede505"
+      abi: MemoAbi
+      startBlock: 53118909
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.9
+      language: wasm/assemblyscript
+      entities:
+        - ReferralAttribution
+      abis:
+        - name: MemoAbi
+          file: ./abis/Memo.json
+      eventHandlers:
+        - event: Memo(indexed address,indexed address,bytes32,indexed bytes32,bytes,uint256)
+          handler: handleMemo
+      file: ./src/mappings.ts
 templates:
   # ERC20 Transfer template, spawned per launched token (ArcadeToken.create in
   # handleTokenCreated / handleTokenLaunchedV4) so holder balances are indexed

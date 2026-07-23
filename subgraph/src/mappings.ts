@@ -45,7 +45,9 @@ import {
   LockerPosition,
   LockerRecipientEarning,
   Referrer,
+  ReferralAttribution,
 } from "../generated/schema";
+import { Memo } from "../generated/MemoContract/MemoAbi";
 
 /**
  * Charts + stats + referral mappings. Price math is a VERBATIM port of the
@@ -808,6 +810,46 @@ export function handleReferralFeePaid(event: ReferralFeePaid): void {
   r.payoutCount = r.payoutCount + 1;
   r.lastPaidAt = event.block.timestamp.toI32();
   r.save();
+}
+
+// keccak256("arcade:ref"): the namespaced memoId the referral confirm tags its
+// Memo with. Verified on-chain 2026-07-23. Kept as a literal because graph-ts
+// has no keccak at map time.
+const REFERRAL_MEMO_ID = "0x32ccdb145c3f184a7362b767a671bcddc66b89ba0e02e9e82bda34dfffc07183";
+
+/**
+ * Index first-touch referral attribution from the Memo predeploy. graph-node
+ * hands us every Memo event (the indexed memoId topic is not a manifest filter),
+ * so we keep only our referral memoId here. The SENDER is the referred wallet
+ * (the tx signer -- unforgeable); the referrer is the `memo` payload we wrote as
+ * the referrer's 20 address bytes. First tag per referred wallet wins; a later
+ * tag or a self-referral is ignored. This is the indexed replacement for the
+ * app's eth_getLogs Memo scan (Arc caps getLogs at ~10k blocks and rate-limits
+ * it from serverless IPs, so the scan returned nothing in production).
+ */
+export function handleMemo(event: Memo): void {
+  if (!event.params.memoId.equals(Bytes.fromHexString(REFERRAL_MEMO_ID))) return;
+
+  const referred = event.params.sender;
+  // memoData carries the referrer as its trailing 20 bytes (written raw, but a
+  // 32-byte left-padded form is tolerated by taking the last 40 hex chars).
+  const hex = event.params.memo.toHexString(); // "0x...."
+  const raw = hex.slice(2); // drop "0x"
+  if (raw.length < 40) return; // malformed / empty payload
+  const referrer = Address.fromString("0x" + raw.slice(raw.length - 40));
+  if (referrer.equals(Address.zero())) return;
+  if (referrer.equals(referred)) return; // no self-referral
+
+  const id = referred.toHexString();
+  // First-touch: the earliest tag is permanent, later ones are ignored.
+  if (ReferralAttribution.load(id) != null) return;
+
+  const a = new ReferralAttribution(id);
+  a.referrer = referrer;
+  a.blockNumber = event.block.number;
+  a.blockTime = event.block.timestamp.toI32();
+  a.txHash = event.transaction.hash;
+  a.save();
 }
 
 function npmAddress(): Address {
