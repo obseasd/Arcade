@@ -3,7 +3,12 @@
 import { useCallback, useEffect, useState } from "react";
 import { Address } from "viem";
 import { usePublicClient, useSignTypedData, useWriteContract } from "wagmi";
-import { buildReferralLink, getStoredReferrer } from "@/lib/referral";
+import {
+    buildReferralLink,
+    getStoredReferrer,
+    isReferralAnchored,
+    markReferralAnchored,
+} from "@/lib/referral";
 import { registerReferrerOnChain } from "@/lib/referralOnchain";
 import { arcTestnet } from "@/lib/chains";
 import type { ReferralStats } from "@/lib/referralPersistence";
@@ -59,11 +64,21 @@ export function ReferralsPanel({ account }: { account: Address | undefined }) {
             return;
         }
         const r = getStoredReferrer();
-        setMyReferrer(
-            r && r.toLowerCase() !== account.toLowerCase() ? (r as Address) : null,
+        const ref = r && r.toLowerCase() !== account.toLowerCase() ? (r as Address) : null;
+        setMyReferrer(ref);
+        // Restore the anchored state. The Memo tx is on-chain and permanent, but
+        // re-deriving it on every page load would need the multi-window getLogs
+        // scan, so we remember it locally instead: without this the button reset
+        // to "Confirm on-chain" after every refresh and looked like the signature
+        // had not been saved. Display-only - the payout still verifies the Memo
+        // attribution on-chain independently, so this flag can never move money.
+        const anchored = ref ? isReferralAnchored(account, ref) : false;
+        setConfirmState(anchored ? "done" : "idle");
+        setConfirmMsg(
+            anchored
+                ? "Referral anchored on-chain - your referrer is now payable and it can no longer be overwritten."
+                : null,
         );
-        setConfirmState("idle");
-        setConfirmMsg(null);
     }, [account]);
 
     // Reveal the per-wallet downline. GET /stats returns coarse totals only
@@ -123,6 +138,9 @@ export function ReferralsPanel({ account }: { account: Address | undefined }) {
                 arcTestnet.id,
             );
             await publicClient.waitForTransactionReceipt({ hash });
+            // Persist so a refresh still shows it as confirmed (see the mount
+            // effect above); the tx itself is the authoritative record.
+            markReferralAnchored(account, myReferrer);
             setConfirmState("done");
             setConfirmMsg(
                 "Referral anchored on-chain - your referrer is now payable and it can no longer be overwritten.",

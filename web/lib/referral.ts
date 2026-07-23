@@ -214,3 +214,28 @@ export function buildReferralLink(account: string): string {
         typeof window !== "undefined" ? window.location.origin : "https://www.arcade.trading";
     return `${origin}/?ref=${account}`;
 }
+
+/** Local record that this wallet ANCHORED its referrer on-chain (the Memo tx).
+ *  Re-deriving this from chain on every page load would need the multi-window
+ *  getLogs scan, so we remember it locally; without it the "Confirm on-chain"
+ *  button reset on every refresh and looked like nothing had been saved.
+ *  DISPLAY ONLY - the payout path independently verifies the Memo attribution
+ *  on-chain, so a forged flag here can never move money. */
+const anchoredKey = (referred: string, referrer: string) =>
+    `${STORAGE_KEY}.anchored.${referred.toLowerCase()}.${referrer.toLowerCase()}`;
+
+export function markReferralAnchored(referred: string, referrer: string): void {
+    try {
+        localStorage.setItem(anchoredKey(referred, referrer), "1");
+    } catch {
+        /* no storage -> the button simply resets on refresh */
+    }
+}
+
+export function isReferralAnchored(referred: string, referrer: string): boolean {
+    try {
+        return localStorage.getItem(anchoredKey(referred, referrer)) === "1";
+    } catch {
+        return false;
+    }
+}
