@@ -162,7 +162,7 @@ export function ReferralsPanel({ account }: { account: Address | undefined }) {
         let cancelled = false;
         setLoading(true);
         setRevealed(false);
-        (async () => {
+        const load = async () => {
             try {
                 const res = await fetch(`/api/referral/stats?referrer=${account}`);
                 const data = (await res.json()) as ReferralStats & {
@@ -174,15 +174,22 @@ export function ReferralsPanel({ account }: { account: Address | undefined }) {
                 // zeros -- an outage that reads as an empty downline, which is
                 // exactly how a broken referral program stays unreported.
                 if (!res.ok || data.error) throw new Error(data.error ?? "stats failed");
-                if (!cancelled) setStats(data);
+                // Never let a background poll clobber the richer REVEALED stats
+                // (the coarse GET withholds the per-wallet detail + claimable).
+                if (!cancelled) setStats((prev) => (prev && !prev.detailWithheld ? prev : data));
             } catch {
                 /* soft-fail */
             } finally {
                 if (!cancelled) setLoading(false);
             }
-        })();
+        };
+        void load();
+        // Refresh in the background: referred wallets + their volume used to move
+        // only on a manual page reload.
+        const t = setInterval(() => void load(), 30_000);
         return () => {
             cancelled = true;
+            clearInterval(t);
         };
     }, [account]);
 
@@ -348,7 +355,7 @@ export function ReferralsPanel({ account }: { account: Address | undefined }) {
                     className="text-arc-warn"
                     hint={
                         stats?.claimableUsdMicros != null
-                            ? "verified on-chain - what a claim pays"
+                            ? undefined
                             : "reveal below to compute your verified amount"
                     }
                 />
