@@ -4,6 +4,8 @@ import {
     verifyClaimSignature,
     getVerifiedEarningsUsdMicros,
     getClaimedUsdMicros,
+    getPerWalletVolumeSinceMicros,
+    computeReferralEarningsMicros,
 } from "@/lib/referralPayout";
 
 export const runtime = "nodejs";
@@ -97,8 +99,42 @@ export async function POST(req: NextRequest) {
         const verified = await getVerifiedEarningsUsdMicros(referrer);
         const claimed = await getClaimedUsdMicros(referrer);
         const claimable = verified > claimed ? verified - claimed : 0n;
+
+        // Per-wallet volume: DISPLAY it from the subgraph, not from the DB.
+        // `referral_activity.volume` is a fire-and-forget POST from the referred
+        // user's browser, so it silently misses any trade where the tab closed,
+        // the request failed, or the swap ran outside the app. A wallet that
+        // really traded then shows 0 and is filtered out of the dashboard as
+        // "inactive" -- reported live: a verified referred wallet with ~300 USDC
+        // of volume never appeared. The subgraph is the same source the claimable
+        // is computed from, so the list and the money now agree.
+        let referred = stats.referred;
+        try {
+            const byWallet = await getPerWalletVolumeSinceMicros(
+                referrer,
+                referred.map((r) => r.address),
+            );
+            referred = referred.map((r) => {
+                const onchain = byWallet[r.address.toLowerCase()];
+                if (onchain === undefined) return r;
+                // Only VERIFIED wallets earn, matching the payout path.
+                const earned = r.verified ? computeReferralEarningsMicros(onchain) : 0n;
+                return {
+                    ...r,
+                    volumeUsdMicros: onchain.toString(),
+                    earnedUsdMicros: earned.toString(),
+                };
+            });
+        } catch {
+            // Subgraph unreachable: fall back to the DB figures rather than
+            // showing an empty downline.
+        }
+        const totalVolume = referred.reduce((a, r) => a + BigInt(r.volumeUsdMicros || "0"), 0n);
+
         return NextResponse.json({
             ...stats,
+            referred,
+            totalVolumeUsdMicros: totalVolume.toString(),
             verifiedEarningsUsdMicros: verified.toString(),
             claimableUsdMicros: claimable.toString(),
         });

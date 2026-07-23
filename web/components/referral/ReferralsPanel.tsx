@@ -45,6 +45,48 @@ export function ReferralsPanel({ account }: { account: Address | undefined }) {
     const [copied, setCopied] = useState(false);
     const [claiming, setClaiming] = useState(false);
     const [claimMsg, setClaimMsg] = useState<string | null>(null);
+    // The connected wallet's OWN lifetime Arcade volume, straight from the
+    // subgraph's per-Trader running total. Shown next to the referred volume so
+    // a user sees their own footprint, not only their downline's. Independent of
+    // the referral DB: no signature or reveal needed.
+    const [myVolumeUsdMicros, setMyVolumeUsdMicros] = useState<string | null>(null);
+
+    useEffect(() => {
+        const url = process.env.NEXT_PUBLIC_GOLDSKY_URL;
+        if (!account || !url) {
+            setMyVolumeUsdMicros(null);
+            return;
+        }
+        let cancelled = false;
+        (async () => {
+            try {
+                const res = await fetch(url, {
+                    method: "POST",
+                    headers: { "content-type": "application/json" },
+                    body: JSON.stringify({
+                        query: `{ trader(id: "${account.toLowerCase()}") { totalVolumeUsdc } }`,
+                    }),
+                });
+                if (!res.ok) return;
+                const json = (await res.json()) as {
+                    data?: { trader?: { totalVolumeUsdc?: string } | null };
+                };
+                const v = json?.data?.trader?.totalVolumeUsdc;
+                if (cancelled) return;
+                // BigDecimal string ("123.456789") -> exact micros, no float math.
+                const [w, f] = String(v ?? "0").split(".");
+                const micros =
+                    BigInt(w || "0") * 1_000_000n +
+                    BigInt((f ?? "").slice(0, 6).padEnd(6, "0") || "0");
+                setMyVolumeUsdMicros(micros.toString());
+            } catch {
+                /* subgraph unreachable -> render a dash */
+            }
+        })();
+        return () => {
+            cancelled = true;
+        };
+    }, [account]);
 
     // On-chain referral anchoring. If the connected wallet arrived through
     // someone's link (?ref=), it can sign a Memo tx to make that first-touch
@@ -352,7 +394,7 @@ export function ReferralsPanel({ account }: { account: Address | undefined }) {
                 ESTIMATED is the DB accrual on reported trades. It is NOT what a
                 claim pays and is labelled as an estimate so the two can never be
                 confused. */}
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
                 <Stat label="Claimed" value={fmtUsd(stats?.totalClaimedUsdMicros ?? "0")} className="text-arc-success" />
                 <Stat
                     label="Claimable"
@@ -367,6 +409,11 @@ export function ReferralsPanel({ account }: { account: Address | undefined }) {
                             ? undefined
                             : "reveal below to compute your verified amount"
                     }
+                />
+                <Stat
+                    label="My volume"
+                    value={myVolumeUsdMicros != null ? fmtUsd(myVolumeUsdMicros) : "-"}
+                    hint="your own trading volume on Arcade"
                 />
                 <Stat label="Referred volume" value={fmtUsd(stats?.totalVolumeUsdMicros ?? "0")} />
             </div>

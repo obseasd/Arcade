@@ -190,6 +190,33 @@ async function getWalletsVolumeMicros(
 }
 
 /**
+ * Per-wallet POST-REFERRAL volume (micros) for a referrer's downline, from the
+ * same windowed subgraph source the claimable uses. The DB's `referral_activity`
+ * volume is a fire-and-forget client report: it silently misses any trade where
+ * the tab closed, the POST failed, or the trade ran outside the app, so a wallet
+ * that really traded could show 0 and be filtered out of the dashboard. This is
+ * the trustworthy figure to DISPLAY.
+ */
+export async function getPerWalletVolumeSinceMicros(
+    referrer: string,
+    wallets: string[],
+): Promise<Record<string, bigint>> {
+    const out: Record<string, bigint> = {};
+    if (!isAddr(referrer) || wallets.length === 0) return out;
+    const baselines = await getReferralBaselines(referrer);
+    const keys = wallets.slice(0, MAX_REFERRED_WALLETS).map(norm);
+    // Parallel: this runs inside a user-facing request, and serialising one
+    // paginated subgraph scan per wallet made the dashboard crawl.
+    const vols = await Promise.all(
+        keys.map((k) => getWalletVolumeSinceMicros(k, baselines.get(k) ?? 0)),
+    );
+    keys.forEach((k, i) => {
+        out[k] = vols[i];
+    });
+    return out;
+}
+
+/**
  * The EARNINGS half. For each ON-CHAIN-VERIFIED referred wallet, credit 10% of
  * the protocol fee it paid, derived from its indexed USDC trade volume (Goldsky
  * per-Trader total) * PROTOCOL_FEE_BPS * REFERRAL_SHARE_BPS. See the earnings-
