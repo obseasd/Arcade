@@ -1,17 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { X } from "lucide-react";
-import { useAccount, useSignTypedData } from "wagmi";
-import {
-    captureReferralFromUrl,
-    registerStoredReferral,
-    proveStoredReferral,
-    hasSettledReferralProof,
-    getStoredReferrer,
-} from "@/lib/referral";
+import { useAccount } from "wagmi";
+import { captureReferralFromUrl, registerStoredReferral } from "@/lib/referral";
 import { formatAddress } from "@/lib/utils";
 
 // One dismissal per referrer so the banner never nags after it's been seen.
@@ -40,11 +34,7 @@ const DISMISS_KEY = (ref: string) => `arcade.referrer.ack.dismissed.${ref.toLowe
  */
 export function ReferralCapture() {
     const { address } = useAccount();
-    const { signTypedDataAsync } = useSignTypedData();
     const pathname = usePathname();
-    // Guards against React StrictMode's double-invoked effect and against a
-    // re-render firing a second wallet popup for the same account.
-    const askedFor = useRef<string | null>(null);
 
     // Landing acknowledgement (audit U-1/U-2): a user arriving via ?ref=0x...
     // should immediately SEE they were referred and what makes it count, rather
@@ -74,32 +64,19 @@ export function ReferralCapture() {
         setAckReferrer(null);
     }, [ackReferrer]);
 
-    // Register the stored referrer once a wallet is connected, then prove it.
+    // Register the stored referrer once a wallet is connected. Attribution only:
+    // NO signature is requested here.
+    //
+    // We used to also auto-prompt an EIP-712 "Register" signature on every
+    // connect. It popped up unrequested on page load, re-appeared on every
+    // refresh, and - worst - it did NOT make the referrer payable (only the
+    // on-chain Memo confirmation does), so it taught users the wrong thing.
+    // Dropped in favour of ONE explicit, meaningful confirmation: the
+    // "Confirm on-chain" button on /referrals.
     useEffect(() => {
         if (!address) return;
-        let cancelled = false;
-        void (async () => {
-            await registerStoredReferral(address);
-            if (cancelled) return;
-            // Nothing to prove, or this wallet already settled (proved or
-            // declined): never re-prompt.
-            if (!getStoredReferrer()) return;
-            if (hasSettledReferralProof(address)) return;
-            if (askedFor.current === address) return;
-            askedFor.current = address;
-            await proveStoredReferral(address, (args) =>
-                signTypedDataAsync({
-                    domain: args.domain,
-                    types: args.types,
-                    primaryType: args.primaryType,
-                    message: args.message,
-                }),
-            );
-        })();
-        return () => {
-            cancelled = true;
-        };
-    }, [address, signTypedDataAsync]);
+        void registerStoredReferral(address);
+    }, [address]);
 
     // Hide once the referrer is the connected wallet (self-referral, never
     // valid) or while already on the referrals dashboard (the CTA target).

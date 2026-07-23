@@ -176,6 +176,17 @@ export function ReferralsPanel({ account }: { account: Address | undefined }) {
     // apart from "they joined but haven't proven it". The reveal gate and the
     // empty state key off the total; the money numbers never do.
     const knownCount = (stats?.referredCount ?? 0) + (stats?.unverifiedCount ?? 0);
+    // Only the on-chain-verified amount can actually be claimed, so the Claim
+    // button stays disabled until that number is both known (revealed) and > 0.
+    const hasClaimable = (() => {
+        const raw = stats?.claimableUsdMicros;
+        if (raw == null) return false;
+        try {
+            return BigInt(raw) > 0n;
+        } catch {
+            return false;
+        }
+    })();
     const link = account ? buildReferralLink(account) : "";
     const onCopy = useCallback(() => {
         if (!link) return;
@@ -274,12 +285,9 @@ export function ReferralsPanel({ account }: { account: Address | undefined }) {
                 <div className="rounded-2xl border border-arc-border bg-white/[0.015] p-5">
                     <div className="text-sm font-semibold text-arc-text">Your referrer</div>
                     <p className="mt-1 text-xs text-arc-text-muted">
-                        You were referred by{" "}
-                        <span className="text-arc-text">{formatAddress(myReferrer)}</span>. The
-                        signature you may have approved at connect only records the link for
-                        display. Only this{" "}
-                        <span className="text-arc-text">on-chain confirmation</span> makes your
-                        referrer actually payable - one tiny transaction, and only you can sign it.
+                        Sign to confirm{" "}
+                        <span className="text-arc-text">{formatAddress(myReferrer)}</span> is your
+                        referrer.
                     </p>
                     <div className="mt-3 flex flex-wrap items-center gap-2">
                         <button
@@ -328,36 +336,9 @@ export function ReferralsPanel({ account }: { account: Address | undefined }) {
                 />
                 <Stat label="Referred volume" value={fmtUsd(stats?.totalVolumeUsdMicros ?? "0")} />
             </div>
-            {/* The DB estimate, shown apart and honestly. Only the on-chain
-                confirmation (the "Confirm on-chain" action) makes earnings
-                actually claimable; a referral that was only registered or
-                signed at connect accrues this estimate but pays nothing until
-                it is anchored on-chain. */}
-            {(BigInt(stats?.totalPendingUsdMicros ?? "0") > 0n ||
-                (stats?.unverifiedCount ?? 0) > 0) && (
-                <div className="rounded-2xl border border-arc-border bg-white/[0.015] px-5 py-3 text-xs text-arc-text-muted">
-                    Estimated from reported trades:{" "}
-                    <span className="text-arc-text">
-                        {fmtUsd(
-                            (
-                                BigInt(stats?.totalPendingUsdMicros ?? "0") +
-                                BigInt(stats?.unverifiedPendingUsdMicros ?? "0")
-                            ).toString(),
-                        )}
-                    </span>
-                    . This is an estimate, not a balance: earnings become claimable
-                    only once the referred wallet confirms the referral on-chain.
-                    {(stats?.unverifiedCount ?? 0) > 0 && (
-                        <>
-                            {" "}
-                            {stats!.unverifiedCount} referred wallet
-                            {stats!.unverifiedCount > 1 ? "s have" : " has"} not confirmed yet.
-                        </>
-                    )}
-                </div>
-            )}
-
-            {/* Claim (Phase 2 - disabled until on-chain verification is wired) */}
+            {/* Claim. The button is only live when there is a REAL verified
+                amount to claim (the on-chain-verified figure revealed below);
+                otherwise it stays disabled so it never invites a no-op click. */}
             <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-arc-border bg-white/[0.015] px-5 py-4">
                 <div className="text-xs text-arc-text-muted">
                     {claimMsg ?? "Earnings become claimable once verified on-chain."}
@@ -365,7 +346,7 @@ export function ReferralsPanel({ account }: { account: Address | undefined }) {
                 <button
                     type="button"
                     onClick={onClaim}
-                    disabled={claiming}
+                    disabled={claiming || !hasClaimable}
                     className="arc-button-primary shrink-0 px-4 py-2 text-sm disabled:opacity-50"
                 >
                     {claiming ? "Claiming…" : "Claim"}
