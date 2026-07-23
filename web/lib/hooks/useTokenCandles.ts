@@ -464,13 +464,16 @@ function bucketize(trades: Trade[], bucketSize: number, initialPrice?: number): 
 
   for (const t of trades) {
     const bucket = Math.floor(t.time / bucketSize) * bucketSize;
-    // Force a candle break when the trade side flips (buy <-> sell) even
-    // inside the same time bucket. Without this, a buy + sell pair landing
-    // in the same minute aggregates into one candle whose color depends on
-    // (initialPrice vs sellPrice), so a sell that pushes price down can
-    // still render green if the open was below the sell-side close. Each
-    // distinct side gets its own visible candle that moves the right way.
+    // Force a candle break when the trade side flips (buy <-> sell) inside the
+    // same bucket -- but ONLY on the finest timeframe. Applying it at every
+    // timeframe defeated aggregation entirely: a buy + sell in the same hour
+    // produced TWO candles (nudged 1s apart) instead of one, so 1m / 5m / 1h /
+    // 1d all rendered identically and switching timeframes appeared to do
+    // nothing. At 1m and coarser we now use standard OHLC (open = previous
+    // close, close = last trade, high/low across the bucket), which is the
+    // correct candle semantic and makes the timeframe selector meaningful.
     const sideChanged =
+      bucketSize <= 1 &&
       t.isBuy !== undefined &&
       currentSide !== undefined &&
       t.isBuy !== currentSide;

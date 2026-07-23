@@ -376,9 +376,16 @@ export function ReferralsPanel({ account }: { account: Address | undefined }) {
             <div className="rounded-2xl border border-arc-border bg-white/[0.015] p-5">
                 <div className="mb-3 flex items-center justify-between">
                     <div className="text-sm font-semibold text-arc-text">
+                        {/* Two DIFFERENT metrics: `knownCount` = wallets that joined
+                            via the link (DB first-touch), `activeReferred` = those
+                            that actually traded (volume >= the minimum). Showing one
+                            before reveal and the other after made the number appear
+                            to collapse (e.g. 7 -> 1). Label both explicitly. */}
                         Referred wallets{" "}
                         {stats
-                            ? `(${stats.detailWithheld && !revealed ? knownCount : activeReferred.length})`
+                            ? stats.detailWithheld && !revealed
+                                ? `(${knownCount} joined)`
+                                : `(${activeReferred.length} active of ${knownCount} joined)`
                             : ""}
                     </div>
                 </div>
