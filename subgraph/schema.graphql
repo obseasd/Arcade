@@ -22,6 +22,15 @@ type Trade @entity(immutable: true) {
   blockTime: Int!
   blockNumber: BigInt!
   logIndex: Int!
+  # PROTOCOL (treasury) fee this trade generated, in USDC. This is what Arcade
+  # actually keeps -- NOT the LP fee, NOT the creator cut -- so a referral paid
+  # as a fraction of it is self-funding by construction. Referral earnings read
+  # THIS, not raw volume: crediting a fixed bps of gross volume would pay out on
+  # trades where the protocol earned nothing (a pool the trader LPs, an external
+  # venue), letting a wash-trader drain the referral wallet. Conservative by
+  # design: it never exceeds the real treasury take, so it can only under-credit,
+  # never over-pay. See recordTrade for the per-venue rates.
+  protocolFeeUsdc: BigDecimal!
 }
 
 type Pool @entity(immutable: false) {
@@ -35,6 +44,11 @@ type Pool @entity(immutable: false) {
   feeTier: Int!
   # "v2" | "v3" -- how the pool's USDC reserve is tracked (Sync vs balanceOf).
   kind: String!
+  # True once the V3 locker reports a PositionLocked for this pool: only then
+  # does Arcade actually collect a protocol cut of the pool's LP fees (via the
+  # compounder). A V3 pool anyone can create through the factory but never lock
+  # earns Arcade nothing, so referral must NOT credit protocol fees on it.
+  arcadeLocked: Boolean!
   # USDC-side reserve of the pool (human USDC). V2: exact from Sync; V3: read
   # from USDC.balanceOf(pool) on each swap. Pool TVL ~= usdcReserve x 2.
   usdcReserve: BigDecimal!

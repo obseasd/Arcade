@@ -5,7 +5,9 @@ import {
     getVerifiedEarningsUsdMicros,
     getClaimedUsdMicros,
     getPerWalletVolumeSinceMicros,
+    getPerWalletProtocolFeesSinceMicros,
     computeReferralEarningsMicros,
+    computeReferralFromProtocolFeeMicros,
     getConfirmedReferredWallets,
 } from "@/lib/referralPayout";
 
@@ -152,15 +154,22 @@ export async function POST(req: NextRequest) {
         // of volume never appeared. The subgraph is the same source the claimable
         // is computed from, so the list and the money now agree.
         try {
-            const byWallet = await getPerWalletVolumeSinceMicros(
-                referrer,
-                referred.map((r) => r.address),
-            );
+            const addrs = referred.map((r) => r.address);
+            const byWallet = await getPerWalletVolumeSinceMicros(referrer, addrs);
+            // Earned is a share of the REAL protocol fee each wallet generated
+            // (same basis as the claimable), not a bps of gross volume. Null
+            // until the subgraph ships protocolFeeUsdc, in which case earned
+            // falls back to the legacy volume estimate so it is never blank.
+            const feeByWallet = await getPerWalletProtocolFeesSinceMicros(referrer, addrs);
             referred = referred.map((r) => {
                 const onchain = byWallet[r.address.toLowerCase()];
                 if (onchain === undefined) return r;
-                // Only VERIFIED wallets earn, matching the payout path.
-                const earned = r.verified ? computeReferralEarningsMicros(onchain) : 0n;
+                const feeMicros = feeByWallet ? feeByWallet[r.address.toLowerCase()] : undefined;
+                const earned = !r.verified
+                    ? 0n
+                    : feeMicros !== undefined
+                      ? computeReferralFromProtocolFeeMicros(feeMicros)
+                      : computeReferralEarningsMicros(onchain);
                 return {
                     ...r,
                     volumeUsdMicros: onchain.toString(),

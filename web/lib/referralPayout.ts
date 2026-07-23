@@ -190,6 +190,75 @@ async function getWalletsVolumeMicros(
 }
 
 /**
+ * Sum a single wallet's PROTOCOL-fee contribution (micros) since `sinceUnix`,
+ * from the Trade.protocolFeeUsdc field. This is the treasury cut Arcade actually
+ * kept on the wallet's trades, so a referral paid as a share of it is
+ * self-funding -- unlike a fixed bps of gross volume, which pays out even on
+ * trades the protocol earned nothing from and lets a wash-trader drain the
+ * referral wallet.
+ *
+ * Returns null (not 0) when the subgraph has no protocolFeeUsdc field yet, i.e.
+ * before the fee-indexing redeploy, so the caller falls back to the legacy
+ * volume-times-assumed-bps path during the transition.
+ */
+async function getWalletProtocolFeesSinceMicros(
+    wallet: string,
+    sinceUnix: number,
+): Promise<bigint | null> {
+    const url = process.env.NEXT_PUBLIC_GOLDSKY_URL;
+    if (!url) return null;
+    const w = norm(wallet);
+    const since = Math.max(0, Math.floor(sinceUnix));
+    let total = 0n;
+    try {
+        for (let page = 0; page < VOL_MAX_PAGES; page++) {
+            const query = `{ trades(first: ${VOL_PAGE}, skip: ${page * VOL_PAGE}, orderBy: blockNumber, orderDirection: desc, where: { trader: "${w}", blockTime_gte: ${since} }) { protocolFeeUsdc } }`;
+            const res = await fetch(url, {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ query }),
+            });
+            if (!res.ok) return null;
+            const json = (await res.json()) as {
+                data?: { trades?: { protocolFeeUsdc: string }[] };
+                errors?: unknown;
+            };
+            // Field absent (pre-redeploy) => GraphQL error, no data. Signal the
+            // caller to fall back rather than reporting 0 fees (which would zero
+            // everyone's claimable until the subgraph is redeployed).
+            if (json.errors || !json.data || !Array.isArray(json.data.trades)) return null;
+            const rows = json.data.trades;
+            if (rows.length === 0) break;
+            for (const r of rows) total += usdcStringToMicros(r.protocolFeeUsdc);
+            if (rows.length < VOL_PAGE) break;
+        }
+    } catch {
+        return null;
+    }
+    return total;
+}
+
+/**
+ * Sum protocol fees (micros) across a referrer's verified wallets, windowed per
+ * wallet. Returns null if the subgraph lacks the field (pre-redeploy), so the
+ * caller can fall back to the volume-based estimate.
+ */
+async function getWalletsProtocolFeesMicros(
+    wallets: string[],
+    baselines: Map<string, number>,
+): Promise<bigint | null> {
+    if (wallets.length === 0) return 0n;
+    let total = 0n;
+    for (const wallet of wallets.slice(0, MAX_REFERRED_WALLETS)) {
+        const since = baselines.get(norm(wallet)) ?? 0;
+        const fee = await getWalletProtocolFeesSinceMicros(wallet, since);
+        if (fee === null) return null; // field missing -> fall back wholesale
+        total += fee;
+    }
+    return total;
+}
+
+/**
  * Per-wallet POST-REFERRAL volume (micros) for a referrer's downline, from the
  * same windowed subgraph source the claimable uses. The DB's `referral_activity`
  * volume is a fire-and-forget client report: it silently misses any trade where
@@ -212,6 +281,30 @@ export async function getPerWalletVolumeSinceMicros(
     );
     keys.forEach((k, i) => {
         out[k] = vols[i];
+    });
+    return out;
+}
+
+/**
+ * Per-wallet PROTOCOL-fee contribution (micros) for a referrer's downline, for
+ * the dashboard's "Earned" column so it matches the claimable's basis. Returns
+ * null when the subgraph lacks protocolFeeUsdc (pre-redeploy), so the caller
+ * falls back to the volume-based estimate.
+ */
+export async function getPerWalletProtocolFeesSinceMicros(
+    referrer: string,
+    wallets: string[],
+): Promise<Record<string, bigint> | null> {
+    if (!isAddr(referrer) || wallets.length === 0) return {};
+    const baselines = await getReferralBaselines(referrer);
+    const keys = wallets.slice(0, MAX_REFERRED_WALLETS).map(norm);
+    const fees = await Promise.all(
+        keys.map((k) => getWalletProtocolFeesSinceMicros(k, baselines.get(k) ?? 0)),
+    );
+    if (fees.some((f) => f === null)) return null; // field missing -> fall back
+    const out: Record<string, bigint> = {};
+    keys.forEach((k, i) => {
+        out[k] = fees[i] as bigint;
     });
     return out;
 }
@@ -316,14 +409,38 @@ export async function getVerifiedEarningsUsdMicros(
     // Window each wallet by its "referred since" time so pre-referral volume is
     // never credited (audit C-2). Baselines come from referrals.created_at.
     const baselines = await getReferralBaselines(referrer);
+
+    // Preferred basis: the REAL protocol (treasury) fee the referred wallets
+    // generated. Referral = REFERRAL_SHARE of that, so it is self-funding and a
+    // wash-trader who pays no protocol fee (a pool they LP, an unindexed venue)
+    // earns their referrer nothing -- closing the drain the gross-volume basis
+    // left open. Falls back to the legacy volume-times-assumed-bps estimate only
+    // while the subgraph has not shipped protocolFeeUsdc yet.
+    const feeMicros = await getWalletsProtocolFeesMicros(wallets, baselines);
+    if (feeMicros !== null) {
+        return computeReferralFromProtocolFeeMicros(feeMicros);
+    }
     const volumeMicros = await getWalletsVolumeMicros(wallets, baselines);
     return computeReferralEarningsMicros(volumeMicros);
 }
 
 /**
- * earnings = volume * PROTOCOL_FEE_BPS/1e4 * REFERRAL_SHARE_BPS/1e4 (integer
- * micros). Pure + exported for tests. Floors (BigInt division), so it can only
- * ever under-credit by sub-micro dust -- never over-pay.
+ * earnings = protocolFee * REFERRAL_SHARE_BPS/1e4 (integer micros). The robust
+ * basis: the referrer is paid a share of the treasury fee the referred wallet
+ * ACTUALLY generated, never a bps of gross volume. Pure + exported for tests.
+ * Floors, so it can only under-credit by sub-micro dust.
+ */
+export function computeReferralFromProtocolFeeMicros(protocolFeeMicros: bigint): bigint {
+    if (protocolFeeMicros <= 0n) return 0n;
+    return (protocolFeeMicros * REFERRAL_SHARE_BPS) / 10_000n;
+}
+
+/**
+ * LEGACY estimate: volume * PROTOCOL_FEE_BPS/1e4 * REFERRAL_SHARE_BPS/1e4.
+ * Retained only as the transition fallback for
+ * {@link getVerifiedEarningsUsdMicros} until the subgraph ships protocolFeeUsdc.
+ * Assumes a uniform 15 bps protocol take, which over-credits venues that take
+ * less (the drain vector); the protocol-fee basis above supersedes it.
  */
 export function computeReferralEarningsMicros(
     volumeMicros: bigint,

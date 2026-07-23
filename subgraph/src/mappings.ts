@@ -190,6 +190,7 @@ function recordTrade(
   t.blockTime = blockTime;
   t.blockNumber = event.block.number;
   t.logIndex = event.logIndex.toI32();
+  t.protocolFeeUsdc = protocolFeeForTrade(source, pool, volumeUsdc);
   t.save();
 
   const g = loadGlobal();
@@ -234,6 +235,49 @@ function recordTrade(
     f.curveFeesUsdc = f.curveFeesUsdc.plus(volumeUsdc.times(BigDecimal.fromString("0.01")));
     f.save();
   }
+}
+
+/**
+ * PROTOCOL (treasury) fee a trade generated, in USDC. This is the share Arcade
+ * KEEPS, so a referral paid as a fraction of it is always covered. Deliberately
+ * conservative -- it never exceeds the real treasury take, so referral can only
+ * under-credit, never over-pay (which is what would let a wash-trader drain the
+ * funded referral wallet).
+ *
+ * Per-venue treasury share:
+ *   - curve / v4curve : 1% curve fee, split 80/20 creator/treasury => 0.20%.
+ *   - v4 (graduated)  : 20% of the hook fee. The hook fee is dynamic (PUMP 1%
+ *                       -> 0.30%; CLANKER static tier) and is taken by the hook,
+ *                       not shown in the pool Swap event, so we use the PUMP
+ *                       mature FLOOR (20% * 0.30% = 0.06%). This under-credits
+ *                       fresh-graduated PUMP and CLANKER (safe direction); refine
+ *                       later by attributing RoyaltyPaid.treasuryCut per trader.
+ *   - v2              : pair LaunchFeePaid is 0.15% protocol => 0.15%.
+ *   - v3              : ONLY on Arcade-locked pools, where the compounder takes
+ *                       10% of the pool's LP fee => feeTier * 10%. A pool nobody
+ *                       locked earns Arcade nothing => 0.
+ */
+function protocolFeeForTrade(source: string, pool: Bytes | null, volumeUsdc: BigDecimal): BigDecimal {
+  if (source == "curve" || source == "v4curve") {
+    return volumeUsdc.times(BigDecimal.fromString("0.002"));
+  }
+  if (source == "v4") {
+    return volumeUsdc.times(BigDecimal.fromString("0.0006"));
+  }
+  if (source == "v2") {
+    return volumeUsdc.times(BigDecimal.fromString("0.0015"));
+  }
+  if (source == "v3" && pool !== null) {
+    const p = Pool.load((pool as Bytes).toHexString());
+    if (p != null && p.arcadeLocked) {
+      // feeTier is hundredths of a bip (3000 => 0.30% => /1e6); Arcade keeps 10%.
+      const feeRate = BigDecimal.fromString(p.feeTier.toString()).div(
+        BigDecimal.fromString("1000000"),
+      );
+      return volumeUsdc.times(feeRate).times(BigDecimal.fromString("0.10"));
+    }
+  }
+  return BigDecimal.fromString("0");
 }
 
 /** Swap-fee rate (as a fraction) for a trade, by venue. */
@@ -553,6 +597,7 @@ export function handlePoolCreated(event: PoolCreated): void {
   p.feeTier = event.params.fee;
   p.kind = "v3";
   p.usdcReserve = BigDecimal.fromString("0");
+  p.arcadeLocked = false;
   p.save();
 
   V3Pool.create(event.params.pool);
@@ -603,6 +648,7 @@ export function handleV2PairCreated(event: PairCreated): void {
   p.feeTier = 3000; // V2 flat 0.30%
   p.kind = "v2";
   p.usdcReserve = BigDecimal.fromString("0");
+  p.arcadeLocked = false; // V2 protocol fee is the pair-level LaunchFeePaid, always Arcade's
   p.save();
 
   V2Pair.create(event.params.pair);
@@ -741,6 +787,14 @@ export function handlePositionLocked(event: PositionLocked): void {
   lp.token = event.params.token;
   lp.pool = event.params.pool;
   lp.save();
+
+  // Mark the pool Arcade-locked so referral credits a protocol cut on its v3
+  // swaps (Arcade only earns on pools whose LP is locked in the compounder).
+  const pl = Pool.load(event.params.pool.toHexString());
+  if (pl != null && !pl.arcadeLocked) {
+    pl.arcadeLocked = true;
+    pl.save();
+  }
 }
 
 /**
