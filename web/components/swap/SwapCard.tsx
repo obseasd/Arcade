@@ -613,12 +613,11 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
       activeRoute.provider === "unitflow-v3" ||
       activeRoute.provider === "xylonet-v1" ||
       activeRoute.provider === "usyc-teller");
-  // The USYC Teller is an external route for EXECUTION (its pre-built
-  // executor calls deposit/redeem directly) but unlike the UR routes it
-  // needs a classic ERC20 approve to the Teller for deposit (USDC->USYC);
-  // redeem (USYC->USDC) burns the caller's own shares so approval.amount is
-  // 0 and no approve is issued. Handled at the approval step in onConfirm.
-  const isTellerRoute = activeRoute?.provider === "usyc-teller";
+  // Non-Permit2 external routes (XyloNet, and the USYC Teller deposit leg)
+  // execute through their own pre-built executor but still pull the input via
+  // transferFrom, so they need a classic ERC20 approve to the route's spender.
+  // The Teller redeem leg burns the caller's own shares, so its approval.amount
+  // is 0 and no approve is issued. Handled at the approval step in onConfirm.
 
   // Audit A-1: computedAmountOut drives the For field. When ANY route
   // is active (external OR arcade-v3 / arcade-v2 / xylonet via the
@@ -1144,9 +1143,20 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
       // Classic ERC20 approve is needed for the Arcade routes AND for the
       // USYC Teller deposit leg (approval.amount > 0). The Teller redeem leg
       // and the Permit2-backed UR routes skip this.
+      // A classic ERC20 approve is needed by EVERY route that pulls the input
+      // via transferFrom: the Arcade routes, and any external route that is not
+      // Permit2-backed (XyloNet, the USYC Teller deposit leg). Permit2 routes
+      // approve Permit2 instead (branch below) and value-bearing WRAP_ETH
+      // variants pull nothing, both signalled by approval.amount == 0.
+      //
+      // This used to read `!isExternalRoute || isTellerRoute`, which excluded
+      // every non-Teller external route -- so a XyloNet swap skipped the approve
+      // entirely and always reverted "ERC20: transfer amount exceeds allowance"
+      // (the UI then blamed slippage/deadline). The comment below already
+      // described the intended behaviour; the condition did not match it.
       const needsApprove =
         (!isExternalRoute ||
-          (isTellerRoute && (activeRoute?.approval.amount ?? 0n) > 0n)) &&
+          (!usesPermit2 && (activeRoute?.approval.amount ?? 0n) > 0n)) &&
         currentAllowance < approvalAmount;
 
       // Fast-path: for classic Arcade routes (V2 / V3 / launchpad) that still
