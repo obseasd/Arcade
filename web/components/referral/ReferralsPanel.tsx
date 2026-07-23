@@ -29,7 +29,6 @@ const fmtUsd = (micros: string) => {
 
 // Hide referred wallets that haven't traded a meaningful amount yet (< $0.01
 // volume) - a wallet that connected via the link but never swapped.
-const MIN_VOLUME_MICROS = 10_000n; // $0.01
 
 /**
  * Referrals dashboard (portfolio tab). Shows the wallet's shareable referral
@@ -235,9 +234,20 @@ export function ReferralsPanel({ account }: { account: Address | undefined }) {
         };
     }, [account]);
 
-    const activeReferred = (stats?.referred ?? []).filter(
-        (r) => BigInt(r.volumeUsdMicros) >= MIN_VOLUME_MICROS,
-    );
+    // Show EVERY referred wallet, traded or not. This used to filter on a
+    // minimum volume, which meant a wallet that had joined but not yet traded
+    // was invisible with no explanation -- reported live as "I referred this
+    // address and it never appears". Worse, the volume column is the PAYABLE
+    // figure (Arcade-pool trades since the referral), so a wallet whose trading
+    // happened elsewhere or before the referral legitimately reads 0 and would
+    // vanish. The funnel is the point of this table: joined, confirmed, traded.
+    const visibleReferred = [...(stats?.referred ?? [])].sort((a, b) => {
+        const av = BigInt(a.volumeUsdMicros || "0");
+        const bv = BigInt(b.volumeUsdMicros || "0");
+        if (av === bv) return a.verified === b.verified ? 0 : a.verified ? -1 : 1;
+        return bv > av ? 1 : -1;
+    });
+    const confirmedCount = visibleReferred.filter((r) => r.verified).length;
     // referredCount counts PROVEN rows only, so a referrer whose downline never
     // signed would otherwise see a bare "0" with no way to tell "nobody joined"
     // apart from "they joined but haven't proven it". The reveal gate and the
@@ -438,16 +448,16 @@ export function ReferralsPanel({ account }: { account: Address | undefined }) {
             <div className="rounded-2xl border border-arc-border bg-white/[0.015] p-5">
                 <div className="mb-3 flex items-center justify-between">
                     <div className="text-sm font-semibold text-arc-text">
-                        {/* Two DIFFERENT metrics: `knownCount` = wallets that joined
-                            via the link (DB first-touch), `activeReferred` = those
-                            that actually traded (volume >= the minimum). Showing one
-                            before reveal and the other after made the number appear
-                            to collapse (e.g. 7 -> 1). Label both explicitly. */}
+                        {/* joined = first-touch rows in the DB. confirmed = the
+                            wallet itself signed the on-chain Memo, which is the ONLY
+                            tier that can ever pay. Both are shown because a downline
+                            that is large but unconfirmed earns exactly nothing, and
+                            that has to be visible rather than inferred from a $0. */}
                         Referred wallets{" "}
                         {stats
                             ? stats.detailWithheld && !revealed
                                 ? `(${knownCount} joined)`
-                                : `(${activeReferred.length} active of ${knownCount} joined)`
+                                : `(${knownCount} joined, ${confirmedCount} confirmed on-chain)`
                             : ""}
                     </div>
                 </div>
@@ -476,9 +486,9 @@ export function ReferralsPanel({ account }: { account: Address | undefined }) {
                             "No active referrals yet. Share your link to start earning."
                         )}
                     </div>
-                ) : activeReferred.length === 0 ? (
+                ) : visibleReferred.length === 0 ? (
                     <div className="py-6 text-center text-sm text-arc-text-muted">
-                        No active referrals yet. Share your link to start earning.
+                        Nobody has joined through your link yet. Share it to start earning.
                     </div>
                 ) : (
                     <div className="overflow-x-auto">
@@ -492,7 +502,7 @@ export function ReferralsPanel({ account }: { account: Address | undefined }) {
                                 </tr>
                             </thead>
                             <tbody>
-                                {activeReferred.map((r) => (
+                                {visibleReferred.map((r) => (
                                     <tr key={r.address} className="border-t border-arc-border/60">
                                         <td className="py-2 pr-3 text-arc-text">
                                             {formatAddress(r.address)}
