@@ -130,7 +130,7 @@ export function buildCreateLaunchArgs(
     cmd: LaunchCommand,
     handle: string,
     extras: LaunchExtras = {},
-): readonly [string, string, string, number, `0x${string}`, number, number, number, number, string, bigint] {
+): readonly [string, string, string, number, `0x${string}`, number, number, number, number, string, bigint, bigint] {
     return [
         cmd.name, // name
         cmd.ticker, // symbol
@@ -143,6 +143,10 @@ export function buildCreateLaunchArgs(
         TWEET_LAUNCH_DEFAULTS.feeTier,
         handle.replace(/^@/, ""), // twitterHandle (display; canonical binding = user-id in DB)
         TWEET_LAUNCH_DEFAULTS.startMcapUsdc,
+        // creatorBuyUsdc: 0 -- a tweet launch is CLANKER (the hook reverts a
+        // creator-buy on CLANKER) and the bot has no funds to buy on the
+        // launcher's behalf anyway.
+        0n,
     ] as const;
 }
 
