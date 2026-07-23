@@ -178,7 +178,20 @@ export function ReferralsPanel({ account }: { account: Address | undefined }) {
                 myReferrer,
                 arcTestnet.id,
             );
-            await publicClient.waitForTransactionReceipt({ hash });
+            const receipt = await publicClient.waitForTransactionReceipt({ hash });
+            // waitForTransactionReceipt RESOLVES on a reverted tx (it does not
+            // throw), so without this check a revert was silently marked
+            // "anchored" and the user was told their referrer was payable when
+            // no Memo had been emitted. The Memo wraps Arc's callFrom precompile,
+            // which is intermittently unavailable, so a revert here is a real and
+            // observed outcome, not a corner case.
+            if (receipt.status !== "success") {
+                setConfirmState("idle");
+                setConfirmMsg(
+                    "The confirmation transaction reverted on-chain (Arc's Memo precompile can be temporarily unavailable). Nothing was recorded - please try again in a moment.",
+                );
+                return;
+            }
             // Persist so a refresh still shows it as confirmed (see the mount
             // effect above); the tx itself is the authoritative record.
             markReferralAnchored(account, myReferrer);
