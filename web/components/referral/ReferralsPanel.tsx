@@ -305,32 +305,41 @@ export function ReferralsPanel({ account }: { account: Address | undefined }) {
                 </div>
             </div>
 
-            {/* Your referrer - anchor first-touch on-chain (unforgeable) */}
+            {/* Your referrer - anchor first-touch on-chain (unforgeable). Once
+                anchored there is nothing left to do, so collapse to a plain
+                statement instead of keeping a dead button + explainer around. */}
             {myReferrer && (
                 <div className="rounded-2xl border border-arc-border bg-white/[0.015] p-5">
                     <div className="text-sm font-semibold text-arc-text">Your referrer</div>
-                    <p className="mt-1 text-xs text-arc-text-muted">
-                        Sign to confirm{" "}
-                        <span className="text-arc-text">{formatAddress(myReferrer)}</span> is your
-                        referrer.
-                    </p>
-                    <div className="mt-3 flex flex-wrap items-center gap-2">
-                        <button
-                            type="button"
-                            onClick={onConfirmReferrer}
-                            disabled={confirmState !== "idle"}
-                            className="arc-button-primary shrink-0 px-4 py-2 text-sm disabled:opacity-50"
-                        >
-                            {confirmState === "confirming"
-                                ? "Confirming…"
-                                : confirmState === "done"
-                                  ? "Confirmed on-chain ✓"
-                                  : "Confirm on-chain"}
-                        </button>
-                        {confirmMsg && (
-                            <span className="text-xs text-arc-text-muted">{confirmMsg}</span>
-                        )}
-                    </div>
+                    {confirmState === "done" ? (
+                        <p className="mt-1 text-xs text-arc-text-muted">
+                            Your referrer is{" "}
+                            <span className="text-arc-text">{formatAddress(myReferrer)}</span>.
+                        </p>
+                    ) : (
+                        <>
+                            <p className="mt-1 text-xs text-arc-text-muted">
+                                Sign to confirm{" "}
+                                <span className="text-arc-text">{formatAddress(myReferrer)}</span>{" "}
+                                is your referrer.
+                            </p>
+                            <div className="mt-3 flex flex-wrap items-center gap-2">
+                                <button
+                                    type="button"
+                                    onClick={onConfirmReferrer}
+                                    disabled={confirmState !== "idle"}
+                                    className="arc-button-primary shrink-0 px-4 py-2 text-sm disabled:opacity-50"
+                                >
+                                    {confirmState === "confirming"
+                                        ? "Confirming…"
+                                        : "Confirm on-chain"}
+                                </button>
+                                {confirmMsg && (
+                                    <span className="text-xs text-arc-text-muted">{confirmMsg}</span>
+                                )}
+                            </div>
+                        </>
+                    )}
                 </div>
             )}
 

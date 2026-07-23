@@ -60,7 +60,7 @@ export const ADDRESSES = {
    *  generations as a plain ERC20; pin it in token pickers so the user can
    *  pair it without pasting the address. Optional — keep zeroAddress on
    *  mainnet so the picker doesn't show a phantom ETH chip. */
-  seedEth: safeAddress(process.env.NEXT_PUBLIC_SEED_ETH_ADDRESS),
+  seedEth: safeAddress(process.env.NEXT_PUBLIC_SEED_ETH_ADDRESS ?? DEPLOYMENTS.seedETH),
   /** ArcadeTwitterEscrow: holds Clanker LP fees attributed to a Twitter @handle. */
   twitterEscrow: safeAddress(process.env.NEXT_PUBLIC_TWITTER_ESCROW_ADDRESS ?? DEPLOYMENTS.twitterEscrow),
   /** ArcadeAutoCompounder: V3 LP custody vault that auto-collects fees and
