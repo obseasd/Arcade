@@ -3,14 +3,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { Address } from "viem";
 import { usePublicClient } from "wagmi";
-import { RouteProvider, RouteQuote, QuoteRequest } from "./types";
-import { synthraV3Provider } from "./synthraV3";
-import { arcadeV4Provider } from "./arcadeV4";
-import { arcadeV3Provider } from "./arcadeV3";
-import { arcadeV2Provider } from "./arcadeV2";
-import { unitflowV3Provider } from "./unitflowV3";
-import { xylonetV1Provider } from "./xylonetV1";
-import { usycTellerV1Provider } from "./usycTellerV1";
+import { RouteQuote, QuoteRequest } from "./types";
+import { quoteAllRoutes, sortQuotes } from "./aggregate";
+import { decodeBigints } from "./serialize";
 
 /**
  * Aggregator hook: fans out a quote request to every registered provider
@@ -19,11 +14,10 @@ import { usycTellerV1Provider } from "./usycTellerV1";
  * filtered out — a Synthra outage does not block Arcade quotes and vice
  * versa.
  *
- * Adding a new DEX:
- *   1. Implement RouteProvider in `lib/routing/<dex>.ts`.
- *   2. Add it to PROVIDERS below.
- *   3. Add the ProviderId + meta in `types.ts`.
- * The aggregator + the UI's top-N display pick it up automatically.
+ * Quoting runs SERVER-SIDE (`POST /api/routes/quote`): one request instead of
+ * ~30 browser eth_calls, which is where the panel's multi-second latency lived.
+ * The local fan-out below is kept as a FALLBACK, so the API being down costs
+ * speed, never function. Provider registration lives in `./aggregate`.
  *
  * Cache key is built from request shape — a re-render with the same input
  * returns the same quotes without re-querying. Debounce is the caller's
@@ -35,15 +29,6 @@ import { usycTellerV1Provider } from "./usycTellerV1";
  * land second and clobber the 50-USDC display.
  */
 
-const PROVIDERS: RouteProvider[] = [
-  arcadeV4Provider,
-  arcadeV3Provider,
-  arcadeV2Provider,
-  synthraV3Provider,
-  unitflowV3Provider,
-  xylonetV1Provider,
-  usycTellerV1Provider,
-];
 
 export interface UseRouteQuotesArgs {
   tokenIn?: Address;
@@ -113,7 +98,7 @@ export function useRouteQuotes(args: UseRouteQuotesArgs): UseRouteQuotesResult {
   ]);
 
   useEffect(() => {
-    if (!reqKey || !publicClient) {
+    if (!reqKey) {
       setQuotes([]);
       setLoading(false);
       return;
@@ -160,49 +145,47 @@ export function useRouteQuotes(args: UseRouteQuotesArgs): UseRouteQuotesResult {
       deadline: BigInt(Math.floor(Date.now() / 1000) + (args.deadlineSeconds ?? 600)),
       signal: ctrl.signal,
     };
-    Promise.all(
-      PROVIDERS.map((p) =>
-        p.quote(req, publicClient).catch(() => null),
-      ),
-    ).then((results) => {
-      if (cancelled) return;
-      const good = results.filter((r): r is RouteQuote => r !== null);
-      // Audit R-10: bucket amountOut by 1 bp before sorting so a
-      // 1-wei rounding difference between two equally-good routes does
-      // not flip the "Best" badge. Within a bucket, fall back to a
-      // stable provider preference: native Arcade routes first (no
-      // sig dance), then XyloNet (V2-ABI, no Permit2 setup), then
-      // Synthra, then UnitFlow. The user sees the same total cost on
-      // a tie but the cheapest-to-execute route wins.
-      const providerRank: Record<string, number> = {
-        // Native Arcade routes first (no Permit2 / sig dance). V4 alongside V3.
-        "arcade-v4": 0,
-        "arcade-v3": 0,
-        "arcade-v2": 1,
-        "xylonet-v1": 2,
-        "synthra-v3": 3,
-        "unitflow-v3": 4,
-      };
-      // Audit M4 fix: strict total order. The previous comparator
-      // bucketed each pair to ~1 bp of the larger amount and used the
-      // provider rank inside the bucket. That works for a single
-      // pair (a, b) but violates transitivity across a triple
-      // (a, b, c) where (a, b) and (b, c) both fall inside a bucket
-      // but (a, c) does not — TimSort is stable so the result still
-      // sorts but the "best" route the UI auto-picks can be wrong.
-      // Bucketing was an attempt at a "essentially tied" UX, and the
-      // strict order with an exact-tie tiebreak achieves the same
-      // intent (provider-rank breaks the tie when amounts are equal)
-      // without the math hole. The 1-bp UI affordance, if we want it
-      // back, belongs as a render-side badge on the route panel — not
-      // baked into the sort key.
-      good.sort((a, b) => {
-        if (a.amountOut === b.amountOut) {
-          return (providerRank[a.provider] ?? 99) - (providerRank[b.provider] ?? 99);
-        }
-        return b.amountOut > a.amountOut ? 1 : -1;
+    // Server first. It runs the identical provider code against a batching
+    // client next to the RPC, so it is both faster and immune to the
+    // ad-blockers that make browser-side RPC reads fail (which used to surface
+    // as a phantom "no route"). Any failure - offline, 502, malformed - falls
+    // through to the browser fan-out rather than showing the user nothing.
+    const viaServer = async (): Promise<RouteQuote[]> => {
+      const res = await fetch("/api/routes/quote", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        signal: ctrl.signal,
+        body: JSON.stringify({
+          tokenIn: req.tokenIn,
+          tokenOut: req.tokenOut,
+          decimalsIn: req.decimalsIn,
+          decimalsOut: req.decimalsOut,
+          amountIn: req.amountIn.toString(),
+          recipient: req.recipient,
+          slippageBps: req.slippageBps,
+          deadline: req.deadline.toString(),
+        }),
       });
-      setQuotes(good);
+      if (!res.ok) throw new Error(`quote api ${res.status}`);
+      const json = (await res.json()) as { quotes?: unknown };
+      if (!Array.isArray(json?.quotes)) throw new Error("quote api shape");
+      return decodeBigints(json.quotes) as RouteQuote[];
+    };
+
+    viaServer()
+      .catch(() => {
+        // An abort is the user typing again, not a server failure: retrying
+        // locally would fire a dead fan-out on every keystroke.
+        if (ctrl.signal.aborted || !publicClient) return [] as RouteQuote[];
+        return quoteAllRoutes(req, publicClient).catch(() => [] as RouteQuote[]);
+      })
+      .then((results) => {
+      if (cancelled) return;
+      const good = results;
+      // Ranking lives in ./aggregate so the server's "best" and the
+      // client's "best" can never disagree. Re-applied here because the
+      // fallback path returns unsorted results.
+      setQuotes(sortQuotes(good));
       setLoading(false);
     });
     return () => {

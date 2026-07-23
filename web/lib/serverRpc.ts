@@ -60,3 +60,31 @@ export function serverReadClient() {
         ),
     });
 }
+
+/**
+ * Client for the swap-route quote fan-out (/api/routes/quote). Seven providers,
+ * each issuing several quoter reads, used to be ~30 SEPARATE round trips from
+ * the BROWSER: subject to the browser's per-host connection cap, to ad-blockers,
+ * and to the user's own latency to the RPC. Measured at 20s for a single pair.
+ *
+ * Here they collapse into a handful of JSON-RPC BATCH posts from a server that
+ * sits next to the RPC. Batching happens at the HTTP layer, not via multicall3,
+ * so each call keeps its own result and its own revert data: semantics are
+ * identical to issuing them one by one, only the transport changes. Arc caps a
+ * batch at 100 entries (v0.7.2), hence batchSize 90.
+ */
+export function serverQuoteClient() {
+    return createPublicClient({
+        chain: ARC_CHAIN,
+        transport: fallback(
+            READ_RPC_URLS.map((u) =>
+                http(u, {
+                    batch: { batchSize: 90, wait: 8 },
+                    retryCount: 0,
+                    timeout: 6_000,
+                }),
+            ),
+            { retryCount: 0 },
+        ),
+    });
+}
