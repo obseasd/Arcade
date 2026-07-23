@@ -194,9 +194,27 @@ function Inner() {
     //    price at graduation, which is where the pool actually seeds. (Audit
     //    2026-07-22: display-only, the pool value + quotes were always correct.)
     const poolPrice = useV4PoolPrice(valid ? token : undefined);
+
+    // LIVE curve spot price for a still-curving PUMP, derived from the ON-CHAIN
+    // curve state (polled every 5s) instead of the subgraph's last indexed trade.
+    // The Goldsky subgraph runs ~100 blocks (1-3 min) behind Arc's ~1s blocks, so
+    // a subgraph-sourced market cap sat frozen for minutes after a buy. The curve
+    // is a pure constant product, so its marginal price is exactly
+    // (VIRTUAL_USDC + realUsdcReserve) / (VIRTUAL_TOKEN - tokensSold) -- no
+    // indexer needed. Must mirror ArcadeV4Curve's virtual reserves.
+    const curveSpotPrice = useMemo(() => {
+        if (!isPump || status === ARCADE_HOOK_STATUS.GRADUATED) return undefined;
+        const currentUsdc = 5_800n * 10n ** BigInt(USDC_DECIMALS) + realUsdcReserve;
+        const currentTokens =
+            1_135_000_000n * 10n ** BigInt(LAUNCHPAD_TOKEN_DECIMALS) - tokensSold;
+        if (currentTokens <= 0n) return undefined;
+        // (usdcRaw * 1e18) / tokenRaw == price-per-whole-token * 1e6.
+        return Number((currentUsdc * 10n ** 18n) / currentTokens) / 1e6;
+    }, [isPump, status, realUsdcReserve, tokensSold]);
+
     const effectivePrice = showMarketStats
         ? (poolPrice ?? stats.priceUsd)
-        : (stats.priceUsd ?? poolPrice);
+        : (curveSpotPrice ?? stats.priceUsd ?? poolPrice);
     const mcapLabel = effectivePrice
         ? `$${(effectivePrice * Number(LAUNCHPAD_TOTAL_SUPPLY)).toLocaleString(undefined, { maximumFractionDigits: 0 })}`
         : "-";
