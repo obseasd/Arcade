@@ -28,16 +28,16 @@
     "autoCompounder": "0x2DC0ABb9945506F78bf2490332329BA05E6541a8",
     "identityIssuer": "0x05dF2B0784EC4ECb6101a20204587152C4D6ff49",
     "identityRegistry": "0x8004A818BFB912233c491871b3d84c89A494BD9e",
-    "arcadeHook": "0xCC04b7D8a1B3CCeaA7c0511a7E134e07506DBECE",
+    "arcadeHook": "0x2697c70A46388e5928873111faDBDAbB4ef97EcE",
     "arcadeV4Math": "0x0931aa1082b1ee184f3fa70b8720500d80c226a2",
     "arcadeHookDeployBlock": 53118909,
     "splitterFactory": "0x9562Cd54476E4caaD727A2C88a76Aa89a6117c70",
     "airdropDistributor": "0xB398D1569498A9bED4dc72fAa9b2C7ADC715510B",
     "lockedVault": "0xC7D1481364b18Ddb8fa55d93C454e681b791202E",
     "v4PoolManager": "0x71CCed1c397EC974E74C350eBA6DBa98DE8e8e25",
-    "v4StateView": "0xe487e8D45ed290eF8baF246C7c5344F8329690DC",
-    "v4Quoter": "0x42Dfda16c98a1EaC1926BaeE8C1a5005faCD7D35",
-    "v4Router": "0xB8e94aDb3b4b05FC5D4Bb5d7CDf0bb043f5CCd28",
+    "v4StateView": "0x37cAd5Ad2aB73c98C6E85f0C48175aAA5c6d3bC1",
+    "v4Quoter": "0x3f39b18fC77750eF0966e58912Fcc9d03bCd5858",
+    "v4Router": "0xE2fC5E84900e1d8f7283763F0Fa426397E0f1666",
     "seedETH": "0xcA34959A856c82214Bb3b2b7777342dE30459F83",
     "twitterEscrow": "0x41B0341dd65d3B7c350225b551c9826787325901",
     "twitterEscrowSigner": "0x3a0Dd90212838f32a953Acd4B32596b62859324A",
@@ -47,11 +47,11 @@
   "notes": {
     "generation": "Path B full-stack redeploy 2026-06-30 (audit #3-#4 fixes): launchpad H-1 + CLANKER_V3 mispricing, V3 Zap delta-sweep. ALL of v2Factory/Router/Zap, launchpad, multiSwap, v3Factory/Locker/Router/Quoter/Zap/NPM/descriptor, tokenVault, autoCompounder were redeployed and re-wired (verified on-chain: launchpad.v3Router/v3Locker, factory.feeTo, v3Router.launchpad, v3Zap.factory). Deployer = test EOA 0x3a0Dd9. The matching NEXT_PUBLIC_* Vercel envs MUST be updated to these addresses + frontend redeployed, then test liquidity re-seeded.",
     "twitterEscrowReconnect": "2026-06-30 RedeployLaunchpadChain: the Path B locker had twitterEscrow == 0 (escrow disconnected). Fixed by redeploying the launchpad chain (escrow 0x48B9Aea9, locker 0x13F091De, launchpad 0x4339522d, v3Router 0xe5089a16, tokenVault 0x9289Fe9f, multiSwap 0x854A5374) with the escrow wired. Verified on-chain: locker.twitterEscrow == escrow, escrow.LOCKER == locker, escrow.trustedSigner == deployer (unchanged so the Vercel signer keeps working). NOTE: old escrow 0xfD1c54 still holds any slots credited before today; the /claim UI now points at the NEW escrow, so historical pre-2026-06-30 allocations must be claimed against the old escrow (or the UI must check both).",
-    "auditStatus": "All 3 mainnet-critical audit findings and the V3-stack HIGH findings are LIVE at these addresses — verified on-chain: the deployed runtime bytecode of v3Locker / v3Router / v3Zap is byte-identical to contracts/v3src source (differs only at address-immutable slots).",
-    "recovered": "autoCompounder (0x12D2…), identityIssuer (0x912a…) and twitterEscrow (0xfD1c…) were all recovered + verified on-chain (deposit/mint txs; the live locker 0x8434…'s twitterEscrow() getter), since the local .env.local copy has no entry for them. The new escrow's LOCKER() points to the current locker, and on testnet its trustedSigner is the deployer EOA (mainnet uses a dedicated backend signer).",
-    "v3PositionDescriptor": "Internal NFT-metadata renderer for the V3 position manager (private immutable, no on-chain getter). Cosmetic only — no integrator needs it — so it is not listed here.",
+    "auditStatus": "All 3 mainnet-critical audit findings and the V3-stack HIGH findings are LIVE at these addresses \u00e2\u20ac\u201d verified on-chain: the deployed runtime bytecode of v3Locker / v3Router / v3Zap is byte-identical to contracts/v3src source (differs only at address-immutable slots).",
+    "recovered": "autoCompounder (0x12D2\u00e2\u20ac\u00a6), identityIssuer (0x912a\u00e2\u20ac\u00a6) and twitterEscrow (0xfD1c\u00e2\u20ac\u00a6) were all recovered + verified on-chain (deposit/mint txs; the live locker 0x8434\u00e2\u20ac\u00a6's twitterEscrow() getter), since the local .env.local copy has no entry for them. The new escrow's LOCKER() points to the current locker, and on testnet its trustedSigner is the deployer EOA (mainnet uses a dedicated backend signer).",
+    "v3PositionDescriptor": "Internal NFT-metadata renderer for the V3 position manager (private immutable, no on-chain getter). Cosmetic only \u00e2\u20ac\u201d no integrator needs it \u00e2\u20ac\u201d so it is not listed here.",
     "identityRegistry": "ERC-8004 Identity Registry is an Arc primitive (not Arcade-deployed). Identities are minted via register(string uri) from the holder's own wallet; the gated mint(address,string) reverts.",
-    "externalIntegrations": "Orbs dTWAP (limit orders), Synthra, UnitFlow and Xylo are external protocols the aggregator/limit-order UI integrates with — their addresses live in lib/constants.ts, not here, as this file lists Arcade-deployed contracts only.",
+    "externalIntegrations": "Orbs dTWAP (limit orders), Synthra, UnitFlow and Xylo are external protocols the aggregator/limit-order UI integrates with \u00e2\u20ac\u201d their addresses live in lib/constants.ts, not here, as this file lists Arcade-deployed contracts only.",
     "seedETH": "Standalone testnet ERC20 ('Ether (Seed)', symbol 'ETH', 18 decimals, 1,000,000 supply). May live on an older V2 factory's pair scope; recreate the pair via /positions if it isn't visible on the current factory.",
     "v3Npm": "If the V3 NPM is redeployed: the upstream v3-periphery PoolAddress.POOL_INIT_CODE_HASH does NOT match the bytecode hash our Forge profile produces for UniswapV3Pool. Without patching it the NPM computes a ghost CREATE2 pool address and every mint reverts with 'call to non-contract address'. The patch lives in contracts/scripts/patch-v3-periphery.sh and must be re-applied after any forge install."
   },
@@ -94,5 +94,6 @@
         "positions": 3
       }
     }
-  }
+  },
+  "arcadeHookDeployBlock": 53411156
 }

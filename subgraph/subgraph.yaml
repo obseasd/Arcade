@@ -94,9 +94,9 @@ dataSources:
     name: ArcadeHookV4
     network: arc-testnet
     source:
-      address: "0xCC04b7D8a1B3CCeaA7c0511a7E134e07506DBECE"
+      address: "0x2697c70A46388e5928873111faDBDAbB4ef97EcE"
       abi: ArcadeHook
-      startBlock: 53118909
+      startBlock: 53411156
     mapping:
       kind: ethereum/events
       apiVersion: 0.0.9
@@ -251,9 +251,9 @@ dataSources:
     name: V4SwapRouter
     network: arc-testnet
     source:
-      address: "0xB8e94aDb3b4b05FC5D4Bb5d7CDf0bb043f5CCd28"
+      address: "0xE2fC5E84900e1d8f7283763F0Fa426397E0f1666"
       abi: ArcadeV4SwapRouter
-      startBlock: 53118909
+      startBlock: 53411156
     mapping:
       kind: ethereum/events
       apiVersion: 0.0.9
@@ -282,7 +282,7 @@ dataSources:
     source:
       address: "0x71CCed1c397EC974E74C350eBA6DBa98DE8e8e25"
       abi: PoolManagerV4
-      startBlock: 53118909
+      startBlock: 53411156
     mapping:
       kind: ethereum/events
       apiVersion: 0.0.9
