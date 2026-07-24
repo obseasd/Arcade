@@ -337,6 +337,25 @@
     "anonymous": false
   },
   {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "PoolId",
+        "name": "poolId",
+        "type": "bytes32"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "treasuryUsdc",
+        "type": "uint256"
+      }
+    ],
+    "name": "SwapTreasuryFee",
+    "type": "event"
+  },
+  {
     "type": "event",
     "name": "SnipeConfigured",
     "inputs": [

@@ -337,3 +337,20 @@ type ReferralAttribution @entity(immutable: false) {
   blockTime: Int!
   txHash: Bytes!
 }
+
+# EXACT per-swap treasury (protocol) fee on a graduated pool, attributed to the
+# trader, sourced from the hook's SwapTreasuryFee event. That event is emitted
+# ONLY in the swap fee path (beforeSwap/afterSwap), NEVER by the permissionless
+# collectFees harvest, so crediting the tx sender cannot be spoofed by wrapping
+# collectFees (the flaw that sank the earlier RoyaltyPaid-based attempt, audit
+# 2026-07-24). This supersedes the conservative 0.06% estimate that
+# protocolFeeForTrade otherwise applies to source "v4"; the Trade carries 0 for
+# v4 so the two never double-count. Populated only once the hook emitting the
+# event is deployed.
+type V4TreasuryFee @entity(immutable: true) {
+  id: ID! # txHash-logIndex
+  trader: Bytes!
+  protocolFeeUsdc: BigDecimal!
+  blockTime: Int!
+  blockNumber: BigInt!
+}

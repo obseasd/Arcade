@@ -112,6 +112,7 @@ dataSources:
         - V4Pool
         - HandleAttribution
         - FeeStats
+        - V4TreasuryFee
       abis:
         - name: ArcadeHook
           file: ./abis/ArcadeHook.json
@@ -130,6 +131,12 @@ dataSources:
           handler: handleGraduatedV4
         - event: RoyaltyPaid(indexed bytes32,indexed address,uint256,uint256,address)
           handler: handleRoyaltyPaidV4
+        # Per-swap treasury fee, emitted ONLY on the swap path (never on the
+        # collectFees harvest), so attributing it to the tx sender is safe. Dormant
+        # until the hook that emits it is deployed (rides the next contract redeploy
+        # + hook-address bump below). Supersedes the v4 estimate in protocolFeeForTrade.
+        - event: SwapTreasuryFee(indexed bytes32,uint256)
+          handler: handleSwapTreasuryFee
         - event: AntiSnipeApplied(indexed bytes32,indexed address,uint256,uint16)
           handler: handleAntiSnipeV4
         - event: FeeAttributedToHandle(indexed bytes32,indexed address,string)

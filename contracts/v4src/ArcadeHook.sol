@@ -348,6 +348,16 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         address currency
     );
     event AntiSnipeApplied(PoolId indexed poolId, address indexed sniper, uint256 amount, uint16 bps);
+    /// @notice Emitted for the PER-SWAP treasury fee ONLY (beforeSwap/afterSwap),
+    ///         never on the collectFees harvest. Off-chain referral attribution
+    ///         reads THIS (crediting tx.origin/tx.from as the trader) instead of
+    ///         RoyaltyPaid, which is also emitted by the permissionless
+    ///         collectFees harvest and is therefore spoofable into an over-credit
+    ///         via a wrapper contract (audit 2026-07-24). The amount is always
+    ///         USDC (both swap fee paths capture in USDC). No indexed trader:
+    ///         hooks only see the router as `sender`; the real EOA is the tx
+    ///         sender, which the indexer already uses for the paired Swap event.
+    event SwapTreasuryFee(PoolId indexed poolId, uint256 treasuryUsdc);
     event EscrowCreditFailed(uint256 indexed positionId, uint8 slot, uint256 amount);
     event PositionLocked(bytes32 indexed positionKey, address indexed owner, uint128 liquidity);
     event FeeHarvested(bytes32 indexed positionKey, uint256 amount0, uint256 amount1);
@@ -929,6 +939,9 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         ArcadeHookLib.distributeFee(
             POOL_MANAGER, feeOwners, pendingTokenWithdrawals, TREASURY, poolId, USDC, fee, state.mode, true
         );
+        // Per-swap treasury fee for referral attribution (USDC). Mirrors
+        // distributeFee's split: treasuryCut = fee - creatorCut.
+        if (fee > 0) emit SwapTreasuryFee(poolId, fee - (fee * POST_GRAD_CREATOR_BPS) / 10_000);
 
         // Positive specified delta = the hook takes this many USDC units off
         // the specified side, so the swapper pays for everything taken above.
@@ -1189,6 +1202,10 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         ArcadeHookLib.distributeFee(
             POOL_MANAGER, feeOwners, pendingTokenWithdrawals, TREASURY, poolId, feeCurrency, fee, state.mode, true
         );
+        // Per-swap treasury fee for referral attribution (feeCurrency is USDC
+        // here: the early return above bails when it is not). Mirrors
+        // distributeFee's split: treasuryCut = fee - creatorCut.
+        if (fee > 0) emit SwapTreasuryFee(poolId, fee - (fee * POST_GRAD_CREATOR_BPS) / 10_000);
 
         // Advance the price oracle AFTER taking the fee, so this swap's own
         // price impact never influences the fee it just paid.

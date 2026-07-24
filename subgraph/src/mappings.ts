@@ -19,6 +19,7 @@ import {
   CurveSell,
   Graduated,
   RoyaltyPaid,
+  SwapTreasuryFee,
   AntiSnipeApplied,
   FeeAttributedToHandle,
   FeeHarvested,
@@ -46,6 +47,7 @@ import {
   LockerRecipientEarning,
   Referrer,
   ReferralAttribution,
+  V4TreasuryFee,
 } from "../generated/schema";
 import { Memo } from "../generated/MemoContract/MemoAbi";
 
@@ -262,20 +264,14 @@ function protocolFeeForTrade(source: string, pool: Bytes | null, volumeUsdc: Big
     return volumeUsdc.times(BigDecimal.fromString("0.002"));
   }
   if (source == "v4") {
-    // Graduated-pool (PUMP) hook fee is 20% of a dynamic 1%->0.30% fee, taken by
-    // the hook per swap and not visible in the pool Swap event. We credit the
-    // PUMP mature FLOOR (20% * 0.30% = 0.06%) as a CONSERVATIVE, self-funding
-    // estimate: it never exceeds the real treasury take (fresh PUMP is 0.20%,
-    // CLANKER 0.20-0.60% via harvest), so it can only under-credit.
-    //
-    // We deliberately do NOT attribute the exact fee from RoyaltyPaid: that event
-    // is also emitted by the PERMISSIONLESS collectFees harvest, and its tx.to is
-    // the caller's contract, not the hook, so a wrapper contract can forge a
-    // "swap-path" RoyaltyPaid and funnel a whole CLANKER pool's treasury fee to
-    // an attacker-chosen wallet (audit 2026-07-24, HIGH). A trade-time estimate
-    // has no such surface. An exact per-swap value needs a dedicated, unspoofable
-    // hook event, not RoyaltyPaid.
-    return volumeUsdc.times(BigDecimal.fromString("0.0006"));
+    // The exact per-swap treasury fee is attributed via the hook's
+    // SwapTreasuryFee event (handleSwapTreasuryFee -> V4TreasuryFee), which is
+    // unspoofable (emitted only in the swap path, never by collectFees). The
+    // Trade therefore carries 0 for v4 to avoid double-counting with that entity.
+    // Until the hook emitting SwapTreasuryFee is deployed, no V4TreasuryFee rows
+    // exist, so v4 referral is 0 in the interim -- safe, and moot while there is
+    // no graduated trading.
+    return BigDecimal.fromString("0");
   }
   if (source == "v2") {
     return volumeUsdc.times(BigDecimal.fromString("0.0015"));
@@ -1172,12 +1168,32 @@ export function handleRoyaltyPaidV4(event: RoyaltyPaid): void {
     creditTokenFees(p.token, creatorFee.plus(treasuryFee), event.block.timestamp.toI32());
   }
 
-  // NOTE: we intentionally do NOT attribute treasuryFee to a trader for referral
-  // here. RoyaltyPaid is emitted both per-swap AND by the permissionless
-  // collectFees harvest, and there is no in-event signal that separates them
-  // (tx.to is the caller's own contract, spoofable). Attempting it created a HIGH
-  // over-credit (audit 2026-07-24). Referral uses the conservative per-trade
-  // estimate in protocolFeeForTrade instead. See that function.
+  // NOTE: referral attribution does NOT read RoyaltyPaid. RoyaltyPaid is emitted
+  // both per-swap AND by the permissionless collectFees harvest, with no in-event
+  // signal separating them (tx.to is the caller's own contract, spoofable), which
+  // created a HIGH over-credit (audit 2026-07-24). The hook now emits a dedicated
+  // SwapTreasuryFee on the swap path ONLY; handleSwapTreasuryFee below reads that.
+}
+
+/**
+ * Exact per-swap treasury fee for referral, from the hook's SwapTreasuryFee
+ * event. Unlike RoyaltyPaid this fires ONLY in beforeSwap/afterSwap, never in the
+ * collectFees harvest, so `transaction.from` is genuinely the trader and cannot
+ * be forged by wrapping the permissionless collectFees. treasuryUsdc is always
+ * USDC (both swap fee paths capture in USDC). One event per swap (before/after
+ * are mutually exclusive). Attributed to the same tx sender the paired V4 Swap
+ * uses (handleV4Swap), so the two agree.
+ */
+export function handleSwapTreasuryFee(event: SwapTreasuryFee): void {
+  if (event.params.treasuryUsdc.equals(BigInt.fromI32(0))) return;
+  const id =
+    event.transaction.hash.toHexString() + "-" + event.logIndex.toString();
+  const fee = new V4TreasuryFee(id);
+  fee.trader = event.transaction.from;
+  fee.protocolFeeUsdc = usdcVolume(event.params.treasuryUsdc);
+  fee.blockTime = event.block.timestamp.toI32();
+  fee.blockNumber = event.block.number;
+  fee.save();
 }
 
 export function handleFeeHarvestedV4(event: FeeHarvested): void {

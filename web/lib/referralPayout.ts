@@ -242,11 +242,39 @@ async function getWalletProtocolFeesSinceMicros(
     } catch {
         return null;
     }
-    // Graduated-pool (source "v4") fees are already included in Trade.protocolFeeUsdc
-    // as a conservative estimate (see the subgraph's protocolFeeForTrade). They are
-    // deliberately NOT read from RoyaltyPaid: that event is also emitted by the
-    // permissionless collectFees harvest and is spoofable into an over-credit
-    // (audit 2026-07-24).
+
+    // Graduated-pool (source "v4") treasury fees live in V4TreasuryFee, not on the
+    // Trade (the Trade carries 0 for v4 to avoid double-counting). These are the
+    // EXACT per-swap treasury cuts, sourced from the hook's SwapTreasuryFee event
+    // (emitted only in the swap path, never by the permissionless collectFees
+    // harvest -- the flaw that sank the earlier RoyaltyPaid attempt, audit
+    // 2026-07-24). Absent until the emitting hook is deployed, in which case this
+    // simply adds 0.
+    try {
+        for (let page = 0; page < VOL_MAX_PAGES; page++) {
+            const query = `{ v4TreasuryFees(first: ${VOL_PAGE}, skip: ${page * VOL_PAGE}, orderBy: blockNumber, orderDirection: desc, where: { trader: "${w}", blockTime_gte: ${since} }) { protocolFeeUsdc } }`;
+            const res = await fetch(url, {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ query }),
+            });
+            if (!res.ok) break;
+            const json = (await res.json()) as {
+                data?: { v4TreasuryFees?: { protocolFeeUsdc: string }[] };
+                errors?: unknown;
+            };
+            // Entity absent (older subgraph gen): the Trade query above already
+            // succeeded, so treat v4 fees as zero rather than discarding the whole
+            // valid result.
+            if (json.errors || !json.data || !Array.isArray(json.data.v4TreasuryFees)) break;
+            const rows = json.data.v4TreasuryFees;
+            if (rows.length === 0) break;
+            for (const r of rows) total += usdcStringToMicros(r.protocolFeeUsdc);
+            if (rows.length < VOL_PAGE) break;
+        }
+    } catch {
+        /* v4 fees unavailable -> count only the Trade-based fees */
+    }
     return total;
 }
 
