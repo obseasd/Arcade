@@ -6,6 +6,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { erc20Abi, formatUnits, parseUnits, zeroAddress, type Address } from "viem";
 import { useAccount, usePublicClient, useReadContract, useWriteContract } from "wagmi";
 import { ROUTER_ABI } from "@/lib/abis/dex";
+import { decodeBigints } from "@/lib/routing/serialize";
+import type { RouteQuote } from "@/lib/routing/types";
 import { V3_QUOTER_ABI } from "@/lib/abis/v3";
 import { ADDRESSES, LIMIT_ORDERS_ENABLED, USDC_DECIMALS, V3_FEE } from "@/lib/constants";
 import { TransactionSettings } from "@/components/ui/TransactionSettings";
@@ -337,7 +339,64 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
         if (!spotOutBn || !tokenOut) return 0;
         return Number(formatUnits(spotOutBn, outDec));
     }, [spotOutBn, tokenOut, outDec]);
-    const marketPriceStr = useMemo(() => formatPriceStr(marketPriceNum), [marketPriceNum]);
+
+    // AGGREGATOR market rate: the best executable tokenOut-per-tokenIn across ALL
+    // venues (same source as the swap), impact-adjusted for the order size. This
+    // is the honest reference the keeper's best-venue fill (B) tracks -- unlike
+    // the single-pool `marketPriceNum` spot, which for a thin/mispriced pool
+    // (USDC/EURC on Arcade V2) is nowhere near what a real fill gets. Debounced;
+    // falls back to the spot when it hasn't landed or the endpoint is down.
+    const [aggRateStr, setAggRateStr] = useState<string | null>(null);
+    useEffect(() => {
+        if (!tokenOut || srcAmountBn <= 0n || tokenIn.address === tokenOut.address) {
+            setAggRateStr(null);
+            return;
+        }
+        let cancelled = false;
+        const timer = setTimeout(async () => {
+            try {
+                const res = await fetch("/api/routes/quote", {
+                    method: "POST",
+                    headers: { "content-type": "application/json" },
+                    body: JSON.stringify({
+                        tokenIn: tokenIn.address,
+                        tokenOut: tokenOut.address,
+                        decimalsIn: inDec,
+                        decimalsOut: outDec,
+                        amountIn: srcAmountBn.toString(),
+                        recipient: account ?? tokenIn.address,
+                        slippageBps,
+                        deadline: (Math.floor(Date.now() / 1000) + 600).toString(),
+                    }),
+                });
+                if (!res.ok || cancelled) return;
+                const json = (await res.json()) as { quotes?: unknown };
+                if (!Array.isArray(json.quotes)) return;
+                const quotes = decodeBigints(json.quotes) as RouteQuote[];
+                const best = quotes[0]; // aggregate returns best-first
+                if (!best || best.amountOut <= 0n) return;
+                const rate =
+                    Number(formatUnits(best.amountOut, outDec)) /
+                    Number(formatUnits(srcAmountBn, inDec));
+                if (!cancelled && rate > 0 && Number.isFinite(rate)) {
+                    setAggRateStr(formatPriceStr(rate));
+                }
+            } catch {
+                /* fall back to the spot rate below */
+            }
+        }, 300);
+        return () => {
+            cancelled = true;
+            clearTimeout(timer);
+        };
+    }, [tokenIn.address, tokenOut?.address, srcAmountBn, inDec, outDec, slippageBps, account]);
+
+    // Prefer the aggregator rate (matches the swap + where the keeper actually
+    // fills); fall back to the single-pool spot until it lands.
+    const marketPriceStr = useMemo(
+        () => aggRateStr ?? formatPriceStr(marketPriceNum),
+        [aggRateStr, marketPriceNum],
+    );
 
     // ----- DCA-derived values (only meaningful when orderMode === 'dca') -----
     const numBuysInt = useMemo(() => {
@@ -583,10 +642,17 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
             //   - DCA: N chunks (srcBidAmount = total / N) spaced by fillDelay
             //     = the chosen interval; the keeper fills one chunk per
             //     interval. Same contract, same keeper code path.
+            // exchange = 0 (any exchange). The keeper picks the best-quoting
+            // Orbs-fillable venue per fill (B); TWAP.performFill enforces the
+            // maker receives >= the WINNING BID's committed amount regardless of
+            // which exchange fills, and competitive bidding means the maker gets
+            // the keeper's honest near-market bid, not the floor. So opening the
+            // venue is safe -- the floor (dstMinAmount) is only a backstop.
+            const ORBS_ANY_EXCHANGE = zeroAddress;
             const ask =
                 orderMode === "dca"
                     ? {
-                          exchange: ADDRESSES.orbsExchangeV2,
+                          exchange: ORBS_ANY_EXCHANGE,
                           srcToken: tokenIn.address,
                           dstToken: tokenOut.address,
                           srcAmount: srcAmountBn,
@@ -598,7 +664,7 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
                           data: "0x" as const,
                       }
                     : {
-                          exchange: ADDRESSES.orbsExchangeV2,
+                          exchange: ORBS_ANY_EXCHANGE,
                           srcToken: tokenIn.address,
                           dstToken: tokenOut.address,
                           srcAmount: srcAmountBn,
