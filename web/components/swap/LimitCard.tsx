@@ -73,8 +73,14 @@ const DCA_INTERVALS = [
     { id: "4h", label: "Every 4h", seconds: 4 * 60 * 60 },
     { id: "1d", label: "Daily", seconds: 24 * 60 * 60 },
     { id: "1w", label: "Weekly", seconds: 7 * 24 * 60 * 60 },
+    { id: "custom", label: "Custom (hours)", seconds: 0 },
 ] as const;
 type DcaIntervalId = (typeof DCA_INTERVALS)[number]["id"];
+// Bounds for a custom interval, in hours. Min 1h (Orbs fillDelay granularity +
+// the keeper's 5-min cadence make sub-hour DCA meaningless); the schedule is
+// still clamped to MAX_EXPIRY below.
+const CUSTOM_INTERVAL_MIN_HOURS = 1;
+const CUSTOM_INTERVAL_MAX_HOURS = 24 * 30; // 30 days between buys
 // Bounds on the number of DCA buys. >=2 (else it is just a market/limit
 // order); a ceiling keeps the total schedule inside MAX_EXPIRY and the
 // per-chunk size above dust.
@@ -87,7 +93,17 @@ const DCA_MAX_BUYS = 100;
 // user's limit-order slippage setting, so a DCA keeps buying across a
 // realistic per-interval price move. This is the fix for the audit's #1
 // (DCA-DOA-at-defaults) finding.
-const DCA_MIN_BAND_BPS = 200;
+// Minimum DCA band when price protection is ON. Must comfortably exceed the
+// keeper's 0.5% fill haircut or no chunk ever clears; 1% leaves margin while
+// respecting a user who wants a tighter band than the old 2% default. A tighter
+// intent than this isn't achievable for DCA (the keeper's fill cost eats it) --
+// turn protection OFF to widen the band instead.
+const DCA_MIN_BAND_BPS = 100;
+// Band used when price protection is OFF: WIDE (fills through a big drop, the
+// "buy on schedule no matter what" case) but NOT zero. A dstMinAmount floor of 0
+// would let a single taker fill the whole order for ~nothing and steal the input;
+// 50% caps that worst case while the keeper still fills competitively at ~market.
+const PROTECTION_OFF_BAND_BPS = 5000;
 
 interface LimitCardProps {
     tab: SwapTab;
@@ -128,6 +144,8 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
     const [orderMode, setOrderMode] = useState<"limit" | "dca">("limit");
     const [numBuys, setNumBuys] = useState("10");
     const [dcaIntervalId, setDcaIntervalId] = useState<DcaIntervalId>("1d");
+    // Custom DCA interval, in hours, used when dcaIntervalId === "custom".
+    const [customIntervalHours, setCustomIntervalHours] = useState("12");
     const [expiryId, setExpiryId] = useState<ExpiryId>("7d");
     const [customDays, setCustomDays] = useState("0");
     const [customHours, setCustomHours] = useState("0");
@@ -139,6 +157,12 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
     // regular Swap card.
     const [slippageBps, setSlippageBps] = useState(50);
     const [slippageCustom, setSlippageCustom] = useState("");
+    // Price protection toggle. ON (default): the order's dstMinAmount floor is
+    // enforced (fills only within the chosen slippage of the trigger/market).
+    // OFF: no floor -- the order fills at whatever price is available at the
+    // scheduled time, even far below market. Set OFF for "buy tomorrow at 10h no
+    // matter what" schedules; keep ON to avoid filling into a crash.
+    const [priceProtection, setPriceProtection] = useState(true);
     const [showSettings, setShowSettings] = useState(false);
     // Ref used to dedupe the bidirectional sync between triggerPrice and
     // forAmount: when one of them is updated as a derived side-effect of
@@ -246,8 +270,11 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
     // above the floor.
     const dstMinAmountBn = useMemo(() => {
         if (expectedOutBn === 0n) return 0n;
-        return (expectedOutBn * BigInt(10_000 - slippageBps)) / 10_000n;
-    }, [expectedOutBn, slippageBps]);
+        // Protection OFF: a WIDE floor (50%) so the order fills through a big
+        // drop, without letting a taker steal the whole input at a ~0 floor.
+        const band = priceProtection ? slippageBps : PROTECTION_OFF_BAND_BPS;
+        return (expectedOutBn * BigInt(10_000 - band)) / 10_000n;
+    }, [expectedOutBn, slippageBps, priceProtection]);
 
     // Spot price quote: how many tokenOut per 1 tokenIn at current pool reserves.
     // Used to populate triggerPrice on token pick + drive the Market Price button.
@@ -319,10 +346,14 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
         return Math.min(DCA_MAX_BUYS, Math.max(DCA_MIN_BUYS, n));
     }, [numBuys]);
 
-    const dcaIntervalSecs = useMemo(
-        () => DCA_INTERVALS.find((i) => i.id === dcaIntervalId)?.seconds ?? 86400,
-        [dcaIntervalId],
-    );
+    const dcaIntervalSecs = useMemo(() => {
+        if (dcaIntervalId === "custom") {
+            const h = Math.floor(Number(customIntervalHours));
+            if (!Number.isFinite(h) || h < CUSTOM_INTERVAL_MIN_HOURS) return 0;
+            return Math.min(h, CUSTOM_INTERVAL_MAX_HOURS) * 3600;
+        }
+        return DCA_INTERVALS.find((i) => i.id === dcaIntervalId)?.seconds ?? 86400;
+    }, [dcaIntervalId, customIntervalHours]);
 
     // Per-chunk input size = total / N (the last chunk absorbs any remainder
     // on-chain via srcBidAmountNext's Math.min).
@@ -358,10 +389,12 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
     // is the inherent Orbs-as-DCA limit, solved later by the V3 vault.
     const dcaChunkFloorBn = useMemo(() => {
         if (dcaMarketExpectedOutBn === 0n || numBuysInt <= 0) return 0n;
-        const totalFloor =
-            (dcaMarketExpectedOutBn * BigInt(10_000 - dcaBandBps)) / 10_000n;
-        return totalFloor / BigInt(numBuysInt);
-    }, [dcaMarketExpectedOutBn, dcaBandBps, numBuysInt]);
+        // Protection OFF: WIDE 50% band (fills through a drop, bounded loss).
+        const band = priceProtection ? dcaBandBps : PROTECTION_OFF_BAND_BPS;
+        const totalFloor = (dcaMarketExpectedOutBn * BigInt(10_000 - band)) / 10_000n;
+        const perChunk = totalFloor / BigInt(numBuysInt);
+        return perChunk > 0n ? perChunk : 1n;
+    }, [dcaMarketExpectedOutBn, dcaBandBps, numBuysInt, priceProtection]);
 
     // The schedule must outlive its last chunk: N intervals + a 1-day margin.
     const dcaRequestedSecs = useMemo(
@@ -505,7 +538,10 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
         srcAmountBn > 0n &&
         srcAmountBn <= balance &&
         (orderMode === "dca"
-            ? dcaChunkSrcBn > 0n && dcaChunkFloorBn > 0n && !dcaScheduleOverflow
+            ? dcaChunkSrcBn > 0n &&
+              dcaChunkFloorBn > 0n &&
+              dcaIntervalSecs > 0 &&
+              !dcaScheduleOverflow
             : dstMinAmountBn > 0n && expirySeconds > 0) &&
         ADDRESSES.orbsTwap !== zeroAddress &&
         ADDRESSES.orbsExchangeV2 !== zeroAddress &&
@@ -778,22 +814,57 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
                                         </option>
                                     ))}
                                 </select>
+                                {dcaIntervalId === "custom" && (
+                                    <input
+                                        aria-label="Custom interval in hours"
+                                        type="text"
+                                        inputMode="numeric"
+                                        value={customIntervalHours}
+                                        onChange={(e) =>
+                                            setCustomIntervalHours(
+                                                e.target.value.replace(/[^0-9]/g, ""),
+                                            )
+                                        }
+                                        placeholder="hours"
+                                        className="mt-2 w-full rounded-lg border border-arc-border bg-arc-bg-elevated px-2 py-2 text-sm text-arc-text outline-none"
+                                    />
+                                )}
                             </div>
                         </div>
+                        {dcaIntervalId === "custom" && dcaIntervalSecs === 0 && (
+                            <div className="mt-2 text-[10px] text-arc-warn">
+                                Enter a whole number of hours (min {CUSTOM_INTERVAL_MIN_HOURS}).
+                            </div>
+                        )}
                         {tokenOut && srcAmountBn > 0n && dcaChunkSrcBn > 0n && (
                             <div className="mt-3 space-y-1 text-[10px] text-arc-text-faint">
                                 <div>
                                     Buys {formatToken(dcaChunkSrcBn, inDec, 6).replace(/,/g, "")}{" "}
                                     {tokenIn.symbol} of {tokenOut.symbol} every{" "}
-                                    {DCA_INTERVALS.find(
-                                        (i) => i.id === dcaIntervalId,
-                                    )?.label.toLowerCase()}
+                                    {dcaIntervalId === "custom"
+                                        ? `${Math.max(
+                                              CUSTOM_INTERVAL_MIN_HOURS,
+                                              Math.floor(Number(customIntervalHours) || 0),
+                                          )} hours`
+                                        : DCA_INTERVALS.find(
+                                              (i) => i.id === dcaIntervalId,
+                                          )?.label.toLowerCase()}
                                     , {numBuysInt} times.
                                 </div>
                                 <div>
-                                    Each buy accepts down to {(dcaBandBps / 100).toFixed(2)}% below
-                                    market. A strongly-trending price may pause fills until it comes
-                                    back in range.
+                                    {priceProtection ? (
+                                        <>
+                                            Each buy accepts down to {(dcaBandBps / 100).toFixed(2)}%
+                                            below market. A strongly-trending price may pause fills
+                                            until it comes back in range.
+                                        </>
+                                    ) : (
+                                        <span className="text-arc-warn">
+                                            Price protection OFF: each buy fills on schedule even
+                                            through a drop of up to {PROTECTION_OFF_BAND_BPS / 100}%
+                                            below market.
+                                        </span>
+                                    )}
                                 </div>
                                 {dcaScheduleOverflow && (
                                     <div className="text-arc-warn">
@@ -932,11 +1003,32 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
                     )}
                 </div>
 
+                {/* Price protection toggle. ON = enforce the slippage/band floor;
+                    OFF = fill at any price on schedule (buy no matter what). */}
+                <label className="mt-4 flex cursor-pointer items-center justify-between gap-3 rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2.5">
+                    <span className="text-xs text-arc-text-muted">
+                        Limit slippage
+                        <span className="ml-1 text-arc-text-faint">
+                            {priceProtection
+                                ? orderMode === "dca"
+                                    ? `(fills within ${(dcaBandBps / 100).toFixed(2)}% of market)`
+                                    : `(within ${(slippageBps / 100).toFixed(2)}% of your price)`
+                                : `(off — fills through drops up to ${PROTECTION_OFF_BAND_BPS / 100}%)`}
+                        </span>
+                    </span>
+                    <input
+                        type="checkbox"
+                        checked={priceProtection}
+                        onChange={(e) => setPriceProtection(e.target.checked)}
+                        className="h-4 w-4 accent-arc-cta"
+                    />
+                </label>
+
                 <button type="button"
                     onClick={onSubmit}
                     disabled={!canSubmit}
                     className={cn(
-                        "arc-button-primary mt-5 w-full py-3 text-base font-semibold",
+                        "arc-button-primary mt-3 w-full py-3 text-base font-semibold",
                         !canSubmit && "cursor-not-allowed opacity-50",
                     )}
                 >
