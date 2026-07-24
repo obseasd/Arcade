@@ -14,6 +14,7 @@ import { arcTestnet } from "@/lib/chains";
 import { ADDRESSES } from "@/lib/constants";
 import { scanReferralAttribution } from "@/lib/referralOnchain";
 import { getReferralBaselines } from "@/lib/referralPersistence";
+import { serverReadClient } from "@/lib/serverRpc";
 
 /**
  * Earnings model (Phase 2). Referral pays 10% of the PROTOCOL fee a referred
@@ -402,7 +403,10 @@ async function loadConfirmed(
     let wallets: string[];
     let confirmedAt: Map<string, number>;
     if (sub === null) {
-        const publicClient = createPublicClient({ chain: arcTestnet, transport: http() });
+        // getLogs-heavy scan: use the shared read client (drpc + arcscan + arc.network
+        // fallback, all getLogs-to-10k) rather than bare arc.network, which
+        // rate-limits Vercel IPs and made this scan return empty in production.
+        const publicClient = serverReadClient();
         wallets = await getVerifiedReferredWallets(publicClient, referrer);
         confirmedAt = new Map(); // getLogs path has no blockTime; baseline stays DB-only
     } else {

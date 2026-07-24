@@ -16,10 +16,17 @@ export const ARC_CHAIN = {
     rpcUrls: { default: { http: ["https://rpc.testnet.arc.network"] } },
 } as const;
 
-const RPC_URLS = (
-    process.env.ARC_RPC_URLS ??
-    "https://rpc.testnet.arc.network,https://5042002.rpc.thirdweb.com"
-)
+// Default Arc RPC fallback chain. Probed 2026-07-24:
+//   - arc.network        fast (~130ms) + getLogs to 10k, but RATE-LIMITS Vercel IPs.
+//   - drpc               fastest (~85ms bn), getLogs to 10k, public, no token.
+//   - arcscan blockscout ~125ms, getLogs to 10k, public, no token.
+//   - thirdweb           DROPPED: slow (~600ms) AND caps getLogs at 1000 blocks.
+// For production, prepend the Canteen RPC (dedicated server token, no rate limit)
+// via the ARC_RPC_URLS / ARC_READ_RPC_URLS env -- it is a SECRET, never in code.
+const DEFAULT_ARC_RPCS =
+    "https://rpc.testnet.arc.network,https://arc-testnet.drpc.org,https://testnet.arcscan.app/api/eth-rpc";
+
+const RPC_URLS = (process.env.ARC_RPC_URLS ?? DEFAULT_ARC_RPCS)
     .split(",")
     .map((u) => u.trim())
     .filter(Boolean);
@@ -34,16 +41,12 @@ export function serverPublicClient() {
     });
 }
 
-// A read-optimised client for simple eth_call reads (balanceOf, a getter). The
-// default arc.network primary rate-limits from Vercel IPs, and its lenient 15s x2
-// retry means ONE throttled read can blow a 30s function budget (observed as
-// intermittent 504s on the claim preview). This orders a higher-throughput
-// endpoint FIRST (thirdweb by default; override with ARC_READ_RPC_URLS) with
-// fast-fail retries so a stalled primary fails over in a few seconds, not 30.
-const READ_RPC_URLS = (
-    process.env.ARC_READ_RPC_URLS ??
-    "https://5042002.rpc.thirdweb.com,https://rpc.testnet.arc.network"
-)
+// A read-optimised client for eth_call reads (balanceOf, a getter) AND getLogs.
+// arc.network rate-limits Vercel IPs, so the fallback fans out to drpc + arcscan
+// (both getLogs-to-10k, no token, separate limits) before arc.network. thirdweb
+// is gone (it capped getLogs at 1000). Override with ARC_READ_RPC_URLS to
+// prepend the Canteen server-token RPC (no rate limit) in production.
+const READ_RPC_URLS = (process.env.ARC_READ_RPC_URLS ?? DEFAULT_ARC_RPCS)
     .split(",")
     .map((u) => u.trim())
     .filter(Boolean);

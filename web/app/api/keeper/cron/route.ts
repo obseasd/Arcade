@@ -277,6 +277,27 @@ export async function POST(req: NextRequest) {
         );
     }
 
+    // Neon compute gate. The cron fires every 5 min, and EVERY run touches
+    // Postgres (the keeper lease, the Orbs mirror, bridge intents), which pins
+    // Neon awake 24/7 and burns its whole compute allowance. We only do the
+    // DB-touching work every KEEPER_DB_INTERVAL_MIN minutes (default 10), so Neon
+    // can auto-suspend between and the compute bill drops proportionally. The
+    // cost is latency: a fillable limit order / DCA tranche / CCTP relay waits up
+    // to that interval instead of 5 min. Set KEEPER_DB_INTERVAL_MIN=5 to restore
+    // 5-min cadence (max Neon cost), or 15 for max savings. Because the cron
+    // always fires on a multiple of 5, `minute % interval < 5` selects exactly
+    // one run per interval (e.g. 10 -> :00,:10,:20…; 15 -> :00,:15,:30,:45).
+    const dbIntervalMin = (() => {
+        const v = Number(process.env.KEEPER_DB_INTERVAL_MIN ?? "10");
+        return Number.isFinite(v) && v >= 5 ? Math.floor(v) : 10;
+    })();
+    if (new Date().getMinutes() % dbIntervalMin >= 5) {
+        return NextResponse.json(
+            { ran: false, reason: "db-suspend window (Neon compute gate)", dbIntervalMin },
+            { status: 200 },
+        );
+    }
+
     const account = privateKeyToAccount(keeperKey);
     const publicClient = createPublicClient({ chain: ARC_CHAIN, transport: http() });
     const walletClient = createWalletClient({ account, chain: ARC_CHAIN, transport: http() });
