@@ -1,4 +1,4 @@
-import { BigInt, BigDecimal, Address, Bytes, ethereum, dataSource } from "@graphprotocol/graph-ts";
+import { BigInt, BigDecimal, Address, Bytes, ethereum } from "@graphprotocol/graph-ts";
 import { Buy, Sell, TokenCreated, Migrated } from "../generated/Launchpad/Launchpad";
 import { PoolCreated } from "../generated/V3Factory/V3Factory";
 import { Swap } from "../generated/templates/V3Pool/V3Pool";
@@ -46,7 +46,6 @@ import {
   LockerRecipientEarning,
   Referrer,
   ReferralAttribution,
-  V4TreasuryFee,
 } from "../generated/schema";
 import { Memo } from "../generated/MemoContract/MemoAbi";
 
@@ -263,10 +262,20 @@ function protocolFeeForTrade(source: string, pool: Bytes | null, volumeUsdc: Big
     return volumeUsdc.times(BigDecimal.fromString("0.002"));
   }
   if (source == "v4") {
-    // Graduated-pool fee is exact and attributed per swap via RoyaltyPaid
-    // (see handleRoyaltyPaidV4 -> V4TreasuryFee), so the Trade carries 0 here to
-    // avoid double-counting with that entity.
-    return BigDecimal.fromString("0");
+    // Graduated-pool (PUMP) hook fee is 20% of a dynamic 1%->0.30% fee, taken by
+    // the hook per swap and not visible in the pool Swap event. We credit the
+    // PUMP mature FLOOR (20% * 0.30% = 0.06%) as a CONSERVATIVE, self-funding
+    // estimate: it never exceeds the real treasury take (fresh PUMP is 0.20%,
+    // CLANKER 0.20-0.60% via harvest), so it can only under-credit.
+    //
+    // We deliberately do NOT attribute the exact fee from RoyaltyPaid: that event
+    // is also emitted by the PERMISSIONLESS collectFees harvest, and its tx.to is
+    // the caller's contract, not the hook, so a wrapper contract can forge a
+    // "swap-path" RoyaltyPaid and funnel a whole CLANKER pool's treasury fee to
+    // an attacker-chosen wallet (audit 2026-07-24, HIGH). A trade-time estimate
+    // has no such surface. An exact per-swap value needs a dedicated, unspoofable
+    // hook event, not RoyaltyPaid.
+    return volumeUsdc.times(BigDecimal.fromString("0.0006"));
   }
   if (source == "v2") {
     return volumeUsdc.times(BigDecimal.fromString("0.0015"));
@@ -1163,24 +1172,12 @@ export function handleRoyaltyPaidV4(event: RoyaltyPaid): void {
     creditTokenFees(p.token, creatorFee.plus(treasuryFee), event.block.timestamp.toI32());
   }
 
-  // Attribute the EXACT treasury cut to the trader for referral -- but ONLY on
-  // the per-swap fee path. The identical event is also emitted by collectFees
-  // (the CLANKER locked-LP harvest), whose `transaction.from` is the harvester,
-  // not a trader; crediting that would misattribute a whole pool's fees to one
-  // address. collectFees is called ON the hook, so its tx.to == the hook (this
-  // data source's address); a swap is called on a router, so tx.to != the hook.
-  // That is the discriminator. A harvested fee is therefore never credited to
-  // referral (it cannot be tied to one trade) -- a safe under-credit.
-  const to = event.transaction.to;
-  if (to === null || to.equals(dataSource.address())) return; // harvest / non-swap
-  const feeId =
-    event.transaction.hash.toHexString() + "-" + event.logIndex.toString();
-  const fee = new V4TreasuryFee(feeId);
-  fee.trader = event.transaction.from;
-  fee.protocolFeeUsdc = treasuryFee;
-  fee.blockTime = event.block.timestamp.toI32();
-  fee.blockNumber = event.block.number;
-  fee.save();
+  // NOTE: we intentionally do NOT attribute treasuryFee to a trader for referral
+  // here. RoyaltyPaid is emitted both per-swap AND by the permissionless
+  // collectFees harvest, and there is no in-event signal that separates them
+  // (tx.to is the caller's own contract, spoofable). Attempting it created a HIGH
+  // over-credit (audit 2026-07-24). Referral uses the conservative per-trade
+  // estimate in protocolFeeForTrade instead. See that function.
 }
 
 export function handleFeeHarvestedV4(event: FeeHarvested): void {

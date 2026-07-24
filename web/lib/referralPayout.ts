@@ -146,6 +146,9 @@ async function getWalletVolumeSinceMicros(wallet: string, sinceUnix: number): Pr
     const url = process.env.NEXT_PUBLIC_GOLDSKY_URL;
     if (!url) return 0n;
     const w = norm(wallet);
+    // Interpolated raw into the GraphQL query -> require hex (defense in depth,
+    // audit 2026-07-24). norm() only lowercases; it does not enforce shape.
+    if (!isAddr(w)) return 0n;
     const since = Math.max(0, Math.floor(sinceUnix));
     let total = 0n;
     try {
@@ -208,6 +211,10 @@ async function getWalletProtocolFeesSinceMicros(
     const url = process.env.NEXT_PUBLIC_GOLDSKY_URL;
     if (!url) return null;
     const w = norm(wallet);
+    // Interpolated raw into the GraphQL query -> require hex (defense in depth,
+    // audit 2026-07-24). A bad wallet contributes 0, it does not force the
+    // whole-column volume fallback (that is reserved for a genuinely absent field).
+    if (!isAddr(w)) return 0n;
     const since = Math.max(0, Math.floor(sinceUnix));
     let total = 0n;
     try {
@@ -235,35 +242,11 @@ async function getWalletProtocolFeesSinceMicros(
     } catch {
         return null;
     }
-
-    // Graduated-pool (source "v4") fees live in V4TreasuryFee, not on the Trade
-    // (the Trade carries 0 for v4 to avoid double-counting), so add them here.
-    // These are the EXACT per-swap treasury cuts attributed to this trader.
-    try {
-        for (let page = 0; page < VOL_MAX_PAGES; page++) {
-            const query = `{ v4TreasuryFees(first: ${VOL_PAGE}, skip: ${page * VOL_PAGE}, orderBy: blockNumber, orderDirection: desc, where: { trader: "${w}", blockTime_gte: ${since} }) { protocolFeeUsdc } }`;
-            const res = await fetch(url, {
-                method: "POST",
-                headers: { "content-type": "application/json" },
-                body: JSON.stringify({ query }),
-            });
-            if (!res.ok) break;
-            const json = (await res.json()) as {
-                data?: { v4TreasuryFees?: { protocolFeeUsdc: string }[] };
-                errors?: unknown;
-            };
-            // Entity absent (older subgraph gen): the Trade query above already
-            // succeeded, so treat v4 fees as simply zero rather than discarding
-            // the whole (valid) result.
-            if (json.errors || !json.data || !Array.isArray(json.data.v4TreasuryFees)) break;
-            const rows = json.data.v4TreasuryFees;
-            if (rows.length === 0) break;
-            for (const r of rows) total += usdcStringToMicros(r.protocolFeeUsdc);
-            if (rows.length < VOL_PAGE) break;
-        }
-    } catch {
-        /* v4 fees unavailable -> count only the Trade-based fees */
-    }
+    // Graduated-pool (source "v4") fees are already included in Trade.protocolFeeUsdc
+    // as a conservative estimate (see the subgraph's protocolFeeForTrade). They are
+    // deliberately NOT read from RoyaltyPaid: that event is also emitted by the
+    // permissionless collectFees harvest and is spoofable into an over-credit
+    // (audit 2026-07-24).
     return total;
 }
 
@@ -301,7 +284,7 @@ export async function getPerWalletVolumeSinceMicros(
 ): Promise<Record<string, bigint>> {
     const out: Record<string, bigint> = {};
     if (!isAddr(referrer) || wallets.length === 0) return out;
-    const baselines = await getReferralBaselines(referrer);
+    const baselines = await getEffectiveBaselines(referrer);
     const keys = wallets.slice(0, MAX_REFERRED_WALLETS).map(norm);
     // Parallel: this runs inside a user-facing request, and serialising one
     // paginated subgraph scan per wallet made the dashboard crawl.
@@ -325,7 +308,7 @@ export async function getPerWalletProtocolFeesSinceMicros(
     wallets: string[],
 ): Promise<Record<string, bigint> | null> {
     if (!isAddr(referrer) || wallets.length === 0) return {};
-    const baselines = await getReferralBaselines(referrer);
+    const baselines = await getEffectiveBaselines(referrer);
     const keys = wallets.slice(0, MAX_REFERRED_WALLETS).map(norm);
     const fees = await Promise.all(
         keys.map((k) => getWalletProtocolFeesSinceMicros(k, baselines.get(k) ?? 0)),
@@ -368,14 +351,18 @@ export async function getPerWalletProtocolFeesSinceMicros(
  * need to-the-second freshness).
  */
 const CONFIRMED_TTL_MS = 5 * 60 * 1000;
-const confirmedCache = new Map<string, { wallets: string[]; exp: number }>();
+const confirmedCache = new Map<
+    string,
+    { wallets: string[]; confirmedAt: Map<string, number>; exp: number }
+>();
 
-export async function getConfirmedReferredWallets(referrer: string): Promise<string[]> {
-    if (!isAddr(referrer)) return [];
+async function loadConfirmed(
+    referrer: string,
+): Promise<{ wallets: string[]; confirmedAt: Map<string, number> }> {
     const key = norm(referrer);
     const now = Date.now();
     const hit = confirmedCache.get(key);
-    if (hit && hit.exp > now) return hit.wallets;
+    if (hit && hit.exp > now) return { wallets: hit.wallets, confirmedAt: hit.confirmedAt };
 
     // Prefer the SUBGRAPH: once the Memo data source is deployed and synced,
     // attribution is a single indexed query, which removes the ~200-window
@@ -383,27 +370,62 @@ export async function getConfirmedReferredWallets(referrer: string): Promise<str
     // production showed 0 confirmed). Fall back to the on-chain scan when the
     // subgraph has no ReferralAttribution entity yet (pre-redeploy) so this keeps
     // working through the transition.
-    let wallets = await getConfirmedFromSubgraph(referrer);
-    if (wallets === null) {
+    const sub = await getConfirmedFromSubgraph(referrer);
+    let wallets: string[];
+    let confirmedAt: Map<string, number>;
+    if (sub === null) {
         const publicClient = createPublicClient({ chain: arcTestnet, transport: http() });
         wallets = await getVerifiedReferredWallets(publicClient, referrer);
+        confirmedAt = new Map(); // getLogs path has no blockTime; baseline stays DB-only
+    } else {
+        wallets = sub.wallets;
+        confirmedAt = sub.confirmedAt;
     }
-    confirmedCache.set(key, { wallets, exp: now + CONFIRMED_TTL_MS });
-    return wallets;
+    confirmedCache.set(key, { wallets, confirmedAt, exp: now + CONFIRMED_TTL_MS });
+    return { wallets, confirmedAt };
+}
+
+export async function getConfirmedReferredWallets(referrer: string): Promise<string[]> {
+    if (!isAddr(referrer)) return [];
+    return (await loadConfirmed(referrer)).wallets;
 }
 
 /**
- * Confirmed referred wallets from the subgraph's ReferralAttribution entity.
- * Returns null (not []) when the entity is absent -- i.e. the Memo data source
- * has not been deployed/backfilled yet -- so the caller knows to fall back to
- * the on-chain scan rather than treating "no data yet" as "nobody confirmed".
+ * Per-wallet "referred since" window for EARNINGS. Prefers the DB first-touch
+ * time (referrals.created_at, the earliest signal). For a wallet confirmed
+ * ON-CHAIN that never got a DB row -- which getConfirmedReferredWallets
+ * deliberately surfaces -- there is no DB baseline; without a fallback its
+ * window would be 0 and its ENTIRE pre-referral history would be credited (audit
+ * 2026-07-24, since=0 hole). We fall back to the on-chain CONFIRMATION time,
+ * which is >= first-touch, so it can only under-credit, never credit
+ * pre-referral fees. A wallet with neither is windowed at 0 only on the getLogs
+ * fallback path (no blockTime available there).
  */
-async function getConfirmedFromSubgraph(referrer: string): Promise<string[] | null> {
+async function getEffectiveBaselines(referrer: string): Promise<Map<string, number>> {
+    const [db, confirmed] = await Promise.all([
+        getReferralBaselines(referrer),
+        loadConfirmed(referrer).then((c) => c.confirmedAt),
+    ]);
+    const out = new Map(confirmed); // on-chain confirmation time as the floor
+    for (const [k, v] of db) out.set(k, v); // DB first-touch wins where present
+    return out;
+}
+
+/**
+ * Confirmed referred wallets + each one's on-chain confirmation time, from the
+ * subgraph's ReferralAttribution entity. Returns null (not empty) when the
+ * entity is absent -- i.e. the Memo data source has not been deployed/backfilled
+ * yet -- so the caller knows to fall back to the on-chain scan rather than
+ * treating "no data yet" as "nobody confirmed".
+ */
+async function getConfirmedFromSubgraph(
+    referrer: string,
+): Promise<{ wallets: string[]; confirmedAt: Map<string, number> } | null> {
     const url = process.env.NEXT_PUBLIC_GOLDSKY_URL;
     if (!url) return null;
     const query = `{ referralAttributions(first: 1000, where: { referrer: "${norm(
         referrer,
-    )}" }) { id } }`;
+    )}" }) { id blockTime } }`;
     try {
         const res = await fetch(url, {
             method: "POST",
@@ -412,7 +434,7 @@ async function getConfirmedFromSubgraph(referrer: string): Promise<string[] | nu
         });
         if (!res.ok) return null;
         const json = (await res.json()) as {
-            data?: { referralAttributions?: { id: string }[] };
+            data?: { referralAttributions?: { id: string; blockTime: number }[] };
             errors?: unknown;
         };
         // A schema without the entity yet returns a GraphQL error, not data:
@@ -420,7 +442,15 @@ async function getConfirmedFromSubgraph(referrer: string): Promise<string[] | nu
         if (json.errors || !json.data || !Array.isArray(json.data.referralAttributions)) {
             return null;
         }
-        return json.data.referralAttributions.map((a) => norm(a.id));
+        const wallets: string[] = [];
+        const confirmedAt = new Map<string, number>();
+        for (const a of json.data.referralAttributions) {
+            const w = norm(a.id);
+            wallets.push(w);
+            const t = Number(a.blockTime);
+            if (Number.isFinite(t) && t > 0) confirmedAt.set(w, t);
+        }
+        return { wallets, confirmedAt };
     } catch {
         return null;
     }
@@ -436,8 +466,9 @@ export async function getVerifiedEarningsUsdMicros(
     if (wallets.length === 0) return 0n;
 
     // Window each wallet by its "referred since" time so pre-referral volume is
-    // never credited (audit C-2). Baselines come from referrals.created_at.
-    const baselines = await getReferralBaselines(referrer);
+    // never credited (audit C-2). DB first-touch, falling back to on-chain
+    // confirmation time for wallets with no DB row (audit 2026-07-24).
+    const baselines = await getEffectiveBaselines(referrer);
 
     // Preferred basis: the REAL protocol (treasury) fee the referred wallets
     // generated. Referral = REFERRAL_SHARE of that, so it is self-funding and a
