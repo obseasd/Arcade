@@ -13,6 +13,7 @@ import { registerReferrerOnChain } from "@/lib/referralOnchain";
 import { arcTestnet } from "@/lib/chains";
 import type { ReferralStats } from "@/lib/referralPersistence";
 import { formatAddress } from "@/lib/utils";
+import { pushToast } from "@/lib/toast";
 
 // Format USD micros entirely in BigInt - going through Number(...)/1e6 loses
 // precision (and can print Infinity) above ~$9M (audit M-5).
@@ -325,7 +326,14 @@ export function ReferralsPanel({ account }: { account: Address | undefined }) {
             } else if (data.ok && data.claimed === "0") {
                 setClaimMsg("Nothing to claim yet.");
             } else if (data.ok && data.txHash) {
-                setClaimMsg(`Claimed ${fmtUsd(data.claimed)} (tx ${String(data.txHash).slice(0, 10)}…)`);
+                // Success is surfaced as a toast, not a raw tx hash in the panel.
+                const amount = fmtUsd(data.claimed);
+                pushToast({
+                    kind: "info",
+                    title: "Referral reward claimed",
+                    message: `${amount} sent to your wallet.`,
+                });
+                setClaimMsg(`Claimed ${amount}.`);
             } else {
                 setClaimMsg(data.error ?? "Claim unavailable.");
             }
