@@ -8,7 +8,6 @@ import {
     getAddress,
     encodeAbiParameters,
     parseAbiParameters,
-    erc20Abi,
     type Address,
     type Hex,
 } from "viem";
@@ -23,9 +22,8 @@ import {
     mintRecipientFromMessage,
     parseCctpV2Message,
 } from "@/lib/cctp";
+import { ROUTER_ABI } from "@/lib/abis/dex";
 import { buildOrbsBid, clearsFloor } from "@/lib/keeper/orbsRoute";
-import { orbsVenueRegistry, selectBestVenue } from "@/lib/keeper/venues";
-import { quoteAllRoutes } from "@/lib/routing/aggregate";
 import {
     getActiveOrbsOrders,
     upsertOrbsOrder,
@@ -680,76 +678,29 @@ async function settleOrbsOrder(
         return false;
     }
 
-    // Quote every Orbs-fillable venue through the SAME aggregator the swap uses,
-    // and settle on the best. This is B: a limit/DCA order fills on whichever DEX
-    // gives the best price (e.g. XyloNet's stable pool for USDC/EURC), not just
-    // Arcade V2. Ask.exchange=0 lets the keeper pick the venue per fill; an order
-    // pinned to a specific adapter restricts the choice to that venue.
-    const registry = orbsVenueRegistry({
-        arcadeV2: cfg.router,
-        arcadeV3: ADDRESSES.v3Router as Address,
-        xylonet: ADDRESSES.xyloRouter as Address,
-    });
-    const askEx = getAddr(order.ask.exchange);
-    const eligible =
-        askEx === ZERO
-            ? registry
-            : registry.filter((r) => r.adapter && r.adapter.toLowerCase() === askEx.toLowerCase());
-    if (eligible.length === 0) {
-        // Pinned to an adapter we have not wired -> cannot fill.
+    // Direct src->dst V2 path on the trusted V2 adapter. Multi-venue via the
+    // aggregator was REVERTED: it required Ask.exchange=0 (a CRITICAL theft
+    // surface -- an attacker's own IExchange commits the floor and steals the
+    // rest) and mis-built via-USDC / multi-hop / partial-fill quotes as direct
+    // paths that revert-loop (audit 2026-07-24). The correct multi-venue design
+    // is ONE trusted keeper-only multi-router adapter (ExchangeMulti) the order
+    // pins to; until it ships, the keeper settles the direct V2 pair only, as
+    // before. A pair with no direct pool quotes 0 and is skipped (no bid).
+    const path = [srcToken, dstToken] as Address[];
+    const amounts = (await withTimeout(
+        publicClient.readContract({
+            address: cfg.router,
+            abi: ROUTER_ABI,
+            functionName: "getAmountsOut",
+            args: [chunkIn, path],
+        }) as Promise<readonly bigint[]>,
+        RPC_TIMEOUT_MS,
+    )) as readonly bigint[] | null;
+    if (!amounts || amounts.length < 2) {
         summary.orbs.skipped++;
         return false;
     }
-
-    // Token decimals for the aggregator's QuoteRequest. amountOut itself is
-    // decimals-agnostic, but the providers use them for their internal math.
-    const readDecimals = async (t: Address): Promise<number> => {
-        try {
-            return Number(
-                (await withTimeout(
-                    publicClient.readContract({
-                        address: t,
-                        abi: erc20Abi,
-                        functionName: "decimals",
-                    }) as Promise<number>,
-                    RPC_TIMEOUT_MS,
-                )) ?? 18,
-            );
-        } catch {
-            return 18;
-        }
-    };
-    const [decIn, decOut] = await Promise.all([readDecimals(srcToken), readDecimals(dstToken)]);
-
-    let quotes;
-    try {
-        quotes = await quoteAllRoutes(
-            {
-                tokenIn: srcToken,
-                tokenOut: dstToken,
-                decimalsIn: decIn,
-                decimalsOut: decOut,
-                amountIn: chunkIn,
-                // Unused by the keeper (it builds its own venue swapData with the
-                // adapter as recipient); a valid address just satisfies the type.
-                recipient: keeper,
-                slippageBps: 0,
-                deadline: BigInt(cfg.now) + SWAP_DEADLINE_SECS,
-            },
-            publicClient,
-        );
-    } catch {
-        summary.orbs.skipped++;
-        return false;
-    }
-
-    const selected = selectBestVenue(quotes, eligible, srcToken, dstToken);
-    if (!selected) {
-        // No fillable venue quotes for this pair/size this tick.
-        summary.orbs.skipped++;
-        return false;
-    }
-    const quotedOut = selected.quotedOut;
+    const quotedOut = amounts[amounts.length - 1];
 
     if (
         !clearsFloor({
@@ -767,11 +718,11 @@ async function settleOrbsOrder(
     let plan;
     try {
         plan = buildOrbsBid({
-            venue: selected.venue,
+            venue: { kind: "v2", router: cfg.router, path },
             chunkIn,
             quotedOut,
             chunkFloor,
-            exchange: selected.adapter,
+            exchange: cfg.exchange,
             slippagePercent: SLIPPAGE_PERCENT,
             dstFee: DST_FEE,
             deadline: BigInt(cfg.now) + SWAP_DEADLINE_SECS,
@@ -786,9 +737,7 @@ async function settleOrbsOrder(
             address: cfg.twap,
             abi: ORBS_TWAP_ABI,
             functionName: "bid",
-            // Bid.exchange = the SELECTED venue's adapter (not the hardcoded V2
-            // one): the fill executes on whichever DEX won the aggregator quote.
-            args: [id, selected.adapter, plan.dstFee, plan.slippagePercent, plan.bidData],
+            args: [id, cfg.exchange, plan.dstFee, plan.slippagePercent, plan.bidData],
             chain: ARC_CHAIN,
             account: keeper,
             maxFeePerGas: MAX_FEE_PER_GAS_WEI,
