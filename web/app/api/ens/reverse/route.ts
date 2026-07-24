@@ -30,12 +30,15 @@ const RESOLVER_ABI = parseAbi([
 ]);
 
 // Audit F-6: shortlist trimmed — see /api/ens/forward for rationale.
+// publicnode first: the only reliable public ETH RPC in a 2026-07-24 probe
+// (llamarpc returned HTML, cloudflare-eth failed the ENS call); the others stay
+// as last-resort fallbacks. See app/api/ens/forward/route.ts for the detail.
 const RPCS = [
     process.env.MAINNET_RPC,
     process.env.NEXT_PUBLIC_MAINNET_RPC,
+    "https://ethereum-rpc.publicnode.com",
     "https://eth.llamarpc.com",
     "https://cloudflare-eth.com",
-    "https://ethereum-rpc.publicnode.com",
 ].filter((u): u is string => {
     if (!u) return false;
     try {

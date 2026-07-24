@@ -41,16 +41,20 @@ const RESOLVER_ABI = parseAbi([
 // providers leaked the IP + (more importantly) the queried address —
 // which equals the recipient of every transfer the user is about to
 // make — to 9 third-party operators. The remaining 4 are the most
-// reliable + lowest-log providers, and they are tried in the order
-// (paid env → llamarpc → cloudflare-eth → publicnode). For an
-// operator who wants stronger privacy, set MAINNET_RPC to an Alchemy /
-// Infura key and the public list is never consulted.
+// reliable + lowest-log providers, tried in order (paid env → publicnode →
+// llamarpc → cloudflare-eth). publicnode is FIRST because a 2026-07-24 probe
+// found it the only reliable public one: llamarpc returned an HTML error page
+// (blocked/rate-limited) and cloudflare-eth failed the ENS eth_call with an
+// internal error; publicnode answered both blockNumber and the ENS resolver
+// call fastest. The other two are kept only as last-resort fallbacks. For
+// stronger privacy, set MAINNET_RPC to an Alchemy/Infura key and the public
+// list is never consulted.
 const RPCS = [
     process.env.MAINNET_RPC,
     process.env.NEXT_PUBLIC_MAINNET_RPC,
+    "https://ethereum-rpc.publicnode.com",
     "https://eth.llamarpc.com",
     "https://cloudflare-eth.com",
-    "https://ethereum-rpc.publicnode.com",
 ].filter((u): u is string => {
     if (!u) return false;
     try {
