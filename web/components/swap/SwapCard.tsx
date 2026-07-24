@@ -56,13 +56,6 @@ const USDC_TOKEN: TokenOption = {
 // RWA. It's swappable only via the Hashnote ERC-4626 Teller (usyc-teller
 // route provider): USDC->USYC = subscribe, USYC->USDC = redeem. Pinned so it
 // shows in the token list; the aggregator surfaces the Teller route.
-const USYC_TOKEN: TokenOption = {
-  address: USYC_ADDRESS,
-  symbol: "USYC",
-  name: "Hashnote US Yield Coin",
-  decimals: 6,
-  pinned: true,
-};
 
 // Whitelisted base assets shown in the swap selector alongside the (new) V4
 // launchpad tokens. Old V2/V3/curve launchpad tokens are intentionally NOT
@@ -127,7 +120,9 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
     const out: TokenOption[] = [];
     // Selector = whitelisted base assets + the NEW ArcadeHook (V4) launches.
     // The old V2/V3/curve launchpad tokens are deliberately excluded (noise).
-    for (const t of [USDC_TOKEN, WETH_TOKEN, EURC_TOKEN, USYC_TOKEN, CIRBTC_TOKEN, ...v4Tokens]) {
+    // USYC omitted: transfer-gated (Hashnote/KYC), no AMM pool, so a swap to it
+    // reverts for a non-entitled wallet. Subscribe/redeem lives on /earn.
+    for (const t of [USDC_TOKEN, WETH_TOKEN, EURC_TOKEN, CIRBTC_TOKEN, ...v4Tokens]) {
       const k = t.address.toLowerCase();
       if (!t.address || k === ZERO_ADDR || seen.has(k)) continue;
       seen.add(k);
@@ -1530,7 +1525,8 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
           account && balInRaw > 0n
             ? () => {
                 setLastEdited("in");
-                setAmountInStr(toOneDecimal(balInRaw / 2n, decimalsIn));
+                // Exact half, full precision (integer division drops <=1 wei).
+                setAmountInStr(formatUnits(balInRaw / 2n, decimalsIn));
               }
             : undefined
         }
@@ -1538,7 +1534,10 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
           account && balInRaw > 0n
             ? () => {
                 setLastEdited("in");
-                setAmountInStr(toOneDecimal(balInRaw, decimalsIn));
+                // EXACT full balance. `toOneDecimal` truncated to 1 (or 4) dp for
+                // a "pretty" number, which on a high-decimal token like cirBTC (8
+                // dp) left dust unsold -- MAX must let the user spend everything.
+                setAmountInStr(formatUnits(balInRaw, decimalsIn));
               }
             : undefined
         }

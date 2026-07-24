@@ -9,7 +9,6 @@ import { Modal } from "./Modal";
 import { TokenIcon } from "./TokenIcon";
 import { AutoTokenIcon } from "./AutoTokenIcon";
 import { ADDRESSES } from "@/lib/constants";
-import { USYC_ADDRESS } from "@/lib/abis/usyc";
 import { arcTestnet } from "@/lib/chains";
 import { useTokenPrices } from "@/lib/hooks/useTokenPrices";
 import { cn } from "@/lib/utils";
@@ -49,8 +48,11 @@ const PINNED: PinnedTemplate[] = [
   { symbol: "USDC", name: "USD Coin", decimals: 6 },
   { symbol: "ETH", name: "Wrapped Ether", decimals: 18 },
   { symbol: "EURC", name: "Euro Coin", decimals: 6 },
-  { symbol: "USYC", name: "Hashnote US Yield Coin", decimals: 6 },
   { symbol: "cirBTC", name: "Circle Wrapped BTC", decimals: 8 },
+  // USYC is intentionally NOT here. It is transfer-gated (Hashnote/KYC
+  // entitlement) with no AMM pool, so a swap to it reverts for any
+  // non-entitled wallet. Subscribe/redeem lives on /earn (the Teller); the
+  // general swap/limit/bridge/send pickers must not offer it.
 ];
 
 export function TokenSelectModal({ open, onClose, tokens, onSelect, selectedAddress, excludeAddress }: Props) {
@@ -84,7 +86,6 @@ export function TokenSelectModal({ open, onClose, tokens, onSelect, selectedAddr
       // Canonical Circle tokens on Arc testnet are hardcoded in constants.
       if (p.symbol === "EURC") return { ...p, address: ADDRESSES.eurc };
       if (p.symbol === "cirBTC") return { ...p, address: ADDRESSES.cirBtc };
-      if (p.symbol === "USYC") return { ...p, address: USYC_ADDRESS };
       return p;
     });
   }, []);
