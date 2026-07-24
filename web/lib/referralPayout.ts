@@ -235,6 +235,35 @@ async function getWalletProtocolFeesSinceMicros(
     } catch {
         return null;
     }
+
+    // Graduated-pool (source "v4") fees live in V4TreasuryFee, not on the Trade
+    // (the Trade carries 0 for v4 to avoid double-counting), so add them here.
+    // These are the EXACT per-swap treasury cuts attributed to this trader.
+    try {
+        for (let page = 0; page < VOL_MAX_PAGES; page++) {
+            const query = `{ v4TreasuryFees(first: ${VOL_PAGE}, skip: ${page * VOL_PAGE}, orderBy: blockNumber, orderDirection: desc, where: { trader: "${w}", blockTime_gte: ${since} }) { protocolFeeUsdc } }`;
+            const res = await fetch(url, {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ query }),
+            });
+            if (!res.ok) break;
+            const json = (await res.json()) as {
+                data?: { v4TreasuryFees?: { protocolFeeUsdc: string }[] };
+                errors?: unknown;
+            };
+            // Entity absent (older subgraph gen): the Trade query above already
+            // succeeded, so treat v4 fees as simply zero rather than discarding
+            // the whole (valid) result.
+            if (json.errors || !json.data || !Array.isArray(json.data.v4TreasuryFees)) break;
+            const rows = json.data.v4TreasuryFees;
+            if (rows.length === 0) break;
+            for (const r of rows) total += usdcStringToMicros(r.protocolFeeUsdc);
+            if (rows.length < VOL_PAGE) break;
+        }
+    } catch {
+        /* v4 fees unavailable -> count only the Trade-based fees */
+    }
     return total;
 }
 

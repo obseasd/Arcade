@@ -337,3 +337,23 @@ type ReferralAttribution @entity(immutable: false) {
   blockTime: Int!
   txHash: Bytes!
 }
+
+# EXACT per-swap protocol (treasury) fee on a GRADUATED pool, attributed to the
+# trader. On graduated pools the hook takes its fee per swap and emits
+# RoyaltyPaid(…, treasuryCut, currency) IN THE SWAP TX, so `transaction.from` is
+# the trader and `treasuryAmount` is the real cut Arcade kept -- no estimate.
+# This supersedes Trade.protocolFeeUsdc for source "v4" (which is left at 0), so
+# the referral basis for graduated trades is the actual fee, not a floor.
+#
+# CRITICAL: the SAME RoyaltyPaid event is also emitted by collectFees (the
+# CLANKER locked-LP harvest), where `transaction.from` is the harvester, NOT any
+# trader. Those are excluded by the handler (tx.to == the hook), so a harvest is
+# NEVER misattributed. A harvested LP fee is therefore not credited to referral
+# (it cannot be tied to one trade) -- a safe under-credit, never an over-pay.
+type V4TreasuryFee @entity(immutable: true) {
+  id: ID! # txHash-logIndex
+  trader: Bytes!
+  protocolFeeUsdc: BigDecimal!
+  blockTime: Int!
+  blockNumber: BigInt!
+}
