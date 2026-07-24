@@ -6,6 +6,7 @@ import {
     type Address,
 } from "viem";
 import { ROUTER_ABI } from "@/lib/abis/dex";
+import { V3_ROUTER_ABI } from "@/lib/abis/v3";
 import { buildOrbsBid, clearsFloor } from "@/lib/keeper/orbsRoute";
 
 const USDC = "0x3600000000000000000000000000000000000000" as Address;
@@ -91,12 +92,11 @@ describe("clearsFloor", () => {
 
 describe("buildOrbsBid", () => {
     const base = {
-        path: [USDC, TOKEN] as Address[],
+        venue: { kind: "v2" as const, router: ROUTER, path: [USDC, TOKEN] as Address[] },
         chunkIn: 100_000_000n, // 100 USDC (6dp)
         quotedOut: 5_000_000_000_000_000_000n, // 5 TOKEN (18dp)
         chunkFloor: 4_800_000_000_000_000_000n, // floor 4.8 TOKEN
         exchange: EXCHANGE,
-        router: ROUTER,
         slippagePercent: 1_000,
         dstFee: 0n,
         deadline: 9_999_999_999n,
@@ -148,7 +148,44 @@ describe("buildOrbsBid", () => {
         ).toThrow(/floor/i);
     });
 
-    it("refuses a degenerate single-hop path", () => {
-        expect(() => buildOrbsBid({ ...base, path: [USDC] as Address[] })).toThrow(/hop/i);
+    it("refuses a degenerate single-hop v2 path", () => {
+        expect(() =>
+            buildOrbsBid({
+                ...base,
+                venue: { kind: "v2", router: ROUTER, path: [USDC] as Address[] },
+            }),
+        ).toThrow(/hop/i);
+    });
+
+    it("builds a V3 venue bid as exactInputSingle with recipient = the adapter", () => {
+        const plan = buildOrbsBid({
+            ...base,
+            venue: { kind: "v3", router: ROUTER, tokenIn: USDC, tokenOut: TOKEN, fee: 3000 },
+        });
+        const [amountOut, swapData] = decodeAbiParameters(
+            parseAbiParameters("uint256 amountOut, bytes swapData"),
+            plan.bidData,
+        );
+        expect(amountOut).toBe(base.quotedOut);
+        const decoded = decodeFunctionData({ abi: V3_ROUTER_ABI, data: swapData });
+        expect(decoded.functionName).toBe("exactInputSingle");
+        // exactInputSingle(tokenIn, tokenOut, fee, recipient, amountIn, minOut, deadline)
+        const args = decoded.args as readonly unknown[];
+        expect((args[0] as Address).toLowerCase()).toBe(USDC.toLowerCase());
+        expect((args[1] as Address).toLowerCase()).toBe(TOKEN.toLowerCase());
+        expect(args[2]).toBe(3000);
+        expect((args[3] as Address).toLowerCase()).toBe(EXCHANGE.toLowerCase()); // recipient
+        expect(args[4]).toBe(base.chunkIn);
+        expect(args[5]).toBe(base.chunkFloor); // amountOutMinimum = maker floor
+    });
+
+    it("V3 venue still refuses a quote below the floor", () => {
+        expect(() =>
+            buildOrbsBid({
+                ...base,
+                venue: { kind: "v3", router: ROUTER, tokenIn: USDC, tokenOut: TOKEN, fee: 500 },
+                quotedOut: base.chunkFloor - 1n,
+            }),
+        ).toThrow(/floor/i);
     });
 });

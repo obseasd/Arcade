@@ -712,12 +712,14 @@ async function settleOrbsOrder(
     let plan;
     try {
         plan = buildOrbsBid({
-            path,
+            // Phase 1 still routes every fill through the Arcade V2 venue. The
+            // venue-generalised builder (v2 | v3) + aggregator selection lands
+            // with the per-venue ExchangeV2 deploys (B, phase 1 wiring).
+            venue: { kind: "v2", router: cfg.router, path },
             chunkIn,
             quotedOut,
             chunkFloor,
             exchange: cfg.exchange,
-            router: cfg.router,
             slippagePercent: SLIPPAGE_PERCENT,
             dstFee: DST_FEE,
             deadline: BigInt(cfg.now) + SWAP_DEADLINE_SECS,

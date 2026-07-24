@@ -6,6 +6,66 @@ import {
     type Hex,
 } from "viem";
 import { ROUTER_ABI } from "../abis/dex";
+import { V3_ROUTER_ABI } from "../abis/v3";
+
+/**
+ * The venue a single Orbs fill routes through. Each maps to a deployed
+ * ExchangeV2 adapter (one per router). The keeper picks the best-quoting venue
+ * per fill (Ask.exchange = 0 lets it), which is Phase 1 of "limit via aggregator"
+ * (B): V2-style and V3-SwapRouter venues that are approve-to-router so the plain
+ * ExchangeV2 (`approve(router); functionCall(router, swapData)`) fits. Permit2
+ * venues (Synthra/UnitFlow UniversalRouter) and V4 need a Permit2/V4-aware
+ * adapter -- later phases.
+ *
+ *  - v2:  swapExactTokensForTokens(path, recipient=adapter). Arcade V2, XyloNet.
+ *  - v3:  exactInputSingle(tokenIn,tokenOut,fee, recipient=adapter). Arcade V3.
+ */
+export type OrbsVenue =
+    | { kind: "v2"; router: Address; path: readonly Address[] }
+    | {
+          kind: "v3";
+          router: Address;
+          tokenIn: Address;
+          tokenOut: Address;
+          fee: number;
+      };
+
+/**
+ * Build the router calldata (swapData) for a venue. The output recipient MUST be
+ * the ExchangeV2 adapter (it checks the delivered balance >= floor, then forwards
+ * to TWAP); a recipient of the maker would let the adapter's balance check see 0
+ * and revert. amountOutMinimum = the maker floor: the router enforces it too, a
+ * belt to the adapter's suspenders.
+ */
+export function buildVenueSwapData(
+    venue: OrbsVenue,
+    chunkIn: bigint,
+    chunkFloor: bigint,
+    adapter: Address,
+    deadline: bigint,
+): Hex {
+    if (venue.kind === "v2") {
+        if (venue.path.length < 2) throw new Error("v2 path must have >= 2 hops");
+        return encodeFunctionData({
+            abi: ROUTER_ABI,
+            functionName: "swapExactTokensForTokens",
+            args: [chunkIn, chunkFloor, venue.path, adapter, deadline],
+        });
+    }
+    return encodeFunctionData({
+        abi: V3_ROUTER_ABI,
+        functionName: "exactInputSingle",
+        args: [
+            venue.tokenIn,
+            venue.tokenOut,
+            venue.fee,
+            adapter,
+            chunkIn,
+            chunkFloor,
+            deadline,
+        ],
+    });
+}
 
 /**
  * Route encoding for the Orbs TWAP keeper (leg A of the unified keeper).
@@ -51,18 +111,17 @@ export interface OrbsBidPlan {
 }
 
 export interface BuildOrbsBidArgs {
-    /** srcToken -> dstToken direct V2 path (e.g. [USDC, token]). */
-    path: readonly Address[];
+    /** The venue this fill routes through (v2 path or v3 single-hop). Its
+     *  `router` is what the chosen ExchangeV2 adapter wraps. */
+    venue: OrbsVenue;
     /** Chunk input size = srcBidAmountNext, in srcToken base units. */
     chunkIn: bigint;
-    /** Live quote for chunkIn along `path` (router.getAmountsOut last hop). */
+    /** Live quote for chunkIn on `venue` (the venue's own quoter). */
     quotedOut: bigint;
     /** Per-chunk maker floor = dstMinAmountNext, in dstToken base units. */
     chunkFloor: bigint;
-    /** The ExchangeV2 adapter address (the swap recipient). */
+    /** The ExchangeV2 adapter address (the swap recipient) for this venue. */
     exchange: Address;
-    /** The V2 router ExchangeV2 wraps (target of swapData). */
-    router: Address;
     /**
      * Slippage in PERCENT_BASE units the keeper tolerates between the bid
      * quote and the fill-time reserves. 1000 = 1%. Absorbs the price
@@ -105,9 +164,6 @@ export function clearsFloor(args: {
  * the quote does not clear the floor -- the caller must skip such orders.
  */
 export function buildOrbsBid(args: BuildOrbsBidArgs): OrbsBidPlan {
-    if (args.path.length < 2) {
-        throw new Error("path must have at least 2 hops");
-    }
     if (
         !clearsFloor({
             quotedOut: args.quotedOut,
@@ -119,20 +175,15 @@ export function buildOrbsBid(args: BuildOrbsBidArgs): OrbsBidPlan {
         throw new Error("quote does not clear the maker floor");
     }
 
-    // The V2 router pulls the chunk from ExchangeV2 and must deliver the
-    // output BACK to ExchangeV2 (which forwards to TWAP). The router's own
-    // amountOutMin is the maker floor: a belt to ExchangeV2's suspenders.
-    const swapData = encodeFunctionData({
-        abi: ROUTER_ABI,
-        functionName: "swapExactTokensForTokens",
-        args: [
-            args.chunkIn,
-            args.chunkFloor,
-            args.path as readonly Address[],
-            args.exchange, // recipient = the adapter, NOT the maker
-            args.deadline,
-        ],
-    });
+    // Router calldata for the chosen venue. Output recipient = the adapter (it
+    // checks the delivered balance >= floor, then forwards to TWAP).
+    const swapData = buildVenueSwapData(
+        args.venue,
+        args.chunkIn,
+        args.chunkFloor,
+        args.exchange,
+        args.deadline,
+    );
 
     const bidData = encodeAbiParameters(BID_DATA_PARAMS, [
         args.quotedOut,
