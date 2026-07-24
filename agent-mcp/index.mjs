@@ -130,6 +130,18 @@ server.tool(
     async (a) => out(await api("/multiswap", post(a))),
 );
 
+server.tool(
+    "arcade_usyc",
+    "Park idle USDC into USYC (Hashnote tokenized US T-Bills, ~4-5% yield) or redeem it back. USYC is a transfer-gated RWA with no AMM pool; this Teller (deposit/redeem) is the only USDC<->USYC path. The wallet must be Hashnote-entitled. amountIn is RAW 6-decimal units (USDC for deposit, USYC for redeem). Run the returned calls[] in order.",
+    {
+        action: z.enum(["deposit", "redeem"]),
+        amountIn: z.string(),
+        recipient: z.string(),
+        owner: z.string().optional(),
+    },
+    async (a) => out(await api("/usyc", post(a))),
+);
+
 // Resources: let an agent read the full API spec and a how-to-execute guide.
 server.resource(
     "arcade-openapi",

@@ -40,8 +40,10 @@ then use `"command": "node", "args": ["/absolute/path/to/index.mjs"]`.
 | `arcade_portfolio` | known-token balances for a wallet |
 | `arcade_quote` | best-execution price quote (read-only) |
 | `arcade_swap` | build approve + swap descriptors to sign |
+| `arcade_swap_finalize` | complete a Permit2 swap after signing the typedData |
 | `arcade_launchpad` | build bonding-curve buy/sell or create-token descriptors |
 | `arcade_multiswap` | build a basket-converge swap (aggregator) |
+| `arcade_usyc` | deposit USDC into USYC (T-Bill yield) or redeem back |
 
 ## How an agent executes a build result
 

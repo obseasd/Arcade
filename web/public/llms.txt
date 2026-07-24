@@ -4,11 +4,11 @@
 
 ## Agent API
 
-- [OpenAPI 3.1 spec](https://www.arcade.trading/api/agent/openapi): all agent endpoints (markets, trending, portfolio, quote, swap, swap/finalize, launchpad, multiswap).
+- [OpenAPI 3.1 spec](https://www.arcade.trading/api/agent/openapi): all agent endpoints (markets, trending, portfolio, quote, swap, swap/finalize, launchpad, multiswap, usyc).
 - Base URL: https://www.arcade.trading/api/agent
 - MCP server (npm/stdio): `npx -y arcade-agent-mcp` (set `ARCADE_API_BASE=https://www.arcade.trading`).
 - MCP server (HTTP, no install): POST JSON-RPC to https://www.arcade.trading/api/agent/mcp
-- Tools: arcade_markets, arcade_trending, arcade_portfolio, arcade_quote, arcade_swap, arcade_swap_finalize, arcade_launchpad, arcade_multiswap.
+- Tools: arcade_markets, arcade_trending, arcade_portfolio, arcade_quote, arcade_swap, arcade_swap_finalize, arcade_launchpad, arcade_multiswap, arcade_usyc.
 
 ## How it works
 

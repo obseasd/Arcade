@@ -69,7 +69,7 @@ export default function AgentsPage() {
 }`}</Code>
                 <p className="text-arc-text-muted">
                     Tools: arcade_markets, arcade_trending, arcade_portfolio, arcade_quote,
-                    arcade_swap, arcade_swap_finalize, arcade_launchpad, arcade_multiswap.
+                    arcade_swap, arcade_swap_finalize, arcade_launchpad, arcade_multiswap, arcade_usyc.
                 </p>
             </section>
 
