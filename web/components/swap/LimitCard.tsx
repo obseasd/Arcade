@@ -1082,7 +1082,7 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
                             {priceProtection
                                 ? orderMode === "dca"
                                     ? `(fills within ${(dcaBandBps / 100).toFixed(2)}% of market)`
-                                    : `(within ${(slippageBps / 100).toFixed(2)}% of your price)`
+                                    : `` /* the picker row below shows/sets the value */
                                 : `(off — fills through drops up to ${PROTECTION_OFF_BAND_BPS / 100}%)`}
                         </span>
                     </span>

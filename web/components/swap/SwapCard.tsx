@@ -60,8 +60,20 @@ const USDC_TOKEN: TokenOption = {
 // Whitelisted base assets shown in the swap selector alongside the (new) V4
 // launchpad tokens. Old V2/V3/curve launchpad tokens are intentionally NOT
 // listed anymore -- the selector = base assets + ArcadeHook launches only.
+// The "ETH" chip points at SeedETH (the testnet ERC20, symbol "ETH", 18dp) when
+// it's configured, NOT the Arc-native `weth` slot. Rationale (matches
+// TokenSelectModal): the immutable `weth` has ZERO liquidity (no USDC/WETH pool
+// on any venue -- verified on-chain: NO_POOL at every V3 tier), so pinning ETH
+// there produced a permanent "No route found" for USDC->ETH. SeedETH has the
+// live USDC/SeedETH 0.05% V3 pool the aggregator can route. Falls back to weth
+// only if SeedETH is somehow unset.
+const ETH_PIN_ADDRESS =
+  ADDRESSES.seedEth &&
+  ADDRESSES.seedEth !== "0x0000000000000000000000000000000000000000"
+    ? ADDRESSES.seedEth
+    : ADDRESSES.weth;
 const WETH_TOKEN: TokenOption = {
-  address: ADDRESSES.weth,
+  address: ETH_PIN_ADDRESS,
   symbol: "ETH",
   name: "Ether",
   decimals: 18,
@@ -145,9 +157,9 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
   const [confirmOpen, setConfirmOpen] = useState(false);
 
   useEffect(() => {
-    // Default the "to" side to ETH when it's a valid listed asset; else leave
-    // it empty for the user to pick (the old v2Tokens[0] default is gone).
-    if (!tokenOut && ADDRESSES.weth && ADDRESSES.weth !== ZERO_ADDR) setTokenOut(WETH_TOKEN);
+    // Default the "to" side to ETH (SeedETH pin) when it's a valid listed asset;
+    // else leave it empty for the user to pick (the old v2Tokens[0] default is gone).
+    if (!tokenOut && WETH_TOKEN.address && WETH_TOKEN.address !== ZERO_ADDR) setTokenOut(WETH_TOKEN);
   }, [tokenOut]);
 
   // Pool detail page deep-link: /swap?t0=0xUSDC&t1=0xETH (or any of
