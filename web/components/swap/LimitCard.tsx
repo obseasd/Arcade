@@ -153,9 +153,10 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
     const [pickerOpen, setPickerOpen] = useState<"in" | "out" | null>(null);
     const [submitting, setSubmitting] = useState(false);
     // Slippage tolerance applied below the trigger price to compute the
-    // dstMinAmount floor in the on-chain Ask. 0.5% default matches the
-    // regular Swap card.
-    const [slippageBps, setSlippageBps] = useState(50);
+    // dstMinAmount floor in the on-chain Ask. Default 1% = the first Accepted-
+    // slippage preset; a floor tighter than the keeper's 0.5% fill haircut would
+    // rarely clear, so 1% is the sensible fillable default for limit + DCA.
+    const [slippageBps, setSlippageBps] = useState(100);
     const [slippageCustom, setSlippageCustom] = useState("");
     // Price protection toggle. ON (default): the order's dstMinAmount floor is
     // enforced (fills only within the chosen slippage of the trigger/market).
@@ -1080,10 +1081,8 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
                         Limit slippage
                         <span className="ml-1 text-arc-text-faint">
                             {priceProtection
-                                ? orderMode === "dca"
-                                    ? `(fills within ${(dcaBandBps / 100).toFixed(2)}% of market)`
-                                    : `` /* the picker row below shows/sets the value */
-                                : `(off — fills through drops up to ${PROTECTION_OFF_BAND_BPS / 100}%)`}
+                                ? `` /* the picker row below shows/sets the value (limit + DCA) */
+                                : `${PROTECTION_OFF_BAND_BPS / 100}% max drop`}
                         </span>
                     </span>
                     <input
@@ -1094,17 +1093,18 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
                     />
                 </label>
 
-                {/* Inline accepted-slippage picker, shown only when protection is
-                    ON. Limit mode: the user picks the exact tolerance below their
-                    trigger. DCA derives its band from the same value (floored at
-                    the keeper haircut) so we surface it there read-only. */}
-                {priceProtection && orderMode === "limit" && (
+                {/* Inline accepted-slippage picker, shown when protection is ON,
+                    for BOTH limit and DCA. Limit: tolerance below the trigger.
+                    DCA: the same value drives the per-buy band (floored at the
+                    keeper haircut). Presets are 1/5/15% (a limit/DCA floor tighter
+                    than the keeper's 0.5% fill haircut would rarely clear). */}
+                {priceProtection && (
                     <div className="mt-2 flex items-center gap-2 rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2">
                         <span className="text-xs text-arc-text-muted">
                             Accepted slippage
                         </span>
                         <div className="ml-auto flex items-center gap-1">
-                            {[10, 50, 100].map((bps) => (
+                            {[100, 500, 1500].map((bps) => (
                                 <button
                                     key={bps}
                                     type="button"
