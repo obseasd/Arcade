@@ -66,8 +66,14 @@ const MAX_SCAN_BLOCKS = 2_000_000n;
  *  Measured on-chain: 40-wide clears the full 2M scan in ~14s. */
 const SCAN_CONCURRENCY = 40;
 /** Per-window retries: Arc getLogs is transiently flaky even within the range
- *  limit ("HTTP request failed" on a window that succeeds on retry). */
-const WINDOW_RETRIES = 3;
+ *  limit ("HTTP request failed" on a window that succeeds on retry). Raised from
+ *  3 to 5 with exponential backoff so a genuinely-confirmed wallet whose Memo
+ *  sits in a flaky window is far less likely to be silently dropped while the
+ *  subgraph ReferralAttribution entity (the durable source) reaches the prod tag. */
+const WINDOW_RETRIES = 5;
+/** Base backoff between window retries; multiplied by the attempt index. */
+const BACKOFF_BASE_MS = 250;
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 /**
  * writeContract args to register `referrer` as the caller's first-touch
@@ -111,7 +117,7 @@ export async function registerReferrerOnChain(
 }
 
 export interface OnchainReferral {
-    /** The referred wallet (the Memo signer — unforgeable). */
+    /** The referred wallet (the Memo signer, unforgeable). */
     referred: Address;
     /** The referrer they tagged. */
     referrer: Address;
@@ -188,8 +194,16 @@ export async function scanReferralAttribution(
                     topics: [MEMO_EVENT_TOPIC0, null, null, REFERRAL_MEMO_ID],
                 });
             } catch {
-                // transient: retry; only give up (and return []) after the last
-                // attempt. A silently-dropped window under-credits attribution.
+                // transient: exponential backoff, then retry. Arc's getLogs is
+                // flaky from serverless IPs even within the range cap, so a short
+                // sleep between attempts materially raises the per-window success
+                // rate (a dropped window under-credits attribution). Returning []
+                // after the last attempt is SAFE now that callers union rather
+                // than override, so a partial scan only ever ADDS confirmations,
+                // never downgrades one. The subgraph is the durable source.
+                if (attempt < WINDOW_RETRIES - 1) {
+                    await sleep(BACKOFF_BASE_MS * (attempt + 1));
+                }
             }
         }
         return [] as Awaited<ReturnType<typeof publicClient.getLogs>>;

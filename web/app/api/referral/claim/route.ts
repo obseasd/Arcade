@@ -11,6 +11,10 @@ import {
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+// Parity with the stats route: a cold-cache claim whose subgraph is absent falls
+// back to the ~200-window getLogs scan (now up to 5 retries + backoff per window).
+// Give it the same 30s budget so it never times out mid-scan and 500s a claim.
+export const maxDuration = 30;
 
 /**
  * POST /api/referral/claim  { referrer, deadline, signature }

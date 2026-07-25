@@ -124,12 +124,20 @@ export async function POST(req: NextRequest) {
         }
 
         // Union DB rows with on-chain-confirmed wallets missing from the DB.
+        // MONOTONIC: a wallet is confirmed if EITHER the DB row OR the on-chain
+        // source says so. Confirmation is a permanent on-chain fact, so we must
+        // NEVER downgrade. The old code did `confirmedSet.size > 0 ? has(..) :
+        // r.verified`, which OVERRODE the DB with the scan whenever the scan
+        // returned ANYTHING: a flaky getLogs window (Arc rate-limits serverless
+        // IPs) that missed one wallet then flipped a genuinely-confirmed wallet
+        // back to unconfirmed (observed live: 0xcc93 confirmed on-chain at block
+        // 53589432 but shown UNCONFIRMED). Union never has that failure mode.
         type Row = (typeof stats.referred)[number];
         const byAddr = new Map<string, Row>();
         for (const r of stats.referred) {
             byAddr.set(r.address.toLowerCase(), {
                 ...r,
-                verified: confirmedSet.size > 0 ? confirmedSet.has(r.address.toLowerCase()) : r.verified,
+                verified: r.verified || confirmedSet.has(r.address.toLowerCase()),
             });
         }
         for (const w of confirmedSet) {
