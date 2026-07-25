@@ -551,11 +551,12 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
               !dcaScheduleOverflow
             : dstMinAmountBn > 0n && expirySeconds > 0) &&
         ADDRESSES.orbsTwap !== zeroAddress &&
-        ADDRESSES.orbsExchangeV2 !== zeroAddress &&
-        // Pages audit 2026-07-02: every order is encoded with exchange =
-        // orbsExchangeV2, which can only fill against V2 pools. A V3-path
-        // pair would place an order that can never fill, so block it here
-        // (the route panel shows a clear "not supported" note).
+        (ADDRESSES.orbsExchangeV2 !== zeroAddress ||
+            ADDRESSES.orbsExchangeMulti !== zeroAddress) &&
+        // Pages audit 2026-07-02: orders settle on a V2-style adapter (ExchangeV2,
+        // or ExchangeMulti's Arcade-V2 / XyloNet venues), which can only fill
+        // against V2 pools. A V3-path pair would place an order that can never
+        // fill, so block it here (the route panel shows a "not supported" note).
         !isV3Path &&
         !submitting &&
         !isWriting;
@@ -590,19 +591,24 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
             //   - DCA: N chunks (srcBidAmount = total / N) spaced by fillDelay
             //     = the chosen interval; the keeper fills one chunk per
             //     interval. Same contract, same keeper code path.
-            // Pin to the trusted, keeper-only ExchangeV2 adapter. exchange=0 (any
+            // Pin to a trusted, keeper-only adapter -- ExchangeMulti when it is
+            // configured (multi-router: the keeper settles on the best allow-listed
+            // venue), otherwise the legacy single-router ExchangeV2. exchange=0 (any
             // exchange) is UNSAFE on Orbs: the committed bid amount is whatever
             // IExchange(exchange).getAmountOut returns, so an attacker who brings
             // their OWN exchange commits the floor, wins uncontested on a fresh
             // order (bidDelay 30s << keeper 5-10min cadence), and at fill delivers
             // only the floor -- stealing up to (1 - floorBand), i.e. 50% with
-            // price-protection OFF (audit 2026-07-24, CRITICAL). Multi-venue must
-            // instead go through ONE trusted multi-router adapter the order pins
-            // to (ExchangeMulti, in progress), not exchange=0.
+            // price-protection OFF (audit 2026-07-24, CRITICAL). Both adapters keep
+            // exchange PINNED; only ExchangeMulti generalises the venue safely.
+            const settlementExchange =
+                ADDRESSES.orbsExchangeMulti !== zeroAddress
+                    ? ADDRESSES.orbsExchangeMulti
+                    : ADDRESSES.orbsExchangeV2;
             const ask =
                 orderMode === "dca"
                     ? {
-                          exchange: ADDRESSES.orbsExchangeV2,
+                          exchange: settlementExchange,
                           srcToken: tokenIn.address,
                           dstToken: tokenOut.address,
                           srcAmount: srcAmountBn,
@@ -614,7 +620,7 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
                           data: "0x" as const,
                       }
                     : {
-                          exchange: ADDRESSES.orbsExchangeV2,
+                          exchange: settlementExchange,
                           srcToken: tokenIn.address,
                           dstToken: tokenOut.address,
                           srcAmount: srcAmountBn,

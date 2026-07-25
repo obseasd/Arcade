@@ -24,6 +24,7 @@ import {
 } from "@/lib/cctp";
 import { ROUTER_ABI } from "@/lib/abis/dex";
 import { buildOrbsBid, clearsFloor } from "@/lib/keeper/orbsRoute";
+import { pickBestVenue, v2DirectVenue, type DirectVenueCandidate } from "@/lib/keeper/directVenues";
 import {
     getActiveOrbsOrders,
     upsertOrbsOrder,
@@ -178,11 +179,30 @@ const EXCHANGE_V2_ABI = [
 // The 4-byte selector of TakerNotAllowed(address), matched as a belt in
 // case a provider surfaces the raw signature instead of the decoded name.
 const TAKER_NOT_ALLOWED_SELECTOR = "0x8435d2bb";
+// ExchangeMulti public getter: is this router allow-listed to execute fills?
+// getAmountOut (verifyBid) does NOT check the router, only swap (performFill)
+// does, so the keeper reads this itself to avoid bidding a router it cannot then
+// fill on (which would strand the order in a re-bid loop).
+const ALLOWED_ROUTER_ABI = [
+    {
+        type: "function",
+        stateMutability: "view",
+        name: "allowedRouter",
+        inputs: [{ name: "", type: "address" }],
+        outputs: [{ name: "", type: "bool" }],
+    },
+] as const;
 // A well-formed (uint256, bytes) blob so the allowed-taker branch decodes
 // cleanly; the denied branch reverts before ever reaching the decode.
 const PROBE_BID_DATA = encodeAbiParameters(
     parseAbiParameters("uint256 amountOut, bytes swapData"),
     [0n, "0x"],
+);
+// ExchangeMulti decodes (uint256, address, bytes); a matching well-formed blob
+// so the allowed branch decodes cleanly and only a denied taker reverts.
+const MULTI_PROBE_BID_DATA = encodeAbiParameters(
+    parseAbiParameters("uint256 amountOut, address router, bytes swapData"),
+    [0n, "0x0000000000000000000000000000000000000000", "0x"],
 );
 
 async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | null> {
@@ -268,6 +288,16 @@ export async function POST(req: NextRequest) {
             { status: 200 },
         );
     }
+    // ExchangeMulti (optional): the trusted multi-router adapter. When present,
+    // orders pinned to it settle on the best allow-listed direct venue (Arcade V2
+    // + XyloNet today). Orders pinned to the legacy ExchangeV2 keep the single-V2
+    // path. XyloNet router is a second V2-style venue that also takes native USDC.
+    // NOTE: safeAddress() returns the ZERO address (not undefined) for an unset
+    // env, so we MUST treat zero as "unset" here -- otherwise cfg.exchangeMulti =
+    // 0x0 would make legacy any-exchange (ask.exchange==0) orders match it and bid
+    // with exchange=0x0, which TWAP.bid rejects ("params") in a gas-burn loop.
+    const exchangeMulti = liveAddress(ADDRESSES.orbsExchangeMulti);
+    const xyloRouter = liveAddress(ADDRESSES.xyloRouter);
 
     const keeperKey = process.env.KEEPER_OPERATOR_PRIVATE_KEY as Hex | undefined;
     if (!keeperKey || !/^0x[0-9a-fA-F]{64}$/.test(keeperKey)) {
@@ -349,7 +379,7 @@ export async function POST(req: NextRequest) {
         // ---- Leg A: Orbs TWAP ----
         try {
             await runOrbsLeg(
-                { twap, exchange, router, usdc, now },
+                { twap, exchange, exchangeMulti, router, xyloRouter, usdc, now },
                 publicClient,
                 walletClient,
                 account.address,
@@ -378,10 +408,51 @@ export async function POST(req: NextRequest) {
 
 interface OrbsCfg {
     twap: Address;
+    /** Legacy single-router ExchangeV2 adapter (always present). */
     exchange: Address;
+    /** Trusted multi-router ExchangeMulti adapter (optional). */
+    exchangeMulti?: Address;
+    /** Arcade V2 router. */
     router: Address;
+    /** XyloNet V2-style router (optional second direct venue for ExchangeMulti). */
+    xyloRouter?: Address;
     usdc: Address;
     now: number;
+}
+
+/**
+ * Cheap read probe: is `keeper` allow-listed as a taker on `adapter`? Both
+ * ExchangeV2 and ExchangeMulti revert TakerNotAllowed(taker) BEFORE decoding
+ * bidData, so a denied keeper is detected without a well-formed payload; an
+ * allowed keeper either returns or reverts on the (intentionally minimal) decode
+ * — either way NOT TakerNotAllowed, so we read it as allowed. `probeBidData`
+ * must match the adapter's decode shape for the allowed branch not to false-deny.
+ */
+async function probeAllowed(
+    publicClient: PublicClient,
+    adapter: Address,
+    probeBidData: Hex,
+    keeper: Address,
+): Promise<boolean> {
+    const res = await withTimeout(
+        publicClient
+            .readContract({
+                address: adapter,
+                abi: EXCHANGE_V2_ABI,
+                functionName: "getAmountOut",
+                args: [ZERO as Address, ZERO as Address, 0n, "0x", probeBidData, keeper],
+            })
+            .then(() => "allowed" as const)
+            .catch((e: unknown) => {
+                const m = errMsg(e);
+                return m.includes("TakerNotAllowed") ||
+                    m.toLowerCase().includes(TAKER_NOT_ALLOWED_SELECTOR)
+                    ? ("denied" as const)
+                    : ("allowed" as const);
+            }),
+        RPC_TIMEOUT_MS,
+    );
+    return res === "allowed";
 }
 
 async function runOrbsLeg(
@@ -391,35 +462,51 @@ async function runOrbsLeg(
     keeper: Address,
     summary: RunSummary,
 ) {
-    // Precheck: the keeper wallet MUST be allowlisted on ExchangeV2
-    // (constructor-only, no setter). getAmountOut reverts TakerNotAllowed
-    // for a non-allowlisted taker BEFORE decoding, so a cheap probe tells us
-    // whether the KEEPER_SETUP.md redeploy was done. If not, skip leg A
-    // entirely rather than burn gas reverting every bid this tick.
-    const allowProbe = await withTimeout(
-        publicClient
-            .readContract({
-                address: cfg.exchange,
-                abi: EXCHANGE_V2_ABI,
-                functionName: "getAmountOut",
-                args: [ZERO as Address, ZERO as Address, 0n, "0x", PROBE_BID_DATA, keeper],
-            })
-            .then(() => true)
-            .catch((e: unknown) => {
-                const m = errMsg(e);
-                return m.includes("TakerNotAllowed") ||
-                    m.toLowerCase().includes(TAKER_NOT_ALLOWED_SELECTOR)
-                    ? "denied"
-                    : true;
-            }),
-        RPC_TIMEOUT_MS,
-    );
-    if (allowProbe === "denied") {
+    // Precheck: the keeper wallet MUST be allowlisted on the adapter it fills
+    // through. getAmountOut reverts TakerNotAllowed for a non-allowlisted taker
+    // BEFORE decoding, so a cheap probe tells us whether the setup is done. We
+    // probe BOTH adapters (V2 always, Multi if configured) and settle each order
+    // only on an adapter the keeper is allowed on. If neither is usable, skip.
+    const v2Allowed = await probeAllowed(publicClient, cfg.exchange, PROBE_BID_DATA, keeper);
+    const multiAllowed = cfg.exchangeMulti
+        ? await probeAllowed(publicClient, cfg.exchangeMulti, MULTI_PROBE_BID_DATA, keeper)
+        : false;
+    if (!v2Allowed && !multiAllowed) {
         summary.notes.push(
-            "keeper wallet not allowlisted on ExchangeV2 — skipping leg A (redeploy per KEEPER_SETUP.md)",
+            "keeper wallet not allowlisted on any Orbs adapter — skipping leg A (redeploy/allowlist per KEEPER_SETUP.md)",
         );
         return;
     }
+
+    // Which routers ExchangeMulti will accept at fill time. Read once per tick so
+    // the keeper only quotes/bids a router it can actually fill on (getAmountOut
+    // does not check the router; swap does). A router missing here is skipped
+    // rather than bid-then-stuck. Only relevant when the multi adapter is usable.
+    const allowedRouters = new Set<string>();
+    if (cfg.exchangeMulti && multiAllowed) {
+        for (const r of [cfg.router, cfg.xyloRouter]) {
+            if (!r) continue;
+            const ok = await withTimeout(
+                publicClient
+                    .readContract({
+                        address: cfg.exchangeMulti,
+                        abi: ALLOWED_ROUTER_ABI,
+                        functionName: "allowedRouter",
+                        args: [r],
+                    })
+                    .then((v) => v === true)
+                    .catch(() => false),
+                RPC_TIMEOUT_MS,
+            );
+            if (ok) allowedRouters.add(r.toLowerCase());
+        }
+        if (allowedRouters.size === 0) {
+            summary.notes.push(
+                "ExchangeMulti has no allow-listed router (call setRouterAllowed) — multi orders will not settle",
+            );
+        }
+    }
+    const allow = { v2: v2Allowed, multi: multiAllowed, routers: allowedRouters };
 
     // 1. Discover any new orders past the highest id we already track.
     await discoverNewOrders(cfg, publicClient);
@@ -474,6 +561,7 @@ async function runOrbsLeg(
             publicClient,
             walletClient,
             keeper,
+            allow,
             summary,
         );
         if (did) actions++;
@@ -522,16 +610,16 @@ async function discoverNewOrders(cfg: OrbsCfg, publicClient: PublicClient) {
         if (statusField === STATUS_CANCELED || statusField === STATUS_COMPLETED) continue;
         if (statusField <= cfg.now) continue; // already expired
 
-        // Only track orders routed through OUR ExchangeV2 (or any-exchange,
-        // exchange == 0). Anything pinned to a different adapter we cannot
-        // fill (the keeper is only allowlisted on ours).
+        // Only track orders routed through an adapter WE can fill: the legacy
+        // ExchangeV2, the ExchangeMulti (if configured), or any-exchange
+        // (exchange == 0, legacy). Anything pinned to a different adapter we
+        // cannot fill (the keeper is only allowlisted on ours).
         const askExchange = getAddr(order.ask.exchange);
-        if (
-            askExchange !== ZERO &&
-            askExchange.toLowerCase() !== cfg.exchange.toLowerCase()
-        ) {
-            continue;
-        }
+        const fillable =
+            askExchange === ZERO ||
+            askExchange.toLowerCase() === cfg.exchange.toLowerCase() ||
+            (!!cfg.exchangeMulti && askExchange.toLowerCase() === cfg.exchangeMulti.toLowerCase());
+        if (!fillable) continue;
 
         const srcAmount = BigInt(order.ask.srcAmount);
         const srcBidAmount = BigInt(order.ask.srcBidAmount);
@@ -566,6 +654,7 @@ async function settleOrbsOrder(
     publicClient: PublicClient,
     walletClient: WalletClient,
     keeper: Address,
+    allow: { v2: boolean; multi: boolean; routers: Set<string> },
     summary: RunSummary,
 ): Promise<boolean> {
     const id = BigInt(tracked.orderId);
@@ -678,29 +767,68 @@ async function settleOrbsOrder(
         return false;
     }
 
-    // Direct src->dst V2 path on the trusted V2 adapter. Multi-venue via the
-    // aggregator was REVERTED: it required Ask.exchange=0 (a CRITICAL theft
-    // surface -- an attacker's own IExchange commits the floor and steals the
-    // rest) and mis-built via-USDC / multi-hop / partial-fill quotes as direct
-    // paths that revert-loop (audit 2026-07-24). The correct multi-venue design
-    // is ONE trusted keeper-only multi-router adapter (ExchangeMulti) the order
-    // pins to; until it ships, the keeper settles the direct V2 pair only, as
-    // before. A pair with no direct pool quotes 0 and is skipped (no bid).
-    const path = [srcToken, dstToken] as Address[];
-    const amounts = (await withTimeout(
-        publicClient.readContract({
-            address: cfg.router,
-            abi: ROUTER_ABI,
-            functionName: "getAmountsOut",
-            args: [chunkIn, path],
-        }) as Promise<readonly bigint[]>,
-        RPC_TIMEOUT_MS,
-    )) as readonly bigint[] | null;
-    if (!amounts || amounts.length < 2) {
+    // Pick the settlement adapter FROM THE ORDER: an order pinned to
+    // ExchangeMulti settles on the best allow-listed direct venue; anything else
+    // (legacy ExchangeV2, or the legacy any-exchange==0) settles on the single
+    // trusted V2 adapter, exactly as before. The keeper must be allow-listed on
+    // whichever it uses (checked once per tick in `allow`).
+    const askExchange = getAddr(order.ask.exchange);
+    const useMulti =
+        !!cfg.exchangeMulti &&
+        askExchange.toLowerCase() === cfg.exchangeMulti.toLowerCase();
+    const settleExchange = useMulti ? (cfg.exchangeMulti as Address) : cfg.exchange;
+    if (useMulti ? !allow.multi : !allow.v2) {
+        // Keeper not allow-listed on the adapter this order needs.
         summary.orbs.skipped++;
         return false;
     }
-    const quotedOut = amounts[amounts.length - 1];
+
+    // Build direct-venue candidates. Each is quoted at EXACTLY chunkIn on the
+    // EXACT single-hop route it will execute, so quote == execute (no multi-hop /
+    // partial-fill reconstruction gap -- the B-1/B-2/B-3 class that forced the
+    // revert). ExchangeV2 orders see only the Arcade V2 venue; ExchangeMulti
+    // orders additionally see XyloNet (a second native-USDC V2-style router).
+    // Extending to more DEXes = push a candidate here + setRouterAllowed on-chain.
+    // For an ExchangeMulti order a candidate's router must be allow-listed on the
+    // adapter (else the fill would revert RouterNotAllowed); the legacy ExchangeV2
+    // adapter wraps cfg.router immutably, so its single venue is always eligible.
+    const routerEligible = (r: Address) =>
+        !useMulti || allow.routers.has(r.toLowerCase());
+
+    const candidates: DirectVenueCandidate[] = [];
+    if (routerEligible(cfg.router)) {
+        const arcadeOut = await getAmountsOutLast(publicClient, cfg.router, chunkIn, [
+            srcToken,
+            dstToken,
+        ]);
+        if (arcadeOut !== null) {
+            candidates.push({
+                label: "arcade-v2",
+                quotedOut: arcadeOut,
+                venue: v2DirectVenue(cfg.router, srcToken, dstToken),
+            });
+        }
+    }
+    if (useMulti && cfg.xyloRouter && routerEligible(cfg.xyloRouter)) {
+        const xyloOut = await getAmountsOutLast(publicClient, cfg.xyloRouter, chunkIn, [
+            srcToken,
+            dstToken,
+        ]);
+        if (xyloOut !== null) {
+            candidates.push({
+                label: "xylonet",
+                quotedOut: xyloOut,
+                venue: v2DirectVenue(cfg.xyloRouter, srcToken, dstToken),
+            });
+        }
+    }
+    const best = pickBestVenue(candidates);
+    if (!best) {
+        // No wired venue has a direct pool for this pair. Not an error.
+        summary.orbs.skipped++;
+        return false;
+    }
+    const quotedOut = best.quotedOut;
 
     if (
         !clearsFloor({
@@ -718,14 +846,15 @@ async function settleOrbsOrder(
     let plan;
     try {
         plan = buildOrbsBid({
-            venue: { kind: "v2", router: cfg.router, path },
+            venue: best.venue,
             chunkIn,
             quotedOut,
             chunkFloor,
-            exchange: cfg.exchange,
+            exchange: settleExchange,
             slippagePercent: SLIPPAGE_PERCENT,
             dstFee: DST_FEE,
             deadline: BigInt(cfg.now) + SWAP_DEADLINE_SECS,
+            encoding: useMulti ? "exchangeMulti" : "exchangeV2",
         });
     } catch {
         summary.orbs.skipped++;
@@ -737,7 +866,7 @@ async function settleOrbsOrder(
             address: cfg.twap,
             abi: ORBS_TWAP_ABI,
             functionName: "bid",
-            args: [id, cfg.exchange, plan.dstFee, plan.slippagePercent, plan.bidData],
+            args: [id, settleExchange, plan.dstFee, plan.slippagePercent, plan.bidData],
             chain: ARC_CHAIN,
             account: keeper,
             maxFeePerGas: MAX_FEE_PER_GAS_WEI,
@@ -894,6 +1023,17 @@ async function runCctpLeg(
 
 const ZERO = "0x0000000000000000000000000000000000000000";
 
+/**
+ * Normalise a config address: return it only if it is a real, non-zero address,
+ * else undefined. `safeAddress()` (lib/constants) returns the ZERO address for an
+ * unset env var, and isAddress(0x0)===true, so a bare truthy+isAddress check
+ * would treat "unset" as "configured". Everywhere the keeper branches on an
+ * OPTIONAL address (ExchangeMulti, XyloNet) it must use this.
+ */
+function liveAddress(v: string | undefined): Address | undefined {
+    return v && isAddress(v) && v.toLowerCase() !== ZERO ? (v as Address) : undefined;
+}
+
 function getAddr(v: unknown): Address {
     try {
         return getAddress(String(v));
@@ -904,6 +1044,30 @@ function getAddr(v: unknown): Address {
 
 function bigMin(a: bigint, b: bigint): bigint {
     return a < b ? a : b;
+}
+
+/**
+ * Read a V2-style router's getAmountsOut and return the LAST hop's output, or
+ * null on any failure (no pool / revert / timeout). Used to price each direct
+ * venue at the exact chunk size the keeper will then execute (quote == execute).
+ */
+async function getAmountsOutLast(
+    publicClient: PublicClient,
+    router: Address,
+    amountIn: bigint,
+    path: Address[],
+): Promise<bigint | null> {
+    const amounts = (await withTimeout(
+        publicClient.readContract({
+            address: router,
+            abi: ROUTER_ABI,
+            functionName: "getAmountsOut",
+            args: [amountIn, path],
+        }) as Promise<readonly bigint[]>,
+        RPC_TIMEOUT_MS,
+    )) as readonly bigint[] | null;
+    if (!amounts || amounts.length < 2) return null;
+    return amounts[amounts.length - 1];
 }
 
 function errMsg(err: unknown): string {

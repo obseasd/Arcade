@@ -163,6 +163,12 @@ export const ADDRESSES = {
   orbsTwap: safeAddress(process.env.NEXT_PUBLIC_ORBS_TWAP_ADDRESS),
   /** ExchangeV2 adapter wrapping ArcadeV2Router. Used by takers at fill time. */
   orbsExchangeV2: safeAddress(process.env.NEXT_PUBLIC_ORBS_EXCHANGE_V2_ADDRESS),
+  /** ExchangeMulti: the trusted keeper-only MULTI-router adapter. When set,
+   *  new limit/DCA orders pin ask.exchange to THIS (never 0), and the keeper
+   *  settles each fill on the best allow-listed router (Arcade V2, XyloNet, …).
+   *  Adding a venue later = setRouterAllowed on-chain, no redeploy. Falls back
+   *  to orbsExchangeV2 when unset. See contracts/orbs/.../ExchangeMulti.sol. */
+  orbsExchangeMulti: safeAddress(process.env.NEXT_PUBLIC_ORBS_EXCHANGE_MULTI_ADDRESS),
   /** Lens read-only helper for the frontend. */
   orbsLens: safeAddress(process.env.NEXT_PUBLIC_ORBS_LENS_ADDRESS),
   // --- Canonical Circle tokens on Arc testnet (well-known, hardcoded) ---
