@@ -330,6 +330,26 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
         args: tokenOut ? [oneInBn, spotPath] : undefined,
         query: { enabled: !!tokenOut && !isV3Path, refetchInterval: 15_000 },
     });
+    // XyloNet stable pool (V2-style router, native USDC). When ExchangeMulti is
+    // live the keeper settles on the BEST of Arcade V2 / XyloNet / V3, so the
+    // displayed market price MUST aggregate the same venues -- otherwise a thin
+    // Arcade V2 pool (e.g. USDC/EURC quoting 0.05 instead of ~0.92) misprices the
+    // order the keeper would actually fill far better on XyloNet. XyloNet reverts
+    // for non-stable pairs; that just drops out of the max below.
+    const xyloSpotQ = useReadContract({
+        address: ADDRESSES.xyloRouter,
+        abi: ROUTER_ABI,
+        functionName: "getAmountsOut",
+        args: tokenOut ? [oneInBn, spotPath] : undefined,
+        query: {
+            enabled:
+                !!tokenOut &&
+                !isV3Path &&
+                multiEnabled &&
+                ADDRESSES.xyloRouter !== zeroAddress,
+            refetchInterval: 15_000,
+        },
+    });
     const v3SpotQ = useReadContract({
         address: ADDRESSES.v3Quoter,
         abi: V3_QUOTER_ABI,
@@ -342,10 +362,18 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
         if (isV3Path) {
             return v3SpotQ.data as bigint | undefined;
         }
-        const arr = v2SpotQ.data as readonly bigint[] | undefined;
-        if (!arr || arr.length < 2) return undefined;
-        return arr[arr.length - 1];
-    }, [isV3Path, v2SpotQ.data, v3SpotQ.data]);
+        // Best of the venues the keeper can actually fill on (V2 always; XyloNet
+        // when ExchangeMulti is live). Highest output = best price for the maker.
+        const v2Arr = v2SpotQ.data as readonly bigint[] | undefined;
+        const xyloArr = xyloSpotQ.data as readonly bigint[] | undefined;
+        const v2Out = v2Arr && v2Arr.length >= 2 ? v2Arr[v2Arr.length - 1] : undefined;
+        const xyloOut =
+            xyloArr && xyloArr.length >= 2 ? xyloArr[xyloArr.length - 1] : undefined;
+        if (v2Out === undefined && xyloOut === undefined) return undefined;
+        if (v2Out === undefined) return xyloOut;
+        if (xyloOut === undefined) return v2Out;
+        return xyloOut > v2Out ? xyloOut : v2Out;
+    }, [isV3Path, v2SpotQ.data, xyloSpotQ.data, v3SpotQ.data]);
 
     const marketPriceNum = useMemo(() => {
         if (!spotOutBn || !tokenOut) return 0;
@@ -1065,6 +1093,64 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
                         className="h-4 w-4 accent-arc-cta"
                     />
                 </label>
+
+                {/* Inline accepted-slippage picker, shown only when protection is
+                    ON. Limit mode: the user picks the exact tolerance below their
+                    trigger. DCA derives its band from the same value (floored at
+                    the keeper haircut) so we surface it there read-only. */}
+                {priceProtection && orderMode === "limit" && (
+                    <div className="mt-2 flex items-center gap-2 rounded-xl border border-arc-border bg-arc-bg-elevated px-3 py-2">
+                        <span className="text-xs text-arc-text-muted">
+                            Accepted slippage
+                        </span>
+                        <div className="ml-auto flex items-center gap-1">
+                            {[10, 50, 100].map((bps) => (
+                                <button
+                                    key={bps}
+                                    type="button"
+                                    onClick={() => {
+                                        setSlippageBps(bps);
+                                        setSlippageCustom("");
+                                    }}
+                                    className={cn(
+                                        "rounded-lg px-2 py-1 text-xs tabular-nums transition-colors",
+                                        slippageBps === bps && !slippageCustom
+                                            ? "bg-arc-cta text-white"
+                                            : "bg-arc-bg text-arc-text-muted hover:text-arc-text",
+                                    )}
+                                >
+                                    {bps / 100}%
+                                </button>
+                            ))}
+                            <div className="flex items-center rounded-lg bg-arc-bg px-2 py-1">
+                                <input
+                                    type="number"
+                                    inputMode="decimal"
+                                    min={0.01}
+                                    max={50}
+                                    step={0.05}
+                                    value={slippageCustom}
+                                    onChange={(e) => {
+                                        const raw = e.target.value;
+                                        setSlippageCustom(raw);
+                                        const pct = Number(raw);
+                                        if (Number.isFinite(pct) && pct > 0) {
+                                            // clamp 0.01%..50% -> bps, round to int bps
+                                            const bps = Math.min(
+                                                5_000,
+                                                Math.max(1, Math.round(pct * 100)),
+                                            );
+                                            setSlippageBps(bps);
+                                        }
+                                    }}
+                                    placeholder="Custom"
+                                    className="w-14 bg-transparent text-right text-xs tabular-nums text-arc-text outline-none placeholder:text-arc-text-faint"
+                                />
+                                <span className="ml-0.5 text-xs text-arc-text-muted">%</span>
+                            </div>
+                        </div>
+                    </div>
+                )}
 
                 <button type="button"
                     onClick={onSubmit}
