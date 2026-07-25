@@ -23,6 +23,8 @@ import {
     parseCctpV2Message,
 } from "@/lib/cctp";
 import { ROUTER_ABI } from "@/lib/abis/dex";
+import { V3_QUOTER_ABI } from "@/lib/abis/v3";
+import { LAUNCHPAD_ABI } from "@/lib/abis/launchpad";
 import { buildOrbsBid, clearsFloor } from "@/lib/keeper/orbsRoute";
 import { pickBestVenue, v2DirectVenue, type DirectVenueCandidate } from "@/lib/keeper/directVenues";
 import {
@@ -298,6 +300,13 @@ export async function POST(req: NextRequest) {
     // with exchange=0x0, which TWAP.bid rejects ("params") in a gas-burn loop.
     const exchangeMulti = liveAddress(ADDRESSES.orbsExchangeMulti);
     const xyloRouter = liveAddress(ADDRESSES.xyloRouter);
+    // Arcade V3 as a third ExchangeMulti venue (single-pool direct fills). Its
+    // quoter fans out fee tiers; the router flat-arg exactInputSingle matches
+    // buildVenueSwapData. launchpad (optional) lets the keeper replicate the V3
+    // router's anti-sniper skim so the quote matches execution on sniped tokens.
+    const v3Router = liveAddress(ADDRESSES.v3Router);
+    const v3Quoter = liveAddress(ADDRESSES.v3Quoter);
+    const launchpad = liveAddress(ADDRESSES.launchpad);
 
     const keeperKey = process.env.KEEPER_OPERATOR_PRIVATE_KEY as Hex | undefined;
     if (!keeperKey || !/^0x[0-9a-fA-F]{64}$/.test(keeperKey)) {
@@ -379,7 +388,7 @@ export async function POST(req: NextRequest) {
         // ---- Leg A: Orbs TWAP ----
         try {
             await runOrbsLeg(
-                { twap, exchange, exchangeMulti, router, xyloRouter, usdc, now },
+                { twap, exchange, exchangeMulti, router, xyloRouter, v3Router, v3Quoter, launchpad, usdc, now },
                 publicClient,
                 walletClient,
                 account.address,
@@ -416,6 +425,12 @@ interface OrbsCfg {
     router: Address;
     /** XyloNet V2-style router (optional second direct venue for ExchangeMulti). */
     xyloRouter?: Address;
+    /** Arcade V3 SwapRouter (optional third direct venue for ExchangeMulti). */
+    v3Router?: Address;
+    /** Arcade V3 QuoterV2 (needed to price the V3 venue). */
+    v3Quoter?: Address;
+    /** Launchpad (optional) — read to replicate the V3 anti-sniper skim. */
+    launchpad?: Address;
     usdc: Address;
     now: number;
 }
@@ -484,7 +499,7 @@ async function runOrbsLeg(
     // rather than bid-then-stuck. Only relevant when the multi adapter is usable.
     const allowedRouters = new Set<string>();
     if (cfg.exchangeMulti && multiAllowed) {
-        for (const r of [cfg.router, cfg.xyloRouter]) {
+        for (const r of [cfg.router, cfg.xyloRouter, cfg.v3Router]) {
             if (!r) continue;
             const ok = await withTimeout(
                 publicClient
@@ -822,6 +837,22 @@ async function settleOrbsOrder(
             });
         }
     }
+    if (useMulti && cfg.v3Router && routerEligible(cfg.v3Router)) {
+        const v3 = await quoteV3BestDirect(publicClient, cfg, srcToken, dstToken, chunkIn);
+        if (v3) {
+            candidates.push({
+                label: "arcade-v3",
+                quotedOut: v3.quotedOut,
+                venue: {
+                    kind: "v3",
+                    router: cfg.v3Router,
+                    tokenIn: srcToken,
+                    tokenOut: dstToken,
+                    fee: v3.tier,
+                },
+            });
+        }
+    }
     const best = pickBestVenue(candidates);
     if (!best) {
         // No wired venue has a direct pool for this pair. Not an error.
@@ -1068,6 +1099,78 @@ async function getAmountsOutLast(
     )) as readonly bigint[] | null;
     if (!amounts || amounts.length < 2) return null;
     return amounts[amounts.length - 1];
+}
+
+// Arcade V3 standard fee tiers (0.01% / 0.05% / 0.3% / 1%), same set the swap
+// aggregator's arcade-v3 provider fans out over.
+const ARCADE_V3_FEE_TIERS = [100, 500, 3_000, 10_000] as const;
+
+/**
+ * Price a DIRECT single-pool Arcade V3 fill for `chunkIn`, returning the best
+ * tier + its output, or null if no V3 pool quotes this pair. FAITHFUL to what
+ * the V3 router executes:
+ *   - The router skims the anti-sniper tax off the input for launchpad tokens,
+ *     then swaps the net. So we quote at (chunkIn - skim), exactly like the
+ *     swap aggregator's arcade-v3 provider, while the swapData still passes the
+ *     FULL chunkIn (the router re-derives net internally). quote == execute.
+ *   - Only USDC<->token direct pools (one leg is USDC): the overwhelming
+ *     limit/DCA shape. clanker->clanker multi-hop V3 is intentionally skipped.
+ * The returned `tier` is the winning pool fee, baked into the V3 venue.
+ */
+async function quoteV3BestDirect(
+    publicClient: PublicClient,
+    cfg: OrbsCfg,
+    srcToken: Address,
+    dstToken: Address,
+    chunkIn: bigint,
+): Promise<{ quotedOut: bigint; tier: number } | null> {
+    if (!cfg.v3Router || !cfg.v3Quoter) return null;
+    const isUsdcIn = srcToken.toLowerCase() === cfg.usdc.toLowerCase();
+    const isUsdcOut = dstToken.toLowerCase() === cfg.usdc.toLowerCase();
+    if (!isUsdcIn && !isUsdcOut) return null; // direct USDC pools only
+
+    // Replicate the router's anti-sniper skim on the taxed (non-USDC) side.
+    // 0 for non-launchpad / post-window tokens, so this is a no-op for them.
+    let snipeBps = 0n;
+    if (cfg.launchpad) {
+        const taxedSide = isUsdcIn ? dstToken : srcToken;
+        const bps = (await withTimeout(
+            publicClient
+                .readContract({
+                    address: cfg.launchpad,
+                    abi: LAUNCHPAD_ABI,
+                    functionName: "currentSnipeBps",
+                    args: [taxedSide],
+                })
+                .catch(() => 0n) as Promise<bigint>,
+            RPC_TIMEOUT_MS,
+        )) as bigint | null;
+        if (bps && bps > 0n) snipeBps = bps;
+    }
+    const netIn = chunkIn - (chunkIn * snipeBps) / 10_000n;
+    if (netIn <= 0n) return null;
+
+    const perTier = await Promise.all(
+        ARCADE_V3_FEE_TIERS.map(async (tier) => {
+            const out = (await withTimeout(
+                publicClient
+                    .readContract({
+                        address: cfg.v3Quoter as Address,
+                        abi: V3_QUOTER_ABI,
+                        functionName: "quoteExactInputSingle",
+                        args: [srcToken, dstToken, tier, netIn],
+                    })
+                    .catch(() => 0n) as Promise<bigint>,
+                RPC_TIMEOUT_MS,
+            )) as bigint | null;
+            return out && out > 0n ? { tier, out } : null;
+        }),
+    );
+    let best: { tier: number; out: bigint } | null = null;
+    for (const q of perTier) {
+        if (q && (best === null || q.out > best.out)) best = q;
+    }
+    return best ? { quotedOut: best.out, tier: best.tier } : null;
 }
 
 function errMsg(err: unknown): string {

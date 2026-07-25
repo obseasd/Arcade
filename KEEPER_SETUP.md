@@ -139,11 +139,13 @@ multi orders bid-then-can't-fill):**
    ```sh
    cd contracts/orbs
    TAKERS=0xC3D6ED473B2D22908d1CBc45e74ABa1133BD4107,0x3a0Dd90212838f32a953Acd4B32596b62859324A \
-   ROUTERS=0xae744C9Acdc1E80F83B5895ba2C060dB921A6Aa5,0x73742278c31a76dbb0d2587d03ef92e6e2141023 \
+   ROUTERS=0xae744C9Acdc1E80F83B5895ba2C060dB921A6Aa5,0x73742278c31a76dbb0d2587d03ef92e6e2141023,0xc2d2829caFb2763D1f4aDD95591FE5775EAade68 \
    forge script script/DeployExchangeMulti.s.sol:DeployExchangeMulti \
      --rpc-url https://rpc.testnet.arc.network --broadcast --slow
    ```
-   Note the deployed address.
+   Note the deployed address. `ROUTERS` = Arcade V2 + XyloNet + Arcade V3 (the
+   three venues the keeper quotes). The keeper reads `allowedRouter` per tick, so
+   any router NOT in this list is simply never bid.
 
 2. **Transfer ownership to the Safe** (2-step; renounce is disabled by design):
    - From the deployer: `ExchangeMulti.transferOwnership(0x0bDE09e3Bfc9b2Ee7b94e56A6A06e0a14706195D)`

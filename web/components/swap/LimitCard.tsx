@@ -308,6 +308,20 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
         );
     }, [tokenIn.address, v2Tokens, v3Tokens]);
     const isV3Path = isV3Out || isV3In;
+    // ExchangeMulti configured => the keeper settles on the best of Arcade V2 /
+    // XyloNet / Arcade V3 direct pools, so V3-path orders become fillable.
+    const multiEnabled = ADDRESSES.orbsExchangeMulti !== zeroAddress;
+    // The keeper's V3 venue settles DIRECT USDC<->token pools only (clanker->
+    // clanker multi-hop is not a fill route), so a V3-path order is fillable only
+    // when one side is USDC. A token<->token V3 order would sit forever unfilled.
+    const oneSideUsdc = useMemo<boolean>(() => {
+        const u = ADDRESSES.usdc.toLowerCase();
+        return (
+            tokenIn.address.toLowerCase() === u ||
+            tokenOut?.address.toLowerCase() === u
+        );
+    }, [tokenIn.address, tokenOut]);
+    const v3Fillable = !isV3Path || (multiEnabled && oneSideUsdc);
 
     const v2SpotQ = useReadContract({
         address: ADDRESSES.router,
@@ -553,11 +567,12 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
         ADDRESSES.orbsTwap !== zeroAddress &&
         (ADDRESSES.orbsExchangeV2 !== zeroAddress ||
             ADDRESSES.orbsExchangeMulti !== zeroAddress) &&
-        // Pages audit 2026-07-02: orders settle on a V2-style adapter (ExchangeV2,
-        // or ExchangeMulti's Arcade-V2 / XyloNet venues), which can only fill
-        // against V2 pools. A V3-path pair would place an order that can never
-        // fill, so block it here (the route panel shows a "not supported" note).
-        !isV3Path &&
+        // A V3-path pair can only be filled by ExchangeMulti (its Arcade-V3
+        // direct-pool venue), and only when one side is USDC (no multi-hop V3
+        // fill route). The legacy ExchangeV2 adapter fills V2 pools only. Block
+        // otherwise so we never place an order that can never fill; the route
+        // panel shows the reason.
+        v3Fillable &&
         !submitting &&
         !isWriting;
 
@@ -973,11 +988,16 @@ export function LimitCard({ tab, onTabChange }: LimitCardProps) {
                             />
                             <span>via</span>
                             <span className="font-medium text-arc-text">
-                                Arcade V2
+                                {multiEnabled ? "best venue" : "Arcade V2"}
                             </span>
-                            {isV3Path && (
+                            {isV3Path && !multiEnabled && (
                                 <span className="ml-1 rounded-full border border-arc-warn/40 bg-arc-warn/10 px-1.5 py-0.5 text-[10px] font-medium text-arc-warn">
                                     V3 limit orders not supported yet
+                                </span>
+                            )}
+                            {isV3Path && multiEnabled && !oneSideUsdc && (
+                                <span className="ml-1 rounded-full border border-arc-warn/40 bg-arc-warn/10 px-1.5 py-0.5 text-[10px] font-medium text-arc-warn">
+                                    V3 needs one side to be USDC
                                 </span>
                             )}
                         </div>
