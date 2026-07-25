@@ -1350,7 +1350,7 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
           // the gate was added to close.
           if (usdcMidMinForRoute === 0n) {
             throw new Error(
-              "Cannot compute a mid-leg slippage floor for the migrated route — please refresh the quote and try again.",
+              "Cannot compute a mid-leg slippage floor for the migrated route. Please refresh the quote and try again.",
             );
           }
           swapCall = {
@@ -1833,11 +1833,7 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
           inputUsd={inUsd.usd}
           outputUsd={outUsd.usd}
           priceImpactPct={priceImpactPct}
-          partialFillNotice={
-            partialFillActive && activeRoute?.partialFill
-              ? `You typed ${formatTokenAmount(activeRoute.partialFill.requestedAmountIn, decimalsIn, 6)} ${symIn} but only ${formatTokenAmount(activeRoute.partialFill.effectiveAmountIn, decimalsIn, 6)} ${symIn} will be swapped — the pool can't absorb more at this fee tier without crossing a tick.`
-              : undefined
-          }
+          partialFillNotice={undefined}
           protocolLabel={
             // When an external route wins, the confirm screen has to
             // reflect that — otherwise the user signs a Synthra tx but
@@ -2025,7 +2021,7 @@ function TokenBox({
           {lossPct !== undefined && (
             <span
               className={cn("tabular-nums", lossClass)}
-              title="Value change vs the pool mid-price (price impact + fee). Negative means this trade moves a thin pool, so you get less than the spot rate — compare the routes below for a better venue."
+              title="Value change vs the pool mid-price (price impact + fee). Negative means this trade moves a thin pool, so you get less than the spot rate. Compare the routes below for a better venue."
             >
               ({lossPct >= 0 ? "+" : ""}
               {lossPct.toFixed(2)}%)

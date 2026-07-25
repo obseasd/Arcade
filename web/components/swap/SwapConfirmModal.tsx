@@ -78,7 +78,17 @@ export function SwapConfirmModal({
     if (!inputUsd || inputUsd <= 0 || outputUsd === undefined) return 0;
     return Math.max(0, (1 - outputUsd / inputUsd) * 100);
   })();
-  const dangerous = lossPct >= 50;
+  // The red high-loss state fires ONLY when the route's own price impact
+  // corroborates the USD-oracle loss. On Arc testnet the per-token USDC-pool
+  // oracle is unreliable (eg EURC priced off a thin/broken USDC/EURC V2 pool),
+  // so a large USD "loss" with a tiny price impact is an oracle artefact, NOT a
+  // real loss: the aggregator picked the best venue and its price impact is the
+  // ground truth for how much value the trade actually gives up. When no price
+  // impact is available (eg an ETH leg) we keep the oracle-only fallback so the
+  // safety net still exists where it is the only signal.
+  const impactUnknown = priceImpactPct === undefined;
+  const impactCorroboratesLoss = impactUnknown || (priceImpactPct as number) >= 10;
+  const dangerous = lossPct >= 50 && impactCorroboratesLoss;
   // Price impact panel: separate from the USD-loss "dangerous" state so
   // it fires even when the USD oracle is missing. Threshold 5% mirrors
   // the SwapCard's warn tone — the modal echoes what the user already
@@ -150,9 +160,9 @@ export function SwapConfirmModal({
             <div className="mt-1 text-arc-danger/80">
               The output is worth at most {outputUsd ? `$${outputUsd.toFixed(4)}` : "$0"} vs
               {" "}
-              {inputUsd ? `$${inputUsd.toFixed(2)}` : "—"} sent in. This usually
+              {inputUsd ? `$${inputUsd.toFixed(2)}` : "$0"} sent in. This usually
               means the pool is too thin or its ratio is broken. Triple-check
-              before signing — this loss is permanent.
+              before signing. This loss is permanent.
             </div>
           </div>
         )}
@@ -170,7 +180,7 @@ export function SwapConfirmModal({
               Price impact {priceImpactPct.toFixed(2)}%{impactSeverityTag ? ` · ${impactSeverityTag}` : ""}
             </div>
             <div className="mt-1 text-arc-danger/80">
-              Your trade is eating a large slice of the pool depth — the
+              Your trade is eating a large slice of the pool depth. The
               effective rate is materially worse than the pool's mid-price.
               Either size down or split the trade across multiple swaps so
               you stop pushing the curve.
