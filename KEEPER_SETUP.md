@@ -117,3 +117,48 @@ testnet reference the old adapter).
   beneficiary-from-attested-message) and is bounded: a completed non-receiver
   burn is expired on sight, a never-attesting one is age-expired after 3h,
   and the intent API refuses new rows past a 500-pending backlog.
+
+## Optional: activate ExchangeMulti (multi-venue limit/DCA settlement)
+
+`ExchangeMulti` is the trusted, keeper-only MULTI-router adapter (replaces the
+reverted `Ask.exchange=0` design). Orders pin `ask.exchange = ExchangeMulti`;
+the keeper settles each fill on the best allow-listed direct venue (Arcade V2 +
+XyloNet today), quoting each at exactly `chunkIn` on the exact single-hop route
+it executes (quote == execute, no multi-hop reconstruction gap). Adding a DEX
+later = `setRouterAllowed(router, true)` on-chain, no redeploy. All wiring is
+already committed and DORMANT until `NEXT_PUBLIC_ORBS_EXCHANGE_MULTI_ADDRESS`
+is set. 3-agent audit clean; 21 Foundry + 6 keeper tests.
+
+**Order of operations (the router allowlist MUST be set before the env, or
+multi orders bid-then-can't-fill):**
+
+1. **Deploy** (`contracts/orbs`). `TAKERS` = keeper + deployer fallback (same as
+   ExchangeV2's `ALLOWED`); `ROUTERS` = every router the keeper quotes (Arcade V2
+   + XyloNet). Both routers are baked in at construction, so no post-deploy
+   `setRouterAllowed` is needed for these two:
+   ```sh
+   cd contracts/orbs
+   TAKERS=0xC3D6ED473B2D22908d1CBc45e74ABa1133BD4107,0x3a0Dd90212838f32a953Acd4B32596b62859324A \
+   ROUTERS=0xae744C9Acdc1E80F83B5895ba2C060dB921A6Aa5,0x73742278c31a76dbb0d2587d03ef92e6e2141023 \
+   forge script script/DeployExchangeMulti.s.sol:DeployExchangeMulti \
+     --rpc-url https://rpc.testnet.arc.network --broadcast --slow
+   ```
+   Note the deployed address.
+
+2. **Transfer ownership to the Safe** (2-step; renounce is disabled by design):
+   - From the deployer: `ExchangeMulti.transferOwnership(0x0bDE09e3Bfc9b2Ee7b94e56A6A06e0a14706195D)`
+   - From the Safe: `ExchangeMulti.acceptOwnership()`
+   (Only needed to add/remove venues or keepers later; the two routers + takers
+   above already work without it.)
+
+3. **Set the Vercel env** (Production): `NEXT_PUBLIC_ORBS_EXCHANGE_MULTI_ADDRESS`
+   = the address from step 1. The moment this is set, NEW orders pin ExchangeMulti
+   and the keeper settles them multi-venue. Leave it unset to stay on ExchangeV2.
+   (No keeper env change: it reads the same public var. Old in-flight ExchangeV2
+   orders keep settling on ExchangeV2 in parallel.)
+
+To add a future DEX: deploy nothing. `setRouterAllowed(newRouter, true)` from the
+Safe, add a candidate branch in `settleOrbsOrder` (mirror the XyloNet block), and
+the keeper picks it up. Only approve-to-router V2-style venues that accept native
+USDC qualify today; V3-single-pool and Permit2/V4 venues need their own quote +
+swapData branch first.
