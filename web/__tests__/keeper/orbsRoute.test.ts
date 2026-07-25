@@ -188,4 +188,55 @@ describe("buildOrbsBid", () => {
             }),
         ).toThrow(/floor/i);
     });
+
+    it("defaults to the ExchangeV2 2-field layout (amountOut, swapData)", () => {
+        const plan = buildOrbsBid(base);
+        // 2-field decodes cleanly; the router is NOT present in the blob.
+        const [amountOut, swapData] = decodeAbiParameters(
+            parseAbiParameters("uint256 amountOut, bytes swapData"),
+            plan.bidData,
+        );
+        expect(amountOut).toBe(base.quotedOut);
+        const decoded = decodeFunctionData({ abi: ROUTER_ABI, data: swapData });
+        expect(decoded.functionName).toBe("swapExactTokensForTokens");
+    });
+
+    it("emits the ExchangeMulti 3-field layout (amountOut, router, swapData) with the venue router inline", () => {
+        const plan = buildOrbsBid({ ...base, encoding: "exchangeMulti" });
+        const [amountOut, router, swapData] = decodeAbiParameters(
+            parseAbiParameters("uint256 amountOut, address router, bytes swapData"),
+            plan.bidData,
+        );
+        expect(amountOut).toBe(base.quotedOut);
+        // The router the ExchangeMulti will validate against its allowlist is the
+        // venue's router -- NOT the adapter, NOT the maker.
+        expect((router as Address).toLowerCase()).toBe(ROUTER.toLowerCase());
+        // swapData is still a real router call with recipient = the adapter.
+        const decoded = decodeFunctionData({ abi: ROUTER_ABI, data: swapData });
+        expect(decoded.functionName).toBe("swapExactTokensForTokens");
+        const args = decoded.args as readonly unknown[];
+        expect((args[3] as Address).toLowerCase()).toBe(EXCHANGE.toLowerCase());
+    });
+
+    it("ExchangeMulti layout carries a V3 venue's router inline too", () => {
+        const V3_ROUTER_ADDR = "0x4444444444444444444444444444444444444444" as Address;
+        const plan = buildOrbsBid({
+            ...base,
+            encoding: "exchangeMulti",
+            venue: { kind: "v3", router: V3_ROUTER_ADDR, tokenIn: USDC, tokenOut: TOKEN, fee: 3000 },
+        });
+        const [, router, swapData] = decodeAbiParameters(
+            parseAbiParameters("uint256 amountOut, address router, bytes swapData"),
+            plan.bidData,
+        );
+        expect((router as Address).toLowerCase()).toBe(V3_ROUTER_ADDR.toLowerCase());
+        const decoded = decodeFunctionData({ abi: V3_ROUTER_ABI, data: swapData });
+        expect(decoded.functionName).toBe("exactInputSingle");
+    });
+
+    it("ExchangeMulti layout still refuses a quote below the floor", () => {
+        expect(() =>
+            buildOrbsBid({ ...base, encoding: "exchangeMulti", quotedOut: base.chunkFloor - 1n }),
+        ).toThrow(/floor/i);
+    });
 });

@@ -3,6 +3,23 @@ import type { ProviderId, RouteQuote } from "@/lib/routing/types";
 import type { OrbsVenue } from "./orbsRoute";
 
 /**
+ * ⚠️ DO NOT ACTIVATE THIS `toVenue` PATH AS-IS. (audit 2026-07-25)
+ * `toVenue` below rebuilds each fill as a SINGLE-HOP trade (arcade-v2 hardcodes
+ * path=[in,out]; arcade-v3 builds exactInputSingle). That drops the aggregator's
+ * via-USDC MULTI-HOP routes and its partialFill clamping, so the committed
+ * `quotedOut` (multi-hop price) would not match the executed single-hop trade =>
+ * bid-revert loops or mispriced fills. This is exactly the B-1/B-2/B-3 bug that
+ * forced the Feature-B revert.
+ *
+ * CORRECT activation (when ExchangeMulti is deployed): source the swapData from
+ * the aggregator's own faithful `RouteQuote.executor` instead of rebuilding it
+ * here — re-quote per chunk with amountIn = chunkIn and recipient = the
+ * ExchangeMulti adapter, then bidData = (q.amountOut, executor.router,
+ * encodeFunctionData(executor)). The executor already carries the real router,
+ * the multi-hop path, and the partialFill-clamped amounts, so the whole
+ * mismatch class disappears. `selectBestVenue` (the adapter-allowlist filter)
+ * stays useful; `toVenue` should be REPLACED, not switched on.
+ *
  * ORBS FILL VENUE REGISTRY — the single extension point for "which DEXes can
  * settle a limit / DCA order".
  *

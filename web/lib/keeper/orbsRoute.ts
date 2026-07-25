@@ -94,8 +94,26 @@ export function buildVenueSwapData(
  * isolation; the cron supplies the live quote + reserves it read.
  */
 
-/** ExchangeV2 decodes bidData as (uint256, bytes). */
+/** ExchangeV2 decodes bidData as (uint256 amountOut, bytes swapData). */
 const BID_DATA_PARAMS = parseAbiParameters("uint256 amountOut, bytes swapData");
+/**
+ * ExchangeMulti decodes bidData as (uint256 amountOut, address router, bytes
+ * swapData): the SAME as ExchangeV2 with the target router carried inline, so
+ * ONE trusted keeper-only adapter can settle on any allow-listed router. The
+ * order pins ask.exchange = ExchangeMulti (never 0); the adapter checks the
+ * router against its on-chain allowlist. See contracts/orbs/.../ExchangeMulti.sol.
+ */
+const MULTI_BID_DATA_PARAMS = parseAbiParameters(
+    "uint256 amountOut, address router, bytes swapData",
+);
+
+/**
+ * Which adapter the fill settles through, and therefore which bidData layout to
+ * emit. "exchangeV2" = the legacy per-router adapter (2-field). "exchangeMulti"
+ * = the single multi-router adapter (3-field, router inline). Defaults to
+ * exchangeV2 for backward compatibility with the currently deployed keeper path.
+ */
+export type OrbsBidEncoding = "exchangeV2" | "exchangeMulti";
 
 export interface OrbsBidPlan {
     /** abi.encoded (amountOut, swapData) blob to pass as bid `data`. */
@@ -132,6 +150,12 @@ export interface BuildOrbsBidArgs {
     dstFee: bigint;
     /** Router deadline for the swap; must survive until the fill tick. */
     deadline: bigint;
+    /**
+     * bidData layout to emit. "exchangeMulti" carries `venue.router` inline so a
+     * single multi-router adapter can settle. Defaults to "exchangeV2" (the
+     * legacy 2-field layout the currently deployed adapter decodes).
+     */
+    encoding?: OrbsBidEncoding;
 }
 
 /**
@@ -185,10 +209,14 @@ export function buildOrbsBid(args: BuildOrbsBidArgs): OrbsBidPlan {
         args.deadline,
     );
 
-    const bidData = encodeAbiParameters(BID_DATA_PARAMS, [
-        args.quotedOut,
-        swapData,
-    ]);
+    const bidData =
+        args.encoding === "exchangeMulti"
+            ? encodeAbiParameters(MULTI_BID_DATA_PARAMS, [
+                  args.quotedOut,
+                  args.venue.router,
+                  swapData,
+              ])
+            : encodeAbiParameters(BID_DATA_PARAMS, [args.quotedOut, swapData]);
 
     return {
         bidData,
