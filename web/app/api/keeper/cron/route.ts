@@ -50,15 +50,15 @@ import {
 import { isDbConfigured } from "@/lib/db";
 
 /**
- * Unified keeper cron — one process settles three user features that
+ * Unified keeper cron - one process settles three user features that
  * otherwise never complete on testnet (and would not on mainnet either
  * without a keeper):
  *
- *   Leg A — Orbs TWAP: bid + fill open order chunks. A single-chunk order
+ *   Leg A - Orbs TWAP: bid + fill open order chunks. A single-chunk order
  *           is a LIMIT order (fill only when price clears the floor); a
  *           multi-chunk order is a DCA schedule (loose floor => every
  *           chunk fills on its interval). Identical settlement code.
- *   Leg B — CCTP bridge-and-buy: relay the attested message so the buy
+ *   Leg B - CCTP bridge-and-buy: relay the attested message so the buy
  *           auto-completes on Arc. Safe to relay from any wallet: the
  *           receiver takes the beneficiary from the ATTESTED message.
  *
@@ -349,7 +349,7 @@ export async function POST(req: NextRequest) {
         return NextResponse.json(
             {
                 ran: false,
-                reason: "Keeper balance below threshold — refill USDC",
+                reason: "Keeper balance below threshold - refill USDC",
                 balance: balance.toString(),
                 threshold: MIN_OPERATOR_BALANCE_WEI.toString(),
             },
@@ -412,7 +412,7 @@ export async function POST(req: NextRequest) {
 }
 
 // ===================================================================
-// Leg A — Orbs TWAP settlement
+// Leg A - Orbs TWAP settlement
 // ===================================================================
 
 interface OrbsCfg {
@@ -429,7 +429,7 @@ interface OrbsCfg {
     v3Router?: Address;
     /** Arcade V3 QuoterV2 (needed to price the V3 venue). */
     v3Quoter?: Address;
-    /** Launchpad (optional) — read to replicate the V3 anti-sniper skim. */
+    /** Launchpad (optional) - read to replicate the V3 anti-sniper skim. */
     launchpad?: Address;
     usdc: Address;
     now: number;
@@ -440,7 +440,7 @@ interface OrbsCfg {
  * ExchangeV2 and ExchangeMulti revert TakerNotAllowed(taker) BEFORE decoding
  * bidData, so a denied keeper is detected without a well-formed payload; an
  * allowed keeper either returns or reverts on the (intentionally minimal) decode
- * — either way NOT TakerNotAllowed, so we read it as allowed. `probeBidData`
+ * - either way NOT TakerNotAllowed, so we read it as allowed. `probeBidData`
  * must match the adapter's decode shape for the allowed branch not to false-deny.
  */
 async function probeAllowed(
@@ -488,7 +488,7 @@ async function runOrbsLeg(
         : false;
     if (!v2Allowed && !multiAllowed) {
         summary.notes.push(
-            "keeper wallet not allowlisted on any Orbs adapter — skipping leg A (redeploy/allowlist per KEEPER_SETUP.md)",
+            "keeper wallet not allowlisted on any Orbs adapter - skipping leg A (redeploy/allowlist per KEEPER_SETUP.md)",
         );
         return;
     }
@@ -517,7 +517,7 @@ async function runOrbsLeg(
         }
         if (allowedRouters.size === 0) {
             summary.notes.push(
-                "ExchangeMulti has no allow-listed router (call setRouterAllowed) — multi orders will not settle",
+                "ExchangeMulti has no allow-listed router (call setRouterAllowed) - multi orders will not settle",
             );
         }
     }
@@ -535,7 +535,7 @@ async function runOrbsLeg(
         if (actions >= MAX_ORBS_ACTIONS_PER_RUN) break;
         summary.orbs.scanned++;
 
-        // Read the live order — the on-chain state is the source of truth.
+        // Read the live order - the on-chain state is the source of truth.
         const order = (await withTimeout(
             publicClient.readContract({
                 address: cfg.twap,
@@ -925,7 +925,7 @@ async function settleOrbsOrder(
 }
 
 // ===================================================================
-// Leg B — CCTP bridge-and-buy relay
+// Leg B - CCTP bridge-and-buy relay
 // ===================================================================
 
 async function runCctpLeg(
@@ -1015,12 +1015,40 @@ async function runCctpLeg(
             }
         }
 
+        const relayFn = intent.intentKind === "forward" ? "receiveAndForward" : "receiveAndBuy";
+        // Simulate before spending gas. intent.intentKind comes from the
+        // unauthenticated /api/bridge/intent POST, so a wrong label (or a message
+        // whose length does not match the chosen entrypoint) reverts BadMessage.
+        // Without this, a spammer's mislabeled-but-real burn burns up to
+        // BRIDGE_MAX_ATTEMPTS reverting relays. The receiver derives the
+        // beneficiary from the ATTESTED message, so simulating changes no trust
+        // assumption; it only skips a doomed send.
+        const relayOk = await withTimeout(
+            publicClient
+                .simulateContract({
+                    address: receiver,
+                    abi: CCTP_BUY_RECEIVER_ABI,
+                    functionName: relayFn,
+                    args: [message, attestation],
+                    account: keeper,
+                })
+                .then(() => true)
+                .catch(() => false),
+            RPC_TIMEOUT_MS,
+        );
+        if (relayOk !== true) {
+            await markBridgeRetryOrFail(intent.id, "relay simulation reverted", BRIDGE_MAX_ATTEMPTS);
+            summary.cctp.failed++;
+            relays++;
+            continue;
+        }
+
         await markBridgeRelaying(intent.id);
         try {
             const hash = await walletClient.writeContract({
                 address: receiver,
                 abi: CCTP_BUY_RECEIVER_ABI,
-                functionName: intent.intentKind === "forward" ? "receiveAndForward" : "receiveAndBuy",
+                functionName: relayFn,
                 args: [message, attestation],
                 chain: ARC_CHAIN,
                 account: keeper,

@@ -512,6 +512,16 @@ export async function getVerifiedEarningsUsdMicros(
     if (feeMicros !== null) {
         return computeReferralFromProtocolFeeMicros(feeMicros);
     }
+    // FAIL CLOSED when payout is enabled: the real-fee basis is unavailable
+    // (the subgraph tag does not expose protocolFeeUsdc yet). The gross-volume
+    // fallback below bills ~1.5 bps of ALL indexed volume regardless of what
+    // Arcade actually collected, which on a fee-free venue (an ordinary V3 pool
+    // with feeProtocol off, an external DEX) would pay out fees never taken and
+    // let a wash-trader drain the referral wallet. So while payouts can move
+    // money, refuse to estimate: return 0 until the subgraph exposes the real
+    // fee. The volume estimate stays a DISPLAY-only convenience when payouts are
+    // off (no money moves).
+    if (process.env.REFERRAL_PAYOUT_ENABLED === "true") return 0n;
     const volumeMicros = await getWalletsVolumeMicros(wallets, baselines);
     return computeReferralEarningsMicros(volumeMicros);
 }

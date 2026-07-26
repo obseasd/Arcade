@@ -291,18 +291,17 @@ function protocolFeeForTrade(source: string, pool: Bytes | null, volumeUsdc: Big
       }
       // Ordinary pool: Uniswap V3 feeProtocol takes 1/N of the LP fee to the
       // factory owner (the Safe). 0 = off; v3-core allows only 0 or 4..10, so a
-      // valid switch is >= 4. protocolFee = LP fee / N. Governance sets both sides
-      // equal (4 on 0.01/0.05% tiers, 6 on 0.30/1%). In v3-core the cut is taken
-      // on the INPUT side (fp0 for token0-in, fp1 for token1-in), and this helper
-      // has no direction, so we use the MIN of the two sides treating 0 as off:
-      // if either side is off, credit 0 for the whole pool. That makes over-credit
-      // structurally impossible even under an asymmetric misconfig (it can only
-      // under-credit the enabled direction, never bill a fee not collected). With
-      // the symmetric governance values min == both == correct. Until the switch
-      // is flipped both are 0, so this credits nothing.
-      const fp = p.feeProtocol0 <= p.feeProtocol1 ? p.feeProtocol0 : p.feeProtocol1;
-      if (fp >= 4) {
-        return volumeUsdc.times(feeRate).div(BigDecimal.fromString(fp.toString()));
+      // valid switch is >= 4. The cut is LP_fee / N, so a SMALLER N is a LARGER
+      // cut. The fee is taken on the INPUT side (fp0 for token0-in, fp1 for
+      // token1-in) and this helper has no direction, so to never OVER-credit we
+      // credit the MINIMUM cut across the two sides: if either side is off (0) the
+      // min cut is 0 -> credit nothing; else the min cut is LP_fee / max(N). With
+      // the symmetric governance values (fp0 == fp1) this is exact; under an
+      // asymmetric misconfig it under-credits the larger-cut direction (safe),
+      // never billing a fee that was not collected. Both 0 until the Safe flips it.
+      if (p.feeProtocol0 >= 4 && p.feeProtocol1 >= 4) {
+        const n = p.feeProtocol0 >= p.feeProtocol1 ? p.feeProtocol0 : p.feeProtocol1;
+        return volumeUsdc.times(feeRate).div(BigDecimal.fromString(n.toString()));
       }
     }
   }
