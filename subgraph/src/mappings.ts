@@ -696,6 +696,9 @@ export function handleV2PairCreated(event: PairCreated): void {
   p.kind = "v2";
   p.usdcReserve = BigDecimal.fromString("0");
   p.arcadeLocked = false; // V2 protocol fee is the pair-level LaunchFeePaid, always Arcade's
+  // feeProtocol is a V3-only mechanism; V2 pools carry 0 (non-nullable field).
+  p.feeProtocol0 = 0;
+  p.feeProtocol1 = 0;
   p.save();
 
   V2Pair.create(event.params.pair);
