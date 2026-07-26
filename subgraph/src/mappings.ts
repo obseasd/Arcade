@@ -291,11 +291,16 @@ function protocolFeeForTrade(source: string, pool: Bytes | null, volumeUsdc: Big
       }
       // Ordinary pool: Uniswap V3 feeProtocol takes 1/N of the LP fee to the
       // factory owner (the Safe). 0 = off; v3-core allows only 0 or 4..10, so a
-      // valid switch is >= 4. protocolFee = LP fee / N. Both sides are set equal
-      // by governance (4 on 0.01/0.05% tiers, 6 on 0.30/1%), so feeProtocol0 is
-      // representative. Until the switch is flipped this is 0 and credits nothing,
-      // so the subgraph never reports a fee that is not actually being collected.
-      const fp = p.feeProtocol0;
+      // valid switch is >= 4. protocolFee = LP fee / N. Governance sets both sides
+      // equal (4 on 0.01/0.05% tiers, 6 on 0.30/1%). In v3-core the cut is taken
+      // on the INPUT side (fp0 for token0-in, fp1 for token1-in), and this helper
+      // has no direction, so we use the MIN of the two sides treating 0 as off:
+      // if either side is off, credit 0 for the whole pool. That makes over-credit
+      // structurally impossible even under an asymmetric misconfig (it can only
+      // under-credit the enabled direction, never bill a fee not collected). With
+      // the symmetric governance values min == both == correct. Until the switch
+      // is flipped both are 0, so this credits nothing.
+      const fp = p.feeProtocol0 <= p.feeProtocol1 ? p.feeProtocol0 : p.feeProtocol1;
       if (fp >= 4) {
         return volumeUsdc.times(feeRate).div(BigDecimal.fromString(fp.toString()));
       }
