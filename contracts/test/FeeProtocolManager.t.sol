@@ -41,6 +41,12 @@ contract MockPool {
     }
 
     function setFeeProtocol(uint8 fp0, uint8 fp1) external {
+        // Mirror v3-core's bound so setFeeProtocolRaw with a bad value reverts here
+        // exactly as the real pool would.
+        require(
+            (fp0 == 0 || (fp0 >= 4 && fp0 <= 10)) && (fp1 == 0 || (fp1 >= 4 && fp1 <= 10)),
+            "invalid fp"
+        );
         feeProtocolPacked = fp0 + (fp1 << 4);
     }
 
@@ -279,18 +285,34 @@ contract FeeProtocolManagerTest is Test {
         mgr.transferFactoryOwnership(attacker);
     }
 
-    function test_factoryEnableFeeAmount_proxied_onlyOwner() public {
+    function test_factoryEnableFeeAmount_proxied_onlyOwner_andSetsTier() public {
         vm.prank(attacker);
         vm.expectRevert(FeeProtocolManager.NotOwner.selector);
-        mgr.factoryEnableFeeAmount(20000, 200);
+        mgr.factoryEnableFeeAmount(2500, 50, 6);
 
+        // A new PUBLIC tier: enabling it ALSO sets its default in one call, so an
+        // ordinary pool on it is skimmable immediately (no forgotten-default dodge).
         vm.prank(safe);
-        mgr.factoryEnableFeeAmount(20000, 200);
-        assertEq(factory.lastFee(), 20000);
-        assertEq(factory.lastSpacing(), int24(200));
+        mgr.factoryEnableFeeAmount(2500, 50, 6);
+        assertEq(factory.lastFee(), 2500);
+        assertEq(factory.lastSpacing(), int24(50));
+        assertEq(mgr.tierDefault(2500), 6);
+        assertTrue(mgr.tierKnown(2500));
+
+        // A launch-only tier: default 0 keeps it unmanaged (sync reverts).
+        vm.prank(safe);
+        mgr.factoryEnableFeeAmount(30000, 200, 0);
+        assertFalse(mgr.tierKnown(30000));
     }
 
-    function test_setTreasury_setPaused_transferOwnership_onlyOwner() public {
+    function test_setFeeProtocolRaw_invalidValue_reverts() public {
+        MockPool p = _pool(500);
+        vm.prank(safe);
+        vm.expectRevert(bytes("invalid fp")); // pool enforces v3-core's {0} u [4,10]
+        mgr.setFeeProtocolRaw(address(p), 3, 3);
+    }
+
+    function test_setTreasury_setPaused_onlyOwner() public {
         vm.startPrank(attacker);
         vm.expectRevert(FeeProtocolManager.NotOwner.selector);
         mgr.setTreasury(attacker);
@@ -300,16 +322,58 @@ contract FeeProtocolManagerTest is Test {
         mgr.transferOwnership(attacker);
         vm.stopPrank();
 
-        vm.startPrank(safe);
+        vm.prank(safe);
         mgr.setTreasury(attacker);
         assertEq(mgr.treasury(), attacker);
-        mgr.transferOwnership(attacker);
-        assertEq(mgr.owner(), attacker);
-        vm.stopPrank();
     }
 
-    function test_constructor_zeroAddress_reverts() public {
+    function test_transferOwnership_isTwoStep() public {
+        vm.prank(safe);
+        mgr.transferOwnership(attacker);
+        assertEq(mgr.owner(), safe); // not yet
+        assertEq(mgr.pendingOwner(), attacker);
+
+        // wrong acceptor rejected
+        vm.prank(makeAddr("rando"));
+        vm.expectRevert(FeeProtocolManager.NotPendingOwner.selector);
+        mgr.acceptOwnership();
+
+        vm.prank(attacker);
+        mgr.acceptOwnership();
+        assertEq(mgr.owner(), attacker);
+        assertEq(mgr.pendingOwner(), address(0));
+    }
+
+    function test_syncMany() public {
+        MockPool a = _pool(500);
+        MockPool b = _pool(3000);
+        address[] memory pools = new address[](2);
+        pools[0] = address(a);
+        pools[1] = address(b);
+        mgr.syncMany(pools);
+        assertEq(a.fp0(), 4);
+        assertEq(b.fp0(), 6);
+    }
+
+    function test_forceZero_notGatedByPaused() public {
+        // A paused manager must NOT brick launches: forceZero (0 direction) works.
+        MockPool p = _pool(500);
+        mgr.sync(address(p));
+        locker.lock(TOKEN, address(p));
+        vm.prank(safe);
+        mgr.setPaused(true);
+        mgr.forceZero(address(p)); // still works while paused
+        assertEq(p.fp0(), 0);
+    }
+
+    function test_constructor_zeroAddress_reverts_allParams() public {
         vm.expectRevert(FeeProtocolManager.ZeroAddress.selector);
         new FeeProtocolManager(address(0), address(locker), safe, treasury);
+        vm.expectRevert(FeeProtocolManager.ZeroAddress.selector);
+        new FeeProtocolManager(address(factory), address(0), safe, treasury);
+        vm.expectRevert(FeeProtocolManager.ZeroAddress.selector);
+        new FeeProtocolManager(address(factory), address(locker), address(0), treasury);
+        vm.expectRevert(FeeProtocolManager.ZeroAddress.selector);
+        new FeeProtocolManager(address(factory), address(locker), safe, address(0));
     }
 }

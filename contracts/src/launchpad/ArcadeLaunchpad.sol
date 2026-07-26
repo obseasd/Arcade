@@ -41,6 +41,14 @@ import {ArcadeV3PriceMath} from "../v3/ArcadeV3PriceMath.sol";
  *
  * USDC has 6 decimals on Arc. Token has 18 decimals.
  */
+interface IFeeProtocolManager {
+    /// Force a genuine launch pool's V3 feeProtocol to 0 (reverts if not a launch
+    /// pool). Called atomically right after the pool is locked so a pool that a
+    /// front-runner pre-created + fee-enabled cannot end up locked WITH the fee on
+    /// (which would double-skim the creator on top of the locker's ~20%).
+    function forceZero(address pool) external;
+}
+
 contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
@@ -148,6 +156,11 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
     address public v3Router;
     /// @notice ArcadeTokenVault — holds the optional locked/vesting creator allocation.
     address public tokenVault;
+    /// @notice FeeProtocolManager (the V3 factory owner). Set once post-deploy
+    /// (it is deployed after the locker, so it cannot be wired in setV3Infra).
+    /// When set, every CLANKER_V3 launch calls forceZero(pool) right after the
+    /// lock so the pool cannot end up locked with a front-run feeProtocol on.
+    address public feeProtocolManager;
 
     // --- State ---
 
@@ -187,6 +200,7 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
     error V3NotConfigured();
     error NotDeployer();
     error LockerAlreadySet();
+    error ManagerAlreadySet();
     error BadFeeTier();
     error BadVault();
     error BadSnipe();
@@ -204,6 +218,10 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
 
     event UsdcCredited(address indexed recipient, uint256 amount);
     event UsdcPendingClaimed(address indexed recipient, uint256 amount);
+    /// Emitted when the post-lock forceZero call reverts (misconfig). The launch
+    /// still completes; the keeper heals the pool on PositionLocked. Observability
+    /// so a monitor can catch a broken fee-manager wiring.
+    event FeeProtocolForceZeroFailed(address indexed pool);
 
     /// @notice Sniper config stored per token. The Arcade V3 router skims
     /// `startBps` from buys at launch, decaying linearly to 0 over
@@ -273,6 +291,16 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
         // unnecessary risk. We can't clear the immutable `deployer`, but
         // every later check is `msg.sender != deployer` and the `v3Locker`
         // gate above prevents re-entry to this function anyway.
+    }
+
+    /// @notice Wire the FeeProtocolManager (deployed after the locker). One-time,
+    /// deployer-only. When set, CLANKER_V3 launches call forceZero(pool) post-lock
+    /// so a front-run feeProtocol on a launch pool is neutralised atomically.
+    function setFeeProtocolManager(address manager) external {
+        if (msg.sender != deployer) revert NotDeployer();
+        if (feeProtocolManager != address(0)) revert ManagerAlreadySet();
+        if (manager == address(0)) revert ZeroAmount();
+        feeProtocolManager = manager;
     }
 
     // ====================== Token creation ======================
@@ -917,6 +945,19 @@ contract ArcadeLaunchpad is IArcadeLaunchpad, ReentrancyGuard {
                 fee: fee // CSEC-013: locker re-derives pool from factory.getPool(token, paired, fee)
             })
         );
+
+        // Close the create-then-lock front-run: the pool is now registered in the
+        // locker (positionIdByToken set inside lockSingleSided), so forceZero
+        // succeeds and neutralises any feeProtocol a front-runner enabled on this
+        // pool before it was locked. try/catch so a mis-wired manager can never
+        // brick a launch; the keeper heals on PositionLocked as the backstop.
+        address fpm = feeProtocolManager;
+        if (fpm != address(0)) {
+            try IFeeProtocolManager(fpm).forceZero(pool) {}
+            catch {
+                emit FeeProtocolForceZeroFailed(pool);
+            }
+        }
 
         emit Migrated(tokenAddr, pool, 0, lpSupply);
 

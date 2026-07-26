@@ -72,6 +72,7 @@ contract FeeProtocolManager {
     address public immutable factory;
     address public immutable locker;
     address public owner; // the Safe
+    address public pendingOwner; // two-step transfer (never brick factory governance)
     address public treasury; // harvest destination (fixed by governance)
     bool public paused;
 
@@ -86,7 +87,9 @@ contract FeeProtocolManager {
     error BadValue();
     error UnknownTier();
     error NotLaunchPool();
+    error NotPendingOwner();
 
+    event OwnershipTransferStarted(address indexed pendingOwner);
     event OwnerSet(address indexed owner);
     event TreasurySet(address indexed treasury);
     event PausedSet(bool paused);
@@ -161,6 +164,9 @@ contract FeeProtocolManager {
      * an ordinary pool.
      */
     function forceZero(address pool) external {
+        // NOT gated by `paused`: 0 is always the safe direction, and the launchpad
+        // calls this atomically in the launch tx (see ArcadeLaunchpad), so gating
+        // it would let a paused manager brick every launch.
         if (!_isLaunchPool(pool)) revert NotLaunchPool();
         IV3PoolMin(pool).setFeeProtocol(0, 0);
         emit ForcedZero(pool);
@@ -189,9 +195,20 @@ contract FeeProtocolManager {
         emit RawSet(pool, fp0, fp1);
     }
 
-    /** Proxy the factory owner-only levers so factory governance is not bricked. */
-    function factoryEnableFeeAmount(uint24 fee, int24 tickSpacing) external onlyOwner {
+    /**
+     * Proxy the factory `enableFeeAmount` AND set this tier's protocol-fee default
+     * in the same call. `feeProtocolDefault` = 0 for a launch-only tier (stays
+     * unmanaged, sync reverts UnknownTier), or 4..10 for a public tier we want
+     * ordinary pools to auto-collect on. Bundling the two prevents the fee-dodge
+     * where a new public tier is enabled but its default is forgotten, so pools
+     * on it permanently escape the skim (audit MEDIUM-1).
+     */
+    function factoryEnableFeeAmount(uint24 fee, int24 tickSpacing, uint8 feeProtocolDefault)
+        external
+        onlyOwner
+    {
         IV3Factory(factory).enableFeeAmount(fee, tickSpacing);
+        _setTier(fee, feeProtocolDefault);
     }
 
     /** Escape hatch: hand factory ownership back to the Safe or to a new manager. */
@@ -212,10 +229,23 @@ contract FeeProtocolManager {
         emit PausedSet(p);
     }
 
+    /**
+     * Two-step ownership. Because this contract holds factory ownership, a
+     * fat-fingered one-step transfer would permanently strand setOwner /
+     * enableFeeAmount / setFeeProtocolRaw (total loss of factory governance, audit
+     * LOW-1). The new owner must accept.
+     */
     function transferOwnership(address to) external onlyOwner {
         if (to == address(0)) revert ZeroAddress();
-        owner = to;
-        emit OwnerSet(to);
+        pendingOwner = to;
+        emit OwnershipTransferStarted(to);
+    }
+
+    function acceptOwnership() external {
+        if (msg.sender != pendingOwner) revert NotPendingOwner();
+        owner = pendingOwner;
+        pendingOwner = address(0);
+        emit OwnerSet(owner);
     }
 
     // -------------------- distinguisher --------------------
