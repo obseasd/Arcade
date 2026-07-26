@@ -42,6 +42,10 @@ export const ADDRESSES = {
   v3Router: safeAddress(process.env.NEXT_PUBLIC_V3_ROUTER_ADDRESS ?? DEPLOYMENTS.v3Router),
   v3Quoter: safeAddress(process.env.NEXT_PUBLIC_V3_QUOTER_ADDRESS ?? DEPLOYMENTS.v3Quoter),
   v3Locker: safeAddress(process.env.NEXT_PUBLIC_V3_LOCKER_ADDRESS ?? DEPLOYMENTS.v3Locker),
+  /** FeeProtocolManager: the V3 factory owner that auto-enables the protocol fee
+   *  on ordinary pools (sync) and holds launch pools at 0. When set, the keeper
+   *  syncs new pools. Unset = the fee-sync leg is dormant. */
+  feeProtocolManager: safeAddress(process.env.NEXT_PUBLIC_FEE_PROTOCOL_MANAGER_ADDRESS ?? DEPLOYMENTS.feeProtocolManager),
   /** ArcadeV3PositionManager (Uniswap V3 NPM rebrand). Deployed; the V3
    *  positions/add tab gates off only if this is zeroAddress, so it carries the
    *  deployments.json fallback like the other core addresses (a missing Vercel

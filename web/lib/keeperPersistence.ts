@@ -564,7 +564,7 @@ export async function releaseKeeperLease(holder: string): Promise<void> {
 // Event log
 // ---------------------------------------------------------------
 
-export type KeeperLeg = "orbs" | "cctp";
+export type KeeperLeg = "orbs" | "cctp" | "fees";
 
 export async function insertKeeperEvent(e: {
     leg: KeeperLeg;
@@ -575,6 +575,7 @@ export async function insertKeeperEvent(e: {
         | "prune"
         | "relay"
         | "skip"
+        | "sync"
         | "error";
     refId?: string | null;
     txHash?: string | null;
@@ -627,4 +628,28 @@ export async function getRecentKeeperEvents(
         detail: r.detail ?? {},
         createdAt: r.created_at,
     }));
+}
+
+/**
+ * Generic scan cursor (last-processed block for a named forward scan). Used by
+ * the keeper fee-protocol sync leg so it scans V3 PoolCreated events forward from
+ * where it stopped rather than re-scanning a window every tick.
+ */
+export async function getKeeperCursor(name: string): Promise<bigint | null> {
+    if (!isDbConfigured()) return null;
+    const sql = getSql();
+    const rows = (await sql`SELECT block FROM keeper_cursors WHERE name = ${name}`) as Array<{
+        block: string;
+    }>;
+    return rows[0] ? BigInt(rows[0].block) : null;
+}
+
+export async function setKeeperCursor(name: string, block: bigint): Promise<void> {
+    if (!isDbConfigured()) return;
+    const sql = getSql();
+    await sql`
+        INSERT INTO keeper_cursors (name, block, updated_at)
+        VALUES (${name}, ${block.toString()}, NOW())
+        ON CONFLICT (name) DO UPDATE SET block = EXCLUDED.block, updated_at = NOW()
+    `;
 }

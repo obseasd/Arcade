@@ -45,6 +45,8 @@ import {
     tryAcquireKeeperLease,
     releaseKeeperLease,
     insertKeeperEvent,
+    getKeeperCursor,
+    setKeeperCursor,
     type KeeperOrbsOrder,
 } from "@/lib/keeperPersistence";
 import { isDbConfigured } from "@/lib/db";
@@ -118,6 +120,48 @@ const BRIDGE_PENDING_MAX_AGE_MS = 3 * 60 * 60 * 1000;
 // The single-run lease covers a full tick (maxDuration=60s) plus slack, so a
 // slow run's lease outlives its execution; it self-expires if the run crashes.
 const LEASE_SECONDS = 90;
+
+// --- Leg C: V3 fee-protocol sync ---
+// topic0 of PoolCreated(address,address,uint24,int24,address). The pool address
+// is the SECOND data word (not indexed); token0/token1/fee are the indexed args.
+const POOL_CREATED_TOPIC0 = "0x783cca1c0412dd0d695e784568c96da2e9c22ff989357a2e8b1d9b2b4e6b7118";
+const FEE_MANAGER_ABI = [
+    {
+        type: "function",
+        stateMutability: "nonpayable",
+        name: "sync",
+        inputs: [{ name: "pool", type: "address" }],
+        outputs: [],
+    },
+    {
+        type: "function",
+        stateMutability: "view",
+        name: "isLaunchPool",
+        inputs: [{ name: "pool", type: "address" }],
+        outputs: [{ type: "bool" }],
+    },
+] as const;
+const POOL_SLOT0_ABI = [
+    {
+        type: "function",
+        stateMutability: "view",
+        name: "slot0",
+        inputs: [],
+        outputs: [
+            { type: "uint160" },
+            { type: "int24" },
+            { type: "uint16" },
+            { type: "uint16" },
+            { type: "uint16" },
+            { type: "uint8" },
+            { type: "bool" },
+        ],
+    },
+] as const;
+const FEE_SYNC_CURSOR = "v3_pool_created";
+const FEE_SYNC_WINDOW = 10_000n; // Arc getLogs range cap
+const MAX_FEE_SYNC_WINDOWS_PER_RUN = 8; // bound the scan span per tick
+const MAX_FEE_SYNCS_PER_RUN = 6; // bound the txs per tick
 
 const RPC_TIMEOUT_MS = 3_000;
 // A submitted tx must not hang the whole run to the 60s Vercel ceiling (and
@@ -234,6 +278,7 @@ async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | null> {
 interface RunSummary {
     orbs: { scanned: number; bid: number; filled: number; closed: number; skipped: number; failed: number };
     cctp: { scanned: number; relayed: number; skipped: number; failed: number };
+    fees: { scanned: number; synced: number; skipped: number; failed: number };
     notes: string[];
 }
 
@@ -316,6 +361,9 @@ export async function POST(req: NextRequest) {
     const v3Router = liveAddress(ADDRESSES.v3Router);
     const v3Quoter = liveAddress(ADDRESSES.v3Quoter);
     const launchpad = liveAddress(ADDRESSES.launchpad);
+    // Leg C: fee-protocol sync. Dormant unless the manager + factory are wired.
+    const feeProtocolManager = liveAddress(ADDRESSES.feeProtocolManager);
+    const v3Factory = liveAddress(ADDRESSES.v3Factory);
 
     const keeperKey = process.env.KEEPER_OPERATOR_PRIVATE_KEY as Hex | undefined;
     if (!keeperKey || !/^0x[0-9a-fA-F]{64}$/.test(keeperKey)) {
@@ -382,6 +430,7 @@ export async function POST(req: NextRequest) {
     const summary: RunSummary = {
         orbs: { scanned: 0, bid: 0, filled: 0, closed: 0, skipped: 0, failed: 0 },
         cctp: { scanned: 0, relayed: 0, skipped: 0, failed: 0 },
+        fees: { scanned: 0, synced: 0, skipped: 0, failed: 0 },
         notes: [],
     };
 
@@ -412,6 +461,21 @@ export async function POST(req: NextRequest) {
             await runCctpLeg(publicClient, walletClient, account.address, now, summary);
         } catch (err) {
             summary.notes.push(`cctp-leg error=${errMsg(err)}`);
+        }
+
+        // ---- Leg C: V3 fee-protocol sync (dormant unless the manager is wired) ----
+        if (feeProtocolManager && v3Factory) {
+            try {
+                await runFeeSyncLeg(
+                    { feeProtocolManager, v3Factory, headBlock: BigInt(latestBlock.number) },
+                    publicClient,
+                    walletClient,
+                    account.address,
+                    summary,
+                );
+            } catch (err) {
+                summary.notes.push(`fees-leg error=${errMsg(err)}`);
+            }
         }
     } finally {
         await releaseKeeperLease(runToken).catch(() => {});
@@ -1083,6 +1147,136 @@ async function runCctpLeg(
 
     void keeper;
     void now;
+}
+
+// ===================================================================
+// Leg C - V3 fee-protocol sync
+// ===================================================================
+
+interface FeeSyncCfg {
+    feeProtocolManager: Address;
+    v3Factory: Address;
+    headBlock: bigint;
+}
+
+/**
+ * Enable the V3 protocol fee on new ORDINARY pools automatically by calling the
+ * FeeProtocolManager's convergent `sync(pool)`, and heal any launch pool the
+ * launchpad's atomic forceZero missed. Scans PoolCreated forward from a persisted
+ * cursor. sync is idempotent (launch -> 0, ordinary -> tier default), so a
+ * pre-check skips pools already in their target state to avoid wasted txs, and
+ * the cursor only advances when the run drained under the per-tick tx cap.
+ */
+async function runFeeSyncLeg(
+    cfg: FeeSyncCfg,
+    publicClient: PublicClient,
+    walletClient: WalletClient,
+    keeper: Address,
+    summary: RunSummary,
+) {
+    const head = cfg.headBlock;
+    let from =
+        (await getKeeperCursor(FEE_SYNC_CURSOR).catch(() => null)) ??
+        (head > FEE_SYNC_WINDOW ? head - FEE_SYNC_WINDOW : 0n);
+    if (from > head) from = head;
+
+    // Collect new pool addresses across a bounded number of windows.
+    const pools: Address[] = [];
+    let scannedTo = from;
+    for (let w = 0; w < MAX_FEE_SYNC_WINDOWS_PER_RUN && scannedTo < head; w++) {
+        const to = scannedTo + FEE_SYNC_WINDOW - 1n > head ? head : scannedTo + FEE_SYNC_WINDOW - 1n;
+        // Raw eth_getLogs (topic0 only). viem's typed getLogs wants an event/args
+        // shape, but Arc ignores indexed-topic filters anyway, so the raw request
+        // is both simpler and faithful to how the referral scan reads Arc logs.
+        const logs = (await withTimeout(
+            publicClient.request({
+                method: "eth_getLogs",
+                params: [
+                    {
+                        address: cfg.v3Factory,
+                        topics: [POOL_CREATED_TOPIC0],
+                        fromBlock: ("0x" + scannedTo.toString(16)) as Hex,
+                        toBlock: ("0x" + to.toString(16)) as Hex,
+                    },
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                ] as any,
+            }) as Promise<{ data: Hex }[]>,
+            RPC_TIMEOUT_MS,
+        )) as { data: Hex }[] | null;
+        if (logs === null) break; // window failed: keep the cursor, retry next tick
+        for (const log of logs) {
+            // data = abi.encode(int24 tickSpacing, address pool); pool is word 2.
+            if (!log.data || log.data.length < 2 + 128) continue;
+            const pool = getAddr(("0x" + log.data.slice(2 + 64 + 24, 2 + 128)) as Address);
+            if (pool !== ZERO) pools.push(pool);
+        }
+        scannedTo = to + 1n;
+    }
+    summary.fees.scanned += pools.length;
+
+    let actions = 0;
+    const seen = new Set<string>();
+    for (const pool of pools) {
+        if (actions >= MAX_FEE_SYNCS_PER_RUN) break;
+        const key = pool.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+
+        const isLaunch = (await withTimeout(
+            publicClient
+                .readContract({
+                    address: cfg.feeProtocolManager,
+                    abi: FEE_MANAGER_ABI,
+                    functionName: "isLaunchPool",
+                    args: [pool],
+                })
+                .then((v) => v === true)
+                .catch(() => null),
+            RPC_TIMEOUT_MS,
+        )) as boolean | null;
+        const fp = (await withTimeout(
+            publicClient
+                .readContract({ address: pool, abi: POOL_SLOT0_ABI, functionName: "slot0" })
+                .then((r) => Number((r as readonly unknown[])[5]))
+                .catch(() => null),
+            RPC_TIMEOUT_MS,
+        )) as number | null;
+
+        // Already in target state: a launch pool at 0 (launchpad handled it) or an
+        // ordinary pool already fee-enabled (fp != 0). Skip the tx.
+        const alreadyOk =
+            (isLaunch === true && fp === 0) || (isLaunch === false && fp !== null && fp !== 0);
+        if (alreadyOk) {
+            summary.fees.skipped++;
+            continue;
+        }
+
+        try {
+            const hash = await walletClient.writeContract({
+                address: cfg.feeProtocolManager,
+                abi: FEE_MANAGER_ABI,
+                functionName: "sync",
+                args: [pool],
+                chain: ARC_CHAIN,
+                account: keeper,
+                maxFeePerGas: MAX_FEE_PER_GAS_WEI,
+            });
+            await publicClient.waitForTransactionReceipt({ hash, timeout: RECEIPT_TIMEOUT_MS });
+            await insertKeeperEvent({ leg: "fees", eventType: "sync", refId: pool, txHash: hash });
+            summary.fees.synced++;
+            actions++;
+        } catch {
+            // e.g. UnknownTier (a launch-only-tier ordinary pool) -> not managed.
+            summary.fees.skipped++;
+        }
+    }
+
+    // Advance only when we drained under the tx cap; if we capped out there may be
+    // more pools in this span, so keep the cursor and the pre-check skips the ones
+    // already synced next tick.
+    if (actions < MAX_FEE_SYNCS_PER_RUN) {
+        await setKeeperCursor(FEE_SYNC_CURSOR, scannedTo).catch(() => {});
+    }
 }
 
 // ===================================================================
