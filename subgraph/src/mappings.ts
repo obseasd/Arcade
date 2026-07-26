@@ -285,9 +285,16 @@ function protocolFeeForTrade(source: string, pool: Bytes | null, volumeUsdc: Big
         BigDecimal.fromString("1000000"),
       );
       if (p.arcadeLocked) {
-        // Locked (CLANKER_V3) pool: the compounder keeps 10% of the LP fee.
-        // One mechanism per pool: locked pools never also carry feeProtocol.
-        return volumeUsdc.times(feeRate).times(BigDecimal.fromString("0.10"));
+        // Locked (CLANKER_V3) LAUNCH pool: the V3 locker distributes LP fees by
+        // recipient bps, with the creator at 8000 (launchpad V3_CREATOR_BPS =
+        // 80%) and the platform/treasury recipient taking the remaining 2000 =
+        // 20%. That 20% is Arcade's REAL protocol take on these pools. The old
+        // 0.10 was wrong: it assumed the ArcadeAutoCompounder's 10% cut, but that
+        // applies only to USER positions deposited in the compounder, and those
+        // pools are NOT arcadeLocked (arcadeLocked is set only from the locker's
+        // PositionLocked, which is launchpad-only). One mechanism per pool: locked
+        // pools never also carry feeProtocol.
+        return volumeUsdc.times(feeRate).times(BigDecimal.fromString("0.20"));
       }
       // Ordinary pool: Uniswap V3 feeProtocol takes 1/N of the LP fee to the
       // factory owner (the Safe). 0 = off; v3-core allows only 0 or 4..10, so a
