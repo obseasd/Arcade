@@ -556,6 +556,33 @@ function FeesRecipientPanel({
             : fo.creator
         : undefined;
 
+    // Reply launch: a PARTIAL creator2Bps on a twitter-escrow launch means the
+    // creator fee is split with the replied-to original poster (launcher on
+    // escrow slot 0, OP on slot 1). Show BOTH @handles + their share, not just
+    // the launcher. The OP's @ lives in the backend DB (not the subgraph), so
+    // resolve it via /api/twitter-launch/reply.
+    const isReplySplit = isTwitter && c2bps > 0 && c2bps < 10_000;
+    const launcherPct = Math.round((10_000 - c2bps) / 100);
+    const opPct = Math.round(c2bps / 100);
+    // "Fees generated" shows the TOTAL creator pot; the per-@ percentages below
+    // divide it. (recipientShare only matters for the fees the shown launcher
+    // keeps; with both recipients displayed we show the full pot instead.)
+    const totalCreatorFeesUsd = feesUsd * creatorFeePortion;
+    const [opHandle, setOpHandle] = useState<string>();
+    useEffect(() => {
+        if (!isReplySplit || !poolId) return;
+        let cancelled = false;
+        fetch(`/api/twitter-launch/reply?poolId=${poolId}`)
+            .then((r) => (r.ok ? r.json() : null))
+            .then((j) => {
+                if (!cancelled && j?.opHandle) setOpHandle(String(j.opHandle).replace(/^@/, ""));
+            })
+            .catch(() => {});
+        return () => {
+            cancelled = true;
+        };
+    }, [isReplySplit, poolId]);
+
     // CLANKER creators realize their 80% fee cut only when collectFees(token)
     // runs -- it's permissionless and always pays the configured recipient, so
     // a wallet-recipient creator can harvest right here instead of the fees
@@ -595,21 +622,42 @@ function FeesRecipientPanel({
             <div className="flex items-center justify-between text-sm">
                 <span className="text-arc-text-muted">Fees generated</span>
                 <span className="tabular-nums font-medium">
-                    ${creatorFeesUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                    ${(isReplySplit ? totalCreatorFeesUsd : creatorFeesUsd).toLocaleString(undefined, { maximumFractionDigits: 2 })}
                     {isEstimate && <span className="text-[10px] text-arc-text-faint"> (est.)</span>}
                 </span>
             </div>
             <div className="border-t border-arc-border pt-3">
                 <div className="text-xs text-arc-text-muted">Fees recipient</div>
                 {isTwitter ? (
-                    <>
-                        <Link
-                            href={`/claim?token=${token}&slot=0${handle ? `&handle=${handle}` : ""}`}
-                            className="mt-1 inline-flex items-center gap-1 text-sm font-medium text-arc-cta-hover hover:underline"
-                        >
-                            @{handle ?? "twitter"} · verify &amp; claim
-                        </Link>
-                    </>
+                    <div className="mt-1 space-y-1">
+                        <div className="flex items-center justify-between gap-2">
+                            <Link
+                                href={`/claim?token=${token}&slot=0${handle ? `&handle=${handle}` : ""}`}
+                                className="inline-flex items-center gap-1 text-sm font-medium text-arc-cta-hover hover:underline"
+                            >
+                                @{handle ?? "twitter"} · verify &amp; claim
+                            </Link>
+                            {isReplySplit && (
+                                <span className="shrink-0 tabular-nums text-[10px] text-arc-text-faint">{launcherPct}%</span>
+                            )}
+                        </div>
+                        {isReplySplit && (
+                            <div className="flex items-center justify-between gap-2">
+                                <Link
+                                    href={`/claim?token=${token}&slot=1${opHandle ? `&handle=${opHandle}` : ""}`}
+                                    className="inline-flex items-center gap-1 text-sm font-medium text-arc-cta-hover hover:underline"
+                                >
+                                    @{opHandle ?? "original poster"} · verify &amp; claim
+                                </Link>
+                                <span className="shrink-0 tabular-nums text-[10px] text-arc-text-faint">{opPct}%</span>
+                            </div>
+                        )}
+                        {isReplySplit && (
+                            <p className="text-[10px] text-arc-text-faint">
+                                Reply launch: creator fees split with the replied-to poster.
+                            </p>
+                        )}
+                    </div>
                 ) : recipientAddr ? (
                     <a
                         href={`https://testnet.arcscan.app/address/${recipientAddr}`}
