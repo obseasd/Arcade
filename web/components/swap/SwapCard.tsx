@@ -789,6 +789,15 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
   //   - V3 fee tier comes from feeOf() already in pips (10_000 = 1%)
   //   - swapMigratedRoute: V2 fee on each leg + 0.30% royalty per migrated side
   const feePips: bigint = (() => {
+    // Prefer the ACTUAL routed fee tier from the aggregator over feeOf()'s static
+    // default. feeOf() returns 3000 (0.30%) for statically-registered V3 tokens
+    // like SeedETH even when the swap routes through the 500 (0.05%) pool, which
+    // made the "Fee" line read 0.30% on a 0.05% trade. The executor already runs
+    // the correct tier (it uses activeRoute.executor verbatim), so the display
+    // must follow activeRoute.fee, not the token default.
+    if (activeRoute?.provider === "arcade-v3" && activeRoute.fee) {
+      return BigInt(activeRoute.fee);
+    }
     if (isV3Swap) return BigInt(v3Fee);
     if (route.useLaunchpadRouter) {
       // 2 V2 legs (3_000 pips each) + 3_000 pips per migrated side (royalty).
@@ -1690,7 +1699,10 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
             )}
             {isV3Swap && !v3DoubleHop && (
               <span className="ml-1 rounded-full border border-arc-success/40 bg-arc-success/10 px-1.5 py-0.5 text-[10px] font-medium text-arc-success">
-                locked-LP pool
+                {/* The real routed fee tier, not a "locked-LP" label: most V3
+                    pools (e.g. USDC/SeedETH 0.05%) are regular /positions pools,
+                    NOT arcadeLocked, so the old badge was misleading. */}
+                {feePct.toFixed(2).replace(/0+$/, "").replace(/\.$/, "")}% pool
               </span>
             )}
             {!isV3Swap && route.viaUsdc && (
