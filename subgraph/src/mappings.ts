@@ -981,6 +981,24 @@ function priceV4(usdcRaw: BigInt, tokenRaw: BigInt): BigDecimal {
   return usdcRaw.toBigDecimal().times(scale).div(tokenRaw.toBigDecimal());
 }
 
+// Post-trade SPOT price on the V4 bonding curve, as a closed form of tokensSold.
+// Mirrors ArcadeV4Curve.spotPrice (currentUsdc/1e18-token) rescaled to the same
+// USDC(6dp)-per-token(18dp) units as priceV4 (so the curve->graduated handoff is
+// price-continuous). By the constant-product invariant the real USDC reserve is
+// K / (VIRTUAL_TOKEN_RESERVE - tokensSold), so tokensSold alone fixes the spot.
+// Constants CALIBRATED 2026-07-17, verified against v4src/libraries/ArcadeV4Curve.sol.
+function curveSpotV4(tokensSold: BigInt): BigDecimal {
+  const V_U = BigInt.fromString("5800000000"); // VIRTUAL_USDC_RESERVE = 5_800e6
+  const V_T = BigInt.fromString("1135000000000000000000000000"); // VIRTUAL_TOKEN_RESERVE = 1.135e9 * 1e18
+  const rem = V_T.minus(tokensSold); // currentTokens (raw 18dp)
+  if (rem.le(BigInt.zero())) return BigDecimal.fromString("0");
+  const remDec = rem.toBigDecimal();
+  // currentUsdc_raw = K / rem (invariant); human price = currentUsdc_raw * 1e12 / rem.
+  const currentUsdcDec = V_U.times(V_T).toBigDecimal().div(remDec);
+  const scale = BigDecimal.fromString("1000000000000"); // 1e12
+  return currentUsdcDec.times(scale).div(remDec);
+}
+
 /// V4 orders currencies by numeric address, so USDC is currency0 iff its address
 /// sorts below the launch token's. Both are 20-byte big-endian; compare from the
 /// most-significant byte. (No string `<` in AssemblyScript, so compare bytes.)
@@ -1050,7 +1068,10 @@ export function handleLaunchCreatedV4(event: LaunchCreated): void {
 
   // PoolId -> token map for the curve/graduation/handle handlers.
   let p = V4Pool.load(poolIdHex);
-  if (p == null) p = new V4Pool(poolIdHex);
+  if (p == null) {
+    p = new V4Pool(poolIdHex);
+    p.tokensSold = BigInt.zero();
+  }
   p.token = token;
   p.creator = creator;
   p.mode = mode;
@@ -1145,13 +1166,17 @@ export function handleTokenLaunchedV4(event: TokenLaunched): void {
 export function handleCurveBuyV4(event: CurveBuy): void {
   const p = V4Pool.load(event.params.poolId.toHexString());
   if (p == null) return;
+  // Advance tokensSold FIRST so the recorded price is the post-trade spot
+  // (the price the next trade would open at), not the execution average.
+  p.tokensSold = p.tokensSold.plus(event.params.tokensOut);
+  p.save();
   recordTrade(
     event,
     p.token,
     event.params.buyer,
     "v4curve",
     null,
-    priceV4(event.params.grossUsdcIn, event.params.tokensOut),
+    curveSpotV4(p.tokensSold),
     usdcVolume(event.params.grossUsdcIn),
     true,
   );
@@ -1160,13 +1185,15 @@ export function handleCurveBuyV4(event: CurveBuy): void {
 export function handleCurveSellV4(event: CurveSell): void {
   const p = V4Pool.load(event.params.poolId.toHexString());
   if (p == null) return;
+  p.tokensSold = p.tokensSold.minus(event.params.tokensIn);
+  p.save();
   recordTrade(
     event,
     p.token,
     event.params.seller,
     "v4curve",
     null,
-    priceV4(event.params.usdcOut, event.params.tokensIn),
+    curveSpotV4(p.tokensSold),
     usdcVolume(event.params.usdcOut),
     false,
   );

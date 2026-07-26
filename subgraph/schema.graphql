@@ -210,6 +210,11 @@ type V4Pool @entity(immutable: false) {
   token: Bytes!
   creator: Bytes!
   mode: Int!
+  # Running total of launch tokens sold on the bonding curve (buy +tokensOut,
+  # sell -tokensIn). Lets the curve trade handlers record the true post-trade
+  # SPOT price (a closed form of tokensSold) instead of the trade's execution
+  # average, so a buy and an equal sell move the chart symmetrically.
+  tokensSold: BigInt!
 }
 
 # A CLANKER launch that routed its creator fees to a Twitter handle. Powers the
