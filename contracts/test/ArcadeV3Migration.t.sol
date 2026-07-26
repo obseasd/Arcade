@@ -12,6 +12,17 @@ import {ArcadeTokenVault} from "../src/launchpad/ArcadeTokenVault.sol";
 import {IArcadeLaunchpad} from "../src/launchpad/interfaces/IArcadeLaunchpad.sol";
 import {IArcadeV3Factory, IArcadeV3Pool, IArcadeV3Locker} from "../src/v3/interfaces/IArcadeV3Minimal.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {FeeProtocolManager} from "../src/FeeProtocolManager.sol";
+
+interface IFactoryGov {
+    function owner() external view returns (address);
+    function setOwner(address) external;
+}
+
+interface IPoolFP {
+    function slot0() external view returns (uint160, int24, uint16, uint16, uint16, uint8, bool);
+    function initialize(uint160 sqrtPriceX96) external;
+}
 
 interface IV3Router {
     function exactInputSingle(
@@ -144,6 +155,57 @@ contract ArcadeV3MigrationTest is Test {
         );
         vm.stopPrank();
         pool = IArcadeV3Factory(v3Factory).getPool(address(usdc), token, FEE);
+    }
+
+    // -------- FeeProtocolManager integration (real launchpad + locker path) --------
+
+    uint160 constant SQRT_1_1 = 79228162514264337593543950336; // sqrt(1) * 2^96
+
+    function _wireFeeManager() internal returns (FeeProtocolManager mgr) {
+        mgr = new FeeProtocolManager(v3Factory, v3Locker, address(this), treasury);
+        IFactoryGov(v3Factory).setOwner(address(mgr)); // manager becomes factory owner
+        launchpad.setFeeProtocolManager(address(mgr)); // deployer(this) wires it
+    }
+
+    function _fp(address p) internal view returns (uint8) {
+        (,,,,, uint8 fp,) = IPoolFP(p).slot0();
+        return fp;
+    }
+
+    // A CLANKER_V3 launch must leave feeProtocol == 0 on its locked pool, and the
+    // launchpad's atomic forceZero must not brick the launch.
+    function test_feeManager_launchPoolHeldAtZero() public {
+        _wireFeeManager();
+        (address token, address pool) = _createV3Token();
+        assertTrue(pool != address(0), "launched");
+        assertEq(IArcadeV3Locker(v3Locker).positionIdByToken(token), 1, "locked");
+        assertEq(_fp(pool), 0, "launch pool feeProtocol held at 0");
+    }
+
+    // Backstop: a REAL locked launch pool that somehow has feeProtocol on is
+    // healed to 0 by the manager (sync forces it, forceZero forces it). Proves the
+    // convergence on a genuine locked pool, not a mock.
+    function test_feeManager_healsLockedPoolToZero() public {
+        FeeProtocolManager mgr = _wireFeeManager();
+        (, address pool) = _createV3Token();
+        // Simulate the front-run outcome: feeProtocol got turned on on the pool.
+        mgr.setFeeProtocolRaw(pool, 6, 6);
+        assertEq(_fp(pool), 6 + (6 << 4), "forced on");
+        // sync now reads it as a launch pool and forces it back to 0.
+        mgr.sync(pool);
+        assertEq(_fp(pool), 0, "healed to 0");
+    }
+
+    // An ORDINARY (non-launch) pool gets the tier default on sync. Real pool
+    // created straight through the factory, not the launchpad.
+    function test_feeManager_ordinaryPoolGetsFee() public {
+        FeeProtocolManager mgr = _wireFeeManager();
+        address pool = IArcadeV3Factory(v3Factory).createPool(address(usdc), address(weth), FEE);
+        IPoolFP(pool).initialize(SQRT_1_1);
+        assertFalse(mgr.isLaunchPool(pool), "ordinary");
+        mgr.sync(pool);
+        // FEE = 10000 (1%) -> tier default 6.
+        assertEq(_fp(pool), 6 + (6 << 4), "ordinary pool fee-enabled at tier default");
     }
 
     function test_launchesImmediatelySingleSided() public {
