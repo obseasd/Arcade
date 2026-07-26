@@ -1,7 +1,7 @@
 import { BigInt, BigDecimal, Address, Bytes, ethereum } from "@graphprotocol/graph-ts";
 import { Buy, Sell, TokenCreated, Migrated } from "../generated/Launchpad/Launchpad";
 import { PoolCreated } from "../generated/V3Factory/V3Factory";
-import { Swap } from "../generated/templates/V3Pool/V3Pool";
+import { Swap, SetFeeProtocol } from "../generated/templates/V3Pool/V3Pool";
 import { ERC20 } from "../generated/templates/V3Pool/ERC20";
 import { Transfer } from "../generated/templates/ArcadeToken/ERC20";
 import { PairCreated } from "../generated/V2Factory/V2Factory";
@@ -278,12 +278,27 @@ function protocolFeeForTrade(source: string, pool: Bytes | null, volumeUsdc: Big
   }
   if (source == "v3" && pool !== null) {
     const p = Pool.load((pool as Bytes).toHexString());
-    if (p != null && p.arcadeLocked) {
-      // feeTier is hundredths of a bip (3000 => 0.30% => /1e6); Arcade keeps 10%.
+    if (p != null) {
+      // feeTier is hundredths of a bip (3000 => 0.30% => /1e6). LP fee on the
+      // swap = volume * feeRate.
       const feeRate = BigDecimal.fromString(p.feeTier.toString()).div(
         BigDecimal.fromString("1000000"),
       );
-      return volumeUsdc.times(feeRate).times(BigDecimal.fromString("0.10"));
+      if (p.arcadeLocked) {
+        // Locked (CLANKER_V3) pool: the compounder keeps 10% of the LP fee.
+        // One mechanism per pool: locked pools never also carry feeProtocol.
+        return volumeUsdc.times(feeRate).times(BigDecimal.fromString("0.10"));
+      }
+      // Ordinary pool: Uniswap V3 feeProtocol takes 1/N of the LP fee to the
+      // factory owner (the Safe). 0 = off; v3-core allows only 0 or 4..10, so a
+      // valid switch is >= 4. protocolFee = LP fee / N. Both sides are set equal
+      // by governance (4 on 0.01/0.05% tiers, 6 on 0.30/1%), so feeProtocol0 is
+      // representative. Until the switch is flipped this is 0 and credits nothing,
+      // so the subgraph never reports a fee that is not actually being collected.
+      const fp = p.feeProtocol0;
+      if (fp >= 4) {
+        return volumeUsdc.times(feeRate).div(BigDecimal.fromString(fp.toString()));
+      }
     }
   }
   return BigDecimal.fromString("0");
@@ -607,9 +622,28 @@ export function handlePoolCreated(event: PoolCreated): void {
   p.kind = "v3";
   p.usdcReserve = BigDecimal.fromString("0");
   p.arcadeLocked = false;
+  // Pools ship with the protocol fee OFF (v3-core default). Kept in sync by
+  // handleSetFeeProtocol below once the factory owner (the Safe) flips it.
+  p.feeProtocol0 = 0;
+  p.feeProtocol1 = 0;
   p.save();
 
   V3Pool.create(event.params.pool);
+}
+
+/**
+ * Keep the pool's protocol-fee switch in sync from its SetFeeProtocol event.
+ * setFeeProtocol is the governance action (factory owner only) that turns the
+ * "1/N of the LP fee to the protocol" cut on or off per pool. protocolFeeForTrade
+ * reads these so referral earnings track the REAL on-chain cut: 0 (no credit)
+ * until the switch is flipped, then the true fraction afterward.
+ */
+export function handleSetFeeProtocol(event: SetFeeProtocol): void {
+  const p = Pool.load(event.address.toHexString());
+  if (p == null) return; // not a tracked USDC pool
+  p.feeProtocol0 = event.params.feeProtocol0New;
+  p.feeProtocol1 = event.params.feeProtocol1New;
+  p.save();
 }
 
 export function handleSwap(event: Swap): void {

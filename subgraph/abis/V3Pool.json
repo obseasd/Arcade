@@ -4,13 +4,72 @@
     "name": "Swap",
     "type": "event",
     "inputs": [
-      { "indexed": true, "name": "sender", "type": "address" },
-      { "indexed": true, "name": "recipient", "type": "address" },
-      { "indexed": false, "name": "amount0", "type": "int256" },
-      { "indexed": false, "name": "amount1", "type": "int256" },
-      { "indexed": false, "name": "sqrtPriceX96", "type": "uint160" },
-      { "indexed": false, "name": "liquidity", "type": "uint128" },
-      { "indexed": false, "name": "tick", "type": "int24" }
+      {
+        "indexed": true,
+        "name": "sender",
+        "type": "address"
+      },
+      {
+        "indexed": true,
+        "name": "recipient",
+        "type": "address"
+      },
+      {
+        "indexed": false,
+        "name": "amount0",
+        "type": "int256"
+      },
+      {
+        "indexed": false,
+        "name": "amount1",
+        "type": "int256"
+      },
+      {
+        "indexed": false,
+        "name": "sqrtPriceX96",
+        "type": "uint160"
+      },
+      {
+        "indexed": false,
+        "name": "liquidity",
+        "type": "uint128"
+      },
+      {
+        "indexed": false,
+        "name": "tick",
+        "type": "int24"
+      }
     ]
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": false,
+        "internalType": "uint8",
+        "name": "feeProtocol0Old",
+        "type": "uint8"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint8",
+        "name": "feeProtocol1Old",
+        "type": "uint8"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint8",
+        "name": "feeProtocol0New",
+        "type": "uint8"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint8",
+        "name": "feeProtocol1New",
+        "type": "uint8"
+      }
+    ],
+    "name": "SetFeeProtocol",
+    "type": "event"
   }
 ]

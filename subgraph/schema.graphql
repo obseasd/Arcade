@@ -49,6 +49,17 @@ type Pool @entity(immutable: false) {
   # compounder). A V3 pool anyone can create through the factory but never lock
   # earns Arcade nothing, so referral must NOT credit protocol fees on it.
   arcadeLocked: Boolean!
+  # Uniswap V3 per-pool protocol-fee switch (the "1/N of the LP fee to the
+  # factory owner" mechanism, set via setFeeProtocol by the factory owner = the
+  # Safe). 0 = off (the default every pool ships with); v3-core allows only 0 or
+  # 4..10, so the live values are 4 (1/4) on the 0.01%/0.05% tiers and 6 (1/6) on
+  # the 0.30%/1% tiers, mirroring Uniswap's schedule. Kept in sync from the pool's
+  # SetFeeProtocol event. On an ORDINARY (non-arcadeLocked) pool this is the ONLY
+  # protocol cut Arcade takes, and referral earnings read it. Reading the REAL
+  # on-chain value (0 until governance flips it) means the subgraph never credits
+  # a fee that is not actually being collected.
+  feeProtocol0: Int!
+  feeProtocol1: Int!
   # USDC-side reserve of the pool (human USDC). V2: exact from Sync; V3: read
   # from USDC.balanceOf(pool) on each swap. Pool TVL ~= usdcReserve x 2.
   usdcReserve: BigDecimal!
