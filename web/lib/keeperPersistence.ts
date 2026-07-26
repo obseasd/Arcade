@@ -49,6 +49,7 @@ export interface KeeperOrbsOrder {
     discoveredAt: string;
     updatedAt: string;
     lastError: string | null;
+    bidFailCount: number;
 }
 
 interface RawOrbsRow {
@@ -66,6 +67,7 @@ interface RawOrbsRow {
     discovered_at: string;
     updated_at: string;
     last_error: string | null;
+    bid_fail_count?: number;
 }
 
 function mapOrbsRow(r: RawOrbsRow): KeeperOrbsOrder {
@@ -84,7 +86,21 @@ function mapOrbsRow(r: RawOrbsRow): KeeperOrbsOrder {
         discoveredAt: r.discovered_at,
         updatedAt: r.updated_at,
         lastError: r.last_error,
+        bidFailCount: Number(r.bid_fail_count ?? 0),
     };
+}
+
+/** Bump the per-order re-bid failure counter (a stale bid that could not fill and
+ *  is being re-bid). Returns nothing; the caller reads the prior count off the
+ *  tracked order to decide whether to back off first. */
+export async function incrementOrbsBidFail(orderId: string): Promise<void> {
+    if (!isDbConfigured()) return;
+    const sql = getSql();
+    await sql`
+        UPDATE keeper_orbs_orders
+        SET bid_fail_count = bid_fail_count + 1, updated_at = NOW()
+        WHERE order_id = ${orderId}
+    `;
 }
 
 /**
@@ -166,7 +182,7 @@ export async function markOrbsFilled(
     await sql`
         UPDATE keeper_orbs_orders
         SET chunks_filled = ${chunksFilled}, last_bid_at = NULL,
-            last_bid_tx = NULL, last_error = NULL, updated_at = NOW()
+            last_bid_tx = NULL, last_error = NULL, bid_fail_count = 0, updated_at = NOW()
         WHERE order_id = ${orderId}
     `;
 }

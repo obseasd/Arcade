@@ -34,6 +34,7 @@ import {
     markOrbsFilled,
     markOrbsClosed,
     markOrbsError,
+    incrementOrbsBidFail,
     getOpenBridgeIntents,
     markBridgeRelaying,
     markBridgeRelayed,
@@ -81,6 +82,12 @@ export const maxDuration = 60;
 // Capped so one slow tick cannot blow the 60s function ceiling: ~8 txs ×
 // ~5s = 40s, with slack for the reads + leg B.
 const MAX_ORBS_ACTIONS_PER_RUN = 8;
+// After this many stale-bid re-bids whose fill still reverts (a dstToken that
+// delivers less than getAmountsOut quotes: fee-on-transfer / returns-false), the
+// keeper backs off the order instead of re-bidding it every staleness window (a
+// gas drain + action-budget DoS). A legit order fills within 1-2 re-bids and its
+// counter resets on fill, so only genuinely-unfillable orders hit the cap.
+const MAX_REBID_FAILS = 3;
 const MAX_BRIDGE_RELAYS_PER_RUN = 5;
 
 // Discovery scan cap. On testnet the book is tiny; a cursor-based scan
@@ -835,6 +842,16 @@ async function settleOrbsOrder(
             summary.orbs.skipped++;
             return false;
         }
+        // Our winning bid could not fill and went stale: this is a re-bid. Back
+        // off an order whose fill keeps reverting despite clearsFloor (a dstToken
+        // delivering less than getAmountsOut quotes). A legit order fills within a
+        // re-bid or two and its counter resets on fill; only an unfillable one
+        // reaches the cap, so we stop re-bidding it (no gas, no action-budget DoS).
+        if (tracked.bidFailCount >= MAX_REBID_FAILS) {
+            summary.orbs.skipped++;
+            return false;
+        }
+        await incrementOrbsBidFail(tracked.orderId);
     }
 
     // If someone else holds a live (non-stale) winning bid, stand back.
