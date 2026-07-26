@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { PublicClient, createPublicClient, webSocket } from "viem";
+import { PublicClient, createPublicClient, webSocket, http } from "viem";
 import { arcTestnet } from "@/lib/chains";
 
 /**
@@ -16,14 +16,19 @@ let cachedClient: PublicClient | undefined;
 
 function getWsClient(): PublicClient {
   if (!cachedClient) {
+    const wsUrl = arcTestnet.rpcUrls.default.webSocket?.[0];
     cachedClient = createPublicClient({
       chain: arcTestnet,
-      transport: webSocket(arcTestnet.rpcUrls.default.webSocket?.[0] ?? "", {
-        retryCount: 5,
-        retryDelay: 2_000,
-        keepAlive: { interval: 30_000 },
-        reconnect: true,
-      }),
+      // Arc mainnet has no known public WS endpoint yet, so when none is set we
+      // degrade to an http client (polling) instead of a broken empty WS URL.
+      transport: wsUrl
+        ? webSocket(wsUrl, {
+            retryCount: 5,
+            retryDelay: 2_000,
+            keepAlive: { interval: 30_000 },
+            reconnect: true,
+          })
+        : http(),
     });
   }
   return cachedClient;

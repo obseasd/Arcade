@@ -127,19 +127,28 @@ const RECEIPT_TIMEOUT_MS = 20_000;
 const MAX_FEE_PER_GAS_WEI = 100_000_000_000n; // 100 gwei
 const MIN_OPERATOR_BALANCE_WEI = 1_000_000n; // 1 USDC (6 decimals)
 
+// Soft mainnet switch: the keeper reads NEXT_PUBLIC_ARC_ENV like the frontend
+// (lib/chains.ts) so flipping that one var moves it to chainId 5042 + mainnet
+// RPCs. Addresses already re-point via the NEXT_PUBLIC_* address envs.
+const ARC_IS_MAINNET = (process.env.NEXT_PUBLIC_ARC_ENV ?? "").toLowerCase() === "mainnet";
+
 const ARC_RPC_LIST: readonly string[] = (() => {
     const out: string[] = [];
     const dedicated = process.env.NEXT_PUBLIC_ARC_RPC_URL;
     if (dedicated) out.push(dedicated);
-    out.push("https://rpc.testnet.arc.network");
-    out.push("https://5042002.rpc.thirdweb.com");
+    if (ARC_IS_MAINNET) {
+        out.push("https://5042.rpc.thirdweb.com");
+    } else {
+        out.push("https://rpc.testnet.arc.network");
+        out.push("https://5042002.rpc.thirdweb.com");
+    }
     return out;
 })();
 
 const ARC_CHAIN = {
-    id: 5042002,
-    name: "Arc Testnet",
-    network: "arc-testnet",
+    id: ARC_IS_MAINNET ? 5042 : 5042002,
+    name: ARC_IS_MAINNET ? "Arc" : "Arc Testnet",
+    network: ARC_IS_MAINNET ? "arc-mainnet" : "arc-testnet",
     nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 6 },
     rpcUrls: {
         default: { http: ARC_RPC_LIST },
