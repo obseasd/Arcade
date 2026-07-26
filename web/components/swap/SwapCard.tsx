@@ -863,30 +863,27 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
   // legs where the USD oracle isn't wired and lossPct is undefined — a
   // 2-ETH trade into a $40 pool would otherwise read as just "Fee 0.30%".
   //
-  // Rate-limit gate: only fire the probe AFTER the main aggregator has
-  // a quote. Without this, every keystroke was firing 5 main-provider
-  // quotes + 5 reference-provider quotes in parallel, hammering Arc's
-  // public RPC into the 429 zone visible in the user's network tab. By
-  // chaining on `activeRoute`, the probe stays idle until the first
-  // round of quotes lands, halving the in-flight RPC pressure during
-  // the typing storm.
-  // Additional gate: only fire the reference probe when the user's
-  // trade is BIG enough that depth-impact actually matters. A 0.001 ETH
-  // swap on a deep pool returns ~0% impact; the extra round of 5
-  // provider quotes is pure waste for the dominant small-trade case.
-  // We sample inUsd as a cheap proxy when available, else fall back to
-  // raw amount thresholds the active provider handles natively.
+  // The reference probe fires IN PARALLEL with the main quote, not
+  // chained behind it. Quoting is server-side now (one POST that fans
+  // out to all providers via Promise.all), so the old "5 main + 5 ref
+  // eth_calls per keystroke hammer the public RPC" concern is gone: the
+  // browser makes one POST per useRouteQuotes, and un-gating means 2
+  // parallel POSTs, not 10 calls. Chaining the probe behind `activeRoute`
+  // used to cost a whole extra quote cycle (debounce + round trip) on the
+  // price-impact critical path, so it landed a full second after the
+  // output amount. `priceImpactPct` below no-ops safely until both the
+  // active route and the ref quote are present, so parallelizing is safe.
+  //
+  // refProbeAmount depends ONLY on amountInRaw (a pure 1% sample). It must
+  // not read inUsd.usd: that USD value comes from a separate on-chain read
+  // that resolves later, and if the probe amount changed when it landed
+  // the ref quote would re-fire with a fresh debounce, making the impact
+  // number flicker in and recompute.
   const refProbeAmount = useMemo<bigint>(() => {
     if (amountInRaw < 100n) return 0n;
-    // Skip probe entirely when the USD value is small (< $10). Pool
-    // impact below that threshold is irrelevant to the user vs the RPC
-    // budget hit. inUsd may be undefined for ETH legs on Arc — fall
-    // through to the existing 1% probe in that case so the panel still
-    // surfaces a warning on whale trades against thin pools.
-    if (inUsd.usd !== undefined && inUsd.usd < 10) return 0n;
     const div100 = amountInRaw / 100n;
     return div100 > 0n ? div100 : 1n;
-  }, [amountInRaw, inUsd.usd]);
+  }, [amountInRaw]);
   const refQuotes = useRouteQuotes({
     tokenIn: tokenIn.address,
     tokenOut: tokenOut?.address,
@@ -895,11 +892,7 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
     amountIn: refProbeAmount,
     recipient: account,
     slippageBps,
-    enabled:
-      aggregatorEnabled &&
-      refProbeAmount > 0n &&
-      !!activeRoute &&
-      activeRoute.amountOut > 0n,
+    enabled: aggregatorEnabled && refProbeAmount > 0n,
   });
   // Per-provider impact map, computed from the same refQuotes probe as
   // the active-route impact display below. Used by the impact-aware
