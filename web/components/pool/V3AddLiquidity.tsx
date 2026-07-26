@@ -713,6 +713,13 @@ export function V3AddLiquidity({
                         amount1Min: 0n,
                         deadline,
                         recipient: account,
+                        // Audit C-1 sqrtPrice band. 0/0 opts out (established
+                        // pool; the amountOtherMinSwap floor already guards the
+                        // swap leg). The deployed struct REQUIRES these two
+                        // trailing fields; omitting them makes the ABI decoder
+                        // revert on short calldata.
+                        sqrtPriceX96Min: 0n,
+                        sqrtPriceX96Max: 0n,
                     },
                 ] as const;
 
