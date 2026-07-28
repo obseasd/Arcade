@@ -169,6 +169,15 @@ const FEE_SYNC_CURSOR = "v3_pool_created";
 const FEE_SYNC_WINDOW = 10_000n; // Arc getLogs range cap
 const MAX_FEE_SYNC_WINDOWS_PER_RUN = 8; // bound the scan span per tick
 const MAX_FEE_SYNCS_PER_RUN = 6; // bound the txs per tick
+// Always re-scan at least this many trailing blocks each run, on top of the
+// forward cursor. The cursor is forward-only, so a pool whose sync transiently
+// failed (shared-wallet nonce clash, RPC hiccup) or that landed in a scan gap
+// would otherwise be skipped FOREVER once the cursor advanced past it. Re-
+// scanning a recent window makes leg C self-healing: the slot0/isLaunchPool
+// pre-check skips pools already in their target state, so it's cheap and
+// idempotent, and an unsynced pool keeps getting retried until it lands.
+// ~30k blocks ~= a few hours at Arc's cadence.
+const FEE_SYNC_SAFETY_LOOKBACK = 30_000n;
 
 const RPC_TIMEOUT_MS = 3_000;
 // A submitted tx must not hang the whole run to the 60s Vercel ceiling (and
@@ -1192,9 +1201,14 @@ async function runFeeSyncLeg(
     summary: RunSummary,
 ) {
     const head = cfg.headBlock;
-    let from =
+    const cursor =
         (await getKeeperCursor(FEE_SYNC_CURSOR).catch(() => null)) ??
         (head > FEE_SYNC_WINDOW ? head - FEE_SYNC_WINDOW : 0n);
+    // Floor the scan start at a trailing safety window so recently-created or
+    // previously-failed pools are always re-checked (self-healing, see the
+    // FEE_SYNC_SAFETY_LOOKBACK note). from = min(cursor, head - lookback).
+    const safetyFloor = head > FEE_SYNC_SAFETY_LOOKBACK ? head - FEE_SYNC_SAFETY_LOOKBACK : 0n;
+    let from = cursor < safetyFloor ? cursor : safetyFloor;
     if (from > head) from = head;
 
     // Collect new pool addresses across a bounded number of windows.
@@ -1282,9 +1296,15 @@ async function runFeeSyncLeg(
             await insertKeeperEvent({ leg: "fees", eventType: "sync", refId: pool, txHash: hash });
             summary.fees.synced++;
             actions++;
-        } catch {
-            // e.g. UnknownTier (a launch-only-tier ordinary pool) -> not managed.
+        } catch (err) {
+            // Failed sync (on-chain revert, or a shared-wallet nonce clash when
+            // the operator EOA also submits user txs). Surface it instead of
+            // swallowing it, and do NOT treat it as done -- the trailing safety
+            // window re-scans and retries next run until it lands. UnknownTier
+            // (a launch-only-tier ordinary pool) also lands here and just
+            // re-skips harmlessly each run.
             summary.fees.skipped++;
+            summary.notes.push(`fee-sync ${pool.slice(0, 10)} failed: ${errMsg(err)}`);
         }
     }
 
