@@ -849,7 +849,10 @@ async function settleOrbsOrder(
                     functionName: "fill",
                     args: [id],
                     chain: ARC_CHAIN,
-                    account: keeper,
+                    // Use the wallet client's LOCAL account object (not the bare
+                    // address): a bare address makes viem call wallet_sendTransaction
+                    // (RPC-side signing), which Arc's node rejects as unsupported.
+                    account: walletClient.account!,
                     maxFeePerGas: MAX_FEE_PER_GAS_WEI,
                 });
                 await publicClient.waitForTransactionReceipt({ hash, timeout: RECEIPT_TIMEOUT_MS });
@@ -1025,7 +1028,7 @@ async function settleOrbsOrder(
             functionName: "bid",
             args: [id, settleExchange, plan.dstFee, plan.slippagePercent, plan.bidData],
             chain: ARC_CHAIN,
-            account: keeper,
+            account: walletClient.account!, // local account, not bare address (see fill)
             maxFeePerGas: MAX_FEE_PER_GAS_WEI,
         });
         await publicClient.waitForTransactionReceipt({ hash, timeout: RECEIPT_TIMEOUT_MS });
@@ -1177,7 +1180,7 @@ async function runCctpLeg(
                 functionName: relayFn,
                 args: [message, attestation],
                 chain: ARC_CHAIN,
-                account: keeper,
+                account: walletClient.account!, // local account, not bare address (see fill)
                 maxFeePerGas: MAX_FEE_PER_GAS_WEI,
             });
             await publicClient.waitForTransactionReceipt({ hash, timeout: RECEIPT_TIMEOUT_MS });
@@ -1334,7 +1337,7 @@ async function runFeeSyncLeg(
                 functionName: "sync",
                 args: [pool],
                 chain: ARC_CHAIN,
-                account: keeper,
+                account: walletClient.account!, // local account, not bare address (see fill)
                 maxFeePerGas: MAX_FEE_PER_GAS_WEI,
             });
             await publicClient.waitForTransactionReceipt({ hash, timeout: RECEIPT_TIMEOUT_MS });
