@@ -7,6 +7,7 @@ import { ARCADE_HOOK_MODE, ARCADE_HOOK_STATUS } from "@/lib/abis/arcadeHook";
 import { type ArcadeHookTokenInfo } from "@/lib/hooks/useArcadeHookTokens";
 import { useTokenImage } from "@/lib/hooks/useTokenImage";
 import { useV4TokenStats } from "@/lib/hooks/useV4TokenStats";
+import { useV4PoolPrice } from "@/lib/hooks/useV4PoolPrice";
 import { LAUNCHPAD_CURVE_SUPPLY, LAUNCHPAD_TOTAL_SUPPLY, FEATURED_TOKENS } from "@/lib/constants";
 import { formatAddress } from "@/lib/utils";
 import { cn } from "@/lib/utils";
@@ -42,8 +43,16 @@ export function V4TokenCard({ token, priority }: { token: ArcadeHookTokenInfo; p
     token.mode === ARCADE_HOOK_MODE.CLANKER || token.mode === ARCADE_HOOK_MODE.CLANKER_V3;
   const isFeatured = FEATURED_TOKENS.has(token.address.toLowerCase());
 
-  const mcapNode = stats.priceUsd
-    ? `$${(stats.priceUsd * Number(LAUNCHPAD_TOTAL_SUPPLY)).toLocaleString(undefined, { maximumFractionDigits: 0 })}`
+  // CLANKER has a real pool price from launch (single-sided LP at a fixed seed
+  // price), but stats.priceUsd is subgraph-trade-derived and stays undefined
+  // until the first trade -- so a fresh CLANKER showed no MC. Fall back to the
+  // on-chain V4 pool spot price so its market cap renders immediately. No-op for
+  // PUMP: the arg is undefined (pre-graduation PUMP trades on the curve, not
+  // this pool), so it keeps using the subgraph trade price.
+  const clankerSpotPrice = useV4PoolPrice(isClanker ? token.address : undefined);
+  const priceUsd = stats.priceUsd ?? clankerSpotPrice;
+  const mcapNode = priceUsd
+    ? `$${(priceUsd * Number(LAUNCHPAD_TOTAL_SUPPLY)).toLocaleString(undefined, { maximumFractionDigits: 0 })}`
     : null;
 
   const progress = useMemo(() => {
