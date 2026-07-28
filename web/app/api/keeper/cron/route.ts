@@ -212,6 +212,20 @@ const ARC_RPC_LIST: readonly string[] = (() => {
     return out;
 })();
 
+// RPC list for the fee-sync getLogs scan, arc.network FIRST. The keeper's
+// default RPC ([0] of ARC_RPC_LIST = a dedicated NEXT_PUBLIC_ARC_RPC_URL, or
+// thirdweb) starved leg C: thirdweb caps getLogs at 1000 blocks and is slow,
+// and trying it first for every window pushed the run past Vercel's 60s ceiling
+// (which then leaked the keeper lease and bailed every subsequent run). Hitting
+// arc.network first (fast, wide-range) keeps the scan snappy; the rest remain
+// as backstops via the fallback transport.
+const FEE_SYNC_LOG_RPCS: readonly string[] = ARC_IS_MAINNET
+    ? ARC_RPC_LIST
+    : [
+          "https://rpc.testnet.arc.network",
+          ...ARC_RPC_LIST.filter((u) => u !== "https://rpc.testnet.arc.network"),
+      ];
+
 const ARC_CHAIN = {
     id: ARC_IS_MAINNET ? 5042 : 5042002,
     name: ARC_IS_MAINNET ? "Arc" : "Arc Testnet",
@@ -1226,7 +1240,7 @@ async function runFeeSyncLeg(
     // several stays well under the Vercel ceiling.
     const logsClient = createPublicClient({
         chain: ARC_CHAIN,
-        transport: fallback(ARC_RPC_LIST.map((u) => http(u, { timeout: 4_000 }))),
+        transport: fallback(FEE_SYNC_LOG_RPCS.map((u) => http(u, { timeout: 4_000 }))),
     });
     // Collect new pool addresses across a bounded number of windows.
     const pools: Address[] = [];
