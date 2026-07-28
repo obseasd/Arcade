@@ -167,13 +167,11 @@ const POOL_SLOT0_ABI = [
     },
 ] as const;
 const FEE_SYNC_CURSOR = "v3_pool_created";
-// getLogs window. The Arc thirdweb RPC (in ARC_RPC_LIST) hard-caps eth_getLogs
-// at 1000 blocks ("Maximum allowed number of requested blocks is 1000"); a
-// wider window erred -> null -> break -> the leg scanned 0 pools on EVERY run
-// when the keeper's chosen RPC was thirdweb. 1000 is the safe universal window
-// (rpc.testnet.arc.network handles it too). Was 10_000.
-const FEE_SYNC_WINDOW = 1_000n;
-const MAX_FEE_SYNC_WINDOWS_PER_RUN = 25; // 25k blocks/tick at the 1k window
+// FEE_SYNC_WINDOW is env-aware and defined after ARC_IS_MAINNET below (the
+// thirdweb RPC caps getLogs at 1000, but testnet scans over arc.network which
+// handles 10k -- a 10k window keeps the whole trailing lookback to ~2 getLogs
+// per run so the leg stays well under the Vercel ceiling).
+const MAX_FEE_SYNC_WINDOWS_PER_RUN = 25; // enough windows for the 1k mainnet case
 const MAX_FEE_SYNCS_PER_RUN = 6; // bound the txs per tick
 // Always re-scan at least this many trailing blocks each run, on top of the
 // forward cursor. The cursor is forward-only, so a pool whose sync transiently
@@ -225,6 +223,13 @@ const FEE_SYNC_LOG_RPCS: readonly string[] = ARC_IS_MAINNET
           "https://rpc.testnet.arc.network",
           ...ARC_RPC_LIST.filter((u) => u !== "https://rpc.testnet.arc.network"),
       ];
+
+// getLogs window sized to the scan RPC's cap. Testnet scans over arc.network
+// (10k OK) so a 10k window covers the ~20k trailing lookback in ~2 getLogs per
+// run -- critical: 25 windows of 1k each from Vercel took the run past the 60s
+// ceiling and leaked the keeper lease. Mainnet's only listed RPC is thirdweb
+// (hard 1000-block getLogs cap), so it must stay at 1000 there.
+const FEE_SYNC_WINDOW = ARC_IS_MAINNET ? 1_000n : 10_000n;
 
 const ARC_CHAIN = {
     id: ARC_IS_MAINNET ? 5042 : 5042002,
