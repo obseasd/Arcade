@@ -23,6 +23,7 @@ import {
     V3_POOL_ABI,
 } from "@/lib/abis/v3-npm";
 import { V3_ZAP_ABI } from "@/lib/abis/v3-zap";
+import { V3_QUOTER_ABI } from "@/lib/abis/v3";
 import { modeLabelFromId, type CompounderModeId } from "@/lib/abis/autoCompounder";
 import { ADDRESSES } from "@/lib/constants";
 import { arcTestnet } from "@/lib/chains";
@@ -502,15 +503,48 @@ export function V3AddLiquidity({
           }
         | undefined;
 
+    // REAL swap output for the internal leg, from the tick-walking quoter.
+    // quoteZap.expectedOut is closed-form constant-product math, which badly
+    // OVERSTATES the output on a V3 pool with concentrated / thin liquidity
+    // (it ignores the tick distribution), so the price impact derived from it
+    // read near-zero even when the swap would move the pool double digits.
+    // Re-quote swapAmount through v3Quoter.quoteExactInputSingle (walks ticks)
+    // so the impact below reflects reality.
+    const realQuoteQ = useReadContract({
+        address: ADDRESSES.v3Quoter,
+        abi: V3_QUOTER_ABI,
+        functionName: "quoteExactInputSingle",
+        args: v3Quote
+            ? [
+                  zapTokenSide === "0" ? t0.address : t1.address,
+                  zapTokenSide === "0" ? t1.address : t0.address,
+                  feePip,
+                  v3Quote.swapAmount,
+              ]
+            : undefined,
+        query: {
+            enabled:
+                mode === "single" &&
+                zapEnabled &&
+                hasPool &&
+                !!v3Quote &&
+                v3Quote.swapAmount > 0n,
+            staleTime: 500,
+        },
+    });
+    const realSwapOut = realQuoteQ.data as bigint | undefined;
+
     // V3 zap price impact (bps). Derives the spot rate from sqrtPriceX96
-    // (token1 per token0 in raw units) then compares against the
-    // effective rate the quoter returned. Thin-liquidity / wide-range
-    // mints can move the price double-digit % per swap leg and the
-    // user only saw it via the LP receipt. Surfaced inline now.
+    // (token1 per token0 in raw units) then compares against the REAL
+    // tick-walking swap output. Thin-liquidity / wide-range mints can move
+    // the price double-digit % per swap leg and the user only saw it via the
+    // LP receipt. Surfaced inline now.
     const zapPriceImpactBps: number | undefined = useMemo(() => {
         if (!v3Quote || sqrtPriceX96 === 0n) return undefined;
-        const { swapAmount, expectedOut } = v3Quote;
-        if (swapAmount === 0n || expectedOut === 0n) return undefined;
+        const { swapAmount } = v3Quote;
+        // Prefer the real quoter; fall back to the closed-form only until it lands.
+        const effectiveOut = realSwapOut ?? v3Quote.expectedOut;
+        if (swapAmount === 0n || effectiveOut === 0n) return undefined;
         const Q192 = 1n << 192n;
         const sq2 = sqrtPriceX96 * sqrtPriceX96;
         // idealOut = swapAmount * spotPrice
@@ -523,10 +557,10 @@ export function V3AddLiquidity({
                 ? (swapAmount * sq2) / Q192
                 : (swapAmount * Q192) / sq2;
         if (idealOut === 0n) return undefined;
-        if (expectedOut >= idealOut) return 0;
-        const bps = Number(((idealOut - expectedOut) * 10_000n) / idealOut);
+        if (effectiveOut >= idealOut) return 0;
+        const bps = Number(((idealOut - effectiveOut) * 10_000n) / idealOut);
         return Math.max(0, Math.min(10_000, bps));
-    }, [v3Quote, sqrtPriceX96, zapTokenSide]);
+    }, [v3Quote, realSwapOut, sqrtPriceX96, zapTokenSide]);
 
     // Out-of-range single-sided logic only makes sense when a pool already
     // exists (we know the current tick). On a fresh pool the user is
