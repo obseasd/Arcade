@@ -180,9 +180,10 @@ const MAX_FEE_SYNCS_PER_RUN = 6; // bound the txs per tick
 // scanning a recent window makes leg C self-healing: the slot0/isLaunchPool
 // pre-check skips pools already in their target state, so it's cheap and
 // idempotent, and an unsynced pool keeps getting retried until it lands.
-// ~20k blocks ~= a few hours at Arc's cadence; covers a pool that has aged out
-// of the immediate cursor window (e.g. one created ~10k blocks / ~80min ago).
-const FEE_SYNC_SAFETY_LOOKBACK = 20_000n;
+// ~40k blocks ~= several hours at Arc's cadence; wide enough that a pool created
+// a few hours before the leg first worked is still re-scanned (at the 10k testnet
+// window that is only ~4 getLogs, so it stays fast).
+const FEE_SYNC_SAFETY_LOOKBACK = 40_000n;
 
 const RPC_TIMEOUT_MS = 3_000;
 // A submitted tx must not hang the whole run to the 60s Vercel ceiling (and
@@ -1293,8 +1294,12 @@ async function runFeeSyncLeg(
         if (seen.has(key)) continue;
         seen.add(key);
 
+        // Pre-check reads over the FAST arc.network-first client (logsClient),
+        // not the slow default publicClient: once the scan finds pools, doing 2
+        // reads each over a slow/timing-out RPC is what pushed the run to the 60s
+        // ceiling and leaked the lease.
         const isLaunch = (await withTimeout(
-            publicClient
+            logsClient
                 .readContract({
                     address: cfg.feeProtocolManager,
                     abi: FEE_MANAGER_ABI,
@@ -1306,7 +1311,7 @@ async function runFeeSyncLeg(
             RPC_TIMEOUT_MS,
         )) as boolean | null;
         const fp = (await withTimeout(
-            publicClient
+            logsClient
                 .readContract({ address: pool, abi: POOL_SLOT0_ABI, functionName: "slot0" })
                 .then((r) => Number((r as readonly unknown[])[5]))
                 .catch(() => null),
