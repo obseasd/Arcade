@@ -166,8 +166,13 @@ const POOL_SLOT0_ABI = [
     },
 ] as const;
 const FEE_SYNC_CURSOR = "v3_pool_created";
-const FEE_SYNC_WINDOW = 10_000n; // Arc getLogs range cap
-const MAX_FEE_SYNC_WINDOWS_PER_RUN = 8; // bound the scan span per tick
+// getLogs window. The Arc thirdweb RPC (in ARC_RPC_LIST) hard-caps eth_getLogs
+// at 1000 blocks ("Maximum allowed number of requested blocks is 1000"); a
+// wider window erred -> null -> break -> the leg scanned 0 pools on EVERY run
+// when the keeper's chosen RPC was thirdweb. 1000 is the safe universal window
+// (rpc.testnet.arc.network handles it too). Was 10_000.
+const FEE_SYNC_WINDOW = 1_000n;
+const MAX_FEE_SYNC_WINDOWS_PER_RUN = 25; // 25k blocks/tick at the 1k window
 const MAX_FEE_SYNCS_PER_RUN = 6; // bound the txs per tick
 // Always re-scan at least this many trailing blocks each run, on top of the
 // forward cursor. The cursor is forward-only, so a pool whose sync transiently
@@ -176,8 +181,9 @@ const MAX_FEE_SYNCS_PER_RUN = 6; // bound the txs per tick
 // scanning a recent window makes leg C self-healing: the slot0/isLaunchPool
 // pre-check skips pools already in their target state, so it's cheap and
 // idempotent, and an unsynced pool keeps getting retried until it lands.
-// ~30k blocks ~= a few hours at Arc's cadence.
-const FEE_SYNC_SAFETY_LOOKBACK = 30_000n;
+// ~20k blocks ~= a few hours at Arc's cadence; covers a pool that has aged out
+// of the immediate cursor window (e.g. one created ~10k blocks / ~80min ago).
+const FEE_SYNC_SAFETY_LOOKBACK = 20_000n;
 
 const RPC_TIMEOUT_MS = 3_000;
 // A submitted tx must not hang the whole run to the 60s Vercel ceiling (and
@@ -1234,7 +1240,12 @@ async function runFeeSyncLeg(
             }) as Promise<{ data: Hex }[]>,
             RPC_TIMEOUT_MS,
         )) as { data: Hex }[] | null;
-        if (logs === null) break; // window failed: keep the cursor, retry next tick
+        if (logs === null) {
+            // window failed (timeout or RPC range-cap): surface it so a silent
+            // scanned:0 is diagnosable, keep the cursor, retry next tick.
+            summary.notes.push(`fee-sync getLogs failed at block ${scannedTo} (RPC range cap?)`);
+            break;
+        }
         for (const log of logs) {
             // data = abi.encode(int24 tickSpacing, address pool); pool is word 2.
             if (!log.data || log.data.length < 2 + 128) continue;
