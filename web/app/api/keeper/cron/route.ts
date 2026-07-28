@@ -4,6 +4,7 @@ import {
     createPublicClient,
     createWalletClient,
     http,
+    fallback,
     isAddress,
     getAddress,
     encodeAbiParameters,
@@ -1217,6 +1218,16 @@ async function runFeeSyncLeg(
     let from = cursor < safetyFloor ? cursor : safetyFloor;
     if (from > head) from = head;
 
+    // getLogs over a FALLBACK transport across every Arc RPC, not just the
+    // keeper's default [0]. The default may be thirdweb (1000-block getLogs cap)
+    // or a dedicated RPC that rejects the scan; fallback rolls to the next RPC
+    // (rpc.testnet.arc.network handles getLogs) on any error, so the scan stops
+    // silently dying on a single bad endpoint. Short per-RPC timeout so trying
+    // several stays well under the Vercel ceiling.
+    const logsClient = createPublicClient({
+        chain: ARC_CHAIN,
+        transport: fallback(ARC_RPC_LIST.map((u) => http(u, { timeout: 4_000 }))),
+    });
     // Collect new pool addresses across a bounded number of windows.
     const pools: Address[] = [];
     let scannedTo = from;
@@ -1225,8 +1236,9 @@ async function runFeeSyncLeg(
         // Raw eth_getLogs (topic0 only). viem's typed getLogs wants an event/args
         // shape, but Arc ignores indexed-topic filters anyway, so the raw request
         // is both simpler and faithful to how the referral scan reads Arc logs.
-        const logs = (await withTimeout(
-            publicClient.request({
+        let logs: { data: Hex }[] | null = null;
+        try {
+            logs = (await logsClient.request({
                 method: "eth_getLogs",
                 params: [
                     {
@@ -1237,13 +1249,11 @@ async function runFeeSyncLeg(
                     },
                     // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 ] as any,
-            }) as Promise<{ data: Hex }[]>,
-            RPC_TIMEOUT_MS,
-        )) as { data: Hex }[] | null;
-        if (logs === null) {
-            // window failed (timeout or RPC range-cap): surface it so a silent
-            // scanned:0 is diagnosable, keep the cursor, retry next tick.
-            summary.notes.push(`fee-sync getLogs failed at block ${scannedTo} (RPC range cap?)`);
+            })) as { data: Hex }[];
+        } catch (e) {
+            // Surface the REAL error (all fallback RPCs exhausted) instead of a
+            // guess; keep the cursor and retry next tick.
+            summary.notes.push(`fee-sync getLogs err @${scannedTo}: ${errMsg(e).slice(0, 140)}`);
             break;
         }
         for (const log of logs) {
