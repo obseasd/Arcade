@@ -592,6 +592,7 @@ export async function insertKeeperEvent(e: {
         | "relay"
         | "skip"
         | "sync"
+        | "collect"
         | "error";
     refId?: string | null;
     txHash?: string | null;

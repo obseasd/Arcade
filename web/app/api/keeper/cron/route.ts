@@ -148,6 +148,23 @@ const FEE_MANAGER_ABI = [
         inputs: [{ name: "pool", type: "address" }],
         outputs: [{ type: "bool" }],
     },
+    {
+        type: "function",
+        stateMutability: "nonpayable",
+        name: "collectProtocol",
+        inputs: [{ name: "pool", type: "address" }],
+        outputs: [{ type: "uint128" }, { type: "uint128" }],
+    },
+] as const;
+// A V3 pool's accrued (uncollected) protocol fees, USDC + token side.
+const POOL_PROTOCOL_FEES_ABI = [
+    {
+        type: "function",
+        stateMutability: "view",
+        name: "protocolFees",
+        inputs: [],
+        outputs: [{ type: "uint128" }, { type: "uint128" }],
+    },
 ] as const;
 const POOL_SLOT0_ABI = [
     {
@@ -173,6 +190,12 @@ const FEE_SYNC_CURSOR = "v3_pool_created";
 // per run so the leg stays well under the Vercel ceiling).
 const MAX_FEE_SYNC_WINDOWS_PER_RUN = 25; // enough windows for the 1k mainnet case
 const MAX_FEE_SYNCS_PER_RUN = 6; // bound the txs per tick
+// Auto-collection of accrued protocol fees to the treasury. Gated to ~every
+// 30min and above a USDC threshold so we never spend gas (~$0.001) harvesting
+// dust. collectProtocol is permissionless and pays the manager's FIXED
+// treasury, so the recipient can't be misdirected.
+const FEE_COLLECT_MIN_USDC = 1_000_000n; // 1 USDC (6dp): below this, skip
+const MAX_FEE_COLLECTS_PER_RUN = 5; // bound collect txs per run
 // Always re-scan at least this many trailing blocks each run, on top of the
 // forward cursor. The cursor is forward-only, so a pool whose sync transiently
 // failed (shared-wallet nonce clash, RPC hiccup) or that landed in a scan gap
@@ -321,7 +344,7 @@ async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | null> {
 interface RunSummary {
     orbs: { scanned: number; bid: number; filled: number; closed: number; skipped: number; failed: number };
     cctp: { scanned: number; relayed: number; skipped: number; failed: number };
-    fees: { scanned: number; synced: number; skipped: number; failed: number };
+    fees: { scanned: number; synced: number; skipped: number; failed: number; collected: number };
     notes: string[];
 }
 
@@ -473,7 +496,7 @@ export async function POST(req: NextRequest) {
     const summary: RunSummary = {
         orbs: { scanned: 0, bid: 0, filled: 0, closed: 0, skipped: 0, failed: 0 },
         cctp: { scanned: 0, relayed: 0, skipped: 0, failed: 0 },
-        fees: { scanned: 0, synced: 0, skipped: 0, failed: 0 },
+        fees: { scanned: 0, synced: 0, skipped: 0, failed: 0, collected: 0 },
         notes: [],
     };
 
@@ -1361,6 +1384,69 @@ async function runFeeSyncLeg(
     // already synced next tick.
     if (actions < MAX_FEE_SYNCS_PER_RUN) {
         await setKeeperCursor(FEE_SYNC_CURSOR, scannedTo).catch(() => {});
+    }
+
+    // ---- Collection pass (~every 30min): sweep accrued protocol fees ----
+    // Pull every fee-enabled pool from the subgraph, read its accrued
+    // protocolFees on-chain, and collectProtocol() the ones over the USDC
+    // threshold. Gated by minute so a fresh accrual isn't harvested every 2min
+    // as dust; the on-chain read is the guard, and collectProtocol always pays
+    // the manager's fixed treasury.
+    if (new Date().getMinutes() % 30 < 2) {
+        try {
+            const url = process.env.NEXT_PUBLIC_GOLDSKY_URL;
+            if (url) {
+                const q = `{ pools(first: 100, where: { feeProtocol0_gt: 0 }) { id usdcIsToken0 } }`;
+                const res = (await withTimeout(
+                    fetch(url, {
+                        method: "POST",
+                        headers: { "content-type": "application/json" },
+                        body: JSON.stringify({ query: q }),
+                    }).then((r) => (r.ok ? r.json() : null)),
+                    RPC_TIMEOUT_MS,
+                )) as { data?: { pools?: { id: string; usdcIsToken0: boolean }[] } } | null;
+                const feePools = res?.data?.pools ?? [];
+                let collects = 0;
+                for (const fp of feePools) {
+                    if (collects >= MAX_FEE_COLLECTS_PER_RUN) break;
+                    const pool = getAddr(fp.id as Address);
+                    const accrued = (await withTimeout(
+                        logsClient
+                            .readContract({
+                                address: pool,
+                                abi: POOL_PROTOCOL_FEES_ABI,
+                                functionName: "protocolFees",
+                            })
+                            .then((r) => {
+                                const a = r as readonly [bigint, bigint];
+                                return fp.usdcIsToken0 ? a[0] : a[1];
+                            })
+                            .catch(() => null),
+                        RPC_TIMEOUT_MS,
+                    )) as bigint | null;
+                    if (accrued === null || accrued < FEE_COLLECT_MIN_USDC) continue;
+                    try {
+                        const hash = await walletClient.writeContract({
+                            address: cfg.feeProtocolManager,
+                            abi: FEE_MANAGER_ABI,
+                            functionName: "collectProtocol",
+                            args: [pool],
+                            chain: ARC_CHAIN,
+                            account: walletClient.account!,
+                            maxFeePerGas: MAX_FEE_PER_GAS_WEI,
+                        });
+                        await publicClient.waitForTransactionReceipt({ hash, timeout: RECEIPT_TIMEOUT_MS });
+                        await insertKeeperEvent({ leg: "fees", eventType: "collect", refId: pool, txHash: hash });
+                        summary.fees.collected++;
+                        collects++;
+                    } catch (e) {
+                        summary.notes.push(`fee-collect ${pool.slice(0, 10)} failed: ${errMsg(e)}`);
+                    }
+                }
+            }
+        } catch (e) {
+            summary.notes.push(`fee-collect: ${errMsg(e)}`);
+        }
     }
 }
 
