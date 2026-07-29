@@ -769,6 +769,16 @@ export function V3AddLiquidity({
                         `V3 Zap reverted on-chain (tx ${hash.slice(0, 10)}…). Common causes: pool moved between read and exec, USDC blocklist precompile, insufficient input.`,
                     );
                 }
+                // Nudge the keeper to activate the platform fee on this pool NOW
+                // (cuts the ~2-6min cron gap to ~seconds). Best-effort + idempotent:
+                // the route no-ops if already synced, and the cron backstops.
+                if (pool && pool !== zeroAddress) {
+                    void fetch("/api/keeper/sync-pool", {
+                        method: "POST",
+                        headers: { "content-type": "application/json" },
+                        body: JSON.stringify({ pool }),
+                    }).catch(() => {});
+                }
                 pushToast({
                     kind: "liquidity",
                     token0: { address: t0.address, symbol: t0.symbol },
@@ -1154,6 +1164,27 @@ export function V3AddLiquidity({
                     throw new Error(
                         `Mint reverted on-chain (tx ${hash.slice(0, 10)}…). Common causes: slippage too tight, tick spacing mismatch, balances too low. Bump slippage in Settings or widen the range.`,
                     );
+                }
+                // This mint may have CREATED a new pool (first LP). Read the pool
+                // address fresh (poolAddrQ may not have refetched yet) and nudge the
+                // keeper to activate the platform fee immediately. Best-effort +
+                // idempotent; the cron backstops anything this misses.
+                try {
+                    const freshPool = (await publicClient.readContract({
+                        address: ADDRESSES.v3Factory,
+                        abi: V3_FACTORY_ABI,
+                        functionName: "getPool",
+                        args: [t0.address, t1.address, feePip],
+                    })) as Address;
+                    if (freshPool && freshPool !== zeroAddress) {
+                        void fetch("/api/keeper/sync-pool", {
+                            method: "POST",
+                            headers: { "content-type": "application/json" },
+                            body: JSON.stringify({ pool: freshPool }),
+                        }).catch(() => {});
+                    }
+                } catch {
+                    /* cron backstop */
                 }
                 // Parse the ERC-721 Transfer (from = address(0) = mint) log
                 // off the receipt to discover the minted tokenId. We do this
