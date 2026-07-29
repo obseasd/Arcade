@@ -16,7 +16,7 @@ import {ILaunchpadSnipe} from "./interfaces/ILaunchpadSnipe.sol";
 ///         so the V4 stack does not import the full escrow source. The `slot`
 ///         is uint256 to match the escrow's ABI byte-for-byte (a uint8 here
 ///         would compute a DIFFERENT selector and silently miss the call).
-interface IArcadeTwitterEscrowV3Min {
+interface IArcadeTwitterEscrowV4Min {
     function creditSlot(uint256 positionId, uint256 slot, address token, uint256 amount) external;
 }
 

@@ -15,7 +15,7 @@ import {IHooks} from "v4-core/interfaces/IHooks.sol";
 
 import {ArcadeV4Curve} from "./ArcadeV4Curve.sol";
 import {ArcadeV4Math} from "./ArcadeV4Math.sol";
-import {ArcadeHook, IArcadeTwitterEscrowV3Min} from "../ArcadeHook.sol";
+import {ArcadeHook, IArcadeTwitterEscrowV4Min} from "../ArcadeHook.sol";
 
 /// @title ArcadeHookLib
 /// @notice EXTERNAL library carrying the ArcadeHook fee-routing + LP
@@ -177,7 +177,7 @@ library ArcadeHookLib {
                 uint256 positionId = uint256(PoolId.unwrap(poolId));
                 // Deliver the USDC to the escrow FIRST, then credit the slot.
                 _safeTake(pm, pending, feeCurrency, fo.twitterEscrow, creatorCut);
-                try IArcadeTwitterEscrowV3Min(fo.twitterEscrow).creditSlot(
+                try IArcadeTwitterEscrowV4Min(fo.twitterEscrow).creditSlot(
                     positionId, fo.slotIndex, feeTokenAddr, creatorCut
                 ) {
                     // credited to the handle slot
