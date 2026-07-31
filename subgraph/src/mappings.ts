@@ -666,7 +666,7 @@ export function handleSwap(event: Swap): void {
   recordTrade(
     event,
     p.token,
-    event.params.recipient, // the wallet receiving the swap output = the trader
+    event.transaction.from, // the EOA that submitted the swap = the real trader
     "v3",
     event.address,
     priceFromSqrtX96(event.params.sqrtPriceX96, p.usdcIsToken0),

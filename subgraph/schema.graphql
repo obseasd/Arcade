@@ -11,7 +11,7 @@ type Trade @entity(immutable: true) {
   id: ID!
   # The token being priced (the non-USDC side).
   token: Bytes!
-  # The wallet that traded: Buy.buyer / Sell.seller / Swap.recipient.
+  # The wallet that traded: Buy.buyer / Sell.seller / transaction.from (V2/V3/V4 swaps).
   trader: Bytes!
   # "curve" (launchpad Buy/Sell) | "v3" (pool Swap).
   source: String!
