@@ -156,9 +156,7 @@ function Inner() {
     const [snipeDecayMinutes, setSnipeDecayMinutes] = useState(0);
 
     // PUMP-only optional "creator buy": USDC the launcher spends on the curve
-    // immediately after createLaunch (the classic pump.fun dev-buy). createLaunch
-    // has no atomic buy param, so this is a SECOND tx right after; the approval
-    // below covers both the 3 USDC fee and this amount.
+    // atomically inside createLaunch (12th arg). Provably first buy, one tx.
     const [creatorBuy, setCreatorBuy] = useState("");
     const creatorBuyRaw = (() => {
         try {
@@ -322,9 +320,7 @@ function Inner() {
         submittingRef.current = true;
 
         try {
-            // Approve the fee PLUS the optional creator-buy up front (same spender
-            // = the hook), so the dev-buy that follows createLaunch needs no second
-            // approval.
+            // Approve the fee PLUS the optional creator-buy (same spender = the hook).
             const approveTotal = CREATION_FEE_USDC + creatorBuyRaw;
             setTxState({
                 status: "pending",
