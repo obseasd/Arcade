@@ -126,14 +126,17 @@ export function PriceChart({ token, mode, pool, source }: Props) {
   useEffect(() => {
     if (!candleSeriesRef.current || !volumeSeriesRef.current) return;
     const scale = metric === "mcap" ? SUPPLY : 1;
-    const candleData: CandlestickData[] = candles.map((c) => ({
+    const valid = candles.filter(
+      (c) => Number.isFinite(c.open) && Number.isFinite(c.close) && Number.isFinite(c.volume),
+    );
+    const candleData: CandlestickData[] = valid.map((c) => ({
       time: c.time as Time,
       open: c.open * scale,
       high: c.high * scale,
       low: c.low * scale,
       close: c.close * scale,
     }));
-    const volumeData: HistogramData[] = candles.map((c) => ({
+    const volumeData: HistogramData[] = valid.map((c) => ({
       time: c.time as Time,
       value: c.volume,
       color: c.close >= c.open ? "rgba(34, 197, 94, 0.4)" : "rgba(239, 68, 68, 0.4)",
@@ -147,7 +150,7 @@ export function PriceChart({ token, mode, pool, source }: Props) {
     });
     candleSeriesRef.current.setData(candleData);
     volumeSeriesRef.current.setData(volumeData);
-    if (candles.length > 0 && chartRef.current) {
+    if (valid.length > 0 && chartRef.current) {
       // Bounce autoScale via applyOptions. lightweight-charts v4 doesn't have
       // a setAutoScale method, but toggling the option forces a recompute of
       // the price range — needed when only the data values change (price ↔

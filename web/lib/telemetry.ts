@@ -92,7 +92,9 @@ export interface SwapTelemetry extends BaseEventCtx {
 }
 
 export function trackSwap(ev: SwapTelemetry) {
-    void send(ev.success ? "info" : "error", "swap", {
+    const level: EventSeverity =
+        ev.success || ev.errorClass === "user_rejected" ? "info" : "error";
+    void send(level, "swap", {
         ...sanitize(ev),
         amountInUsd: ev.amountInUsd ? Math.round(ev.amountInUsd * 100) / 100 : undefined,
     });
