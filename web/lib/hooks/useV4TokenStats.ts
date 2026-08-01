@@ -72,11 +72,11 @@ async function statsFromTokenEntity(url: string, tokenKey: string): Promise<Stat
  * and fees stay live without a manual refresh. Volume sums the most recent 1000
  * trades (a FLOOR for very busy tokens, exact for everything else).
  */
-export function useV4TokenStats(token: Address | undefined): V4TokenStats {
+export function useV4TokenStats(token: Address | undefined, enabled = true): V4TokenStats {
   const tokenKey = token?.toLowerCase();
   const { data, isLoading, isFetching } = useQuery<StatsResult>({
     queryKey: ["arcade", "v4-token-stats", tokenKey],
-    enabled: !!GOLDSKY_URL && !!tokenKey,
+    enabled: enabled && !!GOLDSKY_URL && !!tokenKey,
     staleTime: 10_000,
     refetchInterval: 15_000,
     queryFn: async () => {

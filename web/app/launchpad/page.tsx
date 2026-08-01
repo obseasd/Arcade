@@ -8,6 +8,7 @@ import { useLaunchpadTokens, LaunchpadTokenInfo } from "@/lib/hooks/useLaunchpad
 import { getLaunchpadGenerations } from "@/lib/launchpadGenerations";
 import { useArcadeHookTokens } from "@/lib/hooks/useArcadeHookTokens";
 import { useClankerSortMcaps } from "@/lib/hooks/useClankerSortMcaps";
+import { useV4TokenStatsBatch } from "@/lib/hooks/useV4TokenStatsBatch";
 import { parseInlineMetadata } from "@/lib/metadata";
 import { TokenCard } from "@/components/launchpad/TokenCard";
 import { V4TokenCard } from "@/components/launchpad/V4TokenCard";
@@ -24,6 +25,8 @@ export default function LaunchpadIndexPage() {
   // sorted last even at a big mcap. This gives USDC-paired Clankers a real
   // sort key = their implied FDV in USDC micros (one multicall over slot0).
   const clankerMcaps = useClankerSortMcaps(tokens);
+  const v4Addresses = useMemo(() => v4HookTokens.map((t) => t.address), [v4HookTokens]);
+  const { statsMap: v4StatsMap } = useV4TokenStatsBatch(v4Addresses);
   const [filter, setFilter] = useState<Filter>("all");
   const [q, setQ] = useState("");
   const [launchOpen, setLaunchOpen] = useState(false);
@@ -230,16 +233,14 @@ export default function LaunchpadIndexPage() {
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {/* ArcadeHook (V4) tokens render as regular cards, newest first. */}
           {v4Filtered.map((t, i) => (
-            <V4TokenCard key={t.address} token={t} priority={i < 6} />
+            <V4TokenCard key={t.address} token={t} priority={i < 6} preloadedStats={v4StatsMap.get(t.address.toLowerCase())} />
           ))}
           {filtered.map((t, i) => (
             <TokenCard
               key={t.address}
               token={t}
               curveSupply={LAUNCHPAD_CURVE_SUPPLY}
-              // First row of cards gets priority loading so above-the-fold
-              // logos appear on first paint instead of after the lazy-load
-              // IntersectionObserver fires.
+              clankerFdvUsdc={clankerMcaps.get(t.address.toLowerCase())}
               priority={v4Filtered.length === 0 && i < 6}
             />
           ))}

@@ -6,7 +6,7 @@ import { TokenIcon } from "@/components/ui/TokenIcon";
 import { ARCADE_HOOK_MODE, ARCADE_HOOK_STATUS } from "@/lib/abis/arcadeHook";
 import { type ArcadeHookTokenInfo } from "@/lib/hooks/useArcadeHookTokens";
 import { useTokenImage } from "@/lib/hooks/useTokenImage";
-import { useV4TokenStats } from "@/lib/hooks/useV4TokenStats";
+import { useV4TokenStats, type V4TokenStats } from "@/lib/hooks/useV4TokenStats";
 import { useV4PoolPrice } from "@/lib/hooks/useV4PoolPrice";
 import { LAUNCHPAD_CURVE_SUPPLY, LAUNCHPAD_TOTAL_SUPPLY, FEATURED_TOKENS } from "@/lib/constants";
 import { formatAddress } from "@/lib/utils";
@@ -29,8 +29,11 @@ function ageString(createdAtSec: number): string {
  * V4 lifecycle: CLANKER is a direct single-sided locked-LP launch (NEVER shows
  * "Graduated"); PUMP shows its bonding-curve progress.
  */
-export function V4TokenCard({ token, priority }: { token: ArcadeHookTokenInfo; priority?: boolean }) {
-  const stats = useV4TokenStats(token.address);
+export function V4TokenCard({ token, priority, preloadedStats }: { token: ArcadeHookTokenInfo; priority?: boolean; preloadedStats?: Omit<V4TokenStats, "isLoading"> }) {
+  const liveStats = useV4TokenStats(token.address, !preloadedStats);
+  const stats: V4TokenStats = preloadedStats
+    ? { ...preloadedStats, isLoading: false }
+    : liveStats;
   // Prefer the hook-cached metadataURI (from TokenLaunched); fall back to the
   // subgraph's when the on-chain scan came up empty, so the logo still resolves.
   const { image } = useTokenImage(token.address, token.metadataURI || stats.metadataURI || undefined);

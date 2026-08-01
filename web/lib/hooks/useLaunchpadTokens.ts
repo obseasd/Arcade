@@ -184,42 +184,33 @@ export function useLaunchpadTokens(): { tokens: LaunchpadTokenInfo[]; isLoading:
     (async () => {
       try {
         const latest = await publicClient.getBlockNumber();
-        // SERIALISE the per-generation scans. Promise.all over 7+
-        // generations was firing 7 simultaneous chunked walks, each
-        // sending its own ~10-50 getLogs calls in fast succession.
-        // Total burst: 70-350 getLogs/s. Alchemy free tier caps at
-        // ~30-40 getLogs/s before 429ing - so half the scans died
-        // mid-walk and the metadataMap came up empty for those
-        // generations (root cause of the "no logos on /launchpad"
-        // symptom even after the env-var + CHUNK fixes). One scan at
-        // a time still finishes quickly thanks to the 10k chunk, and
-        // the early-write-wins map merge means newer-generation hits
-        // still take priority (loop iterates generations newest-first
-        // upstream).
+        // Run generation scans in batches of SCAN_CONCURRENCY (was fully
+        // serial to dodge Alchemy 429s; batching keeps burst under
+        // ~30 concurrent getLogs while cutting wall-clock ~3x).
+        const SCAN_CONCURRENCY = 3;
         const map = new Map<string, string>();
-        for (const g of generations) {
+        for (let bi = 0; bi < generations.length; bi += SCAN_CONCURRENCY) {
           if (cancelled) return;
-          try {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const logs = await scanLogsChunked<any>(
-              publicClient,
-              { address: g.address, event: TOKEN_CREATED_EVT },
-              latest,
-              { chunk: CHUNK_SMALL, maxBack: MAX_BACK_BLOCKS, label: `lp.TokenCreated.gen${g.generation}` },
-            );
-            for (const log of logs) {
-              const tokenAddr = (log.args.token as string).toLowerCase();
-              const uri = (log.args.metadataURI as string) ?? "";
-              if (!map.has(tokenAddr)) map.set(tokenAddr, uri);
+          const batch = generations.slice(bi, bi + SCAN_CONCURRENCY);
+          await Promise.all(batch.map(async (g) => {
+            try {
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              const logs = await scanLogsChunked<any>(
+                publicClient,
+                { address: g.address, event: TOKEN_CREATED_EVT },
+                latest,
+                { chunk: CHUNK_SMALL, maxBack: MAX_BACK_BLOCKS, label: `lp.TokenCreated.gen${g.generation}` },
+              );
+              for (const log of logs) {
+                const tokenAddr = (log.args.token as string).toLowerCase();
+                const uri = (log.args.metadataURI as string) ?? "";
+                if (!map.has(tokenAddr)) map.set(tokenAddr, uri);
+              }
+            } catch {
+              // single-generation failure should not abort the batch
             }
-            // Flush after each generation so cards see partial results
-            // as the scan progresses instead of staring at the placeholder
-            // until every generation is done.
-            if (!cancelled) setMetadataMap(new Map(map));
-          } catch {
-            // single-generation failure should not abort the whole loop
-            // - the next generation may still yield hits.
-          }
+          }));
+          if (!cancelled) setMetadataMap(new Map(map));
         }
       } catch {
         /* swallow */

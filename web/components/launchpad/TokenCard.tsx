@@ -19,9 +19,12 @@ interface Props {
    *  appear immediately instead of waiting for the lazy-load
    *  IntersectionObserver to fire. */
   priority?: boolean;
+  /** Pre-computed USDC FDV from the page-level useClankerSortMcaps multicall.
+   *  When set, the per-card useClankerMcap hook is disabled (no duplicate reads). */
+  clankerFdvUsdc?: bigint;
 }
 
-export function TokenCard({ token, curveSupply, priority }: Props) {
+export function TokenCard({ token, curveSupply, priority, clankerFdvUsdc }: Props) {
   const progress = curveSupply > 0n ? Number((token.tokensSold * 10_000n) / curveSupply) / 100 : 0;
   // The bulk launchpad scan has ALREADY discovered each token's
   // metadataURI via useLaunchpadTokens' cross-generation TokenCreated
@@ -39,15 +42,17 @@ export function TokenCard({ token, curveSupply, priority }: Props) {
 
   // CLANKER_V3 = no bonding curve, locked single-sided V3 LP from birth.
   const isClanker = token.mode === 2;
-  // Contract's marketCap() reads V2 reserves on a V3 pool for Clankers → reverts;
-  // compute it client-side from slot0 instead.
-  const clankerMcap = useClankerMcap(isClanker ? token.address : undefined, isClanker ? token.v2Pair : undefined);
+  // Skip the per-card RPC reads when the page already computed the FDV.
+  const needsPerCardMcap = isClanker && clankerFdvUsdc === undefined;
+  const clankerMcap = useClankerMcap(needsPerCardMcap ? token.address : undefined, needsPerCardMcap ? token.v2Pair : undefined);
   const mcapNode = isClanker
-    ? clankerMcap
-      ? clankerMcap.pairedSymbol === "USDC"
-        ? `$${formatUSDC(clankerMcap.fdvRaw, 6, 0)}`
-        : `${formatToken(clankerMcap.fdvRaw, clankerMcap.pairedDecimals, 2)} ${clankerMcap.pairedSymbol}`
-      : null
+    ? clankerFdvUsdc !== undefined
+      ? `$${formatUSDC(clankerFdvUsdc, 6, 0)}`
+      : clankerMcap
+        ? clankerMcap.pairedSymbol === "USDC"
+          ? `$${formatUSDC(clankerMcap.fdvRaw, 6, 0)}`
+          : `${formatToken(clankerMcap.fdvRaw, clankerMcap.pairedDecimals, 2)} ${clankerMcap.pairedSymbol}`
+        : null
     : token.marketCap && token.marketCap > 0n
       ? `$${formatUSDC(token.marketCap, 6, 0)}`
       : null;

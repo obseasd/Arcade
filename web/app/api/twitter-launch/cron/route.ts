@@ -230,16 +230,28 @@ export async function POST(req: NextRequest) {
     const now = Date.now();
     const dayAgoIso = new Date(now - 86_400_000).toISOString();
 
+    console.log("[tweet-launch] config:", {
+        botHandle: botHandle(),
+        hook: hook.slice(0, 10),
+        operator: account.address.slice(0, 10),
+        criteria,
+    });
+
     const summary = { scanned: 0, launched: 0, rejected: 0, skipped: 0, failed: 0, notes: [] as string[] };
 
     const sinceId = await getSinceId();
+    console.log("[tweet-launch] since_id:", sinceId ?? "(none)");
     let mentions: Mention[];
     try {
         mentions = await fetchLaunchMentions(bearer, sinceId);
     } catch (e) {
+        console.error("[tweet-launch] X API error:", e);
         return NextResponse.json({ ran: false, reason: e instanceof Error ? e.message : String(e) }, { status: 502 });
     }
     summary.scanned = mentions.length;
+    console.log("[tweet-launch] scanned:", mentions.length, "mentions:", mentions.map((m) => ({
+        id: m.tweetId, author: m.author.username, followers: m.author.followers, text: m.text.slice(0, 80),
+    })));
 
     // Process OLDEST-first and advance since_id only to the last tweet we actually
     // finished handling. If a per-run / global cap breaks the loop, the UNhandled
@@ -265,25 +277,26 @@ export async function POST(req: NextRequest) {
         cursorId = m.tweetId;
         try {
             if (await isTweetProcessed(m.tweetId)) {
+                console.log(`[tweet-launch] skip ${m.tweetId}: already processed`);
                 summary.skipped++;
                 continue;
             }
-            // Cheap free pre-filter before any paid Claude call.
             if (!hasLaunchIntent(m.text, botHandle())) {
+                console.log(`[tweet-launch] skip ${m.tweetId}: no launch intent`);
                 summary.skipped++;
                 continue;
             }
-            // NL parse via Claude, falling back to the strict regex parser when
-            // ANTHROPIC_API_KEY is unset or Claude is unavailable.
             const cmd: LaunchCommand | null =
                 (await parseLaunchWithClaude(m.text)) ?? parseLaunchCommand(m.text);
             if (!cmd) {
+                console.log(`[tweet-launch] skip ${m.tweetId}: parse failed`);
                 summary.skipped++;
                 continue;
             }
-            // Automated anti-sybil gate.
+            console.log(`[tweet-launch] parsed ${m.tweetId}: ${cmd.ticker} "${cmd.name}"`);
             const gate = passesCriteria(m.author, criteria, now);
             if (!gate.ok) {
+                console.log(`[tweet-launch] reject ${m.tweetId}: ${gate.reason}`);
                 summary.rejected++;
                 await recordLaunchTweet({
                     tweetId: m.tweetId,
@@ -363,15 +376,15 @@ export async function POST(req: NextRequest) {
             });
             summary.launched++;
             globalCount++;
+            console.log(`[tweet-launch] LAUNCHED ${m.tweetId}: token=${token} tx=${hash}`);
 
-            // Announce the launch: reply to the tweet as the bot with the Arcade
-            // link. Best-effort (needs the OAuth 1.0a write creds); never blocks.
             if (token) {
                 await postLaunchReply(m.tweetId, token, cmd.name, cmd.ticker, m.opUser?.username).catch(() => false);
             }
         } catch (err) {
             summary.failed++;
             const msg = err instanceof Error ? err.message : String(err);
+            console.error(`[tweet-launch] FAILED ${m.tweetId}: ${msg.slice(0, 200)}`);
             summary.notes.push(`tweet=${m.tweetId} error=${msg.slice(0, 160)}`);
             await recordLaunchTweet({
                 tweetId: m.tweetId,
@@ -387,5 +400,6 @@ export async function POST(req: NextRequest) {
     // ones stay behind it and re-fetch next run). Reserve/idempotency dedupes.
     if (cursorId && cursorId !== sinceId) await setSinceId(cursorId);
 
-    return NextResponse.json({ ran: true, ...summary });
+    console.log("[tweet-launch] done:", summary);
+    return NextResponse.json({ ran: true, sinceId: sinceId ?? null, ...summary });
 }
