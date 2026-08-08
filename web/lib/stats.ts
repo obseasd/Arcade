@@ -1,6 +1,7 @@
 import { Address, createPublicClient, decodeEventLog, http, keccak256, parseAbiItem, toHex } from "viem";
 import { ADDRESSES } from "./constants";
 import { getLaunchpadAddressList } from "./launchpadGenerations";
+import { ARC_CHAIN } from "./serverRpc";
 
 /** Dev-only scan telemetry. The stats scan logs per-run counters; keep them off
  *  prod logs (Vercel log-tier concern, same as bridge audit M-04). The actionable
@@ -59,7 +60,7 @@ export interface StatsSnapshot {
 // Arc RPC explicitly so we never accidentally run the stats scan on
 // Alchemy regardless of how NEXT_PUBLIC_ARC_RPC_URL is set.
 const ARC_RPC =
-    process.env.ARC_STATS_RPC_URL ?? "https://rpc.testnet.arc.network";
+    process.env.ARC_STATS_RPC_URL ?? ARC_CHAIN.rpcUrls.default.http[0];
 
 /**
  * Predecessor contract addresses from every prior generation we want to keep
@@ -130,16 +131,14 @@ const PREDECESSOR_CONTRACTS: Address[] = [
     "0xc20F1Cc590f505a576bf8Bc5Fef7698f1b900Faa",
 ];
 
-const ARC_TESTNET = {
-    id: 5042002,
-    name: "Arc Testnet",
-    network: "arc-testnet",
-    nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 6 },
+// Extend the env-aware ARC_CHAIN with the stats-specific RPC + Multicall3
+// canonical address -- wires viem's client.multicall() so the V3/V2
+// volume scanners can batch hundreds of token0/token1 reads into a
+// single HTTP roundtrip instead of fanning out to unbatched eth_calls
+// (which the cron's 60s budget can't survive).
+const ARC_STATS_CHAIN = {
+    ...ARC_CHAIN,
     rpcUrls: { default: { http: [ARC_RPC] }, public: { http: [ARC_RPC] } },
-    // Multicall3 canonical address — wires viem's client.multicall()
-    // so the V3/V2 volume scanners can batch hundreds of token0/token1
-    // reads into a single HTTP roundtrip instead of fanning out to
-    // unbatched eth_calls (which the cron's 60s budget can't survive).
     contracts: {
         multicall3: {
             address:
@@ -147,7 +146,7 @@ const ARC_TESTNET = {
             blockCreated: 0,
         },
     },
-} as const;
+};
 
 // USDC-gas estimate: txCount * AVG_TX_GAS_USED * AVG_GAS_PRICE_WEI / DIV.
 // Documented openly on the /stats page as an estimate until a real
@@ -189,7 +188,7 @@ const MAX_TOTAL_BLOCKS = 500_000n;
  * cache (Next.js `revalidate` on the route + ISR on the page).
  */
 export async function getAggregateStats(): Promise<StatsSnapshot> {
-    const client = createPublicClient({ chain: ARC_TESTNET, transport: http(ARC_RPC) });
+    const client = createPublicClient({ chain: ARC_STATS_CHAIN, transport: http(ARC_RPC) });
     const head = await client.getBlockNumber();
     const fromBlock = head > MAX_TOTAL_BLOCKS ? head - MAX_TOTAL_BLOCKS : 0n;
 

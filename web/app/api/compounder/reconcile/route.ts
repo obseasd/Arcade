@@ -14,6 +14,7 @@ import { AUTO_COMPOUNDER_ABI } from "@/lib/abis/autoCompounder";
 import { ADDRESSES } from "@/lib/constants";
 import { isDbConfigured } from "@/lib/db";
 import { quoteUsdcValueForPair } from "@/lib/compounderQuote";
+import { ARC_CHAIN } from "@/lib/serverRpc";
 
 /** tokenId -> the position's two token addresses, for USDC pricing. */
 type PosAddrMap = Map<
@@ -73,25 +74,12 @@ export const maxDuration = 60;
 // Pair this list with BLOCK_WINDOW = 1000n so every provider can serve
 // any chunk without truncation.
 const ARC_RPC_LIST: readonly string[] = (() => {
-    const out: string[] = [
-        "https://5042002.rpc.thirdweb.com",
-        "https://rpc.testnet.arc.network",
-    ];
+    const out: string[] = [];
     const dedicated = process.env.NEXT_PUBLIC_ARC_RPC_URL;
     if (dedicated) out.push(dedicated);
+    out.push(...ARC_CHAIN.rpcUrls.default.http);
     return out;
 })();
-
-const ARC_CHAIN = {
-    id: 5042002,
-    name: "Arc Testnet",
-    network: "arc-testnet",
-    nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 6 },
-    rpcUrls: {
-        default: { http: ARC_RPC_LIST },
-        public: { http: ARC_RPC_LIST },
-    },
-} as const;
 
 // Chunk size is bounded by the strictest still-useful provider.
 // Thirdweb caps getLogs at 1000 blocks (-32005 "Log response size

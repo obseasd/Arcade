@@ -10,6 +10,7 @@ import {
 import { privateKeyToAccount } from "viem/accounts";
 
 import { ADDRESSES } from "@/lib/constants";
+import { ARC_CHAIN } from "@/lib/serverRpc";
 import { ARCADE_HOOK_ABI } from "@/lib/abis/arcadeHook";
 import {
     parseLaunchCommand,
@@ -59,13 +60,6 @@ import { pinFile, pinJson } from "@/lib/pinata";
  */
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
-
-const ARC_CHAIN = {
-    id: 5042002,
-    name: "Arc Testnet",
-    nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 6 },
-    rpcUrls: { default: { http: ["https://rpc.testnet.arc.network"] } },
-} as const;
 
 const MAX_LAUNCHES_PER_RUN = 5;
 const PER_USER_DAILY_LIMIT = Number(process.env.TWEET_LAUNCH_PER_USER_DAILY ?? "1");

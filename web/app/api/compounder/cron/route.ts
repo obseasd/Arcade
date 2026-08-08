@@ -13,6 +13,7 @@ import {
     MULTICALL3_ADDRESS,
     MULTICALL3_AGGREGATE3_ABI,
 } from "@/lib/multicall3";
+import { ARC_CHAIN } from "@/lib/serverRpc";
 import { privateKeyToAccount } from "viem/accounts";
 import {
     getActivePositions,
@@ -86,29 +87,9 @@ const ARC_RPC_LIST: readonly string[] = (() => {
     const out: string[] = [];
     const dedicated = process.env.NEXT_PUBLIC_ARC_RPC_URL;
     if (dedicated) out.push(dedicated);
-    out.push("https://rpc.testnet.arc.network");
-    out.push("https://5042002.rpc.thirdweb.com");
+    out.push(...ARC_CHAIN.rpcUrls.default.http);
     return out;
 })();
-
-const ARC_CHAIN = {
-    id: 5042002,
-    name: "Arc Testnet",
-    network: "arc-testnet",
-    nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 6 },
-    rpcUrls: {
-        // Audit I8 fix: fallback RPC list so a single endpoint's
-        // outage does not break the whole sweep. viem's http
-        // transport with multiple URLs round-robins on failure;
-        // adding an explicit thirdweb fallback gives us a second
-        // path if rpc.testnet.arc.network goes down (the documented
-        // Arc behaviour during prior outages was empty-getLogs +
-        // 504s, both of which propagate cleanly through the
-        // fallback).
-        default: { http: ARC_RPC_LIST },
-        public: { http: ARC_RPC_LIST },
-    },
-} as const;
 
 /// Audit I8 fix: hard ceiling on gas price. Without one, an Arc fee
 /// spike (a launchpad surge or a real mainnet incident) drains the

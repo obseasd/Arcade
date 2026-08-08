@@ -10,6 +10,7 @@ import {
 import { AUTO_COMPOUNDER_ABI } from "@/lib/abis/autoCompounder";
 import { ADDRESSES } from "@/lib/constants";
 import { rateLimit } from "@/lib/apiGuard";
+import { ARC_CHAIN } from "@/lib/serverRpc";
 
 /**
  * /api/compounder/positions
@@ -36,23 +37,6 @@ import { rateLimit } from "@/lib/apiGuard";
  */
 export const dynamic = "force-dynamic";
 
-// Dedicated provider URL via NEXT_PUBLIC_ARC_RPC_URL (Alchemy / thirdweb)
-// keeps the per-request configs() check off the rate-limited public RPC.
-const ARC_RPC_LIST: readonly string[] = [
-    process.env.NEXT_PUBLIC_ARC_RPC_URL,
-    "https://rpc.testnet.arc.network",
-].filter((u): u is string => !!u);
-
-const ARC_CHAIN = {
-    id: 5042002,
-    name: "Arc Testnet",
-    network: "arc-testnet",
-    nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 6 },
-    rpcUrls: {
-        default: { http: ARC_RPC_LIST },
-        public: { http: ARC_RPC_LIST },
-    },
-} as const;
 
 /**
  * Result of reading the on-chain depositor for a tokenId. The

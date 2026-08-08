@@ -12,6 +12,7 @@ import { V3_POOL_ABI } from "@/lib/abis/v3";
 import { V3_FACTORY_ABI } from "@/lib/abis/v3-npm";
 import { ADDRESSES } from "@/lib/constants";
 import { computePendingFees } from "@/lib/v3-fee-math";
+import { ARC_CHAIN } from "@/lib/serverRpc";
 
 /**
  * Server-side replica of the client's pending-fees math. Lets us tell
@@ -36,20 +37,6 @@ function isAuthed(req: NextRequest): boolean {
     return auth?.length === expected.length && auth === expected;
 }
 
-const ARC_RPC_LIST: readonly string[] = [
-    "https://5042002.rpc.thirdweb.com",
-    "https://rpc.testnet.arc.network",
-];
-const ARC_CHAIN = {
-    id: 5042002,
-    name: "Arc Testnet",
-    network: "arc-testnet",
-    nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 6 },
-    rpcUrls: {
-        default: { http: ARC_RPC_LIST },
-        public: { http: ARC_RPC_LIST },
-    },
-} as const;
 
 export async function GET(req: NextRequest) {
     if (!isAuthed(req)) {
@@ -66,7 +53,7 @@ export async function GET(req: NextRequest) {
 
     const client = createPublicClient({
         chain: ARC_CHAIN,
-        transport: fallback(ARC_RPC_LIST.map((u) => http(u))),
+        transport: fallback(ARC_CHAIN.rpcUrls.default.http.map((u) => http(u))),
     }) as unknown as PublicClient;
 
     // 1. NPM.positions(tokenId)

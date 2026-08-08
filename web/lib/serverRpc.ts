@@ -9,22 +9,27 @@ import { createPublicClient, fallback, http } from "viem";
  * reads (claim, balance, reconcile) so no single endpoint's limit breaks them.
  */
 
-export const ARC_CHAIN = {
-    id: 5042002,
-    name: "Arc Testnet",
-    nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 6 },
-    rpcUrls: { default: { http: ["https://rpc.testnet.arc.network"] } },
-} as const;
+const IS_MAINNET = (process.env.NEXT_PUBLIC_ARC_ENV ?? "").toLowerCase() === "mainnet";
 
-// Default Arc RPC fallback chain. Probed 2026-07-24:
-//   - arc.network        fast (~130ms) + getLogs to 10k, but RATE-LIMITS Vercel IPs.
-//   - drpc               fastest (~85ms bn), getLogs to 10k, public, no token.
-//   - arcscan blockscout ~125ms, getLogs to 10k, public, no token.
-//   - thirdweb           DROPPED: slow (~600ms) AND caps getLogs at 1000 blocks.
-// For production, prepend the Canteen RPC (dedicated server token, no rate limit)
-// via the ARC_RPC_URLS / ARC_READ_RPC_URLS env -- it is a SECRET, never in code.
-const DEFAULT_ARC_RPCS =
+export const ARC_CHAIN = IS_MAINNET
+    ? ({
+        id: 5042,
+        name: "Arc",
+        nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 6 },
+        rpcUrls: { default: { http: [process.env.ARC_MAINNET_RPC_URL ?? "https://5042.rpc.thirdweb.com"] } },
+    } as const)
+    : ({
+        id: 5042002,
+        name: "Arc Testnet",
+        nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 6 },
+        rpcUrls: { default: { http: ["https://rpc.testnet.arc.network"] } },
+    } as const);
+
+const DEFAULT_TESTNET_RPCS =
     "https://rpc.testnet.arc.network,https://arc-testnet.drpc.org,https://testnet.arcscan.app/api/eth-rpc";
+const DEFAULT_MAINNET_RPCS =
+    process.env.ARC_MAINNET_RPC_URL ?? "https://5042.rpc.thirdweb.com";
+const DEFAULT_ARC_RPCS = IS_MAINNET ? DEFAULT_MAINNET_RPCS : DEFAULT_TESTNET_RPCS;
 
 const RPC_URLS = (process.env.ARC_RPC_URLS ?? DEFAULT_ARC_RPCS)
     .split(",")

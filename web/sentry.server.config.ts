@@ -9,7 +9,7 @@ if (dsn) {
   Sentry.init({
     dsn,
     // Keep tracing cheap by default; tune via env.
-    tracesSampleRate: Number(process.env.SENTRY_TRACES_SAMPLE_RATE ?? "0.1"),
+    tracesSampleRate: Number(process.env.SENTRY_TRACES_SAMPLE_RATE ?? "0.01"),
     // Don't spam Sentry from local dev even if a DSN leaks into .env.local.
     enabled: process.env.NODE_ENV === "production",
     environment: process.env.VERCEL_ENV ?? process.env.NODE_ENV,

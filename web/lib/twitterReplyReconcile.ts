@@ -9,6 +9,7 @@ import {
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 
+import { ARC_CHAIN } from "@/lib/serverRpc";
 import { ADDRESSES } from "@/lib/constants";
 import { getReplyLaunchByPool, advanceSlot1CreditedIf } from "@/lib/twitterLaunchPersistence";
 
@@ -29,13 +30,6 @@ import { getReplyLaunchByPool, advanceSlot1CreditedIf } from "@/lib/twitterLaunc
  * Requires: the operator (COMPOUNDER_OPERATOR_PRIVATE_KEY) is an allowedCrediter
  * on the escrow (owner/Safe runs escrow.setCrediter(operator, true) once).
  */
-
-const ARC_CHAIN = {
-    id: 5042002,
-    name: "Arc Testnet",
-    nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 6 },
-    rpcUrls: { default: { http: ["https://rpc.testnet.arc.network"] } },
-} as const;
 
 // The hook's deploy block (deployments.json arcadeHookDeployBlock) bounds the
 // RoyaltyPaid scan. BUMP with the hook address at each redeploy.

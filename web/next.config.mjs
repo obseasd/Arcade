@@ -81,8 +81,8 @@ export default withSentryConfig(withBundleAnalyzer(nextConfig), {
   silent: !process.env.CI,
   widenClientFileUpload: true,
   disableLogger: true,
-  // Route Sentry requests through /monitoring to dodge ad-blockers (only used
-  // client-side when a DSN is configured).
-  tunnelRoute: "/monitoring",
+  // tunnelRoute removed: proxying Sentry through Vercel generated 23M
+  // "observability events" ($20/mo). The SDK now sends direct to sentry.io;
+  // ad-blocked users lose client telemetry but server-side captures remain.
 });
 

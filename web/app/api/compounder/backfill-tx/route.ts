@@ -14,6 +14,7 @@ import { ADDRESSES } from "@/lib/constants";
 import { isDbConfigured } from "@/lib/db";
 import { insertEvent, getPosition } from "@/lib/compounderPersistence";
 import { quoteUsdcValueForPair } from "@/lib/compounderQuote";
+import { ARC_CHAIN } from "@/lib/serverRpc";
 
 /**
  * Single-tx Compounded event backfill.
@@ -35,21 +36,6 @@ import { quoteUsdcValueForPair } from "@/lib/compounderQuote";
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
 
-const ARC_RPC_LIST: readonly string[] = [
-    "https://5042002.rpc.thirdweb.com",
-    "https://rpc.testnet.arc.network",
-];
-
-const ARC_CHAIN = {
-    id: 5042002,
-    name: "Arc Testnet",
-    network: "arc-testnet",
-    nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 6 },
-    rpcUrls: {
-        default: { http: ARC_RPC_LIST },
-        public: { http: ARC_RPC_LIST },
-    },
-} as const;
 
 const TOPIC_COMPOUNDED = keccak256(
     toBytes(
@@ -93,7 +79,7 @@ export async function POST(req: NextRequest) {
 
     const publicClient = createPublicClient({
         chain: ARC_CHAIN,
-        transport: fallback(ARC_RPC_LIST.map((url) => http(url))),
+        transport: fallback(ARC_CHAIN.rpcUrls.default.http.map((url) => http(url))),
     });
 
     let receipt;
