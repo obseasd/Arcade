@@ -12,6 +12,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Address } from "viem";
 import { useAccount, useReadContract } from "wagmi";
 import { TWITTER_ESCROW_V3_ABI } from "@/lib/abis/twitterEscrowV3";
+import { arcTestnet } from "@/lib/chains";
 import { ADDRESSES } from "@/lib/constants";
 import { cn, formatAddress } from "@/lib/utils";
 
@@ -22,7 +23,7 @@ import { cn, formatAddress } from "@/lib/utils";
  * USDC Transfer scan has to run server-side.
  */
 
-const EXPLORER_TX = "https://testnet.arcscan.app/tx/";
+const EXPLORER_TX = `${arcTestnet.blockExplorers?.default?.url ?? "https://testnet.arcscan.app"}/tx/`;
 
 interface FeeItem {
     txHash: string;

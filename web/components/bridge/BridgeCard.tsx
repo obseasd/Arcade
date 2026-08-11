@@ -42,6 +42,7 @@ import { TokenIcon } from "@/components/ui/TokenIcon";
 import { RecipientEditModal } from "./RecipientEditModal";
 import { cn, formatAddress, formatUSDC } from "@/lib/utils";
 import { ADDRESSES } from "@/lib/constants";
+import { arcTestnet, cctpSourceChains } from "@/lib/chains";
 import { TokenSelectModal, type TokenOption } from "@/components/ui/TokenSelectModal";
 import { ROUTER_ABI } from "@/lib/abis/dex";
 import { V3_QUOTER_ABI } from "@/lib/abis/v3";
@@ -66,8 +67,8 @@ import {
 import { BridgeStepsProgress } from "./BridgeStepsProgress";
 import { pushToast } from "@/lib/toast";
 
-const ARC_CHAIN_ID = 5_042_002;
-const ETH_SEPOLIA_ID = 11_155_111;
+const ARC_CHAIN_ID = arcTestnet.id;
+const DEFAULT_SRC_CHAIN_ID = cctpSourceChains[0].id;
 
 /** Arcade's ALL-IN fee on FAST bridges (Standard is free). REALLY CHARGED, on
  * chain, by ArcadeCctpBuyReceiver, which every fast bridge to Arc routes
@@ -122,14 +123,19 @@ function formatElapsed(totalSec: number): string {
 function etaLabel(srcChainId: number, fast: boolean): string {
   if (fast) return "~10-30s";
   switch (srcChainId) {
-    case 11_155_111: // Ethereum Sepolia - 2 epochs ≈ 13-19 min
+    case 1: // Ethereum mainnet
+    case 11_155_111: // Ethereum Sepolia
       return "~15-20 min";
+    case 8_453: // Base
     case 84_532: // Base Sepolia
+    case 42_161: // Arbitrum
     case 421_614: // Arbitrum Sepolia
+    case 10: // OP mainnet
     case 11_155_420: // OP Sepolia
       return "~1-3 min";
+    case 43_114: // Avalanche
     case 43_113: // Avalanche Fuji
-      return "~30-60s";
+    case 5_042: // Arc
     case 5_042_002: // Arc Testnet
       return "~30-60s";
     default:
@@ -158,16 +164,18 @@ type Step =
  * so it's not rebuilt on every BridgeCard render.
  */
 function expectedAttestUpperSec(srcChainId: number, fast: boolean): number {
-  if (fast) return 45; // ~10-30s + buffer
+  if (fast) return 45;
   switch (srcChainId) {
-    case 11_155_111: return 25 * 60; // Eth Sepolia 15-20 min + buffer
-    case 84_532:
-    case 421_614:
-    case 11_155_420:
-      return 4 * 60; // 1-3 min + buffer
-    case 43_113:
-    case 5_042_002:
-      return 90; // 30-60s + buffer
+    case 1:
+    case 11_155_111:
+      return 25 * 60;
+    case 8_453: case 84_532:
+    case 42_161: case 421_614:
+    case 10: case 11_155_420:
+      return 4 * 60;
+    case 43_114: case 43_113:
+    case 5_042: case 5_042_002:
+      return 90;
     default:
       return 4 * 60;
   }
@@ -180,7 +188,7 @@ export function BridgeCard() {
   const { switchChainAsync } = useSwitchChain();
   const { writeContractAsync } = useWriteContract();
 
-  const [srcChainId, setSrcChainId] = useState<number>(ETH_SEPOLIA_ID);
+  const [srcChainId, setSrcChainId] = useState<number>(DEFAULT_SRC_CHAIN_ID);
   const [dstChainId, setDstChainId] = useState<number>(ARC_CHAIN_ID);
   const [amountStr, setAmountStr] = useState("");
   const [step, setStep] = useState<Step>({ kind: "idle" });
@@ -728,10 +736,11 @@ export function BridgeCard() {
       });
       setSolStep("done");
       setSolMsg("");
+      const arcExplorerBase = arcTestnet.blockExplorers?.default?.url;
       const destExplorer =
         solanaDirection === "arc-to-solana"
-          ? `https://explorer.solana.com/address/${solAddress}?cluster=devnet`
-          : `https://testnet.arcscan.app/address/${account}`;
+          ? `https://explorer.solana.com/address/${solAddress}${arcTestnet.id === 5_042_002 ? "?cluster=devnet" : ""}`
+          : arcExplorerBase ? `${arcExplorerBase}/address/${account}` : "";
       pushToast({
         kind: "swap",
         action: "Bridge",
@@ -1760,9 +1769,9 @@ export function BridgeCard() {
       )}
 
       {/* Slow source warning - only when Fast Transfer is OFF */}
-      {!fastTransfer && srcChain.id === ETH_SEPOLIA_ID && !sameChain && amountRaw > 0n && (
+      {!fastTransfer && (srcChain.id === 1 || srcChain.id === 11_155_111) && !sameChain && amountRaw > 0n && (
         <div className="mt-2 rounded-xl border border-arc-warn/30 bg-arc-warn/10 p-2 text-[11px] text-arc-warn">
-          Ethereum Sepolia takes ~15-20 min for finality. Enable Fast Transfer (flash icon) to
+          Ethereum takes ~15-20 min for finality. Enable Fast Transfer (flash icon) to
           bridge in seconds for a tiny fee.
         </div>
       )}

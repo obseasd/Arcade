@@ -166,7 +166,7 @@ export function useSignPermit2() {
             // restore now.
             if (chainId !== arcTestnet.id) {
                 throw new Error(
-                    `Permit2 sign requires Arc Testnet (chainId ${arcTestnet.id}); wallet is on ${chainId}`,
+                    `Permit2 sign requires ${arcTestnet.name} (chainId ${arcTestnet.id}); wallet is on ${chainId}`,
                 );
             }
             // Audit CRIT-3: read the Permit2 nonce FRESH at sign time. The

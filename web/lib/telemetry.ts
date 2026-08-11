@@ -20,7 +20,7 @@ type EventSeverity = "info" | "warning" | "error";
 interface BaseEventCtx {
     /** Account or anon id. Hashed before sending. */
     account?: string;
-    /** Connected chain id (Arc testnet = 5042002). */
+    /** Connected chain id (Arc = 5042 mainnet / 5042002 testnet). */
     chainId?: number;
     /** Release version surfaced in Sentry; falls back to NEXT_PUBLIC_GIT_SHA. */
     release?: string;

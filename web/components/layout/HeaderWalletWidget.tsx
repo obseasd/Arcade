@@ -499,7 +499,7 @@ function ActivityFeed({ address, onLinkClick }: { address: Address; onLinkClick:
                 )}
             </div>
             <Link
-                href={`https://testnet.arcscan.app/address/${address}`}
+                href={`${arcTestnet.blockExplorers?.default?.url ?? "https://testnet.arcscan.app"}/address/${address}`}
                 target="_blank"
                 rel="noopener noreferrer"
                 onClick={onLinkClick}

@@ -6,6 +6,7 @@ import { useState } from "react";
 import { Address, isAddress, parseUnits, zeroAddress } from "viem";
 import { useAccount, useReadContract, useWriteContract } from "wagmi";
 
+import { arcTestnet } from "@/lib/chains";
 import { ADDRESSES, USDC_DECIMALS } from "@/lib/constants";
 import { pushToast } from "@/lib/toast";
 import { formatAddress, formatUSDC } from "@/lib/utils";
@@ -165,7 +166,7 @@ export default function EscrowAdminPage() {
 
           <div className="mt-6 grid gap-4 sm:grid-cols-2">
             <Card title="Status" icon={<RefreshCw className="h-4 w-4" />}>
-              <Row label="Escrow" value={<a className="hover:text-arc-cta-hover" href={`https://testnet.arcscan.app/address/${escrow}`} target="_blank" rel="noreferrer">{formatAddress(escrow)}</a>} />
+              <Row label="Escrow" value={<a className="hover:text-arc-cta-hover" href={`${arcTestnet.blockExplorers?.default?.url ?? "https://testnet.arcscan.app"}/address/${escrow}`} target="_blank" rel="noreferrer">{formatAddress(escrow)}</a>} />
               <Row label="Owner" value={owner ? formatAddress(owner) : "…"} />
               <Row label="Trusted signer" value={signerQ.data ? formatAddress(signerQ.data as Address) : "…"} />
               <Row label="Claim timelock" value={timelockQ.data !== undefined ? `${Number(timelockQ.data)}s` : "…"} />

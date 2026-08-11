@@ -1,6 +1,7 @@
 "use client";
 
 import { ArrowLeft, Check, ChevronDown, ExternalLink, Loader2 } from "lucide-react";
+import { arcTestnet } from "@/lib/chains";
 import { CrossIcon } from "@/components/ui/MaskIcon";
 import { useEffect, useMemo, useState } from "react";
 import {
@@ -746,7 +747,7 @@ function StatusView({
             <p className="mt-1 text-sm text-arc-text-muted">{subtitle}</p>
             {txHash && (
                 <a
-                    href={`https://testnet.arcscan.app/tx/${txHash}`}
+                    href={`${arcTestnet.blockExplorers?.default?.url ?? "https://testnet.arcscan.app"}/tx/${txHash}`}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="mt-3 inline-flex items-center gap-1 text-xs text-arc-text-faint hover:text-arc-text"

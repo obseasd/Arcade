@@ -63,12 +63,11 @@ const NPM_MULTICALL_ABI = parseAbi([
     "function multicall(bytes[] data) payable returns (bytes[])",
 ]);
 
-// Circle's Arc testnet. Used to gate the single-transaction fresh-pool path:
-// Arc has NO public mempool and uses deterministic single-sequencer ordering
-// (AMP), so front-running the pool init price is impossible. That makes it
-// safe to batch init + mint atomically instead of the two-tx + slot0-verify
-// flow other chains need. Re-evaluate if Arc ever ships a public mempool.
-const ARC_TESTNET_CHAIN_ID = 5042002;
+// Arc chain gate for the single-transaction fresh-pool path: Arc has NO
+// public mempool and uses deterministic single-sequencer ordering (AMP), so
+// front-running the pool init price is impossible. That makes it safe to
+// batch init + mint atomically instead of the two-tx + slot0-verify flow
+// other chains need. Re-evaluate if Arc ever ships a public mempool.
 
 // Pre-hashed Transfer signature so receipt-log parsing avoids a
 // keccak round trip per mint. ERC-721 emits Transfer(from, to,
@@ -874,7 +873,7 @@ export function V3AddLiquidity({
                     tickSpacing,
                 );
 
-                if (chainId === ARC_TESTNET_CHAIN_ID) {
+                if (chainId === arcTestnet.id) {
                     // Arc fast path: defer the init into the mint multicall.
                     // The ticks above are anchored to the EXACT seed price the
                     // pool will be initialised to in the same atomic tx, so no
@@ -1495,7 +1494,7 @@ export function V3AddLiquidity({
                     Pool doesn&apos;t exist yet. Submitting will create it via
                     createAndInitializePoolIfNecessary with the midpoint of
                     your range as the seed price
-                    {chainId === ARC_TESTNET_CHAIN_ID
+                    {chainId === arcTestnet.id
                         ? ", then add your liquidity in the same single transaction."
                         : ", then add your liquidity."}
                     {pendingApprovals > 0 && (
@@ -1756,7 +1755,7 @@ export function V3AddLiquidity({
                             ? autoMode !== 0
                                 ? "Minting + enabling auto-management…"
                                 : "Minting position…"
-                            : chainId === ARC_TESTNET_CHAIN_ID
+                            : chainId === arcTestnet.id
                                 ? pendingApprovals > 0
                                     ? autoMode !== 0
                                         ? "Approving + creating pool + adding liquidity + auto-management…"
@@ -1789,7 +1788,7 @@ export function V3AddLiquidity({
                                     : "Add concentrated liquidity"
                                   : pendingApprovals + autoMgmtTx > 0
                                     ? `${pendingApprovals > 0 ? `Approve ${pendingApprovals} + ` : ""}create pool + add liquidity${autoMgmtTx ? " + auto-mgmt" : ""} (${1 + pendingApprovals + autoMgmtTx} txs)`
-                                    : chainId === ARC_TESTNET_CHAIN_ID
+                                    : chainId === arcTestnet.id
                                       ? "Create pool + add liquidity (1 tx)"
                                       : "Create pool + add liquidity"}
             </button>

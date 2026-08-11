@@ -34,6 +34,7 @@ import {
     USDC_DECIMALS,
     V4_HOOK_ENABLED,
 } from "@/lib/constants";
+import { arcTestnet } from "@/lib/chains";
 import { pushToast } from "@/lib/toast";
 import { useArcadeHookCurveState } from "@/lib/hooks/useArcadeHookTokens";
 import { useV4TokenStats } from "@/lib/hooks/useV4TokenStats";
@@ -308,7 +309,7 @@ function Inner() {
                                 <div className="mt-3 flex flex-wrap items-center gap-2">
                                     {poolFee > 0 && <span className="arc-pill cursor-default">Fees: {poolFee / 10_000}%</span>}
                                     <a
-                                        href={`https://testnet.arcscan.app/address/${token}`}
+                                        href={`${arcTestnet.blockExplorers?.default?.url ?? "https://testnet.arcscan.app"}/address/${token}`}
                                         target="_blank"
                                         rel="noopener noreferrer"
                                         className="arc-pill"
@@ -660,7 +661,7 @@ function FeesRecipientPanel({
                     </div>
                 ) : recipientAddr ? (
                     <a
-                        href={`https://testnet.arcscan.app/address/${recipientAddr}`}
+                        href={`${arcTestnet.blockExplorers?.default?.url ?? "https://testnet.arcscan.app"}/address/${recipientAddr}`}
                         target="_blank"
                         rel="noreferrer"
                         className="mt-1 block truncate font-mono text-sm text-arc-text hover:text-arc-cta-hover"

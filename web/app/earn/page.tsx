@@ -5,6 +5,7 @@ import { useState } from "react";
 import { erc20Abi, formatUnits, parseUnits } from "viem";
 import { useAccount, usePublicClient, useReadContract, useWriteContract } from "wagmi";
 import { TokenIcon } from "@/components/ui/TokenIcon";
+import { arcTestnet } from "@/lib/chains";
 import { ADDRESSES, USDC_DECIMALS } from "@/lib/constants";
 import {
     USYC_ABI,
@@ -88,7 +89,7 @@ export default function EarnPage() {
                     Earn
                 </h1>
                 <p className="mt-1 text-sm text-arc-text-muted">
-                    Yield products available on Arc Testnet. More to come.
+                    Yield products available on {arcTestnet.name}. More to come.
                 </p>
             </div>
 
@@ -173,7 +174,7 @@ export default function EarnPage() {
                                 <ExternalLink className="h-3 w-3" />
                             </a>
                             <a
-                                href={`https://testnet.arcscan.app/address/${USYC_TELLER_ADDRESS}`}
+                                href={`${arcTestnet.blockExplorers?.default?.url ?? "https://testnet.arcscan.app"}/address/${USYC_TELLER_ADDRESS}`}
                                 target="_blank"
                                 rel="noopener noreferrer"
                                 className="inline-flex items-center gap-1 text-arc-text-muted underline-offset-2 hover:text-arc-text"

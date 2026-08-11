@@ -5,6 +5,11 @@ import {
   arbitrumSepolia,
   optimismSepolia,
   avalancheFuji,
+  mainnet as ethereumMainnet,
+  base,
+  arbitrum,
+  optimism,
+  avalanche,
 } from "viem/chains";
 
 /**
@@ -99,4 +104,7 @@ export const anvilLocal = defineChain({
 });
 
 // Re-export CCTP source chains so wagmi config can register them.
-export { sepolia, baseSepolia, arbitrumSepolia, optimismSepolia, avalancheFuji };
+// Testnet: Sepolia variants. Mainnet: real L1s.
+export const cctpSourceChains = IS_MAINNET
+  ? [ethereumMainnet, base, arbitrum, optimism, avalanche]
+  : [sepolia, baseSepolia, arbitrumSepolia, optimismSepolia, avalancheFuji];

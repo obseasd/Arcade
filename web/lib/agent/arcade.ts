@@ -40,14 +40,15 @@ import {
     PERMIT2_DEFAULT_EXPIRATION_SECONDS,
 } from "@/lib/abis/permit2";
 
-export const ARC_CHAIN = "ARC-TESTNET" as const;
+const IS_MAINNET = (process.env.NEXT_PUBLIC_ARC_ENV ?? "").toLowerCase() === "mainnet";
+export const ARC_CHAIN = IS_MAINNET ? "ARC" : "ARC-TESTNET";
 
 /** Server-side Arc public client. Uses the same RPC the app resolves to. */
 export const arc = createPublicClient({
     chain: arcTestnet,
     // Bound RPC latency so a hung node returns an error instead of stalling
     // an agent's request forever (audit: no transport timeout).
-    transport: http(process.env.NEXT_PUBLIC_ARC_RPC_URL || "https://rpc.testnet.arc.network", {
+    transport: http(process.env.NEXT_PUBLIC_ARC_RPC_URL || arcTestnet.rpcUrls.default.http[0], {
         timeout: 12_000,
     }),
 });
@@ -330,7 +331,7 @@ export async function getSwapPlan(params: {
         ...baseOut,
         executable: true,
         nextStep:
-            "Submit calls[] in order via Circle createContractExecutionTransaction on blockchain ARC-TESTNET.",
+            `Submit calls[] in order via Circle createContractExecutionTransaction on blockchain ${ARC_CHAIN}.`,
         calls: [
             ...(swapApprove ? [swapApprove] : []),
             {
@@ -584,7 +585,7 @@ export async function getLaunchpadBuyPlan(params: {
         slippageBps,
         executable: true,
         nextStep:
-            "Submit calls[] in order (approve USDC, then buy) via Circle createContractExecutionTransaction on ARC-TESTNET.",
+            `Submit calls[] in order (approve USDC, then buy) via Circle createContractExecutionTransaction on ${ARC_CHAIN}.`,
         note: refund > 0n ? `Curve will refund ${refund} USDC (it graduates mid-buy).` : undefined,
         calls: [
             ...(await oneApprove(params.owner, ADDRESSES.usdc, ADDRESSES.launchpad, params.amountUsdcIn, "Arcade launchpad")),
@@ -668,7 +669,7 @@ export async function getLaunchpadSellPlan(params: {
         slippageBps,
         executable: true,
         nextStep:
-            "Submit calls[] in order (approve token, then sell) via Circle createContractExecutionTransaction on ARC-TESTNET.",
+            `Submit calls[] in order (approve token, then sell) via Circle createContractExecutionTransaction on ${ARC_CHAIN}.`,
         calls: [
             ...(await oneApprove(params.owner, params.token, ADDRESSES.launchpad, params.tokensIn, "Arcade launchpad")),
             {
@@ -933,7 +934,7 @@ export async function getMultiswapPlan(params: {
         slippageBps,
         executable: true,
         nextStep:
-            "Submit calls[] in order (one approve per input, then swapToSingle) via Circle createContractExecutionTransaction on ARC-TESTNET.",
+            `Submit calls[] in order (one approve per input, then swapToSingle) via Circle createContractExecutionTransaction on ${ARC_CHAIN}.`,
         calls: [
             ...(
                 await Promise.all(

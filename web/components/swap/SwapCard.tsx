@@ -1458,7 +1458,7 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
           success: true,
           txHash: hash,
           account,
-          chainId: 5042002,
+          chainId: arcTestnet.id,
         });
         // Referral accrual (fire-and-forget; no effect on the swap). If this
         // wallet was referred, its referrer earns a share of the protocol
@@ -1500,7 +1500,7 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
         success: false,
         errorClass: classifyError(e),
         account: account ?? undefined,
-        chainId: 5042002,
+        chainId: arcTestnet.id,
       });
     }
   };

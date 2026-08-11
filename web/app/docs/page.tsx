@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { arcTestnet } from "@/lib/chains";
 
 export const metadata = {
   title: "Docs",
@@ -56,7 +57,7 @@ export default function DocsPage() {
           Arcade runs on <b>Arc</b>, Circle&apos;s EVM L1, where the native gas
           token is <b>USDC</b> — no ETH round-trip before you can transact. Gas,
           swaps, liquidity, and launch fees all denominate in USDC. Wallets are
-          standard Ethereum (secp256k1); chainId is <code>5042002</code>.
+          standard Ethereum (secp256k1); chainId is <code>{arcTestnet.id}</code>.
         </p>
         <p>What you can do:</p>
         <ul className="mt-2 list-disc space-y-1 pl-5">
@@ -151,12 +152,20 @@ export default function DocsPage() {
         </p>
         <Table
           headers={["Chain", "Typical time"]}
-          rows={[
-            ["Ethereum Sepolia", "~15-20 min (waits for finality)"],
-            ["Base / Arbitrum / OP Sepolia", "~1-3 min"],
-            ["Avalanche Fuji", "~30-60s"],
-            ["Arc Testnet (default destination, also a source)", "~30-60s"],
-          ]}
+          rows={arcTestnet.id === 5_042
+            ? [
+                ["Ethereum", "~15-20 min (waits for finality)"],
+                ["Base / Arbitrum / Optimism", "~1-3 min"],
+                ["Avalanche", "~30-60s"],
+                ["Arc (default destination, also a source)", "~30-60s"],
+              ]
+            : [
+                ["Ethereum Sepolia", "~15-20 min (waits for finality)"],
+                ["Base / Arbitrum / OP Sepolia", "~1-3 min"],
+                ["Avalanche Fuji", "~30-60s"],
+                ["Arc Testnet (default destination, also a source)", "~30-60s"],
+              ]
+          }
         />
         <ul className="mt-3 list-disc space-y-1 pl-5">
           <li><b>Standard</b> transfer is free (waits for full finality). <b>Fast Transfer</b> settles in ~10-30s with a tiny Circle fee; minimum 0.5 USDC.</li>

@@ -28,6 +28,7 @@ import { V3_QUOTER_ABI } from "@/lib/abis/v3";
 import { LAUNCHPAD_ABI } from "@/lib/abis/launchpad";
 import { buildOrbsBid, clearsFloor } from "@/lib/keeper/orbsRoute";
 import { pickBestVenue, v2DirectVenue, type DirectVenueCandidate } from "@/lib/keeper/directVenues";
+import { arcTestnet } from "@/lib/chains";
 import {
     getActiveOrbsOrders,
     upsertOrbsOrder,
@@ -229,7 +230,7 @@ const ARC_RPC_LIST: readonly string[] = (() => {
         out.push("https://5042.rpc.thirdweb.com");
     } else {
         out.push("https://rpc.testnet.arc.network");
-        out.push("https://5042002.rpc.thirdweb.com");
+        out.push(`https://${arcTestnet.id}.rpc.thirdweb.com`);
     }
     return out;
 })();
@@ -256,7 +257,7 @@ const FEE_SYNC_LOG_RPCS: readonly string[] = ARC_IS_MAINNET
 const FEE_SYNC_WINDOW = ARC_IS_MAINNET ? 1_000n : 10_000n;
 
 const ARC_CHAIN = {
-    id: ARC_IS_MAINNET ? 5042 : 5042002,
+    id: arcTestnet.id,
     name: ARC_IS_MAINNET ? "Arc" : "Arc Testnet",
     network: ARC_IS_MAINNET ? "arc-mainnet" : "arc-testnet",
     nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 6 },

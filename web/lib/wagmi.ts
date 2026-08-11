@@ -4,11 +4,7 @@ import { mainnet } from "wagmi/chains";
 import {
   arcTestnet,
   anvilLocal,
-  sepolia,
-  baseSepolia,
-  arbitrumSepolia,
-  optimismSepolia,
-  avalancheFuji,
+  cctpSourceChains,
 } from "./chains";
 
 const WALLETCONNECT_PROJECT_ID =
@@ -21,7 +17,7 @@ const defaultChain = process.env.NEXT_PUBLIC_DEFAULT_CHAIN === "arc" ? arcTestne
 // mainnet is included read-only so wagmi's useEnsAddress / useEnsName can
 // resolve `name.eth` recipients in the Send modal - those hooks REQUIRE
 // the chain to be configured in wagmi, even if the user never switches to it.
-const allChains = [arcTestnet, anvilLocal, sepolia, baseSepolia, arbitrumSepolia, optimismSepolia, avalancheFuji, mainnet] as const;
+const allChains = [arcTestnet, anvilLocal, ...cctpSourceChains, mainnet] as const;
 const chains = defaultChain.id === arcTestnet.id
   ? ([arcTestnet, ...allChains.filter((c) => c.id !== arcTestnet.id)] as const)
   : ([anvilLocal, ...allChains.filter((c) => c.id !== anvilLocal.id)] as const);
@@ -83,17 +79,12 @@ export const wagmiConfig = getDefaultConfig({
     [arcTestnet.id]: fallback(
       [
         http(resolveArcRpc(), { batch: { wait: 50, batchSize: 90 }, retryCount: 0 }),
-        http("https://rpc.testnet.arc.network", { batch: { wait: 50, batchSize: 90 }, retryCount: 0 }),
-        http("https://5042002.rpc.thirdweb.com", { batch: { wait: 50, batchSize: 90 }, retryCount: 0 }),
+        http(arcTestnet.rpcUrls.default.http[0], { batch: { wait: 50, batchSize: 90 }, retryCount: 0 }),
       ],
       { rank: false },
     ),
     [anvilLocal.id]: http(anvilLocal.rpcUrls.default.http[0]),
-    [sepolia.id]: http(),
-    [baseSepolia.id]: http(),
-    [arbitrumSepolia.id]: http(),
-    [optimismSepolia.id]: http(),
-    [avalancheFuji.id]: http(),
+    ...Object.fromEntries(cctpSourceChains.map((c) => [c.id, http()])),
     // Explicit public RPC for mainnet ENS reads. See safeMainnetRpc()
     // below for the full story - tl;dr: llamarpc.com is on every major
     // ad-blocker's privacy filter list and a blocked mainnet transport

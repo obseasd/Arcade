@@ -9,6 +9,7 @@ const CHAIN_LOGOS: Record<number, string> = {
   421_614: "/arbitrum.png",
   11_155_420: "/optimism.png",
   43_113: "/avalanche.png",
+  5_042: "/arc.jpg",
   5_042_002: "/arc.jpg",
   [SOLANA_BRIDGE_ID]: "/solana.jpg",
 };

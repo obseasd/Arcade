@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { arcTestnet } from "@/lib/chains";
 
 /**
  * ERC-721 metadata endpoint for ArcadeV3PositionManager. The on-chain
@@ -33,7 +34,7 @@ export async function GET(
         external_url: `https://www.arcade.trading/positions`,
         attributes: [
             { trait_type: "Token ID", value: tokenId },
-            { trait_type: "Chain", value: "Arc Testnet" },
+            { trait_type: "Chain", value: arcTestnet.name },
             { trait_type: "Protocol", value: "Arcade V3" },
         ],
     };

@@ -10,6 +10,7 @@ import {
 } from "@/lib/stats";
 import { getBridgeRouteVolume, type BridgeRouteVolume } from "@/lib/keeperPersistence";
 import { cctpDomainLabel } from "@/lib/cctp";
+import { arcTestnet } from "@/lib/chains";
 import {
     getLatestPersistedSnapshot,
     getSnapshotHistory,
@@ -310,8 +311,8 @@ export default async function StatsPage({
                     </li>
                     <li>
                         Transaction and wallet counts come from a server-side
-                        eth_getLogs scan of every Arcade contract on Arc testnet
-                        (chainId 5042002), chunked in 5,000-block windows. The
+                        eth_getLogs scan of every Arcade contract on Arc
+                        (chainId {arcTestnet.id}), chunked in 5,000-block windows. The
                         scan covers V2 (router + factory + launchpad), V3 (router,
                         factory, quoter, NPM, locker, zap) and V4 surfaces; every
                         prior-generation address is included so the cumulative

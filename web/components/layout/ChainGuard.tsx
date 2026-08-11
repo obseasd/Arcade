@@ -68,7 +68,7 @@ export function ChainGuard() {
           <div>
             <h3 className="text-base font-semibold">Wrong network</h3>
             <p className="mt-1 text-sm text-arc-text-muted">
-              Arcade runs on Arc Testnet (chainId {arcTestnet.id}). Your wallet is
+              Arcade runs on {arcTestnet.name} (chainId {arcTestnet.id}). Your wallet is
               currently on a different network. Click below to switch. If Arc is
               not yet in your wallet, the same button adds it.
             </p>
@@ -78,7 +78,7 @@ export function ChainGuard() {
         <div className="rounded-xl border border-arc-border bg-arc-bg-elevated p-3 text-xs">
           <div className="grid grid-cols-2 gap-1.5">
             <span className="text-arc-text-muted">Chain</span>
-            <span className="tabular-nums text-arc-text">Arc Testnet</span>
+            <span className="tabular-nums text-arc-text">{arcTestnet.name}</span>
             <span className="text-arc-text-muted">Chain ID</span>
             <span className="tabular-nums text-arc-text">{arcTestnet.id}</span>
             <span className="text-arc-text-muted">Native gas token</span>

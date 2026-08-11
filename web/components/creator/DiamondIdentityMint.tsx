@@ -7,6 +7,7 @@ import {
     ERC_8004_IDENTITY_ABI,
     ERC_8004_IDENTITY_ADDRESS,
 } from "@/lib/abis/erc8004Identity";
+import { arcTestnet } from "@/lib/chains";
 import { runSequential } from "@/lib/routing/runSequential";
 import { useCreatorTier, type CreatorTier } from "@/lib/hooks/useCreatorTier";
 import { pushToast } from "@/lib/toast";
@@ -310,7 +311,7 @@ export function DiamondIdentityMint() {
                         </button>
                     )}
                     <a
-                        href={`https://testnet.arcscan.app/address/${ERC_8004_IDENTITY_ADDRESS}`}
+                        href={`${arcTestnet.blockExplorers?.default?.url ?? "https://testnet.arcscan.app"}/address/${ERC_8004_IDENTITY_ADDRESS}`}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="inline-flex items-center gap-1 text-[11px] text-arc-text-faint hover:text-arc-text-muted"

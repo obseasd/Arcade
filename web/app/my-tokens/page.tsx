@@ -28,6 +28,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { Address, erc20Abi, formatUnits } from "viem";
 import { useAccount, useReadContract, useReadContracts } from "wagmi";
+import { arcTestnet } from "@/lib/chains";
 import dynamic from "next/dynamic";
 // Audit 2026-06-11 v2 Perf P0-1: defer recharts into its own chunk via
 // next/dynamic + ssr:false. The /my-tokens route was 503 kB First Load
@@ -1843,7 +1844,7 @@ function AddressPopover({
                     )}
                 </button>
                 <a
-                    href={`https://testnet.arcscan.app/address/${address}`}
+                    href={`${arcTestnet.blockExplorers?.default?.url ?? "https://testnet.arcscan.app"}/address/${address}`}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="shrink-0 transition-opacity hover:opacity-80"
@@ -2039,7 +2040,7 @@ function bridgeToUnified(b: HistoryEntry): UnifiedActivityItem[] {
             counterparty: b.recipient,
             counterpartyDirection: "to",
             txHash: b.burnTxHash,
-            explorerUrl: b.burnTxHash ? `https://testnet.arcscan.app/tx/${b.burnTxHash}` : undefined,
+            explorerUrl: b.burnTxHash ? `${arcTestnet.blockExplorers?.default?.url ?? "https://testnet.arcscan.app"}/tx/${b.burnTxHash}` : undefined,
             // The burn tx lives on the source chain.
             chainId: b.srcChainId,
         },
@@ -2062,7 +2063,7 @@ function bridgeToUnified(b: HistoryEntry): UnifiedActivityItem[] {
             // yourself") - drop the TO/FROM caption since it's redundant.
             addressColumnKind: "address-only",
             txHash: b.mintTxHash,
-            explorerUrl: b.mintTxHash ? `https://testnet.arcscan.app/tx/${b.mintTxHash}` : undefined,
+            explorerUrl: b.mintTxHash ? `${arcTestnet.blockExplorers?.default?.url ?? "https://testnet.arcscan.app"}/tx/${b.mintTxHash}` : undefined,
             // The mint tx lives on the destination chain (usually Arc).
             chainId: b.dstChainId,
         });
@@ -2081,7 +2082,7 @@ function claimToUnified(c: PendingTwitterClaim): UnifiedActivityItem {
         label: ready ? "Claim ready" : "Claim authorized",
         value: `@${c.handle}`,
         // Twitter claims always settle on Arc (the escrow contract).
-        chainId: 5_042_002,
+        chainId: arcTestnet.id,
     };
 }
 
@@ -2118,11 +2119,11 @@ function appToUnified(a: ActivityEntry): UnifiedActivityItem {
         counterparty: a.type === "send" ? a.token : undefined,
         counterpartyDirection: a.type === "send" ? "to" : undefined,
         txHash: a.txHash,
-        explorerUrl: a.txHash ? `https://testnet.arcscan.app/tx/${a.txHash}` : undefined,
+        explorerUrl: a.txHash ? `${arcTestnet.blockExplorers?.default?.url ?? "https://testnet.arcscan.app"}/tx/${a.txHash}` : undefined,
         // All app activity lives on Arc - the launchpad, V2/V3 routers,
         // multiswap, locker, sends are all Arc contracts. Hardcoding
         // is fine until we go multi-chain.
-        chainId: 5_042_002,
+        chainId: arcTestnet.id,
     };
 }
 

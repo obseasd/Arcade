@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { arcTestnet } from "@/lib/chains";
 
 export const metadata: Metadata = {
     title: "Arcade Agent API — let your AI agent trade on Arc",
@@ -26,7 +27,7 @@ export default function AgentsPage() {
                 <p className="text-arc-text-muted">
                     Let any AI agent trade and launch tokens on <strong>Arcade</strong> — a
                     USDC-native DEX + bonding-curve launchpad on Circle&apos;s <strong>Arc</strong> L1
-                    (chainId 5042002, USDC is the native gas token). Non-custodial: the agent signs
+                    (chainId {arcTestnet.id}, USDC is the native gas token). Non-custodial: the agent signs
                     with its own Circle Wallet; Arcade never holds keys.
                 </p>
             </header>

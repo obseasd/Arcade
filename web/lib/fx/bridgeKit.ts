@@ -45,19 +45,22 @@ export function isSolanaBridgeConfigured(): boolean {
     return isFxConfigured();
 }
 
-// Circle's USDC mint on Solana Devnet (what CCTP mints when bridging in).
-const SOLANA_DEVNET_RPC = "https://api.devnet.solana.com";
-const SOLANA_USDC_DEVNET_MINT =
-    "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
+const IS_MAINNET = (process.env.NEXT_PUBLIC_ARC_ENV ?? "").toLowerCase() === "mainnet";
+const SOLANA_RPC = IS_MAINNET
+    ? (process.env.NEXT_PUBLIC_SOLANA_RPC_URL ?? "https://api.mainnet-beta.solana.com")
+    : "https://api.devnet.solana.com";
+const SOLANA_USDC_MINT = IS_MAINNET
+    ? "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+    : "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
 
-/** Sum the connected Phantom wallet's devnet USDC (uiAmount), or 0. */
+/** Sum the connected Phantom wallet's USDC (uiAmount), or 0. */
 export async function getSolanaUsdcBalance(owner: string): Promise<number> {
     try {
         const { Connection, PublicKey } = await import("@solana/web3.js");
-        const conn = new Connection(SOLANA_DEVNET_RPC, "confirmed");
+        const conn = new Connection(SOLANA_RPC, "confirmed");
         const res = await conn.getParsedTokenAccountsByOwner(
             new PublicKey(owner),
-            { mint: new PublicKey(SOLANA_USDC_DEVNET_MINT) },
+            { mint: new PublicKey(SOLANA_USDC_MINT) },
         );
         let total = 0;
         for (const acc of res.value) {

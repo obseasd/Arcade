@@ -153,13 +153,13 @@ export const PROVIDER_META: Record<ProviderId, ProviderMeta> = {
   "synthra-v3": {
     id: "synthra-v3",
     label: "Synthra V3",
-    longLabel: "Synthra Uniswap V3 fork on Arc testnet",
+    longLabel: "Synthra Uniswap V3 fork on Arc",
     accent: "text-emerald-400",
   },
   "unitflow-v3": {
     id: "unitflow-v3",
     label: "UnitFlow V3",
-    longLabel: "UnitFlow Finance Uniswap V3 fork on Arc testnet",
+    longLabel: "UnitFlow Finance Uniswap V3 fork on Arc",
     accent: "text-fuchsia-400",
   },
   "xylonet-v1": {

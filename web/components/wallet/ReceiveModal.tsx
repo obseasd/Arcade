@@ -20,6 +20,7 @@ import { useEnsName } from "wagmi";
 import { mainnet } from "wagmi/chains";
 import { Modal } from "@/components/ui/Modal";
 import { pushToast } from "@/lib/toast";
+import { arcTestnet } from "@/lib/chains";
 
 /**
  * Uniswap-style "Receive crypto" modal. Two stacked views inside the
@@ -179,7 +180,7 @@ export function ReceiveModal({ address, onClose }: Props) {
                     <div className="mt-4 flex items-center justify-center">
                         <div className="rounded-2xl border border-arc-border bg-arc-bg-elevated p-4">
                             <QRCodeSVG
-                                value={`ethereum:${address}@5042002`}
+                                value={`ethereum:${address}@${arcTestnet.id}`}
                                 size={220}
                                 bgColor="#0d1424"
                                 fgColor="#38BDF8"
@@ -195,7 +196,7 @@ export function ReceiveModal({ address, onClose }: Props) {
                         </div>
                     </div>
                     <div className="mt-2 text-center text-[11px] font-medium uppercase tracking-wider text-arc-warn">
-                        Arc testnet only · chainId 5042002
+                        Arc{arcTestnet.id === 5042 ? '' : ' testnet'} only · chainId {arcTestnet.id}
                     </div>
 
                     {/* Address read-out: small label + the full hex address,

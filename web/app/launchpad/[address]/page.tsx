@@ -7,6 +7,7 @@ import { useParams } from "next/navigation";
 import { useCallback, useMemo, useState } from "react";
 import { Address, erc20Abi, isAddress, parseAbiItem } from "viem";
 import { useReadContract, useReadContracts } from "wagmi";
+import { arcTestnet } from "@/lib/chains";
 import { LAUNCHPAD_ABI } from "@/lib/abis/launchpad";
 import { V3_POOL_ABI } from "@/lib/abis/v3";
 import { ADDRESSES, LAUNCHPAD_CURVE_SUPPLY, LAUNCHPAD_GRADUATION_USDC, LAUNCHPAD_TOTAL_SUPPLY } from "@/lib/constants";
@@ -306,7 +307,7 @@ export default function TokenDetailPage() {
                   <span className="break-all sm:hidden">{formatAddress(token)} · created by</span>
                   <span className="hidden break-all sm:inline">{token} · created by</span>
                   <a
-                    href={`https://testnet.arcscan.app/address/${state.creator}`}
+                    href={`${arcTestnet.blockExplorers?.default?.url ?? "https://testnet.arcscan.app"}/address/${state.creator}`}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="hover:text-arc-text"
@@ -358,7 +359,7 @@ export default function TokenDetailPage() {
                     </span>
                   )}
                   <a
-                    href={`https://testnet.arcscan.app/address/${token}`}
+                    href={`${arcTestnet.blockExplorers?.default?.url ?? "https://testnet.arcscan.app"}/address/${token}`}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="arc-pill"
