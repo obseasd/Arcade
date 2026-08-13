@@ -59,6 +59,7 @@ export function BridgeHistory() {
   // immediately. Closing the panel hides every row (closed = empty,
   // open = full list), so there's no half-state to confuse with.
   const [expanded, setExpanded] = useState(true);
+  const [showAll, setShowAll] = useState(false);
 
   useEffect(() => {
     setEntries(loadBridgeHistory(account));
@@ -176,10 +177,9 @@ export function BridgeHistory() {
 
   if (entries.length === 0) return null;
 
-  // Closed -> show nothing. Open -> show every entry. The user explicitly
-  // asked for this binary behaviour to avoid the half-collapsed "3 of 12"
-  // state that used to confuse what "recent" means.
-  const visible = expanded ? entries : [];
+  // Closed -> nothing. Open -> the 5 most recent, with a "View more" that
+  // reveals the rest so the panel does not open into a very long list.
+  const visible = expanded ? (showAll ? entries : entries.slice(0, 5)) : [];
 
   return (
     <div className="mt-5 rounded-2xl border border-arc-border bg-black/15 backdrop-blur-xl">
@@ -200,16 +200,27 @@ export function BridgeHistory() {
         />
       </button>
       {expanded && (
-        <div className="divide-y divide-arc-border/40 border-t border-arc-border/40">
-          {visible.map((e) => (
-            <Row
-              key={e.id}
-              entry={e}
-              onDismiss={() => dismiss(e.id)}
-              onRetry={onRetry}
-            />
-          ))}
-        </div>
+        <>
+          <div className="divide-y divide-arc-border/40 border-t border-arc-border/40">
+            {visible.map((e) => (
+              <Row
+                key={e.id}
+                entry={e}
+                onDismiss={() => dismiss(e.id)}
+                onRetry={onRetry}
+              />
+            ))}
+          </div>
+          {!showAll && entries.length > 5 && (
+            <button
+              type="button"
+              onClick={() => setShowAll(true)}
+              className="flex w-full items-center justify-center border-t border-arc-border/40 px-4 py-2.5 text-xs font-medium text-arc-cta-hover hover:underline"
+            >
+              View more ({entries.length - 5})
+            </button>
+          )}
+        </>
       )}
     </div>
   );

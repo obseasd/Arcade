@@ -795,7 +795,9 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
     // made the "Fee" line read 0.30% on a 0.05% trade. The executor already runs
     // the correct tier (it uses activeRoute.executor verbatim), so the display
     // must follow activeRoute.fee, not the token default.
-    if (activeRoute?.provider === "arcade-v3" && activeRoute.fee) {
+    // Any route carrying its real pool fee tier drives the display: Arcade V3
+    // AND external V3 forks (Synthra/unitflow/xylonet all set activeRoute.fee).
+    if (activeRoute?.fee) {
       return BigInt(activeRoute.fee);
     }
     if (isV3Swap) return BigInt(v3Fee);
@@ -809,7 +811,9 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
     return 3_000n; // plain V2
   })();
   const feeRaw = (finalAmountIn * feePips) / 1_000_000n;
-  const feeFormatted = formatTokenAmount(feeRaw, decimalsIn);
+  // Cap the fee amount display at 0.01 (2 fraction digits) instead of full token
+  // precision (was "0.100000 USDC" -> "0.10 USDC").
+  const feeFormatted = formatUSDC(feeRaw, decimalsIn, 2);
   const feePct = Number(feePips) / 10_000;
   const feePctLabel = `${feePct.toFixed(feePct < 1 ? 2 : 1)}%`;
   // Total loss % includes price impact + AMM fee (already baked into out amount)
@@ -1616,7 +1620,13 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
           // the eventual route ends up routing through a different fee
           // tier or an external aggregator. Wait for the route to land,
           // then render the real number.
-          !isExternalRoute && feeRaw > 0n && !!activeRoute && activeRoute.amountOut > 0n
+          // Show the fee whenever the route carries its REAL fee tier: Arcade
+          // routes, and external V3 forks (activeRoute.fee set). Hidden only for
+          // external routes with no tier (e.g. USYC), where a guess would mislead.
+          feeRaw > 0n &&
+          !!activeRoute &&
+          activeRoute.amountOut > 0n &&
+          (!isExternalRoute || !!activeRoute.fee)
             ? `Fee ${feePctLabel} (${feeFormatted} ${tokenIn.symbol ?? "TOKEN"})`
             : undefined
         }

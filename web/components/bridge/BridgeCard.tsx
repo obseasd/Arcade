@@ -1643,25 +1643,20 @@ export function BridgeCard() {
         </div>
       )}
 
-      {/* Itemised bridge fee. Previously the fee silently lowered the "You
-          receive" estimate with no line explaining it. Standard Transfer is
-          free on both sides, so the row only appears for Fast. */}
-      {!sameChain && amountRaw > 0n && (
+      {/* Itemised bridge fee. Fast only: Standard Transfer is free on both
+          sides, so no row appears at all (no "Free" line). */}
+      {!sameChain && amountRaw > 0n && fastTransfer && (
         <div className="mt-3 space-y-1 rounded-xl border border-arc-border bg-white/[0.015] p-3 text-xs">
           <div className="flex items-center justify-between">
-            <span className="text-arc-text-muted">
-              Bridge fee {fastTransfer ? "(Fast, all-in)" : "(Standard)"}
-            </span>
+            <span className="text-arc-text-muted">Bridge fee (Fast, all-in)</span>
             <span className="tabular-nums text-arc-text">
-              {fastTransfer ? `${formatUSDC(totalFee, 6, 4)} USDC (0.05%)` : "Free"}
+              {formatUSDC(totalFee, 6, 4)} USDC (0.05%)
             </span>
           </div>
-          {fastTransfer && (
-            <div className="text-[10px] text-arc-text-faint">
-              Includes Circle&apos;s fast-transfer fee. Total never exceeds 0.05%.
-              Switch to Standard for a free transfer.
-            </div>
-          )}
+          <div className="text-[10px] text-arc-text-faint">
+            Includes Circle&apos;s fast-transfer fee. Total never exceeds 0.05%.
+            Switch to Standard for a free transfer.
+          </div>
         </div>
       )}
 
@@ -1671,10 +1666,6 @@ export function BridgeCard() {
           <label className="flex cursor-pointer items-center justify-between gap-3">
             <div className="min-w-0">
               <div className="text-sm font-medium text-arc-text">Buy a token on arrival</div>
-              <div className="text-xs text-arc-text-muted">
-                Bridge + buy in one flow — bought on Arc when the transfer lands.
-                If the buy can&apos;t fill, your USDC is delivered instead.
-              </div>
             </div>
             <input
               type="checkbox"
