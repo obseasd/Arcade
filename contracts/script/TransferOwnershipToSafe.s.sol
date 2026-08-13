@@ -24,12 +24,18 @@ import {Script, console2} from "forge-std/Script.sol";
  *                        the deployer still controls everything and can redeploy).
  *
  * Env (addresses): SAFE, V2_FACTORY, V3_FACTORY, FEE_PROTOCOL_MANAGER,
- *   AUTO_COMPOUNDER, ARCADE_HOOK, TWITTER_ESCROW, V3_LOCKER, LAUNCHPAD
+ *   AUTO_COMPOUNDER, ARCADE_HOOK, TWITTER_ESCROW, V3_LOCKER, LAUNCHPAD,
+ *   AIRDROP_DISTRIBUTOR
  * Env (key): DEPLOYER_PRIVATE_KEY
  *
- * NOTE: peripheral V4 contracts (splitterFactory, airdropDistributor,
- * lockedVault, tokenVault) are intentionally NOT handled here yet -- verify each
- * one's governance model and add it before relying on this for the full stack.
+ * Peripheral V4 contracts (governance verified 2026-08-13):
+ *   - airdropDistributor (HolderAirdropDistributor): setTreasury(Safe) +
+ *     transferOwnership(Safe) -- 1-STEP (direct, no acceptOwnership). Handled.
+ *   - splitterFactory (SplitterLaunchFactory): OWNERLESS -- each per-launch
+ *     CreatorSplitter is owned by its creator, not the factory. Nothing to do.
+ *   - lockedVault (LockedVault): no admin, no owner-setter, zero functions (a
+ *     pure LP holder). Nothing to do.
+ *   - tokenVault (ArcadeTokenVault): no governance. Nothing to do.
  */
 interface IV2Factory {
     function feeTo() external view returns (address);
@@ -65,6 +71,13 @@ interface IOwnable2Step {
     function transferOwnership(address) external; // OZ Ownable2Step (escrow)
 }
 
+interface IHolderAirdrop {
+    function owner() external view returns (address);
+    function treasury() external view returns (address);
+    function setTreasury(address) external;
+    function transferOwnership(address) external; // 1-step (direct, no accept)
+}
+
 interface IImmutableOwner {
     function owner() external view returns (address);
 }
@@ -84,6 +97,7 @@ contract TransferOwnershipToSafe is Script {
         address escrow = vm.envAddress("TWITTER_ESCROW");
         address locker = vm.envAddress("V3_LOCKER");
         address launchpad = vm.envAddress("LAUNCHPAD");
+        address airdrop = vm.envAddress("AIRDROP_DISTRIBUTOR");
         require(safe != address(0), "SAFE unset");
 
         // --- Pre-flight: the IMMUTABLE-owner contracts must ALREADY be the Safe.
@@ -118,6 +132,11 @@ contract TransferOwnershipToSafe is Script {
         // set in the constructor / rotated via startSignerRotation).
         IOwnable2Step(escrow).transferOwnership(safe);
 
+        // Holder airdrop distributor: forfeit treasury + 1-STEP ownership
+        // (direct, no acceptOwnership). setTreasury BEFORE transferOwnership.
+        IHolderAirdrop(airdrop).setTreasury(safe);
+        IHolderAirdrop(airdrop).transferOwnership(safe);
+
         vm.stopBroadcast();
 
         // --- Post: assert the IMMEDIATE (single-step) settings landed on the Safe.
@@ -129,8 +148,11 @@ contract TransferOwnershipToSafe is Script {
         require(IFeeProtocolManager(mgr).treasury() == safe, "mgr.treasury != Safe");
         require(IAutoCompounder(comp).feeRecipient() == safe, "comp.feeRecipient != Safe");
         require(IArcadeHook(hook).TREASURY() == safe, "hook.TREASURY != Safe");
+        // Airdrop is 1-step, so its ownership is final here too (assert both).
+        require(IHolderAirdrop(airdrop).treasury() == safe, "airdrop.treasury != Safe");
+        require(IHolderAirdrop(airdrop).owner() == safe, "airdrop.owner != Safe");
 
-        console2.log("Immediate settings -> Safe: OK (feeTo, feeToSetter, v3Factory owner, mgr/hook treasury, comp feeRecipient)");
+        console2.log("Immediate settings -> Safe: OK (feeTo, feeToSetter, v3Factory owner, mgr/hook treasury, comp feeRecipient, airdrop owner+treasury)");
         console2.log("Immutable owners already Safe: v3Locker, launchpad");
         console2.log("=> The Safe must now call acceptOwnership() on each of:");
         console2.log("   feeProtocolManager:", mgr);
