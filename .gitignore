@@ -37,3 +37,6 @@ npm-debug.log*
 contracts/out-orbs/
 
 .vercel
+
+# Local-only security-ops checklist (public repo: do NOT commit compromised-key details)
+P2_SECURITY.md
