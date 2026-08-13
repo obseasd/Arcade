@@ -62,6 +62,15 @@ contract ArcadeTwitterEscrowV4 is Ownable2Step, Pausable, ReentrancyGuard {
     );
 
     uint64 public constant MAX_TIMELOCK = 7 days;
+    /// @notice Floor for a NON-ZERO claim timelock, so the owner-veto window is
+    ///         always meaningful (a tiny value would be useless). 0 stays allowed
+    ///         to explicitly disable the veto.
+    uint64 public constant MIN_TIMELOCK = 15 minutes;
+    /// @notice Constructor default, so a fresh escrow ships with a real veto
+    ///         window instead of 0. A 0 default collapses authorize+claim into
+    ///         one block, letting a compromised signer drain before the owner can
+    ///         veto/pause; the owner can setClaimTimelock(0) later to opt out.
+    uint64 public constant DEFAULT_TIMELOCK = 1 hours;
     /// @notice Delay before a rotated trusted signer takes effect.
     uint64 public constant SIGNER_ROTATION_DELAY = 24 hours;
     /// @notice A slot with no `creditSlot` activity for this long can be
@@ -166,6 +175,7 @@ contract ArcadeTwitterEscrowV4 is Ownable2Step, Pausable, ReentrancyGuard {
     error Timelocked();
     error Already();
     error TimelockTooLong();
+    error TimelockTooShort();
     error ExceedsFreeBalance();
     error NotStaleYet();
     error RotationNotReady();
@@ -177,9 +187,12 @@ contract ArcadeTwitterEscrowV4 is Ownable2Step, Pausable, ReentrancyGuard {
     constructor(address trustedSigner_, address owner_) Ownable(owner_) {
         if (trustedSigner_ == address(0)) revert ZeroAddress();
         trustedSigner = trustedSigner_;
+        // Ship with a real veto window instead of a silent 0 (audit MEDIUM).
+        claimTimelock = DEFAULT_TIMELOCK;
         _CACHED_CHAIN_ID = block.chainid;
         _DOMAIN_SEPARATOR_CACHED = _buildDomainSeparator();
         emit TrustedSignerUpdated(address(0), trustedSigner_);
+        emit TimelockChanged(DEFAULT_TIMELOCK);
     }
 
     // ====================== Owner admin ======================
@@ -192,6 +205,9 @@ contract ArcadeTwitterEscrowV4 is Ownable2Step, Pausable, ReentrancyGuard {
 
     function setClaimTimelock(uint64 newTimelock) external onlyOwner {
         if (newTimelock > MAX_TIMELOCK) revert TimelockTooLong();
+        // A non-zero timelock must clear the floor so the veto stays meaningful;
+        // 0 is still allowed to explicitly disable it.
+        if (newTimelock != 0 && newTimelock < MIN_TIMELOCK) revert TimelockTooShort();
         claimTimelock = newTimelock;
         emit TimelockChanged(newTimelock);
     }

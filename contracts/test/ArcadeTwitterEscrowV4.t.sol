@@ -371,6 +371,7 @@ contract ArcadeTwitterEscrowV4Test is Test {
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(newPk, digest);
         vm.prank(USER);
         escrow.authorize(POS, SLOT, USER, address(usdc), 100e6, deadline, nonce, abi.encodePacked(r, s, v));
+        vm.warp(block.timestamp + escrow.claimTimelock() + 1); // clear the claim timelock
         escrow.claimByTwitter(nonce);
         assertEq(usdc.balanceOf(USER), 100e6, "new signer authorized a claim");
     }
@@ -379,5 +380,22 @@ contract ArcadeTwitterEscrowV4Test is Test {
         vm.prank(OWNER);
         vm.expectRevert(ArcadeTwitterEscrowV4.RenounceDisabled.selector);
         escrow.renounceOwnership();
+    }
+
+    function test_claimTimelock_defaultAndFloor() public {
+        // Ships with a real veto window, not a silent 0 (audit MEDIUM).
+        assertEq(escrow.claimTimelock(), escrow.DEFAULT_TIMELOCK(), "default timelock");
+        // Cache the view result BEFORE expectRevert (else it consumes the revert).
+        uint64 minT = escrow.MIN_TIMELOCK();
+        vm.startPrank(OWNER);
+        // A non-zero value below the floor is rejected...
+        vm.expectRevert(ArcadeTwitterEscrowV4.TimelockTooShort.selector);
+        escrow.setClaimTimelock(minT - 1);
+        // ...but 0 (explicit disable) and >= MIN are allowed.
+        escrow.setClaimTimelock(0);
+        assertEq(escrow.claimTimelock(), 0, "disable allowed");
+        escrow.setClaimTimelock(minT);
+        assertEq(escrow.claimTimelock(), minT, "min allowed");
+        vm.stopPrank();
     }
 }

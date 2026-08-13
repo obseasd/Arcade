@@ -214,7 +214,23 @@ export async function buildV4ClaimPayload(args: {
     const signer = await getBackendClaimSigner();
     if (!signer) return { kind: "error", error: "server_misconfigured" };
     const nonce = `0x${crypto.randomBytes(32).toString("hex")}` as `0x${string}`;
-    const deadline = BigInt(Math.floor(Date.now() / 1000) + 30 * 60);
+    // The signed deadline must exceed now + claimTimelock or the escrow's
+    // authorize() reverts DeadlineInPast. Read the on-chain timelock (0 today, so
+    // this is a no-op) and add a 30min buffer for the user to submit the authorize
+    // tx, so claims keep working if the owner raises claimTimelock.
+    let claimTimelock = 0n;
+    try {
+        claimTimelock = (await client.readContract({
+            address: escrow,
+            abi: [
+                { type: "function", name: "claimTimelock", stateMutability: "view", inputs: [], outputs: [{ type: "uint64" }] },
+            ] as const,
+            functionName: "claimTimelock",
+        })) as bigint;
+    } catch {
+        /* leave 0: falls back to the prior now+30min deadline */
+    }
+    const deadline = BigInt(Math.floor(Date.now() / 1000)) + claimTimelock + 30n * 60n;
     const sig = await signer.signTypedData({
         domain: {
             name: "ArcadeTwitterEscrow",

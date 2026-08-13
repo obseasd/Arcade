@@ -22,9 +22,12 @@ Legend: ✅ code done · 🛠 user ops · 🔗 external dependency · 🟡 decis
 
 ## B. Pre-mainnet code decisions (pending the founder)
 
-- 🟡 **H-02**: escrow `MIN_TIMELOCK` / `DEFAULT_TIMELOCK` are 0 (testnet build);
-  set to 1h for mainnet. A constant flip + redeploy. **Decision pending** — it
-  changes the withdrawal-delay UX, so not flipped unilaterally.
+- ✅ **H-02** (audit MEDIUM): escrow now ships with `claimTimelock =
+  DEFAULT_TIMELOCK (1h)` + a `MIN_TIMELOCK (15min)` floor, instead of a silent 0
+  that neutered the owner veto (a compromised signer could authorize+claim in one
+  block). The claim signer reads `claimTimelock()` and sizes the deadline to it,
+  so the owner can tune the window (down to 15min, or 0 to disable) WITHOUT
+  bricking claims. Source-only; ships at the mainnet redeploy.
 - ✅ **Escrow signer** (was "H-02 bis"): DECIDED → a **fresh dedicated key in
   Vercel Sensitive** (`0xd3e19E…`), not the personal wallet. Signing-only, holds
   no funds. A KMS-backed signer (`web/lib/kmsSigner.ts`) is coded + dormant if the
