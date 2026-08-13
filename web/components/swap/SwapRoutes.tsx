@@ -156,12 +156,6 @@ export function SwapRoutes({
           const meta = PROVIDER_META[q.provider];
           const active = activeAddress === q.provider;
           const isBest = q === best;
-          const deltaBps = isBest
-            ? 0
-            : Number(
-                ((best.amountOut - q.amountOut) * 10_000n) /
-                  (best.amountOut === 0n ? 1n : best.amountOut),
-              );
           return (
             <button
               key={q.provider}
@@ -220,7 +214,7 @@ export function SwapRoutes({
                   <div className="flex items-center gap-1.5 text-sm font-semibold text-arc-text">
                     <span className="truncate">{meta.label}</span>
                     {isBest && (
-                      <span className="rounded bg-emerald-400/15 px-1.5 py-px text-[9px] font-bold uppercase tracking-wide text-emerald-400">
+                      <span className="rounded bg-arc-cta-hover/15 px-1.5 py-px text-[9px] font-bold uppercase tracking-wide text-arc-cta-hover">
                         Best
                       </span>
                     )}
@@ -231,19 +225,15 @@ export function SwapRoutes({
                 </div>
               </div>
               <div className="text-right">
+                {/* Token amount received on top, estimated USD value below it
+                    (replaces the prior %-loss-vs-best line). */}
                 <div className="text-sm font-semibold tabular-nums text-arc-text">
-                  {usdPricePerOut !== undefined
-                    ? formatUsd(q.amountOut, decimalsOut, usdPricePerOut)
-                    : (
-                      <>
-                        {formatAmount(q.amountOut, decimalsOut)}{" "}
-                        <span className="text-[10px] font-medium text-arc-text-faint">{symbolOut}</span>
-                      </>
-                    )}
+                  {formatAmount(q.amountOut, decimalsOut)}{" "}
+                  <span className="text-[10px] font-medium text-arc-text-faint">{symbolOut}</span>
                 </div>
-                {!isBest && deltaBps > 0 && (
-                  <div className="text-[10px] tabular-nums text-arc-warn">
-                    -{(deltaBps / 100).toFixed(2)}%
+                {usdPricePerOut !== undefined && (
+                  <div className="text-[10px] tabular-nums text-arc-text-faint">
+                    {formatUsd(q.amountOut, decimalsOut, usdPricePerOut)}
                   </div>
                 )}
               </div>
