@@ -105,6 +105,9 @@ export const anvilLocal = defineChain({
 
 // Re-export CCTP source chains so wagmi config can register them.
 // Testnet: Sepolia variants. Mainnet: real L1s.
+// Base leads so it is the default source chain (BridgeCard reads [0]) and heads
+// the picker: most Arc bridge inflow comes from Base, and its fees/latency are
+// the lightest of the CCTP set.
 export const cctpSourceChains = IS_MAINNET
-  ? [ethereumMainnet, base, arbitrum, optimism, avalanche]
-  : [sepolia, baseSepolia, arbitrumSepolia, optimismSepolia, avalancheFuji];
+  ? [base, ethereumMainnet, arbitrum, optimism, avalanche]
+  : [baseSepolia, sepolia, arbitrumSepolia, optimismSepolia, avalancheFuji];
