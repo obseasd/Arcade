@@ -204,10 +204,13 @@ const MAX_FEE_COLLECTS_PER_RUN = 5; // bound collect txs per run
 // scanning a recent window makes leg C self-healing: the slot0/isLaunchPool
 // pre-check skips pools already in their target state, so it's cheap and
 // idempotent, and an unsynced pool keeps getting retried until it lands.
-// ~40k blocks ~= several hours at Arc's cadence; wide enough that a pool created
-// a few hours before the leg first worked is still re-scanned (at the 10k testnet
-// window that is only ~4 getLogs, so it stays fast).
-const FEE_SYNC_SAFETY_LOOKBACK = 40_000n;
+// FEE_SYNC_SAFETY_LOOKBACK is env-aware and defined after ARC_IS_MAINNET below.
+// Bound the pools PROCESSED per run (reads + write attempts), independent of how
+// many the scan returns (audit HIGH-1): a flood of junk pools (uninitialized /
+// unmanaged-tier, each cheap to create) must not run the loop unbounded, blow the
+// 60s ceiling, and starve the collection pass. Unprocessed pools are re-scanned
+// next run by the trailing window.
+const MAX_FEE_POOLS_PER_RUN = 40;
 
 const RPC_TIMEOUT_MS = 3_000;
 // A submitted tx must not hang the whole run to the 60s Vercel ceiling (and
@@ -255,6 +258,15 @@ const FEE_SYNC_LOG_RPCS: readonly string[] = ARC_IS_MAINNET
 // ceiling and leaked the keeper lease. Mainnet's only listed RPC is thirdweb
 // (hard 1000-block getLogs cap), so it must stay at 1000 there.
 const FEE_SYNC_WINDOW = ARC_IS_MAINNET ? 1_000n : 10_000n;
+
+// Trailing re-scan window. It MUST be <= MAX_FEE_SYNC_WINDOWS_PER_RUN * window,
+// or the scan can never reach the chain head (audit HIGH-2): in steady state the
+// cursor sits at head, so `from = head - lookback` every run, and the loop only
+// covers windows*window blocks -- a wider lookback leaves a permanent blind spot
+// at [head-covered, head]. Testnet (10k window, 25 windows -> 250k reach) fits
+// 40k easily. Mainnet's 1k window * 25 = 25k reach, so keep the mainnet lookback
+// at 20k (a dedicated mainnet RPC can raise the window later).
+const FEE_SYNC_SAFETY_LOOKBACK = ARC_IS_MAINNET ? 20_000n : 40_000n;
 
 const ARC_CHAIN = {
     id: arcTestnet.id,
@@ -1314,12 +1326,14 @@ async function runFeeSyncLeg(
     summary.fees.scanned += pools.length;
 
     let actions = 0;
+    let processed = 0;
     const seen = new Set<string>();
     for (const pool of pools) {
-        if (actions >= MAX_FEE_SYNCS_PER_RUN) break;
+        if (actions >= MAX_FEE_SYNCS_PER_RUN || processed >= MAX_FEE_POOLS_PER_RUN) break;
         const key = pool.toLowerCase();
         if (seen.has(key)) continue;
         seen.add(key);
+        processed++;
 
         // Pre-check reads over the FAST arc.network-first client (logsClient),
         // not the slow default publicClient: once the scan finds pools, doing 2
@@ -1337,13 +1351,24 @@ async function runFeeSyncLeg(
                 .catch(() => null),
             RPC_TIMEOUT_MS,
         )) as boolean | null;
-        const fp = (await withTimeout(
+        const slot0 = (await withTimeout(
             logsClient
                 .readContract({ address: pool, abi: POOL_SLOT0_ABI, functionName: "slot0" })
-                .then((r) => Number((r as readonly unknown[])[5]))
+                .then((r) => r as readonly [bigint, number, number, number, number, number, boolean])
                 .catch(() => null),
             RPC_TIMEOUT_MS,
-        )) as number | null;
+        )) as readonly [bigint, number, number, number, number, number, boolean] | null;
+        const fp = slot0 ? Number(slot0[5]) : null;
+
+        // Skip a pool whose sync would REVERT (audit HIGH-1) so a junk pool can't
+        // burn the run and starve the collect pass below: an UNINITIALIZED pool
+        // (sqrtPrice 0 -> the pool's setFeeProtocol reverts LOK). Unmanaged-tier
+        // ordinary pools only cost the caught estimateGas; the per-run cap bounds
+        // how many of those a spammer can force.
+        if (slot0 !== null && slot0[0] === 0n) {
+            summary.fees.skipped++;
+            continue;
+        }
 
         // Already in target state: a launch pool at 0 (launchpad handled it) or an
         // ordinary pool already fee-enabled (fp != 0). Skip the tx.
