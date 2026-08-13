@@ -1216,7 +1216,7 @@ function TokenRow({ holding }: { holding: HoldingInfo }) {
                 ${valueFormatted}
             </td>
             <td className="px-3 py-3 text-right tabular-nums text-arc-text-faint sm:px-4">
-                <span className="text-[10px]">(indexer)</span>
+                <span>-</span>
             </td>
         </tr>
     );

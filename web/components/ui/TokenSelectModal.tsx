@@ -87,8 +87,13 @@ export function TokenSelectModal({ open, onClose, tokens, onSelect, selectedAddr
       if (p.symbol === "EURC") return { ...p, address: ADDRESSES.eurc };
       if (p.symbol === "cirBTC") return { ...p, address: ADDRESSES.cirBtc };
       return p;
-    });
-  }, []);
+    }).filter(
+      // Honour excludeAddress for the pinned chips too (e.g. the bridge's
+      // "buy on arrival" picker excludes USDC — buying USDC on a USDC bridge
+      // is a no-op), not just the searchable token list below.
+      (p) => !excludeAddress || (p.address ?? "").toLowerCase() !== excludeAddress.toLowerCase(),
+    );
+  }, [excludeAddress]);
 
   // Detect a pasted address that isn't already in the list - fetch metadata
   // and surface it as an importable token.

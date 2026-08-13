@@ -1926,6 +1926,8 @@ export function BridgeCard() {
             setBuyTokenPickerOpen(false);
           }}
           selectedAddress={buyToken?.address}
+          // Bridging USDC -> buying USDC on arrival is a no-op; hide it here.
+          excludeAddress={ADDRESSES.usdc as Address}
         />
       )}
 
