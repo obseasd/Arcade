@@ -13,10 +13,17 @@ import { privateKeyToAccount } from "viem/accounts";
 import { ADDRESSES } from "@/lib/constants";
 import { arcActive } from "@/lib/chains";
 import { rateLimit, rateLimitGlobal } from "@/lib/apiGuard";
+import { tryAcquireKeeperLease, releaseKeeperLease } from "@/lib/keeperPersistence";
 
 export const maxDuration = 30;
 
 const ZERO = "0x0000000000000000000000000000000000000000";
+// Match the cron's gas ceiling so an on-demand sync is priced identically and
+// not left to default estimation on Arc.
+const MAX_FEE_PER_GAS_WEI = 100_000_000_000n; // 100 gwei
+// Brief lease: it only has to cover one tx submission (nonce consumption), then
+// it's released so a waiting cron run isn't blocked for the full TTL.
+const SYNC_POOL_LEASE_SECONDS = 20;
 
 const POOL_ABI = [
     {
@@ -128,7 +135,16 @@ export async function POST(req: NextRequest) {
         .catch(() => null)) as boolean | null;
     if (isLaunch === true) return NextResponse.json({ ran: false, reason: "launch pool, stays at 0" });
 
-    // --- Send sync (best-effort; the cron self-heals on any failure) ---
+    // --- Send sync under the SHARED keeper lease so this can't collide with a
+    //     concurrent cron run on the shared wallet's nonce (audit MEDIUM-1). If
+    //     the cron (or another sync-pool call) already holds the lease we DON'T
+    //     send: the cron's own leg-C scan syncs this pool within a tick, so
+    //     deferring is correct and keeps this a pure latency optimisation. ---
+    const holder = `sync-pool-${globalThis.crypto?.randomUUID?.() ?? String(Date.now())}`;
+    const gotLease = await tryAcquireKeeperLease(SYNC_POOL_LEASE_SECONDS, holder).catch(() => false);
+    if (!gotLease) {
+        return NextResponse.json({ ran: false, reason: "keeper busy (cron will sync)" });
+    }
     try {
         const account = privateKeyToAccount(keeperKey);
         const walletClient = createWalletClient({ account, chain: arcActive, transport: http() });
@@ -139,10 +155,15 @@ export async function POST(req: NextRequest) {
             args: [pool],
             chain: arcActive,
             account, // local account object -> local signing (eth_sendRawTransaction)
+            maxFeePerGas: MAX_FEE_PER_GAS_WEI,
         });
         return NextResponse.json({ ran: true, synced: true, hash });
     } catch (e) {
         // Non-fatal: the cron re-scans + syncs this pool within a couple ticks.
         return NextResponse.json({ ran: false, reason: "sync tx failed (cron will retry)", error: errMsg(e) });
+    } finally {
+        // Release once the tx is submitted (nonce already consumed on-chain) so a
+        // waiting cron run isn't blocked for the full lease TTL.
+        await releaseKeeperLease(holder).catch(() => {});
     }
 }

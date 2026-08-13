@@ -197,6 +197,14 @@ const MAX_FEE_SYNCS_PER_RUN = 6; // bound the txs per tick
 // treasury, so the recipient can't be misdirected.
 const FEE_COLLECT_MIN_USDC = 1_000_000n; // 1 USDC (6dp): below this, skip
 const MAX_FEE_COLLECTS_PER_RUN = 5; // bound collect txs per run
+// Candidate page size + a ROTATING skip cursor so the collect scan never
+// silently truncates at a fixed 100 (audit MEDIUM-2). Each run scans the next
+// page (orderBy id for a stable order) and advances the cursor, wrapping to 0
+// at the end -- so with >PAGE fee pools, coverage rotates across runs instead
+// of the first 100-by-arbitrary-order always winning and the tail never being
+// harvested. The on-chain protocolFees read remains the actual collect gate.
+const FEE_COLLECT_PAGE = 100;
+const FEE_COLLECT_CURSOR = "v3_fee_collect_skip";
 // Always re-scan at least this many trailing blocks each run, on top of the
 // forward cursor. The cursor is forward-only, so a pool whose sync transiently
 // failed (shared-wallet nonce clash, RPC hiccup) or that landed in a scan gap
@@ -1422,7 +1430,11 @@ async function runFeeSyncLeg(
         try {
             const url = process.env.NEXT_PUBLIC_GOLDSKY_URL;
             if (url) {
-                const q = `{ pools(first: 100, where: { feeProtocol0_gt: 0 }) { id usdcIsToken0 } }`;
+                // Rotating page: resume from the saved skip so successive runs
+                // cover the whole fee-pool set, not just the first PAGE. orderBy
+                // id makes the ordering stable so `skip` is meaningful.
+                const skip = Number((await getKeeperCursor(FEE_COLLECT_CURSOR).catch(() => null)) ?? 0n);
+                const q = `{ pools(first: ${FEE_COLLECT_PAGE}, skip: ${skip}, orderBy: id, orderDirection: asc, where: { feeProtocol0_gt: 0 }) { id usdcIsToken0 } }`;
                 const res = (await withTimeout(
                     fetch(url, {
                         method: "POST",
@@ -1432,6 +1444,14 @@ async function runFeeSyncLeg(
                     RPC_TIMEOUT_MS,
                 )) as { data?: { pools?: { id: string; usdcIsToken0: boolean }[] } } | null;
                 const feePools = res?.data?.pools ?? [];
+                // Advance the cursor: wrap to 0 when this page was the last (fewer
+                // than a full page), else step to the next page. Persisted even if
+                // the query returned nothing, so a transient empty page still
+                // rotates rather than pinning the scan at one offset.
+                if (res?.data?.pools !== undefined) {
+                    const nextSkip = feePools.length < FEE_COLLECT_PAGE ? 0 : skip + FEE_COLLECT_PAGE;
+                    await setKeeperCursor(FEE_COLLECT_CURSOR, BigInt(nextSkip)).catch(() => {});
+                }
                 let collects = 0;
                 for (const fp of feePools) {
                     if (collects >= MAX_FEE_COLLECTS_PER_RUN) break;
