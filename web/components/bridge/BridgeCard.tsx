@@ -1616,6 +1616,23 @@ export function BridgeCard() {
         </button>
       </div>
 
+      {/* Flash-mode fee, shown ABOVE the reception box. Fast only: Standard is
+          free on both sides, so no row (no "Free" line). */}
+      {!sameChain && amountRaw > 0n && fastTransfer && (
+        <div className="mt-3 space-y-1 rounded-xl border border-arc-border bg-white/[0.015] p-3 text-xs">
+          <div className="flex items-center justify-between">
+            <span className="text-arc-text-muted">Bridge fee (Fast, all-in)</span>
+            <span className="tabular-nums text-arc-text">
+              {formatUSDC(totalFee, 6, 4)} USDC (0.05%)
+            </span>
+          </div>
+          <div className="text-[10px] text-arc-text-faint">
+            Includes Circle&apos;s fast-transfer fee. Total never exceeds 0.05%.
+            Switch to Standard for a free transfer.
+          </div>
+        </div>
+      )}
+
       {/* TO */}
       <ChainBox
         label="To"
@@ -1640,23 +1657,6 @@ export function BridgeCard() {
       {sameChain && (
         <div className="mt-3 rounded-xl border border-arc-warn/30 bg-arc-warn/10 p-2 text-xs text-arc-warn">
           Source and destination must be different chains.
-        </div>
-      )}
-
-      {/* Itemised bridge fee. Fast only: Standard Transfer is free on both
-          sides, so no row appears at all (no "Free" line). */}
-      {!sameChain && amountRaw > 0n && fastTransfer && (
-        <div className="mt-3 space-y-1 rounded-xl border border-arc-border bg-white/[0.015] p-3 text-xs">
-          <div className="flex items-center justify-between">
-            <span className="text-arc-text-muted">Bridge fee (Fast, all-in)</span>
-            <span className="tabular-nums text-arc-text">
-              {formatUSDC(totalFee, 6, 4)} USDC (0.05%)
-            </span>
-          </div>
-          <div className="text-[10px] text-arc-text-faint">
-            Includes Circle&apos;s fast-transfer fee. Total never exceeds 0.05%.
-            Switch to Standard for a free transfer.
-          </div>
         </div>
       )}
 

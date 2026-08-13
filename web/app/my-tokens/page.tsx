@@ -217,6 +217,32 @@ function MyTokensPageInner() {
         return total;
     }, [holdings]);
 
+    // Idle USDC rendered as a pinned row at the top of the held-tokens list.
+    // It is NOT merged into `holdings` (that would corrupt the "N V2/V3 tokens"
+    // count and cost-basis P/L), so we keep it separate. balance is scaled to
+    // 18dp so formatToken() shows the USDC amount; value = balance since $1.
+    const usdcHolding = useMemo<HoldingInfo | null>(() => {
+        if (usdcBalanceRaw <= 0n) return null;
+        return {
+            token: {
+                address: ADDRESSES.usdc as Address,
+                creator: "0x0000000000000000000000000000000000000000" as Address,
+                createdAt: 0n,
+                migratedAt: 0n,
+                migrated: true,
+                mode: 0,
+                realUsdcReserve: 0n,
+                tokensSold: 0n,
+                v2Pair: "0x0000000000000000000000000000000000000000" as Address,
+                metadataURI: "",
+                name: "USD Coin",
+                symbol: "USDC",
+            },
+            balance: usdcBalanceRaw * 1_000_000_000_000n,
+            valueUsdcRaw: usdcBalanceRaw,
+        };
+    }, [usdcBalanceRaw]);
+
     return (
         <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6">
             <Link
@@ -242,6 +268,7 @@ function MyTokensPageInner() {
                 <OverviewTab
                     account={account}
                     holdings={holdings}
+                    usdcRow={usdcHolding}
                     totalHoldingsUsd={totalHoldingsUsd}
                     usdcBalanceUsd={Number(usdcBalanceRaw) / 1e6}
                     launchedCount={mine.length}
@@ -251,6 +278,7 @@ function MyTokensPageInner() {
             ) : tab === "tokens" ? (
                 <TokensTab
                     holdings={holdings}
+                    usdcRow={usdcHolding}
                     totalHoldingsUsd={totalHoldingsUsd}
                     loading={holdingsLoading}
                     v4Holdings={myV4Holdings}
@@ -471,6 +499,7 @@ function generatePlaceholderSeries(current: number, points = 32): { x: number; y
 function OverviewTab({
     account,
     holdings,
+    usdcRow,
     totalHoldingsUsd,
     usdcBalanceUsd,
     launchedCount,
@@ -479,6 +508,7 @@ function OverviewTab({
 }: {
     account: Address;
     holdings: HoldingInfo[];
+    usdcRow: HoldingInfo | null;
     totalHoldingsUsd: bigint;
     usdcBalanceUsd: number;
     launchedCount: number;
@@ -710,7 +740,7 @@ function OverviewTab({
                             <div>
                                 <div className="text-sm font-semibold">Tokens</div>
                                 <div className="text-xs text-arc-text-faint">
-                                    {holdings.length} held{launchedCount > 0 ? ` · ${launchedCount} launched` : ""}
+                                    {holdings.length + (usdcRow ? 1 : 0)} held{launchedCount > 0 ? ` · ${launchedCount} launched` : ""}
                                 </div>
                             </div>
                             <button type="button"
@@ -721,7 +751,7 @@ function OverviewTab({
                                 <ArrowRight className="h-3 w-3" />
                             </button>
                         </div>
-                        <TokensTablePreview holdings={holdings.slice(0, 5)} />
+                        <TokensTablePreview holdings={holdings.slice(0, 5)} pinned={usdcRow} />
                     </div>
                 </div>
 
@@ -884,16 +914,18 @@ function PerfLine({ label, value, pct }: { label: string; value: number; pct?: n
 
 function TokensTab({
     holdings,
+    usdcRow,
     totalHoldingsUsd,
     loading,
     v4Holdings,
 }: {
     holdings: HoldingInfo[];
+    usdcRow: HoldingInfo | null;
     totalHoldingsUsd: bigint;
     loading: boolean;
     v4Holdings: ArcadeHookHolding[];
 }) {
-    const hasAnything = holdings.length > 0 || v4Holdings.length > 0;
+    const hasAnything = holdings.length > 0 || v4Holdings.length > 0 || !!usdcRow;
     if (loading && !hasAnything) {
         return (
             <div className="arc-card p-8 text-center text-sm text-arc-text-muted">Loading…</div>
@@ -919,20 +951,22 @@ function TokensTab({
     }
     return (
         <div className="space-y-6">
-            {holdings.length > 0 && (
+            {(holdings.length > 0 || usdcRow) && (
                 <div className="space-y-3">
-                    <div className="text-xs text-arc-text-muted">
-                        {holdings.length} V2/V3 token{holdings.length === 1 ? "" : "s"}
-                        {totalHoldingsUsd > 0n && (
-                            <>
-                                {" · approx "}
-                                <span className="text-arc-text">
-                                    ${(Number(totalHoldingsUsd) / 1e6).toLocaleString(undefined, { maximumFractionDigits: 2 })}
-                                </span>
-                            </>
-                        )}
-                    </div>
-                    <TokensTablePreview holdings={holdings} />
+                    {holdings.length > 0 && (
+                        <div className="text-xs text-arc-text-muted">
+                            {holdings.length} V2/V3 token{holdings.length === 1 ? "" : "s"}
+                            {totalHoldingsUsd > 0n && (
+                                <>
+                                    {" · approx "}
+                                    <span className="text-arc-text">
+                                        ${(Number(totalHoldingsUsd) / 1e6).toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                                    </span>
+                                </>
+                            )}
+                        </div>
+                    )}
+                    <TokensTablePreview holdings={holdings} pinned={usdcRow} />
                 </div>
             )}
             {v4Holdings.length > 0 && (
@@ -1085,8 +1119,8 @@ function ArcadeHookHoldingCard({ holding }: { holding: ArcadeHookHolding }) {
     );
 }
 
-function TokensTablePreview({ holdings }: { holdings: HoldingInfo[] }) {
-    if (holdings.length === 0) {
+function TokensTablePreview({ holdings, pinned }: { holdings: HoldingInfo[]; pinned?: HoldingInfo | null }) {
+    if (holdings.length === 0 && !pinned) {
         return (
             <div className="text-xs text-arc-text-faint">
                 No tokens held yet.
@@ -1111,6 +1145,7 @@ function TokensTablePreview({ holdings }: { holdings: HoldingInfo[] }) {
                     </tr>
                 </thead>
                 <tbody>
+                    {pinned && <TokenRow key="pinned-usdc" holding={pinned} />}
                     {holdings.map((h) => (
                         <TokenRow key={h.token.address} holding={h} />
                     ))}
@@ -1142,27 +1177,38 @@ function TokenRow({ holding }: { holding: HoldingInfo }) {
                 : `$${price.toLocaleString(undefined, { maximumFractionDigits: 6 })}`;
         }
     }
+    // USDC has no launchpad page, so its row renders as plain cash (no link).
+    const isUsdc = holding.token.address.toLowerCase() === (ADDRESSES.usdc as string).toLowerCase();
+    const tokenCell = (
+        <>
+            <TokenIcon
+                symbol={holding.token.symbol}
+                image={image}
+                size={28}
+            />
+            <div className="min-w-0">
+                <div className="truncate font-medium text-arc-text">
+                    {holding.token.name ?? "Token"}
+                </div>
+                <div className="truncate text-[10px] text-arc-text-faint">
+                    ${holding.token.symbol ?? "?"}
+                </div>
+            </div>
+        </>
+    );
     return (
         <tr className="rounded-lg text-sm transition-colors hover:bg-white/[0.04]">
             <td className="px-3 py-3 sm:px-4">
-                <Link
-                    href={`/launchpad/${holding.token.address}`}
-                    className="flex min-w-0 items-center gap-2 hover:underline"
-                >
-                    <TokenIcon
-                        symbol={holding.token.symbol}
-                        image={image}
-                        size={28}
-                    />
-                    <div className="min-w-0">
-                        <div className="truncate font-medium text-arc-text">
-                            {holding.token.name ?? "Token"}
-                        </div>
-                        <div className="truncate text-[10px] text-arc-text-faint">
-                            ${holding.token.symbol ?? "?"}
-                        </div>
-                    </div>
-                </Link>
+                {isUsdc ? (
+                    <div className="flex min-w-0 items-center gap-2">{tokenCell}</div>
+                ) : (
+                    <Link
+                        href={`/launchpad/${holding.token.address}`}
+                        className="flex min-w-0 items-center gap-2 hover:underline"
+                    >
+                        {tokenCell}
+                    </Link>
+                )}
             </td>
             <td className="px-3 py-3 text-right tabular-nums text-arc-text">{priceStr}</td>
             <td className="px-3 py-3 text-right tabular-nums text-arc-text">{balanceFormatted}</td>
