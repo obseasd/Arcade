@@ -14,9 +14,10 @@ Legend: ✅ code done · 🛠 user ops · 🔗 external dependency · 🟡 decis
   `KEEPER_OPERATOR_PRIVATE_KEY` on Vercel; **redeploy ExchangeV2 allowlisting the
   keeper wallet** (its allowlist is constructor-only) → `NEXT_PUBLIC_ORBS_EXCHANGE_V2_ADDRESS`;
   apply `web/db/migrations/010_keeper.sql`; wire cron-job.org → `/api/keeper/cron`.
-- 🛠 **Indexer** (`INDEXER_SETUP.md`): host the Ponder process (Railway/Render/VM,
-  not Vercel) + a SEPARATE Neon DB + a dedicated Arc RPC; set
-  `NEXT_PUBLIC_INDEXER_URL`. Frontend falls back to the client scan until set.
+- ✅ **Indexer**: SUPERSEDED by a managed **Goldsky subgraph** (`GOLDSKY_SETUP.md`);
+  the self-hosted Ponder plan is dropped. For mainnet: push the Goldsky config
+  pointed at the mainnet contracts + set `NEXT_PUBLIC_GOLDSKY_URL`. Powers charts,
+  /stats, and referral volume.
 - 🛠 **Compounder**: `NEXT_PUBLIC_AUTO_COMPOUNDER_ADDRESS` on Vercel (done).
 
 ## B. Pre-mainnet code decisions (pending the founder)
@@ -24,29 +25,65 @@ Legend: ✅ code done · 🛠 user ops · 🔗 external dependency · 🟡 decis
 - 🟡 **H-02**: escrow `MIN_TIMELOCK` / `DEFAULT_TIMELOCK` are 0 (testnet build);
   set to 1h for mainnet. A constant flip + redeploy. **Decision pending** — it
   changes the withdrawal-delay UX, so not flipped unilaterally.
-- 🟡 **H-02 bis**: escrow trusted signer → 2-of-N instead of a single backend
-  wallet. More involved (design + its own review). **Decision pending.**
+- ✅ **Escrow signer** (was "H-02 bis"): DECIDED → a **fresh dedicated key in
+  Vercel Sensitive** (`0xd3e19E…`), not the personal wallet. Signing-only, holds
+  no funds. A KMS-backed signer (`web/lib/kmsSigner.ts`) is coded + dormant if the
+  escrow ever warrants a hardware vault (set `ARCADE_KMS_KEY_ID`); NOT needed at
+  launch. See `P2_SECURITY.md`.
 
-## C. Mainnet generation deploy (ONE fresh deploy, not a retrofit)
+## C. Mainnet generation deploy (ONE fresh deploy, ordered)
 
-The mainnet gen is a fresh deploy of the current Safe-governed code; existing
-testnet V3 positions are non-migratable, so nothing is carried over.
+Fresh deploy of the current Safe-governed code (testnet V3 positions are
+non-migratable; nothing is carried over). **Deployer = a FRESH throwaway key**
+(`cast wallet new`), NEVER the personal wallet `0x3a0Dd9`. `TREASURY_ADDRESS` and
+`OWNER_ADDRESS` = the Safe `0x0bDE09e3` everywhere. Escrow signer = the fresh
+dedicated key `0xd3e19E8464282fdA4Fd9Cd305C35690C57aC4f97` (Vercel Sensitive),
+passed in the constructor. See `P2_SECURITY.md` for the fresh-key set.
 
-- ✅ Deploy script parameterized: `TREASURY_ADDRESS=Safe` → treasury + feeTo =
-  Safe; locker owner = Safe from construction; handover block sets factory
-  fee-setter = Safe + `escrow.transferOwnership(Safe)`.
-- 🛠 Broadcast the gen (deployer key), then the Safe `acceptOwnership()` on the
-  escrow (2-of-3).
+Build every solc profile first:
+`forge build && FOUNDRY_PROFILE=v3 forge build && FOUNDRY_PROFILE=v4 forge build && unset FOUNDRY_PROFILE`
+
+✅ Every script already takes `OWNER`/`TREASURY` = Safe. Ordered sequence
+(deployer key):
+1. **V3 core + periphery** (`DeployV3.s.sol` → factory + NPM) unless reusing Arc's
+   canonical Uniswap V3. Note the factory + NPM addresses for the next steps.
+2. **DEX + launchpad chain** (`RedeployDexAndLaunchpad.s.sol`): `TREASURY=Safe`,
+   `ARCADE_BACKEND_SIGNER=0xd3e19E…`, `V3_FACTORY`, `V3_NPM`. Deploys v2Factory/
+   router, launchpad, escrow, locker (owner=Safe immutable), tokenVault, v3Router,
+   multiSwap, migratedRouter, zaps, identityIssuer. Governance handover built in
+   (feeTo/feeToSetter=Safe, `escrow.transferOwnership(Safe)` initiated).
+3. **Fee manager** (`DeployFeeProtocolManager.s.sol`): `OWNER=Safe`,
+   `TREASURY=Safe`, `V3_FACTORY`, `V3_LOCKER`, `HANDOVER=true` (deployer still
+   owns the factory here) → manager owns the V3 factory; ordinary pools auto-earn
+   the protocol fee, launch pools stay 0.
+4. **V4 stack** (`v4script/DeployV4.s.sol`): `OWNER_ADDRESS=Safe`, `TREASURY=Safe`,
+   `TWITTER_SIGNER=0xd3e19E…` → hook, poolManager, router, quoter, stateView,
+   lockedVault, V4 escrow. With owner=Safe the escrow↔hook wiring is a separate
+   Safe tx (the script prints it).
+5. **V4 peripherals** (`v4script/DeployPeripherals.s.sol`): `OWNER=Safe`,
+   `TREASURY=Safe`, `ARCADE_HOOK` → splitterFactory, airdropDistributor(owner=Safe),
+   lockedVault.
+6. **Auto-compounder** (`DeployArcadeAutoCompounder.s.sol`): `OWNER=Safe`,
+   `FEE_RECIPIENT=Safe` → Safe-owned from construction.
+
+Then finalize governance:
+- 🛠 **Safe `acceptOwnership()`** on every Ownable2Step contract that was deployed
+  owner=deployer then transferred (the escrow from step 2; anything in step 4 not
+  deployed OWNER=Safe directly). A contract deployed OWNER=Safe is already
+  Safe-owned (no accept).
+- ✅ **`TransferOwnershipToSafe.s.sol`** = the safety-net / verifier. Run it
+  (simulate first, `--broadcast` only if it must move anything): it transfers +
+  ASSERTs every governed contract (v2Factory, v3Factory→manager, feeProtocolManager,
+  autoCompounder, arcadeHook, escrow, airdropDistributor) is on the Safe, and its
+  pre-flight `require()`s catch a wrong immutable ctor arg (v3Locker/launchpad)
+  BEFORE any handoff. Ownerless/no-governance contracts (splitterFactory,
+  lockedVault, tokenVault) are documented no-ops.
 - 🛠 Re-point every `NEXT_PUBLIC_*` Vercel env to the mainnet addresses (incl.
-  `NEXT_PUBLIC_MIGRATED_ROUTER_ADDRESS`), redeploy the frontend, re-seed test
-  liquidity.
-- ✅ **identityIssuer owner**: NO action needed. Its `owner` field is inert (no
-  `onlyOwner` function exists on the issuer; `mint` is permissionless with
-  on-chain tier verification). The earlier "deploy owner=Safe" note was cosmetic
-  — a compromised deployer can do nothing via the issuer.
-- ✅ The V3-router / locker / escrow / launchpad / POOL_WETH-snipe fixes are in
-  the code, so deploying the current code IS the fix (they were source-only on
-  the older LIVE gen; the current gen carries them).
+  `NEXT_PUBLIC_MIGRATED_ROUTER_ADDRESS`) + rotate ALL service keys to fresh
+  dedicated ones (P2), redeploy, re-seed test liquidity, update
+  `web/public/deployments.json`.
+- ✅ **identityIssuer owner** inert (no `onlyOwner` fn; `mint` is permissionless
+  with on-chain tier verification) — nothing to hand over.
 
 ## D. External dependencies
 
@@ -69,12 +106,14 @@ testnet V3 positions are non-migratable, so nothing is carried over.
 - 🔗 **External audit**: hard gate before mainnet; the highest-leverage grant
   line item. Weeks of calendar time.
 
-## F. Indexer-dependent (do after the indexer is hosted)
+## F. Indexer-dependent (Goldsky subgraph)
 
-- ✅/🔗 **Charts**: complete history automatically once `NEXT_PUBLIC_INDEXER_URL`
-  is set (already coded, fallback otherwise).
-- **Referral Phase 2 payout**: the 2 stubs that block on-chain payout can now be
-  filled from indexer queries; + the `REFERRAL_PAYOUT_PRIVATE_KEY` wallet.
+- ✅ **Charts / stats / referral volume**: run on the Goldsky subgraph once
+  `NEXT_PUBLIC_GOLDSKY_URL` points at the mainnet subgraph (already coded, client
+  fallback otherwise).
+- ✅ **Referral Phase 2 payout**: the 2 stubs are FILLED (fed by Goldsky
+  `Trader.totalVolumeUsdc`); gated on `REFERRAL_PAYOUT_ENABLED` + the funded
+  `REFERRAL_PAYOUT_PRIVATE_KEY` wallet (0xE68A6D4e, 200 USDC).
 
 ## G. Deferred / post-mainnet
 
