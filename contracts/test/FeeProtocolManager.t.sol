@@ -8,6 +8,7 @@ contract MockFactory {
     address public owner;
     uint24 public lastFee;
     int24 public lastSpacing;
+    mapping(bytes32 => address) internal _pools;
 
     constructor(address _owner) {
         owner = _owner;
@@ -20,6 +21,20 @@ contract MockFactory {
     function enableFeeAmount(uint24 fee, int24 spacing) external {
         lastFee = fee;
         lastSpacing = spacing;
+    }
+
+    // Register a MockPool so getPool maps its (token0, token1, fee) back to it,
+    // mirroring a real factory. Needed by the manager's L-1 provenance guard.
+    function registerPool(address pool) external {
+        _pools[_key(MockPool(pool).token0(), MockPool(pool).token1(), MockPool(pool).fee())] = pool;
+    }
+
+    function getPool(address a, address b, uint24 fee) external view returns (address) {
+        return _pools[_key(a, b, fee)];
+    }
+
+    function _key(address a, address b, uint24 fee) internal pure returns (bytes32) {
+        return keccak256(abi.encode(a, b, fee));
     }
 }
 
@@ -108,7 +123,9 @@ contract FeeProtocolManagerTest is Test {
     }
 
     function _pool(uint24 fee) internal returns (MockPool) {
-        return new MockPool(fee, USDC, TOKEN);
+        MockPool p = new MockPool(fee, USDC, TOKEN);
+        factory.registerPool(address(p));
+        return p;
     }
 
     // -------- constructor / tier map --------
@@ -201,10 +218,36 @@ contract FeeProtocolManagerTest is Test {
         MockPool a = _pool(3000);
         locker.lock(TOKEN, address(a));
         MockPool b = new MockPool(500, USDC, TOKEN); // different pool, same token
+        factory.registerPool(address(b));
         mgr.sync(address(b));
         assertEq(b.fp0(), 4); // ordinary -> skimmed (no fee-dodge)
         assertTrue(mgr.isLaunchPool(address(a)));
         assertFalse(mgr.isLaunchPool(address(b)));
+    }
+
+    // -------- L-1 / L-2 hardening --------
+
+    function test_sync_rejectsNonCanonicalPool() public {
+        // A fake pool NOT registered in the factory must revert on both
+        // permissionless entrypoints, so nobody can spoof Synced/Harvested
+        // events (audit L-1).
+        MockPool fake = new MockPool(500, USDC, TOKEN); // never registered
+        vm.expectRevert(FeeProtocolManager.NotAPool.selector);
+        mgr.sync(address(fake));
+        vm.expectRevert(FeeProtocolManager.NotAPool.selector);
+        mgr.collectProtocol(address(fake));
+    }
+
+    function test_syncMany_bestEffort_skipsBadPool() public {
+        // A member that reverts (unmanaged tier) must NOT revert the whole batch;
+        // the good pool still syncs (audit L-2).
+        MockPool good = _pool(500);
+        MockPool badTier = _pool(20000); // canonical but unmanaged tier -> UnknownTier
+        address[] memory pools = new address[](2);
+        pools[0] = address(badTier); // bad one first
+        pools[1] = address(good);
+        mgr.syncMany(pools); // must not revert
+        assertEq(good.fp0(), 4); // good pool synced despite the bad member
     }
 
     // -------- forceZero --------

@@ -5,6 +5,7 @@ interface IV3Factory {
     function owner() external view returns (address);
     function setOwner(address _owner) external;
     function enableFeeAmount(uint24 fee, int24 tickSpacing) external;
+    function getPool(address tokenA, address tokenB, uint24 fee) external view returns (address);
 }
 
 interface IV3PoolMin {
@@ -88,6 +89,7 @@ contract FeeProtocolManager {
     error UnknownTier();
     error NotLaunchPool();
     error NotPendingOwner();
+    error NotAPool();
 
     event OwnershipTransferStarted(address indexed pendingOwner);
     event OwnerSet(address indexed owner);
@@ -132,6 +134,7 @@ contract FeeProtocolManager {
      */
     function sync(address pool) public {
         if (paused) revert Paused_();
+        if (!_isCanonicalPool(pool)) revert NotAPool(); // L-1: real factory pool only
         if (_isLaunchPool(pool)) {
             // Launch pool: hold at 0. Only write if currently on (idempotent, and
             // this is what heals a create-then-lock front-run once the lock lands).
@@ -150,9 +153,15 @@ contract FeeProtocolManager {
         emit Synced(pool, d, false);
     }
 
+    /**
+     * Best-effort batch (audit L-2): a single bad member (unmanaged tier,
+     * uninitialized pool, fake pool) must NOT revert the whole batch and let an
+     * attacker brick every keeper run. try/catch per element via an external
+     * self-call; `sync` stays permissionless so the self-call is unprivileged.
+     */
     function syncMany(address[] calldata pools) external {
         for (uint256 i; i < pools.length; ++i) {
-            sync(pools[i]);
+            try this.sync(pools[i]) {} catch {}
         }
     }
 
@@ -178,6 +187,7 @@ contract FeeProtocolManager {
      * caller argument, so nobody can drain the fees to themselves.
      */
     function collectProtocol(address pool) external returns (uint128 amount0, uint128 amount1) {
+        if (!_isCanonicalPool(pool)) revert NotAPool(); // L-1: real factory pool only
         (amount0, amount1) =
             IV3PoolMin(pool).collectProtocol(treasury, type(uint128).max, type(uint128).max);
         emit Harvested(pool, treasury, amount0, amount1);
@@ -271,6 +281,21 @@ contract FeeProtocolManager {
         uint256 id = IV3LockerMin(locker).positionIdByToken(token);
         if (id == 0) return false;
         return IV3LockerMin(locker).getPosition(id).pool == pool;
+    }
+
+    /**
+     * Provenance guard (audit L-1): the permissionless entrypoints must only act
+     * on a REAL pool from OUR factory. Without this a fake contract implementing
+     * token0/token1/fee/collectProtocol could make anyone emit spoofed
+     * Synced/Harvested events and poison off-chain accounting (no fund loss, but
+     * an integrity footgun). getPool is keyed by the canonical (sorted tokens,
+     * fee) tuple, so it maps back uniquely to `pool`.
+     */
+    function _isCanonicalPool(address pool) internal view returns (bool) {
+        return
+            IV3Factory(factory).getPool(
+                IV3PoolMin(pool).token0(), IV3PoolMin(pool).token1(), IV3PoolMin(pool).fee()
+            ) == pool;
     }
 
     // -------------------- internal --------------------
