@@ -106,8 +106,9 @@ Then finalize governance:
   state (keeper, indexer, Safe governance, pair-level fee, current addresses,
   M3 de-risked). REMAINING (founder-only): video, deck, hackathon name, live
   traction numbers, Pashov quote confirmation, COI answer.
-- 🔗 **External audit**: hard gate before mainnet; the highest-leverage grant
-  line item. Weeks of calendar time.
+- ❌ **External audit**: DROPPED (no budget, founder decision 2026-08-13). Coverage
+  = the internal multi-agent audits (this session's 4-agent pass + the prior
+  offensive audits). Accepted risk: no third-party sign-off before mainnet.
 
 ## F. Indexer-dependent (Goldsky subgraph)
 
@@ -130,6 +131,9 @@ Then finalize governance:
 
 ## Critical path (minimum to mainnet)
 
-A (activate keeper + indexer) → B (decide H-02) → C (broadcast gen + wiring) →
-D (CCTP + WalletConnect). E (grant) runs in parallel; the external audit in E is
-the one hard gate that must clear before the C broadcast is considered final.
+A (activate keeper + indexer) → B (done) → C (broadcast gen + wiring) → D.
+No external-audit gate (dropped). **The real launch blocker is getting USDC onto
+Arc mainnet** (for gas + seed liquidity): CCTP/bridge is NOT live yet (Circle
+does not attest Arc mainnet burns), so the DEX+launchpad can ship but the bridge
+stays OFF and liquidity must be seeded via a non-bridge USDC path (Circle mint /
+an exchange that delivers on Arc). Goldsky `arc-mainnet` is confirmed supported.
