@@ -143,7 +143,8 @@ export function SwapRoutes({
   return (
     <div className="mt-3 space-y-1.5">
       <div className="flex items-center justify-between">
-        <span className="text-[11px] font-medium uppercase tracking-wide text-arc-text-faint">
+        <span className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-arc-text-faint">
+          <Image src="/route.png" alt="" width={12} height={12} className="h-3 w-3 opacity-75" />
           {visible.length === 1 ? "Route" : `Top ${visible.length} routes`}
         </span>
         {loading && (
@@ -225,15 +226,14 @@ export function SwapRoutes({
                 </div>
               </div>
               <div className="text-right">
-                {/* Token amount received on top, estimated USD value below it
-                    (replaces the prior %-loss-vs-best line). */}
+                {/* Token amount on top (no symbol); estimated USD value below it,
+                    larger + bolder + a ~ prefix. */}
                 <div className="text-sm font-semibold tabular-nums text-arc-text">
-                  {formatAmount(q.amountOut, decimalsOut)}{" "}
-                  <span className="text-[10px] font-medium text-arc-text-faint">{symbolOut}</span>
+                  {formatAmount(q.amountOut, decimalsOut)}
                 </div>
                 {usdPricePerOut !== undefined && (
-                  <div className="text-[10px] tabular-nums text-arc-text-faint">
-                    {formatUsd(q.amountOut, decimalsOut, usdPricePerOut)}
+                  <div className="text-xs font-semibold tabular-nums text-arc-text-muted">
+                    ~{formatUsd(q.amountOut, decimalsOut, usdPricePerOut)}
                   </div>
                 )}
               </div>

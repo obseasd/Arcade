@@ -1025,17 +1025,6 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
     const impactBps = Number(((refNum - tradeNum) * 10000n) / refNum);
     return impactBps / 100;
   }, [activeRoute, refQuotes.quotes, refQuotes.best, refProbeAmount, amountInRaw]);
-  const priceImpactLabel = useMemo<string | undefined>(() => {
-    if (priceImpactPct === undefined) return undefined;
-    if (priceImpactPct < 0.01) return undefined;
-    const tag = priceImpactPct >= 15
-      ? "EXTREME"
-      : priceImpactPct >= 5
-        ? "HIGH"
-        : "";
-    const tagPart = tag ? ` · ${tag}` : "";
-    return `Price impact ${priceImpactPct.toFixed(2)}%${tagPart}`;
-  }, [priceImpactPct]);
 
   // Pick the spender to approve based on the route. For external
   // UR + Permit2 routes the user-facing approval is to Permit2 (one
@@ -1653,14 +1642,7 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
             ? `Fee ${feePctLabel} (${feeFormatted} ${tokenIn.symbol ?? "TOKEN"})`
             : undefined
         }
-        slippageLabel={priceImpactLabel}
-        slippageTone={
-          priceImpactPct === undefined || priceImpactPct < 1
-            ? "normal"
-            : priceImpactPct < 5
-              ? "warn"
-              : "danger"
-        }
+        slippageLabel={undefined}
       />
 
       {/* Audit 2026-06-11 bug #5: PUMP-mode pre-grad tokens trade on the
@@ -1706,50 +1688,9 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
           executes on effectiveAmountIn and leaves the remainder in the wallet;
           the "Fee"/output figures already reflect the executed amount. */}
 
-      {/* Route + rate row (between For box and Swap button). Hidden on
-          external routes — the SwapRoutes panel renders the route info
-          (Synthra V3 / UnitFlow V3) right under the swap button, so
-          repeating the "via Arcade V3" caption would be wrong and noisy. */}
-      {!isExternalRoute && finalAmountIn > 0n && finalAmountOut > 0n && tokenOut && (
-        <div className="mt-4 flex flex-wrap items-center justify-between gap-y-1 text-xs">
-          <div className="flex flex-wrap items-center gap-1.5 gap-y-1 text-arc-text-muted">
-            <Image src="/route.png" alt="" width={14} height={14} className="h-3.5 w-3.5 opacity-75" />
-            <span>via</span>
-            <span className="font-medium text-arc-text">
-              {isV3Swap || activeRoute?.provider === "arcade-v3" ? "Arcade V3" : "Arcade V2"}
-            </span>
-            {isV3Swap && v3DoubleHop && (
-              <span className="ml-1 rounded-full border border-arc-cta-hover/40 bg-arc-cta-hover/10 px-1.5 py-0.5 text-[10px] font-medium text-arc-cta-hover">
-                {symIn} → USDC → {symOut}
-              </span>
-            )}
-            {isV3Swap && !v3DoubleHop && (
-              <span className="ml-1 rounded-full border border-arc-success/40 bg-arc-success/10 px-1.5 py-0.5 text-[10px] font-medium text-arc-success">
-                {/* The real routed fee tier, not a "locked-LP" label: most V3
-                    pools (e.g. USDC/SeedETH 0.05%) are regular /positions pools,
-                    NOT arcadeLocked, so the old badge was misleading. */}
-                {feePct.toFixed(2).replace(/0+$/, "").replace(/\.$/, "")}% pool
-              </span>
-            )}
-            {!isV3Swap && route.viaUsdc && (
-              <span className="ml-1 rounded-full border border-arc-cta-hover/40 bg-arc-cta-hover/10 px-1.5 py-0.5 text-[10px] font-medium text-arc-cta-hover">
-                {symIn} → USDC → {symOut}
-              </span>
-            )}
-          </div>
-          <div className="text-arc-text-muted tabular-nums">
-            1 {symIn} ≈{" "}
-            <span className="text-arc-text">
-              {formatTokenAmount(
-                (finalAmountOut * 10n ** BigInt(decimalsIn)) / finalAmountIn,
-                decimalsOut,
-                6,
-              )}
-            </span>{" "}
-            {symOut}
-          </div>
-        </div>
-      )}
+      {/* Route + rate caption removed per product: the SwapRoutes panel below
+          already names the route and shows each quote, so the "via X · 1 A ≈ B"
+          line was redundant. */}
 
       {/* Multi-DEX routes comparison. Auto-picks the best, user can tap
           a row to override. usdPricePerOut is derived from Arcade's USDC
