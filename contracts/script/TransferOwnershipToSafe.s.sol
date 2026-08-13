@@ -25,7 +25,7 @@ import {Script, console2} from "forge-std/Script.sol";
  *
  * Env (addresses): SAFE, V2_FACTORY, V3_FACTORY, FEE_PROTOCOL_MANAGER,
  *   AUTO_COMPOUNDER, ARCADE_HOOK, TWITTER_ESCROW, V3_LOCKER, LAUNCHPAD,
- *   AIRDROP_DISTRIBUTOR
+ *   AIRDROP_DISTRIBUTOR, V4_ROUTER
  * Env (key): DEPLOYER_PRIVATE_KEY
  *
  * Peripheral V4 contracts (governance verified 2026-08-13):
@@ -51,8 +51,15 @@ interface IV3Factory {
 
 interface IFeeProtocolManager {
     function treasury() external view returns (address);
+    function factory() external view returns (address); // immutable
+    function locker() external view returns (address); // immutable
     function setTreasury(address) external;
     function transferOwnership(address) external; // 2-step
+}
+
+interface IV4SwapRouter {
+    function owner() external view returns (address);
+    function transferOwnership(address) external; // 1-step
 }
 
 interface IAutoCompounder {
@@ -98,6 +105,7 @@ contract TransferOwnershipToSafe is Script {
         address locker = vm.envAddress("V3_LOCKER");
         address launchpad = vm.envAddress("LAUNCHPAD");
         address airdrop = vm.envAddress("AIRDROP_DISTRIBUTOR");
+        address v4Router = vm.envAddress("V4_ROUTER");
         require(safe != address(0), "SAFE unset");
 
         // --- Pre-flight: the IMMUTABLE-owner contracts must ALREADY be the Safe.
@@ -105,6 +113,12 @@ contract TransferOwnershipToSafe is Script {
         //     handoff (the deployer still controls everything -> redeploy those). ---
         require(IImmutableOwner(locker).owner() == safe, "v3Locker.owner != Safe (immutable: redeploy with Safe)");
         require(ILaunchpad(launchpad).treasury() == safe, "launchpad.treasury != Safe (immutable: redeploy with Safe)");
+        // The manager's factory + locker are IMMUTABLE. setOwner(mgr) below is
+        // irreversible (it hands the V3 factory to mgr; reclaim goes through
+        // mgr.factory which, if wrong, can never release the real factory). Assert
+        // they match BEFORE the handoff so a stale mgr ctor arg is caught here.
+        require(IFeeProtocolManager(mgr).factory() == v3Factory, "mgr.factory != V3_FACTORY (redeploy mgr)");
+        require(IFeeProtocolManager(mgr).locker() == locker, "mgr.locker != V3_LOCKER (redeploy mgr)");
 
         vm.startBroadcast(vm.envUint("DEPLOYER_PRIVATE_KEY"));
 
@@ -137,6 +151,11 @@ contract TransferOwnershipToSafe is Script {
         IHolderAirdrop(airdrop).setTreasury(safe);
         IHolderAirdrop(airdrop).transferOwnership(safe);
 
+        // V4 swap router: 1-STEP ownership. The owner only sets the 0-1% referral
+        // surcharge (referrer is caller-supplied, so not fund-redirection), but
+        // it's a live lever that must not stay on the throwaway deployer.
+        IV4SwapRouter(v4Router).transferOwnership(safe);
+
         vm.stopBroadcast();
 
         // --- Post: assert the IMMEDIATE (single-step) settings landed on the Safe.
@@ -151,6 +170,7 @@ contract TransferOwnershipToSafe is Script {
         // Airdrop is 1-step, so its ownership is final here too (assert both).
         require(IHolderAirdrop(airdrop).treasury() == safe, "airdrop.treasury != Safe");
         require(IHolderAirdrop(airdrop).owner() == safe, "airdrop.owner != Safe");
+        require(IV4SwapRouter(v4Router).owner() == safe, "v4Router.owner != Safe");
 
         console2.log("Immediate settings -> Safe: OK (feeTo, feeToSetter, v3Factory owner, mgr/hook treasury, comp feeRecipient, airdrop owner+treasury)");
         console2.log("Immutable owners already Safe: v3Locker, launchpad");

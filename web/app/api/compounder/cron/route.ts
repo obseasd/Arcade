@@ -104,7 +104,9 @@ const MAX_FEE_PER_GAS_WEI = 100_000_000_000n; // 100 gwei
 /// notifications inbox rather than burning the float to zero
 /// silently. 1 USDC ≈ 100 average compound calls on Arc, so the alert
 /// fires with comfortable headroom for an ops response.
-const MIN_OPERATOR_BALANCE_WEI = 1_000_000n; // 1 USDC (6 decimals)
+// Arc's NATIVE balance (getBalance) is 18-dp wei (1 USDC = 1e18), NOT the ERC-20
+// USDC's 6dp. A 1e6 floor was ~1e-12 USDC, so the low-balance breaker never fired.
+const MIN_OPERATOR_BALANCE_WEI = 1_000_000_000_000_000_000n; // 1 USDC (18dp native)
 
 /** Run a promise under a hard timeout. Returns null on timeout (the
  *  caller is expected to treat null as "skip this leg / pool" and

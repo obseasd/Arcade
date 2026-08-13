@@ -135,18 +135,36 @@ export async function POST(req: NextRequest) {
         .catch(() => null)) as boolean | null;
     if (isLaunch === true) return NextResponse.json({ ran: false, reason: "launch pool, stays at 0" });
 
-    // --- Send sync under the SHARED keeper lease so this can't collide with a
-    //     concurrent cron run on the shared wallet's nonce (audit MEDIUM-1). If
-    //     the cron (or another sync-pool call) already holds the lease we DON'T
-    //     send: the cron's own leg-C scan syncs this pool within a tick, so
-    //     deferring is correct and keeps this a pure latency optimisation. ---
+    // --- Simulate BEFORE taking the lease / sending. The read pre-checks above
+    //     read attacker-CONTROLLABLE view functions (factory/slot0), so a fake
+    //     contract can pass them; simulateContract runs the REAL sync (incl. the
+    //     manager's _isCanonicalPool factory.getPool round-trip + tier check), so
+    //     a fake / foreign / unmanaged-tier pool reverts HERE at zero gas and
+    //     WITHOUT touching the shared lease (audit: fake-pool gas-drain + cron
+    //     lease starvation). ---
+    const account = privateKeyToAccount(keeperKey);
+    try {
+        await publicClient.simulateContract({
+            address: manager,
+            abi: MANAGER_ABI,
+            functionName: "sync",
+            args: [pool],
+            account,
+        });
+    } catch (e) {
+        return NextResponse.json({ ran: false, reason: "sync would revert (skipped)", error: errMsg(e) });
+    }
+
+    // --- Send under the SHARED keeper lease so this can't collide with a
+    //     concurrent cron run on the shared wallet's nonce. If the cron (or
+    //     another sync-pool call) holds the lease we DON'T send: the cron's leg-C
+    //     scan syncs this pool within a tick, so deferring is correct. ---
     const holder = `sync-pool-${globalThis.crypto?.randomUUID?.() ?? String(Date.now())}`;
     const gotLease = await tryAcquireKeeperLease(SYNC_POOL_LEASE_SECONDS, holder).catch(() => false);
     if (!gotLease) {
         return NextResponse.json({ ran: false, reason: "keeper busy (cron will sync)" });
     }
     try {
-        const account = privateKeyToAccount(keeperKey);
         const walletClient = createWalletClient({ account, chain: arcActive, transport: http() });
         const hash = await walletClient.writeContract({
             address: manager,

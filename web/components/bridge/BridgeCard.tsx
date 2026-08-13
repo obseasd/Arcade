@@ -639,13 +639,16 @@ export function BridgeCard() {
   // whatever Circle charges on the route, and Arcade's share is the remainder.
   // (This replaces the old `arcadeFee + circleMaxFee` sum, which double-counted
   // and quoted 0.07% for what is a 0.05% all-in.)
+  // Arcade's 0.05% is skimmed ONLY when the burn routes through the on-chain
+  // receiver (the fee-hook or buy-hook path = Arc destination, non-Solana). A
+  // plain bridge to a non-Arc dest, or a Solana route, pays only Circle's own
+  // fee, so charging/showing the 0.05% there overstated the fee and understated
+  // the received amount (audit MEDIUM). Gate the whole fee on the receiver path.
+  const arcadeFeeApplies = useFeeHook || useBuyHook;
   const totalFee =
-    amountRaw > 0n && fastTransfer
+    amountRaw > 0n && arcadeFeeApplies
       ? (amountRaw * ARCADE_BRIDGE_FEE_BPS) / BPS_DENOMINATOR
       : 0n;
-  const circleMaxFee =
-    amountRaw > 0n && fastTransfer ? (amountRaw * CCTP_FAST_MAX_FEE_BPS) / BPS_DENOMINATOR : 0n;
-  const arcadeFee = totalFee > circleMaxFee ? totalFee - circleMaxFee : 0n;
   const estReceived = amountRaw > 0n ? amountRaw - totalFee : 0n;
   const isProcessing =
     step.kind === "approving" ||
@@ -1634,9 +1637,9 @@ export function BridgeCard() {
         recipientLabel={recipient ? formatAddress(recipient) : undefined}
         onRecipientClick={!isProcessing ? () => setRecipientModalOpen(true) : undefined}
         recipientIsOverride={!!recipientOverride}
-        // Fast mode: show a compact "Fee 0.05%" above the balance instead of a
-        // separate fee panel. Standard is free, so no note.
-        feeNote={!sameChain && amountRaw > 0n && fastTransfer ? "Fee 0.05%" : undefined}
+        // Show the compact "Fee 0.05%" only when Arcade actually skims it (the
+        // receiver path); a plain non-Arc/Solana bridge shows no Arcade fee.
+        feeNote={!sameChain && amountRaw > 0n && arcadeFeeApplies ? "Fee 0.05%" : undefined}
       />
 
       {/* Same-chain warning */}

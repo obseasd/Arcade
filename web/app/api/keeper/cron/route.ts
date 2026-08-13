@@ -226,7 +226,9 @@ const RPC_TIMEOUT_MS = 3_000;
 // on" -- the on-chain state is re-read next tick, so no double-action results.
 const RECEIPT_TIMEOUT_MS = 20_000;
 const MAX_FEE_PER_GAS_WEI = 100_000_000_000n; // 100 gwei
-const MIN_OPERATOR_BALANCE_WEI = 1_000_000n; // 1 USDC (6 decimals)
+// Arc's NATIVE balance (getBalance) is 18-dp wei (1 USDC = 1e18), NOT the ERC-20
+// USDC's 6dp. A 1e6 floor was ~1e-12 USDC, so the low-balance breaker never fired.
+const MIN_OPERATOR_BALANCE_WEI = 1_000_000_000_000_000_000n; // 1 USDC (18dp native)
 
 // Soft mainnet switch: the keeper reads NEXT_PUBLIC_ARC_ENV like the frontend
 // (lib/chains.ts) so flipping that one var moves it to chainId 5042 + mainnet
