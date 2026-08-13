@@ -816,6 +816,26 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
   const feeFormatted = formatUSDC(feeRaw, decimalsIn, 2);
   const feePct = Number(feePips) / 10_000;
   const feePctLabel = `${feePct.toFixed(feePct < 1 ? 2 : 1)}%`;
+  // Per-token USD price for tokenOut: reserve-based spot when available, else a
+  // trade-ratio fallback (input USD / output tokens, fee-adjusted for internal
+  // routes). Defined even for external-only tokens with no Arcade USDC pool
+  // (e.g. cirBTC), which is why the route panel shows "$X" where the For-box
+  // oracle (outUsd) returns nothing. Lifted to a const so the For-box USD
+  // estimate below reuses it and matches the route panel instead of vanishing.
+  const usdPricePerOut: number | undefined =
+    outUsd.spotUsdPerToken ??
+    (inUsd.usd !== undefined && finalAmountOut > 0n
+      ? (inUsd.usd * (isExternalRoute ? 1 : 1 - Number(feePips) / 1_000_000)) /
+        (Number(finalAmountOut) / Math.pow(10, decimalsOut))
+      : undefined);
+  // Estimated USD value of the received amount = per-token price x output tokens.
+  // The For-box uses this as its last-resort USD estimate so an external route
+  // (Synthra/UnitFlow) whose output token has no oracle price still shows a
+  // "~$X" received value, consistent with the route panel's own figure.
+  const estOutUsd: number | undefined =
+    usdPricePerOut !== undefined && finalAmountOut > 0n
+      ? usdPricePerOut * (Number(finalAmountOut) / Math.pow(10, decimalsOut))
+      : undefined;
   // Total loss % includes price impact + AMM fee (already baked into out amount)
   const lossPctRaw =
     inUsd.usd !== undefined && outUsd.usd !== undefined && inUsd.usd > 0
@@ -1605,7 +1625,10 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
           !isExternalRoute &&
           feePips > 0n
             ? inUsd.usd * (1 - Number(feePips) / 1_000_000)
-            : outUsd.usd
+            : // External-only tokens have no oracle price, so outUsd.usd is
+              // undefined and the "~$" received value used to vanish. Fall back
+              // to the route-implied estimate (same figure the route panel shows).
+              outUsd.usd ?? estOutUsd
         }
         lossPct={lossPct}
         feeLabel={
@@ -1756,25 +1779,7 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
           }}
           decimalsOut={decimalsOut}
           symbolOut={symOut}
-          usdPricePerOut={
-            outUsd.spotUsdPerToken ??
-            (inUsd.usd !== undefined &&
-            finalAmountOut > 0n &&
-            decimalsOut !== undefined
-              ? // Multiply inUsd by (1 - fee) before dividing by output
-                // tokens so the per-token USD price reflects the pool
-                // mid-price, not the post-fee execution rate. Without
-                // this the route panel reads "$1.00" on a 1-USDC swap
-                // with 1% fee because spot = inUsd / out exactly cancels
-                // back to inUsd at display time. External routes
-                // (Synthra/UnitFlow) bake their own fee into the quoted
-                // amountOut so we only apply the correction on Arcade-
-                // internal routes.
-                (inUsd.usd *
-                  (isExternalRoute ? 1 : 1 - Number(feePips) / 1_000_000)) /
-                (Number(finalAmountOut) / Math.pow(10, decimalsOut))
-              : undefined)
-          }
+          usdPricePerOut={usdPricePerOut}
         />
       )}
 

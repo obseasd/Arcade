@@ -1616,23 +1616,6 @@ export function BridgeCard() {
         </button>
       </div>
 
-      {/* Flash-mode fee, shown ABOVE the reception box. Fast only: Standard is
-          free on both sides, so no row (no "Free" line). */}
-      {!sameChain && amountRaw > 0n && fastTransfer && (
-        <div className="mt-3 space-y-1 rounded-xl border border-arc-border bg-white/[0.015] p-3 text-xs">
-          <div className="flex items-center justify-between">
-            <span className="text-arc-text-muted">Bridge fee (Fast, all-in)</span>
-            <span className="tabular-nums text-arc-text">
-              {formatUSDC(totalFee, 6, 4)} USDC (0.05%)
-            </span>
-          </div>
-          <div className="text-[10px] text-arc-text-faint">
-            Includes Circle&apos;s fast-transfer fee. Total never exceeds 0.05%.
-            Switch to Standard for a free transfer.
-          </div>
-        </div>
-      )}
-
       {/* TO */}
       <ChainBox
         label="To"
@@ -1651,6 +1634,9 @@ export function BridgeCard() {
         recipientLabel={recipient ? formatAddress(recipient) : undefined}
         onRecipientClick={!isProcessing ? () => setRecipientModalOpen(true) : undefined}
         recipientIsOverride={!!recipientOverride}
+        // Fast mode: show a compact "Fee 0.05%" above the balance instead of a
+        // separate fee panel. Standard is free, so no note.
+        feeNote={!sameChain && amountRaw > 0n && fastTransfer ? "Fee 0.05%" : undefined}
       />
 
       {/* Same-chain warning */}
@@ -2015,6 +2001,9 @@ interface ChainBoxProps {
   recipientLabel?: string;
   onRecipientClick?: () => void;
   recipientIsOverride?: boolean;
+  /** Compact fee note shown above the balance (e.g. "Fee 0.05%"). Used on the
+   *  To box in Fast mode instead of a separate fee panel. */
+  feeNote?: string;
 }
 
 function ChainBox({
@@ -2032,6 +2021,7 @@ function ChainBox({
   recipientLabel,
   onRecipientClick,
   recipientIsOverride,
+  feeNote,
 }: ChainBoxProps) {
   if (!chain) return null;
   const balLabel = formatUSDC(balanceRaw, 6, 2);
@@ -2107,16 +2097,21 @@ function ChainBox({
               <span className="text-arc-text-faint">to {recipientLabel}</span>
             ))}
         </div>
-        <div className="flex items-center gap-1.5 text-arc-text-faint">
-          <span>
-            Balance: <span className="text-arc-text-muted">{balLabel}</span> USDC
-          </span>
-          {showHalfMax && (
-            <>
-              <QuickButton onClick={onHalf}>HALF</QuickButton>
-              <QuickButton onClick={onMax}>MAX</QuickButton>
-            </>
+        <div className="flex flex-col items-end gap-0.5">
+          {feeNote && (
+            <span className="text-[11px] tabular-nums text-arc-text-muted">{feeNote}</span>
           )}
+          <div className="flex items-center gap-1.5 text-arc-text-faint">
+            <span>
+              Balance: <span className="text-arc-text-muted">{balLabel}</span> USDC
+            </span>
+            {showHalfMax && (
+              <>
+                <QuickButton onClick={onHalf}>HALF</QuickButton>
+                <QuickButton onClick={onMax}>MAX</QuickButton>
+              </>
+            )}
+          </div>
         </div>
       </div>
     </div>
