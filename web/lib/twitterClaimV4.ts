@@ -1,8 +1,8 @@
 import crypto from "crypto";
 import { zeroAddress, type Address } from "viem";
-import { privateKeyToAccount } from "viem/accounts";
 
-import { arcTestnet } from "@/lib/chains";
+import { arcActive } from "@/lib/chains";
+import { getBackendClaimSigner } from "@/lib/kmsSigner";
 import { ADDRESSES } from "@/lib/constants";
 import { serverPublicClient } from "@/lib/serverRpc";
 import { normaliseHandle } from "@/lib/twitterHandle";
@@ -106,9 +106,8 @@ export async function buildV4ClaimPayload(args: {
     /** OAuth numeric Twitter user-id (from /users/me data.id). Canonical claim
      *  key — handles rename/recycle, ids do not. */
     oauthUserId?: string;
-    backendPk: `0x${string}`;
 }): Promise<V4ClaimResult> {
-    const { token, slotIndex, recipient, oauthHandle, oauthUserId, backendPk } = args;
+    const { token, slotIndex, recipient, oauthHandle, oauthUserId } = args;
     const hook = ADDRESSES.arcadeHook as Address;
     const usdc = ADDRESSES.usdc as Address;
     if (!hook || hook === zeroAddress) {
@@ -210,14 +209,17 @@ export async function buildV4ClaimPayload(args: {
 
     // 4) Sign the V4 Claim (7-field, domain version "4"). Signing for the live
     //    balance; claimByTwitter sweeps the balance at execute time (>= signed).
-    const account = privateKeyToAccount(backendPk);
+    //    Signer = KMS (mainnet) or the local backend key (testnet); both yield a
+    //    signature the escrow's ECDSA.recover accepts as `trustedSigner`.
+    const signer = await getBackendClaimSigner();
+    if (!signer) return { kind: "error", error: "server_misconfigured" };
     const nonce = `0x${crypto.randomBytes(32).toString("hex")}` as `0x${string}`;
     const deadline = BigInt(Math.floor(Date.now() / 1000) + 30 * 60);
-    const sig = await account.signTypedData({
+    const sig = await signer.signTypedData({
         domain: {
             name: "ArcadeTwitterEscrow",
             version: TWITTER_ESCROW_V4_DOMAIN_VERSION,
-            chainId: arcTestnet.id,
+            chainId: arcActive.id,
             verifyingContract: escrow,
         },
         types: TWITTER_ESCROW_V4_CLAIM_TYPES,

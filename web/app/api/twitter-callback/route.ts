@@ -2,8 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
 import { rateLimit, rateLimitGlobal } from "@/lib/apiGuard";
 import { Address, isAddress } from "viem";
-import { privateKeyToAccount } from "viem/accounts";
 import { buildV4ClaimPayload } from "@/lib/twitterClaimV4";
+import { backendSignerConfigured } from "@/lib/kmsSigner";
 import { ADDRESSES } from "@/lib/constants";
 
 export const dynamic = "force-dynamic";
@@ -146,8 +146,8 @@ export async function GET(req: NextRequest) {
 
   const clientId = process.env.TWITTER_CLIENT_ID;
   const clientSecret = process.env.TWITTER_CLIENT_SECRET;
-  const backendPk = process.env.ARCADE_BACKEND_PRIVATE_KEY as `0x${string}` | undefined;
-  if (!clientId || !clientSecret || !backendPk) {
+  // Backend claim signer: KMS (mainnet) or the local key (testnet). Either works.
+  if (!clientId || !clientSecret || !backendSignerConfigured()) {
     return redirectBackWithError(origin, "server_misconfigured");
   }
 
@@ -228,7 +228,6 @@ export async function GET(req: NextRequest) {
       recipient: recipient as Address,
       oauthHandle,
       oauthUserId,
-      backendPk,
     });
     if (v4.kind === "error") return redirectBackWithError(origin, v4.error);
     if (v4.kind === "ok") {
