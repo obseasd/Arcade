@@ -81,7 +81,9 @@ export function ipfsGatewayUrls(uri: string): string[] {
   const hosts = [
     ipfsGatewayBase(),
     "https://ipfs.io/ipfs",
-    "https://cloudflare-ipfs.com/ipfs",
+    // cloudflare-ipfs.com was shut down (ERR_NAME_NOT_RESOLVED); dweb.link is
+    // Protocol Labs' reliable public gateway.
+    "https://dweb.link/ipfs",
     "https://gateway.pinata.cloud/ipfs",
   ];
   // De-dup while preserving order.
@@ -117,7 +119,8 @@ export function ipfsGatewayUrls(uri: string): string[] {
 function buildIpfsGateways(): readonly string[] {
   const candidates = [
     process.env.NEXT_PUBLIC_IPFS_GATEWAY?.replace(/\/$/, "") || "https://ipfs.io",
-    "https://cloudflare-ipfs.com",
+    // cloudflare-ipfs.com is dead (public gateway shut down); dropped from the
+    // quorum pool. ipfs.io + pinata + dweb.link keep >= 2 distinct hosts.
     "https://gateway.pinata.cloud",
     "https://dweb.link",
   ];
