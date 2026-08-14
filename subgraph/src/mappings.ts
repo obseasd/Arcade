@@ -217,8 +217,10 @@ function recordTrade(
   // graduated volume ONLY for the token's official migrated pool.
   creditCreator(token, volumeUsdc, blockTime, pool);
 
-  // Per-token running aggregates + daily bucket (launchpad tokens only).
-  bumpTokenAggregates(token, price, volumeUsdc, isBuy, blockTime);
+  // Per-token running aggregates + daily bucket (launchpad tokens only). The
+  // source/pool gate the price so a rogue permissionless V2/V3 USDC pool can't
+  // overwrite the token's real curve/graduated price.
+  bumpTokenAggregates(token, price, volumeUsdc, isBuy, blockTime, source, pool);
 
   // Protocol-wide daily bucket (all sources) for the Explore hero sparklines.
   // Fee estimate by venue: V3 uses the pool's tier; V2 0.30%; everything else
@@ -429,31 +431,63 @@ function loadTokenDay(token: Bytes, blockTime: i32, price: BigDecimal): TokenDay
   return d;
 }
 
+/** Is this trade on the token's OFFICIAL launchpad venue, so its price is the
+ *  real one? The bonding curve (v4curve/curve) and registered V4 pools (v4 --
+ *  CLANKER from birth + graduated PUMP) always are. A v2/v3 swap only counts
+ *  when it is the token's migrated pair or an Arcade-locked pool; otherwise it
+ *  is a rogue permissionless USDC pool someone opened with the token, whose
+ *  price must NOT overwrite lastPriceUsdc.
+ *
+ *  Audit 2026-08-14: rogue v2/v3 swaps were injecting garbage prices (ADT's last
+ *  trade was a "v2" at 206 and a "v3" at 3.4e50 vs its real ~5e-6 curve price),
+ *  which the launchpad cards turned into billion-dollar / hidden market caps. */
+function isCanonicalPrice(tok: Token, source: string, pool: Bytes | null): boolean {
+  // Bonding curve + registered V4 pools (CLANKER from birth, graduated PUMP)
+  // are always the token's real venue.
+  if (source == "v4curve" || source == "curve" || source == "v4") return true;
+  // A v2/v3 swap only counts when it is the token's official graduated pair;
+  // any other permissionless USDC pool is rogue and must not set the price.
+  if (pool === null) return false;
+  const mp = tok.migratedPair;
+  if (mp === null) return false;
+  return (mp as Bytes).equals(pool as Bytes);
+}
+
 /** Update a launchpad token's running volume/trade-count/last-price/liquidity
- *  and its daily bucket. No-op for a non-launchpad token (no Token row). */
+ *  and its daily bucket. No-op for a non-launchpad token (no Token row). The
+ *  price + OHLC only move on a canonical-venue trade (see isCanonicalPrice);
+ *  volume still counts every trade. */
 function bumpTokenAggregates(
   token: Bytes,
   price: BigDecimal,
   volumeUsdc: BigDecimal,
   isBuy: boolean,
   blockTime: i32,
+  source: string,
+  pool: Bytes | null,
 ): void {
   const tok = Token.load(token.toHexString());
   if (tok == null) return;
+  const canonical = isCanonicalPrice(tok, source, pool);
   tok.totalVolumeUsdc = tok.totalVolumeUsdc.plus(volumeUsdc);
   tok.tradeCount = tok.tradeCount + 1;
-  tok.lastPriceUsdc = price;
+  if (canonical) tok.lastPriceUsdc = price;
   let liq = isBuy ? tok.usdcLiquidity.plus(volumeUsdc) : tok.usdcLiquidity.minus(volumeUsdc);
   if (liq.lt(BigDecimal.fromString("0"))) liq = BigDecimal.fromString("0");
   tok.usdcLiquidity = liq;
   tok.save();
 
-  const d = loadTokenDay(token, blockTime, price);
+  // Seed a fresh day's OHLC at the trade price only when canonical; otherwise at
+  // the token's last real price so a rogue trade can't spike the candle.
+  const seed = canonical ? price : tok.lastPriceUsdc;
+  const d = loadTokenDay(token, blockTime, seed);
   d.volumeUsdc = d.volumeUsdc.plus(volumeUsdc);
   d.tradeCount = d.tradeCount + 1;
-  d.close = price;
-  if (price.gt(d.high)) d.high = price;
-  if (price.lt(d.low)) d.low = price;
+  if (canonical) {
+    d.close = price;
+    if (price.gt(d.high)) d.high = price;
+    if (price.lt(d.low)) d.low = price;
+  }
   d.save();
 }
 
