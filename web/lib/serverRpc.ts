@@ -25,8 +25,13 @@ export const ARC_CHAIN = IS_MAINNET
         rpcUrls: { default: { http: ["https://rpc.testnet.arc.network"] } },
     } as const);
 
+// Ordered by the 2026-08-14 benchmark: drpc.org + arcscan serve 40 concurrent
+// reads with ZERO rate-limiting; the public rpc.testnet.arc.network 429s ~35%
+// of a burst (and harder from Vercel's shared IPs). Reliable endpoints FIRST,
+// public as last-resort backup. Override with ARC_READ_RPC_URLS to prepend the
+// Canteen server-token RPC (no rate limit) in production.
 const DEFAULT_TESTNET_RPCS =
-    "https://rpc.testnet.arc.network,https://arc-testnet.drpc.org,https://testnet.arcscan.app/api/eth-rpc";
+    "https://arc-testnet.drpc.org,https://testnet.arcscan.app/api/eth-rpc,https://rpc.testnet.arc.network";
 const DEFAULT_MAINNET_RPCS =
     process.env.ARC_MAINNET_RPC_URL ?? "https://5042.rpc.thirdweb.com";
 const DEFAULT_ARC_RPCS = IS_MAINNET ? DEFAULT_MAINNET_RPCS : DEFAULT_TESTNET_RPCS;
@@ -56,14 +61,27 @@ const READ_RPC_URLS = (process.env.ARC_READ_RPC_URLS ?? DEFAULT_ARC_RPCS)
     .map((u) => u.trim())
     .filter(Boolean);
 
+/** Pick transport options per Arc RPC host. drpc.org rejects JSON-RPC batches
+ *  (HTTP 500) and arcscan caps a batch at 5 entries; the public RPC and a
+ *  Canteen/dedicated node take the full 90-entry batch. `batched` gates whether
+ *  we batch at all (the quote fan-out benefits; single reads don't need it). */
+function arcHttp(url: string, batched: boolean, timeout: number) {
+    const h = url.toLowerCase();
+    if (h.includes("drpc.org")) return http(url, { retryCount: 0, timeout });
+    if (h.includes("arcscan")) {
+        return http(url, batched ? { batch: { batchSize: 5, wait: 8 }, retryCount: 0, timeout } : { retryCount: 0, timeout });
+    }
+    return http(url, batched ? { batch: { batchSize: 90, wait: 8 }, retryCount: 0, timeout } : { retryCount: 0, timeout });
+}
+
 export function serverReadClient() {
     return createPublicClient({
         chain: ARC_CHAIN,
         transport: fallback(
             // No per-transport retry (a throttled Arc RPC HANGS rather than erroring
             // fast, so retries just stack timeouts); a short timeout fails over to
-            // the next endpoint quickly. Two endpoints => ~7s worst case.
-            READ_RPC_URLS.map((u) => http(u, { retryCount: 0, timeout: 3_500 })),
+            // the next endpoint quickly. Reliable endpoints (drpc/arcscan) are first.
+            READ_RPC_URLS.map((u) => arcHttp(u, false, 3_500)),
             { retryCount: 0 },
         ),
     });
@@ -85,13 +103,10 @@ export function serverQuoteClient() {
     return createPublicClient({
         chain: ARC_CHAIN,
         transport: fallback(
-            READ_RPC_URLS.map((u) =>
-                http(u, {
-                    batch: { batchSize: 90, wait: 8 },
-                    retryCount: 0,
-                    timeout: 6_000,
-                }),
-            ),
+            // Per-host batch config: drpc takes single calls (it 500s a batch but
+            // never rate-limits, so the fan-out still lands), arcscan batches 5,
+            // the public/Canteen node batches 90. drpc/arcscan are first.
+            READ_RPC_URLS.map((u) => arcHttp(u, true, 6_000)),
             { retryCount: 0 },
         ),
     });
