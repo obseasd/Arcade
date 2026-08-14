@@ -282,10 +282,15 @@ export function SendModal({ open, onClose, defaultToken }: Props) {
                     txHash: hash,
                 });
             }
+            // Reuse the swap-toast shape so the confirmation shows the SENT
+            // token's logo (auto-resolved from its address) next to
+            // "Send confirmed", instead of a bare text line.
             pushToast({
-                kind: "info",
-                title: "Send confirmed",
-                message: `${amount} ${token.symbol ?? ""} sent`,
+                kind: "swap",
+                action: "Send",
+                tokenAddress: token.address,
+                tokenSymbol: token.symbol,
+                amountFormatted: amount,
             });
         } catch (e: any) {
             setStep("error");
