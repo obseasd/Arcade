@@ -67,7 +67,10 @@ const READ_RPC_URLS = (process.env.ARC_READ_RPC_URLS ?? DEFAULT_ARC_RPCS)
  *  we batch at all (the quote fan-out benefits; single reads don't need it). */
 function arcHttp(url: string, batched: boolean, timeout: number) {
     const h = url.toLowerCase();
-    if (h.includes("drpc.org")) return http(url, { retryCount: 0, timeout });
+    // drpc.org (500s a batch) and the Canteen node (413 "batch exceeds
+    // MaxBatchSize", benchmarked) don't take JSON-RPC batches -> single calls
+    // only. Both are rate-limit-free so the un-batched fan-out still lands.
+    if (h.includes("drpc.org") || h.includes("thecanteenapp.com")) return http(url, { retryCount: 0, timeout });
     if (h.includes("arcscan")) {
         return http(url, batched ? { batch: { batchSize: 5, wait: 8 }, retryCount: 0, timeout } : { retryCount: 0, timeout });
     }
