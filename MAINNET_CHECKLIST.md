@@ -33,6 +33,29 @@ Legend: ✅ code done · 🛠 user ops · 🔗 external dependency · 🟡 decis
   no funds. A KMS-backed signer (`web/lib/kmsSigner.ts`) is coded + dormant if the
   escrow ever warrants a hardware vault (set `ARCADE_KMS_KEY_ID`); NOT needed at
   launch. See `P2_SECURITY.md`.
+- 🟡 **CLANKER claim token-leg on-chain** [audited 2026-08-14, decision pending]:
+  today a CLANKER claim's TOKEN leg sits on the OPERATOR and is forwarded by the
+  backend (best-effort, off-escrow, separate tx). So it has NO on-chain `Claimed`
+  event -> the launchpad activity row can only show the USDC leg, not the token
+  amount, and custody transiently trusts the operator hot key. Two ways to fix
+  at a contract redeploy:
+  - **RECOMMENDED (low risk):** a thin `TokenFeeForwarder` the operator calls to
+    forward the token leg, emitting `Forwarded(token, recipient, amount,
+    positionId, slotIndex, claimTxHash)`. The subgraph indexes it + joins to the
+    Claim -> the activity row shows USDC + token. NO escrow change, no re-audit
+    of the escrow core.
+  - **Fuller (higher risk):** route the token leg THROUGH the escrow. Blocked by
+    the escrow's deliberate ONE-token-per-slot invariant (`slotToken`, pinned on
+    first credit so claim/forfeit can't target an unrelated balance);
+    `claimByTwitter` sweeps that single token. Would need either extra slots (=
+    doubles the claim txs) or a multi-token-per-slot rewrite (claim loops over
+    the slot's tokens; authorize/forfeit adjusted) = new audit surface. Net
+    custody win (fully trustless) but heavy.
+  Both paths ALSO need the subgraph's `handleEscrowClaimed` to store the token
+  leg's RAW amount + format by the token's decimals (the current `amountUsdc`
+  divides by 1e6, wrong for an 18-dp token) -- add an `amountRaw`/`amountToken`
+  field. Frontend consumer: the launchpad "CLAIM" activity row (put the token
+  amount in the token column instead of the word "fees").
 
 ## C. Mainnet generation deploy (ONE fresh deploy, ordered)
 
