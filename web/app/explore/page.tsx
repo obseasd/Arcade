@@ -525,6 +525,16 @@ export default function ExplorePage() {
     const volDay = useGlobalDaySeries(volWindow, "volume");
     const feeDay = useGlobalDaySeries(feeWindow, "fees");
     const tvlDay = useGlobalDaySeries(tvlWindow, "tvl");
+    // TVL headline = the LATEST daily snapshot from the subgraph (matches the
+    // chart's last point). NOT sumMicro (a sum, meaningless for a level) and NOT
+    // the live on-chain reserve sum, which UNDER-counts whenever the RPC
+    // rate-limits (showing e.g. 26k while the chart's tooltip shows 72k). Falls
+    // back to the live reserve sum only when the subgraph series is empty.
+    const tvlHeadline = useMemo(() => {
+        const s = tvlDay.series;
+        if (s.length > 0) return BigInt(Math.max(0, Math.round(s[s.length - 1].total * 1e6)));
+        return totalTvlUsdc;
+    }, [tvlDay.series, totalTvlUsdc]);
 
     const { tvlV2, tvlV3 } = useMemo(() => {
         let v2 = 0n;
@@ -567,9 +577,10 @@ export default function ExplorePage() {
             <div className="mb-6 grid grid-cols-1 gap-4 lg:grid-cols-3">
                 <ChartCard
                     label="TVL"
-                    // Headline = accurate on-chain TVL now; sparkline = the real
-                    // daily TVL history from the subgraph (GlobalDayData.tvlUsdc).
-                    valueUsdc={totalTvlUsdc}
+                    // Headline + sparkline both from the subgraph's daily TVL
+                    // (GlobalDayData.tvlUsdc) so the number matches the chart's
+                    // last point instead of a rate-limited live reserve sum.
+                    valueUsdc={tvlHeadline}
                     v2Usdc={tvlV2}
                     v3Usdc={tvlV3}
                     window={tvlWindow}

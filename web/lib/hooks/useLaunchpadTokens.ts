@@ -182,6 +182,35 @@ export function useLaunchpadTokens(): { tokens: LaunchpadTokenInfo[]; isLoading:
     if (!publicClient || addresses.length === 0) return;
     let cancelled = false;
     (async () => {
+      // Prefer the Goldsky subgraph: ONE GraphQL query for every token's
+      // metadataURI, instead of the per-generation getLogs scan that Arc's RPC
+      // rate-limits (the dedicated RPC caps the getLogs range, so viem's
+      // fallback rotates to the public RPC, which 429s under the multi-gen
+      // load). Falls back to the scan when Goldsky is unset or errors.
+      const goldskyUrl = process.env.NEXT_PUBLIC_GOLDSKY_URL;
+      if (goldskyUrl) {
+        try {
+          const res = await fetch(goldskyUrl, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ query: "{ tokens(first: 1000) { id metadataURI } }" }),
+          });
+          if (res.ok) {
+            const j = (await res.json()) as {
+              data?: { tokens?: { id: string; metadataURI: string | null }[] };
+            };
+            const rows = j?.data?.tokens ?? [];
+            if (rows.length > 0 && !cancelled) {
+              const map = new Map<string, string>();
+              for (const t of rows) map.set(t.id.toLowerCase(), t.metadataURI ?? "");
+              setMetadataMap(map);
+              return; // served by Goldsky -> skip the RPC getLogs scan entirely
+            }
+          }
+        } catch {
+          /* fall through to the RPC scan below */
+        }
+      }
       try {
         const latest = await publicClient.getBlockNumber();
         // Run generation scans in batches of SCAN_CONCURRENCY (was fully
