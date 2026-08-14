@@ -143,6 +143,13 @@ export default function ExplorePage() {
         query: { enabled: v2Pairs.length > 0 },
     });
 
+    // Per-pool USDC reserve from the Goldsky subgraph, keyed by pool address.
+    // The indexer knows which side is USDC (usdcIsToken0), so this survives the
+    // testnet case where the pool's USDC token doesn't equal USDC_LOWER, and it
+    // fills TVL when the on-chain reserve multicall is rate-limited. Used only
+    // as a fallback for sub-rows whose on-chain TVL came back 0.
+    const goldskyPoolTvl = useAllPoolReserves();
+
     // True while ANY pool source is still resolving. Used to gate the
     // skeleton / "No pools" empty state so neither flashes before V3 /
     // launchpad rows arrive (pages audit 2026-07-02).
@@ -431,10 +438,23 @@ export default function ExplorePage() {
         // address-only checks that didn't survive env / symbol drift.
         const out = Array.from(grouped.values());
         for (const row of out) {
+            // Backfill any sub-row whose on-chain TVL is 0 with the subgraph's
+            // USDC reserve (doubled for the paired side), then re-sum the row so
+            // the pair TVL column populates even when the reserve multicall was
+            // rate-limited or the pool's USDC side isn't USDC_LOWER on testnet.
+            let sum = 0n;
+            for (const s of row.subRows) {
+                if (s.tvlUsdc === 0n) {
+                    const g = goldskyPoolTvl.get(s.poolAddress.toLowerCase());
+                    if (g && g > 0n) s.tvlUsdc = g;
+                }
+                sum += s.tvlUsdc;
+            }
+            row.tvlUsdc = sum;
             row.isIncentivized = isIncentivisedRow(row);
         }
         return out;
-    }, [v2Pairs, reservesQ.data, v3Tokens, v3FeeOf, v3PoolOf, v3FactoryPools, tokenLookup, launchpadV3TvlByToken]);
+    }, [v2Pairs, reservesQ.data, v3Tokens, v3FeeOf, v3PoolOf, v3FactoryPools, tokenLookup, launchpadV3TvlByToken, goldskyPoolTvl]);
 
     // One shared per-pool daily map (drives per-row APR + sub-pool metrics +
     // the Hyped filter + the volume sort).
@@ -760,11 +780,6 @@ export default function ExplorePage() {
                 <Pagination page={page} pageCount={pageCount} onPage={setPage} />
             )}
 
-            <p className="mt-10 text-center text-xs text-arc-text-faint">
-                Volume, daily fees, APR and TVL are live from the ArcLens indexer (Circle
-                Grant Milestone 3), aggregated across every Arcade pool.
-            </p>
-
             {/* Create-a-new-pool modal. Defaults to the highest-TVL pair so the
                 user lands on the existing flagship pool without having to pick. */}
             <CreatePoolModal
@@ -822,6 +837,38 @@ function useProtocolTotals(): { volumeUsdc: bigint; feesUsdc: bigint } {
         },
     });
     return data ?? { volumeUsdc: 0n, feesUsdc: 0n };
+}
+
+/**
+ * ONE query for every pool's USDC-side reserve (subgraph Pool.usdcReserve),
+ * returned as a pool-address -> TVL-in-micro map (usdcReserve doubled for the
+ * paired side). The indexer resolves which token is USDC per pool, so this is
+ * robust to the testnet USDC-is-native case and to the on-chain reserve
+ * multicall being rate-limited. Empty map on a miss so callers keep their
+ * on-chain value. */
+function useAllPoolReserves(): Map<string, bigint> {
+    const { data } = useQuery<Map<string, bigint>>({
+        queryKey: ["arcade", "all-pool-reserves"],
+        enabled: !!process.env.NEXT_PUBLIC_GOLDSKY_URL,
+        staleTime: 30_000,
+        refetchInterval: 60_000,
+        queryFn: async () => {
+            const url = process.env.NEXT_PUBLIC_GOLDSKY_URL as string;
+            const q = `{ pools(first: 1000) { id usdcReserve } }`;
+            const res = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ query: q }) });
+            const map = new Map<string, bigint>();
+            if (!res.ok) return map;
+            const j = (await res.json()) as { data?: { pools?: { id: string; usdcReserve: string }[] } };
+            const rows = j?.data?.pools;
+            if (!Array.isArray(rows)) return map;
+            for (const r of rows) {
+                const n = Number(r.usdcReserve);
+                if (Number.isFinite(n) && n > 0) map.set(r.id.toLowerCase(), BigInt(Math.round(n * 1e6)) * 2n);
+            }
+            return map;
+        },
+    });
+    return data ?? new Map();
 }
 
 export type PoolDayMap = Map<string, { vol1d: number; fees1d: number }>;

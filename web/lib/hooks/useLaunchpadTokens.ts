@@ -172,50 +172,55 @@ export function useLaunchpadTokens(): { tokens: LaunchpadTokenInfo[]; isLoading:
     query: { enabled: addressEntries.length > 0, staleTime: 30_000, gcTime: 1_800_000 },
   });
 
-  // Batch-fetch all TokenCreated events ACROSS every generation. Each
-  // generation gets its own scanLogsChunked pass and the resulting
-  // address → metadataURI map is merged — first-write wins so the
-  // newer-generation entry (scanned first) overrides any duplicate from
-  // an older one with a stale URI.
+  // -------- Goldsky-primary token list --------
+  // The launchpad list renders straight from the Goldsky `Token` entity
+  // (one GraphQL query for every token across every generation) so the page
+  // is NOT hostage to Arc's public RPC rate-limiting. The RPC multicall chain
+  // above stays as an ENRICHMENT source for the two fields Goldsky doesn't
+  // carry (tokensSold -> the bonding-progress bar; the exact on-chain
+  // marketCap) and as the authoritative generation/launchpad tag. When the
+  // RPC 429s, those two degrade gracefully (progress bar reads 0 until it
+  // resolves) but the list still fully renders from Goldsky.
+  const [goldsky, setGoldsky] = useState<Map<string, GoldskyRow>>(new Map());
+  const [goldskyDone, setGoldskyDone] = useState(false);
+  // metadataMap is the RPC getLogs fallback for metadataURI, only used when
+  // Goldsky is unset/unreachable (Goldsky rows already carry their URI).
   const [metadataMap, setMetadataMap] = useState<Map<string, string>>(new Map());
+
   useEffect(() => {
-    if (!publicClient || addresses.length === 0) return;
     let cancelled = false;
     (async () => {
-      // Prefer the Goldsky subgraph: ONE GraphQL query for every token's
-      // metadataURI, instead of the per-generation getLogs scan that Arc's RPC
-      // rate-limits (the dedicated RPC caps the getLogs range, so viem's
-      // fallback rotates to the public RPC, which 429s under the multi-gen
-      // load). Falls back to the scan when Goldsky is unset or errors.
       const goldskyUrl = process.env.NEXT_PUBLIC_GOLDSKY_URL;
       if (goldskyUrl) {
         try {
           const res = await fetch(goldskyUrl, {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify({ query: "{ tokens(first: 1000) { id metadataURI } }" }),
+            body: JSON.stringify({
+              query:
+                "{ tokens(first: 1000) { id creator mode createdAt migrated migratedAt migratedPair name symbol metadataURI usdcLiquidity } }",
+            }),
           });
           if (res.ok) {
-            const j = (await res.json()) as {
-              data?: { tokens?: { id: string; metadataURI: string | null }[] };
-            };
+            const j = (await res.json()) as { data?: { tokens?: GoldskyToken[] } };
             const rows = j?.data?.tokens ?? [];
-            if (rows.length > 0 && !cancelled) {
-              const map = new Map<string, string>();
-              for (const t of rows) map.set(t.id.toLowerCase(), t.metadataURI ?? "");
-              setMetadataMap(map);
-              return; // served by Goldsky -> skip the RPC getLogs scan entirely
+            if (!cancelled && rows.length > 0) {
+              const map = new Map<string, GoldskyRow>();
+              for (const t of rows) map.set(t.id.toLowerCase(), toGoldskyRow(t));
+              setGoldsky(map);
+              setGoldskyDone(true);
+              return; // served by Goldsky -> skip the RPC getLogs metadata scan
             }
           }
         } catch {
-          /* fall through to the RPC scan below */
+          /* fall through to the RPC metadata scan below */
         }
       }
+      setGoldskyDone(true);
+      // ---- Fallback: per-generation getLogs scan for metadataURI only ----
+      if (!publicClient || addresses.length === 0) return;
       try {
         const latest = await publicClient.getBlockNumber();
-        // Run generation scans in batches of SCAN_CONCURRENCY (was fully
-        // serial to dodge Alchemy 429s; batching keeps burst under
-        // ~30 concurrent getLogs while cutting wall-clock ~3x).
         const SCAN_CONCURRENCY = 3;
         const map = new Map<string, string>();
         for (let bi = 0; bi < generations.length; bi += SCAN_CONCURRENCY) {
@@ -252,38 +257,133 @@ export function useLaunchpadTokens(): { tokens: LaunchpadTokenInfo[]; isLoading:
 
   const currentGen = generations.find((g) => g.isCurrent)?.generation;
 
-  const tokens: LaunchpadTokenInfo[] = useMemo(() => {
-    if (!stateCalls.data) return [];
-    return addressEntries.map((entry, i) => {
+  // RPC generation/launchpad tag + state enrichment, keyed by lowercase addr.
+  const rpcByAddr = useMemo(() => {
+    const map = new Map<
+      string,
+      { generation: number; launchpad: Address; state?: RpcState; mcap?: bigint; name?: string; symbol?: string }
+    >();
+    addressEntries.forEach((entry, i) => {
+      const lc = entry.address.toLowerCase();
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const state = stateCalls.data[4 * i]?.result as any;
-      const mcap = stateCalls.data[4 * i + 1]?.result as bigint | undefined;
-      const name = stateCalls.data[4 * i + 2]?.result as string | undefined;
-      const symbol = stateCalls.data[4 * i + 3]?.result as string | undefined;
-      return {
-        address: entry.address,
-        creator: state?.creator ?? ("0x0" as Address),
-        createdAt: state?.createdAt ?? 0n,
-        migratedAt: state?.migratedAt ?? 0n,
-        migrated: !!state?.migrated,
-        mode: Number(state?.mode ?? 0),
-        realUsdcReserve: state?.realUsdcReserve ?? 0n,
-        tokensSold: state?.tokensSold ?? 0n,
-        v2Pair: state?.v2Pair ?? ("0x0" as Address),
-        metadataURI: metadataMap.get(entry.address.toLowerCase()) ?? "",
-        marketCap: mcap,
-        name,
-        symbol,
-        generation: entry.generation,
-        launchpad: entry.launchpad,
-        legacy: currentGen !== undefined && entry.generation !== currentGen,
-      };
+      const state = stateCalls.data?.[4 * i]?.result as RpcState | undefined;
+      const mcap = stateCalls.data?.[4 * i + 1]?.result as bigint | undefined;
+      const name = stateCalls.data?.[4 * i + 2]?.result as string | undefined;
+      const symbol = stateCalls.data?.[4 * i + 3]?.result as string | undefined;
+      map.set(lc, { generation: entry.generation, launchpad: entry.launchpad, state, mcap, name, symbol });
     });
-  }, [addressEntries, stateCalls.data, metadataMap, currentGen]);
+    return map;
+  }, [addressEntries, stateCalls.data]);
+
+  const tokens: LaunchpadTokenInfo[] = useMemo(() => {
+    // Union of every address Goldsky knows about and every address the RPC
+    // address-list resolved, so neither source alone drops a token.
+    const keys = new Set<string>([...goldsky.keys(), ...rpcByAddr.keys()]);
+    const out: LaunchpadTokenInfo[] = [];
+    for (const lc of keys) {
+      const g = goldsky.get(lc);
+      const r = rpcByAddr.get(lc);
+      const s = r?.state;
+      // Goldsky ids and the lowercase key are valid address representations
+      // (viem accepts all-lowercase in reads); prefer Goldsky's stored form.
+      const address = (g?.address ?? (lc as Address)) as Address;
+      out.push({
+        address,
+        creator: (s?.creator ?? g?.creator ?? "0x0000000000000000000000000000000000000000") as Address,
+        createdAt: s?.createdAt ?? g?.createdAt ?? 0n,
+        migratedAt: s?.migratedAt ?? g?.migratedAt ?? 0n,
+        migrated: s ? !!s.migrated : g?.migrated ?? false,
+        mode: s ? Number(s.mode) : g?.mode ?? 0,
+        realUsdcReserve: s?.realUsdcReserve ?? g?.realUsdcReserve ?? 0n,
+        // Goldsky doesn't index tokensSold; only the RPC state carries it.
+        tokensSold: s?.tokensSold ?? 0n,
+        v2Pair: (s?.v2Pair ?? g?.v2Pair ?? "0x0000000000000000000000000000000000000000") as Address,
+        metadataURI: g?.metadataURI || metadataMap.get(lc) || "",
+        // Goldsky doesn't index the exact on-chain marketCap; RPC-only.
+        marketCap: r?.mcap,
+        name: r?.name ?? g?.name,
+        symbol: r?.symbol ?? g?.symbol,
+        generation: r?.generation,
+        launchpad: r?.launchpad,
+        legacy: r ? currentGen !== undefined && r.generation !== currentGen : undefined,
+      });
+    }
+    return out;
+  }, [goldsky, rpcByAddr, metadataMap, currentGen]);
 
   return {
     tokens,
+    // Only block on a spinner when we have nothing to show yet. Once Goldsky
+    // (or the RPC chain) yields any row, render it and let enrichment stream in.
     isLoading:
-      countQueries.isLoading || addrCalls.isLoading || stateCalls.isLoading,
+      tokens.length === 0 &&
+      (!goldskyDone || countQueries.isLoading || addrCalls.isLoading || stateCalls.isLoading),
+  };
+}
+
+// ---- Goldsky Token entity plumbing ----
+interface GoldskyToken {
+  id: string;
+  creator: string | null;
+  mode: number | null;
+  createdAt: string | number | null;
+  migrated: boolean | null;
+  migratedAt: string | number | null;
+  migratedPair: string | null;
+  name: string | null;
+  symbol: string | null;
+  metadataURI: string | null;
+  usdcLiquidity: string | null;
+}
+
+interface GoldskyRow {
+  address: Address;
+  creator: Address;
+  mode: number;
+  createdAt: bigint;
+  migrated: boolean;
+  migratedAt: bigint;
+  v2Pair: Address;
+  name?: string;
+  symbol?: string;
+  metadataURI: string;
+  realUsdcReserve: bigint;
+}
+
+/** On-chain launchpad getTokenState() shape (subset we read). */
+interface RpcState {
+  creator?: Address;
+  createdAt?: bigint;
+  migratedAt?: bigint;
+  migrated?: boolean;
+  mode?: number | bigint;
+  realUsdcReserve?: bigint;
+  tokensSold?: bigint;
+  v2Pair?: Address;
+}
+
+const ZERO = "0x0000000000000000000000000000000000000000" as Address;
+
+/** Parse a decimal USDC string ("321.615143") into 6-decimal micro units. */
+function usdcToMicro(s: string | null | undefined): bigint {
+  if (!s) return 0n;
+  const n = Number(s);
+  if (!Number.isFinite(n) || n <= 0) return 0n;
+  return BigInt(Math.round(n * 1e6));
+}
+
+function toGoldskyRow(t: GoldskyToken): GoldskyRow {
+  return {
+    address: (t.id as Address) ?? ZERO,
+    creator: (t.creator as Address) ?? ZERO,
+    mode: Number(t.mode ?? 0),
+    createdAt: BigInt(Math.trunc(Number(t.createdAt ?? 0))),
+    migrated: !!t.migrated,
+    migratedAt: BigInt(Math.trunc(Number(t.migratedAt ?? 0))),
+    v2Pair: (t.migratedPair as Address) ?? ZERO,
+    name: t.name ?? undefined,
+    symbol: t.symbol ?? undefined,
+    metadataURI: t.metadataURI ?? "",
+    realUsdcReserve: usdcToMicro(t.usdcLiquidity),
   };
 }
