@@ -29,6 +29,7 @@ import {
     markWithdrawn,
     type CompounderMode,
 } from "@/lib/compounderPersistence";
+import { getKeeperCursor, setKeeperCursor } from "@/lib/keeperPersistence";
 
 /**
  * Audit I5 fix: reconciliation worker.
@@ -90,6 +91,15 @@ const ARC_RPC_LIST: readonly string[] = (() => {
 // ~7h of headroom per scan, still plenty.
 const BLOCK_WINDOW = 1_000n;
 const LOOKBACK_BLOCKS = 50_000n;
+
+// Hard cap on how many blocks a SINGLE invocation scans. The scan is a serial
+// walk of 1000-block getLogs chunks over Arc's rate-limited RPC, and the
+// cron-job.org trigger aborts at 30s. 15k blocks = 15 chunks keeps the happy
+// path comfortably under that. A persistent cursor (keeper_cursors,
+// name="compounder_reconcile") resumes the next run where this one stopped, so
+// a larger backlog drains across consecutive runs instead of timing out.
+const MAX_BLOCKS_PER_RUN = 15_000n;
+const CURSOR_NAME = "compounder_reconcile";
 
 // Pre-hashed event signatures so the decoded log filter does not
 // re-keccak on every call. Mirrors the cron's hot-path pattern.
@@ -175,15 +185,33 @@ export async function POST(req: NextRequest) {
     });
 
     const head = await publicClient.getBlockNumber();
-    const fromBlock = head > LOOKBACK_BLOCKS ? head - LOOKBACK_BLOCKS : 0n;
 
-    // Walk the window in 50k chunks so a wider span never trips the
+    // Incremental scan: resume from the persisted cursor (only NEW blocks since
+    // the last successful run); on the very first run start from a bounded
+    // lookback and let successive runs walk forward to head. Each run scans at
+    // most MAX_BLOCKS_PER_RUN so it always finishes under the cron's 30s wall.
+    const savedCursor = await getKeeperCursor(CURSOR_NAME).catch(() => null);
+    const defaultStart = head > LOOKBACK_BLOCKS ? head - LOOKBACK_BLOCKS : 0n;
+    const fromBlock = savedCursor !== null ? savedCursor + 1n : defaultStart;
+    if (fromBlock > head) {
+        // Cursor already caught up to head — nothing new to reconcile.
+        return NextResponse.json({
+            ran: true,
+            upToDate: true,
+            cursor: savedCursor?.toString() ?? null,
+            head: head.toString(),
+        });
+    }
+    const runTarget =
+        fromBlock + MAX_BLOCKS_PER_RUN - 1n > head ? head : fromBlock + MAX_BLOCKS_PER_RUN - 1n;
+
+    // Walk the window in 1000-block chunks so a wider span never trips the
     // Arc range cap. Each chunk's logs are decoded in-memory and
     // dispatched to the right reconciler.
     const summary: RunSummary = {
         compounderAddress,
         fromBlock: fromBlock.toString(),
-        toBlock: head.toString(),
+        toBlock: runTarget.toString(),
         eventsScanned: 0,
         deposits: 0,
         withdraws: 0,
@@ -211,27 +239,33 @@ export async function POST(req: NextRequest) {
         });
     }
 
-    for (let from = fromBlock; from <= head; from += BLOCK_WINDOW) {
-        const to = from + BLOCK_WINDOW - 1n > head ? head : from + BLOCK_WINDOW - 1n;
-        const logs = await publicClient
-            .getLogs({
+    // Highest contiguous block fully reconciled this run. The cursor only
+    // advances to here, so a mid-window RPC failure re-scans that chunk next
+    // run instead of leaving a permanent gap.
+    let cursorTo = fromBlock - 1n;
+    for (let from = fromBlock; from <= runTarget; from += BLOCK_WINDOW) {
+        const to = from + BLOCK_WINDOW - 1n > runTarget ? runTarget : from + BLOCK_WINDOW - 1n;
+        let logs: Awaited<ReturnType<typeof publicClient.getLogs>>;
+        try {
+            logs = await publicClient.getLogs({
                 address: compounderAddress,
                 fromBlock: from,
                 toBlock: to,
-            })
-            .catch((err) => {
-                // eslint-disable-next-line no-console
-                console.warn("[reconcile] getLogs failed", from, to, err);
-                summary.rpcErrors++;
-                if (!summary.firstRpcError) {
-                    summary.firstRpcError =
-                        (err as { shortMessage?: string; message?: string })
-                            ?.shortMessage ??
-                        (err as { message?: string })?.message ??
-                        String(err);
-                }
-                return [] as Awaited<ReturnType<typeof publicClient.getLogs>>;
             });
+        } catch (err) {
+            // eslint-disable-next-line no-console
+            console.warn("[reconcile] getLogs failed", from, to, err);
+            summary.rpcErrors++;
+            if (!summary.firstRpcError) {
+                summary.firstRpcError =
+                    (err as { shortMessage?: string; message?: string })?.shortMessage ??
+                    (err as { message?: string })?.message ??
+                    String(err);
+            }
+            // Stop advancing past a gap; the cursor stays at the last good
+            // block so the next run resumes here.
+            break;
+        }
         for (const log of logs) {
             summary.eventsScanned++;
             const topic0 = log.topics[0];
@@ -268,9 +302,22 @@ export async function POST(req: NextRequest) {
                 }
             }
         }
+        // Chunk fully processed (handler errors are logged but non-blocking, so
+        // the cursor still advances past them — they don't retry).
+        cursorTo = to;
     }
 
-    return NextResponse.json({ ran: true, ...summary });
+    // Persist the cursor so the next run resumes from the block after the last
+    // one fully reconciled. Only advance forward.
+    if (cursorTo >= fromBlock) {
+        await setKeeperCursor(CURSOR_NAME, cursorTo).catch((e) => {
+            // eslint-disable-next-line no-console
+            console.warn("[reconcile] setKeeperCursor failed", e);
+        });
+    }
+    summary.toBlock = cursorTo.toString();
+
+    return NextResponse.json({ ran: true, cursorAdvancedTo: cursorTo.toString(), ...summary });
 }
 
 type EvmLog = {

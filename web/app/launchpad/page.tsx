@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { Search } from "lucide-react";
 import { PlusIcon } from "@/components/ui/MaskIcon";
-import { FEATURED_TOKENS, LAUNCHPAD_CURVE_SUPPLY, LAUNCHPAD_TOTAL_SUPPLY, LaunchMode, V4_HOOK_ENABLED } from "@/lib/constants";
+import { FEATURED_TOKENS, LAUNCHPAD_CURVE_SUPPLY, LaunchMode, V4_HOOK_ENABLED } from "@/lib/constants";
 import { useLaunchpadTokens, LaunchpadTokenInfo } from "@/lib/hooks/useLaunchpadTokens";
 import { getLaunchpadGenerations } from "@/lib/launchpadGenerations";
 import { useArcadeHookTokens } from "@/lib/hooks/useArcadeHookTokens";
@@ -246,11 +246,6 @@ export default function LaunchpadIndexPage() {
           ))}
         </div>
       )}
-
-      <div className="mt-12 text-xs text-arc-text-muted">
-        Total supply per launch: {(LAUNCHPAD_TOTAL_SUPPLY / 1_000_000n).toString()}M ·
-        Curve supply: 800M · Migration triggers automatically when the curve sells out.
-      </div>
 
       <LaunchModeModal open={launchOpen} onClose={() => setLaunchOpen(false)} />
     </div>

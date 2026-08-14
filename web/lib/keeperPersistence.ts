@@ -652,9 +652,25 @@ export async function getRecentKeeperEvents(
  * the keeper fee-protocol sync leg so it scans V3 PoolCreated events forward from
  * where it stopped rather than re-scanning a window every tick.
  */
+/** Idempotently ensure the cursor table exists so callers don't depend on
+ *  migration 012 having been run by hand on a given database (the .sql files
+ *  are doc-only; several deploys apply schema inline). CREATE TABLE IF NOT
+ *  EXISTS is a fast no-op once the table is present. */
+async function ensureKeeperCursorsTable(): Promise<void> {
+    const sql = getSql();
+    await sql`
+        CREATE TABLE IF NOT EXISTS keeper_cursors (
+            name TEXT PRIMARY KEY,
+            block BIGINT NOT NULL,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+    `;
+}
+
 export async function getKeeperCursor(name: string): Promise<bigint | null> {
     if (!isDbConfigured()) return null;
     const sql = getSql();
+    await ensureKeeperCursorsTable();
     const rows = (await sql`SELECT block FROM keeper_cursors WHERE name = ${name}`) as Array<{
         block: string;
     }>;
@@ -664,6 +680,7 @@ export async function getKeeperCursor(name: string): Promise<bigint | null> {
 export async function setKeeperCursor(name: string, block: bigint): Promise<void> {
     if (!isDbConfigured()) return;
     const sql = getSql();
+    await ensureKeeperCursorsTable();
     await sql`
         INSERT INTO keeper_cursors (name, block, updated_at)
         VALUES (${name}, ${block.toString()}, NOW())
