@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { keepPreviousData } from "@tanstack/react-query";
 import { Address, erc20Abi } from "viem";
 import { usePublicClient, useReadContract, useReadContracts } from "wagmi";
 import { LAUNCHPAD_ABI } from "@/lib/abis/launchpad";
@@ -82,7 +83,14 @@ export function useLaunchpadTokens(): { tokens: LaunchpadTokenInfo[]; isLoading:
     // gcTime: 30 min keeps the data in memory across unmount/remount so
     //   the Unnamed/0x0 fallback never appears just because the user
     //   navigated away for a few seconds.
-    query: { enabled: generations.length > 0, staleTime: 60_000, gcTime: 1_800_000 },
+    query: {
+      enabled: generations.length > 0,
+      staleTime: 60_000,
+      gcTime: 1_800_000,
+      // Keep the last good counts on-screen during a refetch so a transient
+      // RPC 429 doesn't blank the list (the flicker fix).
+      placeholderData: keepPreviousData,
+    },
   });
 
   const refetchAll = useCallback(() => {
@@ -129,7 +137,12 @@ export function useLaunchpadTokens(): { tokens: LaunchpadTokenInfo[]; isLoading:
     // Address-list is append-only on chain: a launchpad never removes a
     // token index. 5-minute staleTime is safe; gcTime carries the cache
     // across remounts so the back-from-detail navigation hits cache.
-    query: { enabled: addrCallSpecs.length > 0, staleTime: 300_000, gcTime: 1_800_000 },
+    query: {
+      enabled: addrCallSpecs.length > 0,
+      staleTime: 300_000,
+      gcTime: 1_800_000,
+      placeholderData: keepPreviousData,
+    },
   });
 
   // Pair each resolved address with its source generation so the
@@ -169,7 +182,14 @@ export function useLaunchpadTokens(): { tokens: LaunchpadTokenInfo[]; isLoading:
     //   navigation. Without it, every Launchpad re-mount refires the
     //   full multicall and Arc's public RPC starts rate-limiting at the
     //   ~50-token mark, leaving the page stuck on "Unnamed / 0x0".
-    query: { enabled: addressEntries.length > 0, staleTime: 30_000, gcTime: 1_800_000 },
+    query: {
+      enabled: addressEntries.length > 0,
+      staleTime: 30_000,
+      gcTime: 1_800_000,
+      // Retain the last resolved state/marketCap/name during a refetch so the
+      // MC + bonding-progress don't flicker to 0 when the RPC rate-limits.
+      placeholderData: keepPreviousData,
+    },
   });
 
   // -------- Goldsky-primary token list --------
