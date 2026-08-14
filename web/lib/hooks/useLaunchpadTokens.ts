@@ -218,7 +218,7 @@ export function useLaunchpadTokens(): { tokens: LaunchpadTokenInfo[]; isLoading:
             headers: { "content-type": "application/json" },
             body: JSON.stringify({
               query:
-                "{ tokens(first: 1000) { id creator mode createdAt migrated migratedAt migratedPair name symbol metadataURI usdcLiquidity } }",
+                "{ tokens(first: 1000) { id creator mode createdAt migrated migratedAt migratedPair name symbol metadataURI usdcLiquidity lastPriceUsdc } }",
             }),
           });
           if (res.ok) {
@@ -319,8 +319,14 @@ export function useLaunchpadTokens(): { tokens: LaunchpadTokenInfo[]; isLoading:
         tokensSold: s?.tokensSold ?? 0n,
         v2Pair: (s?.v2Pair ?? g?.v2Pair ?? "0x0000000000000000000000000000000000000000") as Address,
         metadataURI: g?.metadataURI || metadataMap.get(lc) || "",
-        // Goldsky doesn't index the exact on-chain marketCap; RPC-only.
-        marketCap: r?.mcap,
+        // Market cap: prefer a positive on-chain marketCap() when this token is
+        // on a launchpad the frontend can call; otherwise fall back to the
+        // subgraph-derived value (price x 1B supply). Most tokens live on a
+        // launchpad generation not in KNOWN_LAUNCHPADS, so marketCap() reads 0
+        // for them and the Goldsky value is what actually renders. The card
+        // clamps implausible results (a few old-gen tokens carry a corrupted
+        // indexed price).
+        marketCap: r?.mcap && r.mcap > 0n ? r.mcap : g?.marketCapMicro,
         name: r?.name ?? g?.name,
         symbol: r?.symbol ?? g?.symbol,
         generation: r?.generation,
@@ -354,6 +360,7 @@ interface GoldskyToken {
   symbol: string | null;
   metadataURI: string | null;
   usdcLiquidity: string | null;
+  lastPriceUsdc: string | null;
 }
 
 interface GoldskyRow {
@@ -368,6 +375,9 @@ interface GoldskyRow {
   symbol?: string;
   metadataURI: string;
   realUsdcReserve: bigint;
+  /** Market cap in 6-dp USDC micros, derived from the indexed price x 1B
+   *  supply. undefined when there's no usable price. */
+  marketCapMicro?: bigint;
 }
 
 /** On-chain launchpad getTokenState() shape (subset we read). */
@@ -392,6 +402,15 @@ function usdcToMicro(s: string | null | undefined): bigint {
   return BigInt(Math.round(n * 1e6));
 }
 
+/** Market cap in 6-dp micros from an indexed USDC/token price: price x 1B
+ *  supply x 1e6. Returns undefined for a missing/non-positive price. */
+function priceToMcapMicro(s: string | null | undefined): bigint | undefined {
+  if (!s) return undefined;
+  const n = Number(s);
+  if (!Number.isFinite(n) || n <= 0) return undefined;
+  return BigInt(Math.round(n * 1e9 * 1e6));
+}
+
 function toGoldskyRow(t: GoldskyToken): GoldskyRow {
   return {
     address: (t.id as Address) ?? ZERO,
@@ -405,5 +424,6 @@ function toGoldskyRow(t: GoldskyToken): GoldskyRow {
     symbol: t.symbol ?? undefined,
     metadataURI: t.metadataURI ?? "",
     realUsdcReserve: usdcToMicro(t.usdcLiquidity),
+    marketCapMicro: priceToMcapMicro(t.lastPriceUsdc),
   };
 }
