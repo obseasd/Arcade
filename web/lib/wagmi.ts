@@ -76,12 +76,7 @@ export const wagmiConfig = getDefaultConfig({
     // /launchpad / /positions would silently start failing the moment the
     // hardfork lands. Pin to 90 (small safety margin) so we never trip the
     // node-side cap even if it's tightened further later.
-    [arcTestnet.id]: fallback(
-      arcRpcList().map((url) =>
-        http(url, { batch: { wait: 50, batchSize: 90 }, retryCount: 0 }),
-      ),
-      { rank: false },
-    ),
+    [arcTestnet.id]: fallback(arcTransports(), { rank: false }),
     [anvilLocal.id]: http(anvilLocal.rpcUrls.default.http[0]),
     ...Object.fromEntries(cctpSourceChains.map((c) => [c.id, http()])),
     // Explicit public RPC for mainnet ENS reads. See safeMainnetRpc()
@@ -118,19 +113,36 @@ function resolveArcRpc(): string {
   }
 }
 
-/** Deduplicated, ordered list of Arc testnet RPCs for the fallback transport.
- *  The public rpc.testnet.arc.network rate-limits (429) under the multi-read
- *  load on /launchpad /positions /explore; adding drpc.org (reliable, verified)
- *  and arcscan as extra legs lets viem's fallback rotate off the throttled
- *  primary instead of failing the read. Mirrors the server READ_RPC_URLS set. */
-function arcRpcList(): string[] {
-  const urls = [
-    resolveArcRpc(),
-    arcTestnet.rpcUrls.default.http[0],
-    "https://arc-testnet.drpc.org",
-    "https://testnet.arcscan.app/api/eth-rpc",
+/** Ordered Arc testnet read transports for the wagmi fallback.
+ *
+ *  Benchmark (40 concurrent eth_getBalance, 2026-08-14):
+ *    - drpc.org : 40/40 ok, 0 rate-limited, ~37ms  (NO json-rpc batch: 500s a batch)
+ *    - arcscan  : 40/40 ok, 0 rate-limited, ~34ms  (batch capped at 5)
+ *    - public arc.network : 26/40 ok, 14 rate-limited(429), ~44ms (batch ~25)
+ *    - thirdweb : slow (~250ms) + broken getLogs -> excluded
+ *
+ *  So the reliable, no-429 endpoints (drpc, arcscan) go FIRST; the public RPC
+ *  (the actual source of the /explore /positions rate-limit) drops to a backup.
+ *  Per-leg batch config respects each endpoint's real limit. Arc's Multicall3
+ *  (wired in chains.ts) already collapses useReadContracts fan-outs into one
+ *  eth_call, so the no-batch primary legs still serve list reads in one request. */
+function arcTransports() {
+  const publicRpc = arcTestnet.rpcUrls.default.http[0];
+  const dedicated = resolveArcRpc(); // NEXT_PUBLIC_ARC_RPC_URL override, else publicRpc
+  const legs = [
+    // Primary: reliable + fast, never 429 under burst.
+    http("https://arc-testnet.drpc.org", { retryCount: 0 }),
+    http("https://testnet.arcscan.app/api/eth-rpc", { batch: { batchSize: 5, wait: 50 }, retryCount: 0 }),
   ];
-  return Array.from(new Set(urls.filter(Boolean)));
+  // Optional dedicated override (Alchemy/thirdweb client-id/custom) above the
+  // throttled public RPC when the operator has set one.
+  if (dedicated !== publicRpc) {
+    legs.push(http(dedicated, { batch: { batchSize: 90, wait: 50 }, retryCount: 0 }));
+  }
+  // Public RPC last: batched to minimise its 429s, but only reached if the
+  // reliable legs above all error.
+  legs.push(http(publicRpc, { batch: { batchSize: 90, wait: 50 }, retryCount: 0 }));
+  return legs;
 }
 
 function safeMainnetRpc(): string {
