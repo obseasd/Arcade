@@ -21,28 +21,41 @@ A faithful Uniswap V2 fork.
 
 ---
 
-## 2. Launchpad — bonding curve (modes **Pump** & **Arcade**)
+## 2. Launchpad — bonding curve (**PUMP**, ArcadeHook V4)
 
-Fixed 1B supply. Trading on a constant-product curve vs virtual reserves;
-migrates to a V2 pool when the curve fills, LP burned (un-ruggable).
+The current launch path (`/launchpad/v4hook/create` → `ArcadeHook`
+`0x6f107380`). Fixed 1B supply. Trades on a constant-product curve vs virtual
+reserves, then GRADUATES into a locked full-range Uniswap **V4** pool (LP locked
+forever — un-ruggable; the hook captures fees perpetually in before/afterSwap).
 
 - **Creation fee:** 3 USDC (treasury).
-- **Trade fee:** 1% of every curve swap, in USDC. Split by mode:
-  - **Pump:** 50% platform / 50% creator(s)
-  - **Arcade:** 70% platform / 30% creator(s) (optional 2nd creator address)
-- **Curve:** virtual reserves 5,000 USDC / 1B tokens; 800M sold on the curve;
-  migration at ~20,000 USDC raised → seeds the V2 pool with the raised USDC +
-  the remaining 200M tokens, then burns the LP to `0xdead`.
-- **Post-migration royalty:** 0.30% on swaps routed through the launchpad
-  (`buyMigrated`/`sellMigrated`/`swapMigratedRoute`) — **0.20% platform +
-  0.10% creator(s)** — charged on top of the standard 0.30% V2 LP fee.
+- **Curve trade fee:** 1% of every curve swap, in USDC. **80% creator / 20%
+  treasury** (optional 2nd creator address for reply-to-launch 50/50 splits).
+- **Curve:** virtual reserves **5,800 USDC / 1.135B tokens**, 806M sold on the
+  curve. Graduates at **~14,209 USDC raised (≈ $60k FDV)** with price continuity
+  (no cliff — pump.fun method) → seeds the locked V4 LP with the raised USDC +
+  the unsold remainder.
+- **Post-graduation fee:** captured in USDC by the hook, **DYNAMIC** — starts at
+  **1%** at graduation and decays **linearly in log-market-cap to 0.30%** as the
+  mcap grows (manipulation-resistant mcap-tick EMA). Split **80% creator / 20%
+  treasury** (`POST_GRAD_CREATOR_BPS = 8000`).
+- **Anti-sniper:** a launch auction whose proceeds go to the creator.
 
-**Inspiration:** pump.fun. Differences: we share the 1% with the creator
-(pump.fun historically kept it all) and add a perpetual post-migration royalty.
+**Inspiration:** pump.fun. Differences: the creator keeps **80%** of a dynamic
+fee, and the graduated venue is a locked V4 LP with perpetual in-hook fee
+capture (not a burned V2 pool). *(The legacy V2 curve — 50/50 Pump / 70/30
+"Arcade", ~20k V2 migration — is deprecated; `/launchpad/create` is the old
+path.)*
 
 ---
 
-## 3. Launchpad — **Clanker** mode (locked single-sided V3 LP)
+## 3. Launchpad — **Clanker** mode (locked single-sided LP)
+
+> The DEFAULT Clanker today is on the **ArcadeHook V4** (`mode 1`, `Type: Direct
+> (V4)`): a locked single-sided full-range V4 LP, tradeable from launch, with a
+> **static 1%/2%/3% fee tier** and the same **80% creator / 20% treasury** split.
+> The **V3** mechanics below describe the legacy **CLANKER_V3** (`mode 2`, via
+> `ArcadeV3Locker`), still reachable but not the default create path.
 
 No bonding curve. The full LP supply is locked single-sided in a Uniswap V3
 pool at creation; the token is tradeable instantly and the **principal is
@@ -82,8 +95,11 @@ trading is not wired yet.
 
 ## 4. LP economics
 
-- **V2 (Pump/Arcade after migration):** standard 0.30% fee to LPs; LP tokens
-  burned at migration so the launch liquidity can never be pulled.
+- **PUMP after graduation (V4):** the raised USDC + unsold remainder seed a
+  locked full-range V4 pool held by the hook (LP locked forever — un-ruggable);
+  trading fees are captured in USDC by the hook's before/afterSwap and split
+  80/20 creator/treasury (see §2). *(The legacy V2-migration path burned the LP
+  to `0xdead` instead — deprecated.)*
 - **V3 (Clanker):** the launch position is held forever by `ArcadeV3Locker`
   (no `decreaseLiquidity`, only `burn(0)` to poke fees). Swap fees accrue in two
   pots (paired/USDC side + token side) and are distributed by bps weight,
@@ -121,9 +137,10 @@ bridge receiver (not pending any "fee router").
 | Source | Platform revenue |
 |--------|------------------|
 | DEX V2 | 0.05% of volume (`feeTo`) |
-| Pump curve | 0.5% of curve volume |
-| Arcade curve | 0.7% of curve volume |
-| Post-migration | 0.20% of routed volume |
-| Clanker | 20% of LP fees, always (≈0.20% of volume on a 1% pool) + anti-sniper skim |
+| PUMP curve (V4) | 20% of the 1% curve fee = **0.20% of curve volume** |
+| PUMP post-graduation (V4) | 20% of the dynamic 1%→0.30% fee (≈0.06–0.20% of volume) |
+| CLANKER (V4/V3) | 20% of LP fees, always (≈0.20% of volume on a 1% pool) + anti-sniper |
 | Fast bridge | 0.05% all-in, charged on-chain (Standard free) |
 | Creation | 3 USDC per token, all modes |
+
+*(Legacy V2 curve: Pump 0.5% / "Arcade" 0.7% of curve volume, + 0.20% post-migration royalty — deprecated, see §2.)*
