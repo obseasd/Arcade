@@ -67,6 +67,17 @@ const PER_USER_DAILY_LIMIT = Number(process.env.TWEET_LAUNCH_PER_USER_DAILY ?? "
 // fleet can't drain the operator's gas + 3-USDC-per-launch sponsorship.
 const GLOBAL_DAILY_LIMIT = Number(process.env.TWEET_LAUNCH_GLOBAL_DAILY ?? "50");
 
+// X/Twitter snowflake epoch (ms). A tweet id encodes its creation time as
+// (id >> 22) + epoch, letting us age-check a stored since_id without a lookup.
+const X_SNOWFLAKE_EPOCH_MS = 1_288_834_974_657n;
+function tweetIdToMs(id: string): number | null {
+    try {
+        return Number((BigInt(id) >> 22n) + X_SNOWFLAKE_EPOCH_MS);
+    } catch {
+        return null;
+    }
+}
+
 function criteriaFromEnv(): CriteriaConfig {
     return {
         minAccountAgeDays: Number(process.env.TWEET_LAUNCH_MIN_ACCOUNT_AGE_DAYS ?? DEFAULT_CRITERIA.minAccountAgeDays),
@@ -241,7 +252,21 @@ export async function POST(req: NextRequest) {
 
     const summary = { scanned: 0, launched: 0, rejected: 0, skipped: 0, failed: 0, notes: [] as string[] };
 
-    const sinceId = await getSinceId();
+    // X rejects a since_id older than ~7 days ("must be a tweet id created after
+    // <now-7d>"). If the cron was paused past that window the stored cursor goes
+    // stale and every poll 400s. Snowflake ids encode their creation time, so
+    // drop a cursor older than 6 days and fetch recent instead; the run then
+    // sets a fresh cursor and the idempotency layer (reserveTweet /
+    // isTweetProcessed) prevents any re-launch.
+    const storedSince = await getSinceId();
+    let sinceId = storedSince;
+    if (storedSince) {
+        const createdMs = tweetIdToMs(storedSince);
+        if (createdMs !== null && now - createdMs > 6 * 86_400_000) {
+            console.log("[tweet-launch] since_id too old, dropping:", storedSince);
+            sinceId = null;
+        }
+    }
     console.log("[tweet-launch] since_id:", sinceId ?? "(none)");
     let mentions: Mention[];
     try {

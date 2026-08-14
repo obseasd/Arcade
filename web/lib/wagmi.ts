@@ -77,10 +77,9 @@ export const wagmiConfig = getDefaultConfig({
     // hardfork lands. Pin to 90 (small safety margin) so we never trip the
     // node-side cap even if it's tightened further later.
     [arcTestnet.id]: fallback(
-      [
-        http(resolveArcRpc(), { batch: { wait: 50, batchSize: 90 }, retryCount: 0 }),
-        http(arcTestnet.rpcUrls.default.http[0], { batch: { wait: 50, batchSize: 90 }, retryCount: 0 }),
-      ],
+      arcRpcList().map((url) =>
+        http(url, { batch: { wait: 50, batchSize: 90 }, retryCount: 0 }),
+      ),
       { rank: false },
     ),
     [anvilLocal.id]: http(anvilLocal.rpcUrls.default.http[0]),
@@ -117,6 +116,21 @@ function resolveArcRpc(): string {
   } catch {
     return fallback;
   }
+}
+
+/** Deduplicated, ordered list of Arc testnet RPCs for the fallback transport.
+ *  The public rpc.testnet.arc.network rate-limits (429) under the multi-read
+ *  load on /launchpad /positions /explore; adding drpc.org (reliable, verified)
+ *  and arcscan as extra legs lets viem's fallback rotate off the throttled
+ *  primary instead of failing the read. Mirrors the server READ_RPC_URLS set. */
+function arcRpcList(): string[] {
+  const urls = [
+    resolveArcRpc(),
+    arcTestnet.rpcUrls.default.http[0],
+    "https://arc-testnet.drpc.org",
+    "https://testnet.arcscan.app/api/eth-rpc",
+  ];
+  return Array.from(new Set(urls.filter(Boolean)));
 }
 
 function safeMainnetRpc(): string {
