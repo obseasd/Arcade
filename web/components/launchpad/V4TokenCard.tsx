@@ -54,9 +54,16 @@ export function V4TokenCard({ token, priority, preloadedStats }: { token: Arcade
   // this pool), so it keeps using the subgraph trade price.
   const clankerSpotPrice = useV4PoolPrice(isClanker ? token.address : undefined);
   const priceUsd = stats.priceUsd ?? clankerSpotPrice;
-  const mcapNode = priceUsd
-    ? `$${(priceUsd * Number(LAUNCHPAD_TOTAL_SUPPLY)).toLocaleString(undefined, { maximumFractionDigits: 0 })}`
-    : null;
+  // Clamp implausible market caps ($100M ceiling): a few tokens carry a
+  // ~1e6x-inflated indexed/pool price that renders as billions. Hide it rather
+  // than show garbage (this was the "MC reappears after back-navigation" bug --
+  // the v4 stats price resolves from cache on return and this path was
+  // unclamped, unlike TokenCard).
+  const mcapUsd = priceUsd ? priceUsd * Number(LAUNCHPAD_TOTAL_SUPPLY) : 0;
+  const mcapNode =
+    mcapUsd > 0 && mcapUsd <= 100_000_000
+      ? `$${mcapUsd.toLocaleString(undefined, { maximumFractionDigits: 0 })}`
+      : null;
 
   const progress = useMemo(() => {
     if (LAUNCHPAD_CURVE_SUPPLY === 0n) return 0;

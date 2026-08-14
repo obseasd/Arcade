@@ -53,17 +53,19 @@ export function TokenCard({ token, curveSupply, priority, clankerFdvUsdc }: Prop
   // Skip the per-card RPC reads when the page already computed the FDV.
   const needsPerCardMcap = isClanker && clankerFdvUsdc === undefined;
   const clankerMcap = useClankerMcap(needsPerCardMcap ? token.address : undefined, needsPerCardMcap ? token.v2Pair : undefined);
+  // A USD market cap in 6-dp micros -> "$N" string, or null when it's absent or
+  // implausibly large (a few tokens carry a ~1e6x-inflated indexed price).
+  const usdMc = (v: bigint | undefined): string | null =>
+    v !== undefined && v > 0n && v <= MAX_PLAUSIBLE_MCAP_MICRO ? `$${formatUSDC(v, 6, 0)}` : null;
   const mcapNode = isClanker
     ? clankerFdvUsdc !== undefined
-      ? `$${formatUSDC(clankerFdvUsdc, 6, 0)}`
+      ? usdMc(clankerFdvUsdc)
       : clankerMcap
         ? clankerMcap.pairedSymbol === "USDC"
-          ? `$${formatUSDC(clankerMcap.fdvRaw, 6, 0)}`
+          ? usdMc(clankerMcap.fdvRaw)
           : `${formatToken(clankerMcap.fdvRaw, clankerMcap.pairedDecimals, 2)} ${clankerMcap.pairedSymbol}`
         : null
-    : token.marketCap && token.marketCap > 0n && token.marketCap <= MAX_PLAUSIBLE_MCAP_MICRO
-      ? `$${formatUSDC(token.marketCap, 6, 0)}`
-      : null;
+    : usdMc(token.marketCap);
   const isPump = token.mode === 0;
   const isArcade = token.mode === 1;
   const isFeatured = FEATURED_TOKENS.has(token.address.toLowerCase());
