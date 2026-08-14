@@ -219,7 +219,7 @@ export function V4ClaimCard({
             pushToast({
                 kind: "info",
                 title: "Creator fees claimed",
-                message: `$${claimedUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })} USDC${tokenMsg} is in your wallet`,
+                message: `$${claimedUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })} USDC${tokenMsg}`,
             });
             setDone(true);
             setMsg(`Claimed $${claimedUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })}${tokenMsg}. Redirecting…`);
@@ -244,7 +244,7 @@ export function V4ClaimCard({
             });
             await publicClient.waitForTransactionReceipt({ hash: cHash });
             setDone(true);
-            setMsg("Claimed. The USDC is in your wallet. Redirecting…");
+            setMsg("Claimed. Redirecting…");
             redirectToToken();
         } catch (e) {
             setMsg(e instanceof Error ? e.message.slice(0, 200) : "Claim failed");

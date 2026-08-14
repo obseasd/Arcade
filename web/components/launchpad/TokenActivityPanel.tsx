@@ -1,6 +1,6 @@
 "use client";
 
-import { Activity, Users, ExternalLink, BadgeDollarSign, Rocket } from "lucide-react";
+import { Activity, Users, ExternalLink, Rocket } from "lucide-react";
 import { useEffect, useState, useMemo } from "react";
 import { Address, zeroHash } from "viem";
 import { useReadContract } from "wagmi";
@@ -147,7 +147,11 @@ function TransactionsTab({
         } as Trade,
       }));
     const c = claims.map((cl) => ({ kind: "claim" as const, time: cl.blockTime, claim: cl }));
-    const g = graduation ? [{ kind: "graduation" as const, time: graduation.blockTime, graduation }] : [];
+    // PUMP (mode 0) graduates from its bonding curve to the AMM; CLANKER /
+    // CLANKER_V3 (modes 1 & 2) launch DIRECTLY into a V4 pool, so there is no
+    // graduation -- don't render a spurious "Graduated to the AMM" row for them.
+    const isDirectLaunch = mode === 1 || mode === 2;
+    const g = graduation && !isDirectLaunch ? [{ kind: "graduation" as const, time: graduation.blockTime, graduation }] : [];
     return [...o, ...t, ...c, ...g].sort((a, b) => b.time - a.time);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [trades, claims, graduation, optimistic]);
@@ -266,8 +270,8 @@ function ClaimRow({
   const seconds = Math.max(0, nowSec - claim.blockTime);
   return (
     <div className="grid grid-cols-[60px_minmax(0,1fr)_100px_100px_80px_20px] items-center gap-2 px-1 py-2 text-xs tabular-nums">
-      <span className="flex items-center justify-center gap-0.5 rounded-md bg-arc-cta-hover/15 px-1.5 py-0.5 text-center text-[10px] font-semibold uppercase text-arc-cta-hover">
-        <BadgeDollarSign className="h-3 w-3" /> Claim
+      <span className="flex items-center justify-center rounded-md bg-arc-cta-hover/15 px-1.5 py-0.5 text-center text-[10px] font-semibold uppercase text-arc-cta-hover">
+        Claim
       </span>
       <a
         href={`${explorerUrl}/address/${claim.recipient}`}

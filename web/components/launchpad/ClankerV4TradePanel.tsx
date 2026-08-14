@@ -110,6 +110,10 @@ export function ClankerV4TradePanel({ token, symbol, image, curve, onTradeSucces
   const [slippageBps, setSlippageBps] = useState(300);
   const [tx, setTx] = useState<TxState>({ status: "idle" });
   const [routerOut, setRouterOut] = useState(0n);
+  // True when the quoter simulate REVERTED for a non-zero amount (vs simply
+  // loading). On a fresh CLANKER launch the anti-snipe hook caps buy size, so a
+  // big amount reverts while a small one quotes -- surface a useful hint.
+  const [quoteReverted, setQuoteReverted] = useState(false);
 
   // The pool's fee tier (10000/20000/30000 = 1/2/3%), set at launch. Only used
   // by the router path; the curve runs the dynamic 1% fee (poolFeeOf === 0).
@@ -193,8 +197,10 @@ export function ClankerV4TradePanel({ token, symbol, image, curve, onTradeSucces
     let cancelled = false;
     if (!publicClient || amountRaw === 0n || !feeReady) {
       setRouterOut(0n);
+      setQuoteReverted(false);
       return;
     }
+    setQuoteReverted(false);
     publicClient
       .simulateContract({
         address: ADDRESSES.v4Quoter,
@@ -206,9 +212,15 @@ export function ClankerV4TradePanel({ token, symbol, image, curve, onTradeSucces
         if (cancelled) return;
         const out = (res.result as readonly [bigint, bigint])[0];
         setRouterOut(out);
+        setQuoteReverted(false);
       })
       .catch(() => {
-        if (!cancelled) setRouterOut(0n);
+        if (!cancelled) {
+          setRouterOut(0n);
+          // A revert with a real amount entered = the swap can't fill (usually
+          // the fresh-launch anti-snipe cap, or too little liquidity for the size).
+          setQuoteReverted(true);
+        }
       });
     return () => {
       cancelled = true;
@@ -424,7 +436,9 @@ export function ClankerV4TradePanel({ token, symbol, image, curve, onTradeSucces
             : amountRaw === 0n
               ? "Enter amount"
               : estimatedOut === 0n
-                ? "No quote (retry)"
+                ? quoteReverted
+                  ? "Amount too large — try smaller"
+                  : "No quote (retry)"
                 : tx.status === "pending"
                   ? `${side === "buy" ? "Buying" : "Selling"}…`
                   : side === "buy"
