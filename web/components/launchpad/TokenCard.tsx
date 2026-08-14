@@ -24,6 +24,14 @@ interface Props {
   clankerFdvUsdc?: bigint;
 }
 
+// Display sanity ceiling for a launchpad token's market cap ($100M in 6-dp
+// micros). A curve token graduates well under $100k and testnet AMM tokens are
+// tiny, so any MC above this is a bad indexed/on-chain price (a few tokens on an
+// old launchpad carry a ~1e6x-inflated spot price that renders as billions).
+// Hide it rather than show garbage; the token detail page reads the value live
+// and is unaffected.
+const MAX_PLAUSIBLE_MCAP_MICRO = 100_000_000_000_000n; // $100,000,000
+
 export function TokenCard({ token, curveSupply, priority, clankerFdvUsdc }: Props) {
   const progress = curveSupply > 0n ? Number((token.tokensSold * 10_000n) / curveSupply) / 100 : 0;
   // The bulk launchpad scan has ALREADY discovered each token's
@@ -53,7 +61,7 @@ export function TokenCard({ token, curveSupply, priority, clankerFdvUsdc }: Prop
           ? `$${formatUSDC(clankerMcap.fdvRaw, 6, 0)}`
           : `${formatToken(clankerMcap.fdvRaw, clankerMcap.pairedDecimals, 2)} ${clankerMcap.pairedSymbol}`
         : null
-    : token.marketCap && token.marketCap > 0n
+    : token.marketCap && token.marketCap > 0n && token.marketCap <= MAX_PLAUSIBLE_MCAP_MICRO
       ? `$${formatUSDC(token.marketCap, 6, 0)}`
       : null;
   const isPump = token.mode === 0;
