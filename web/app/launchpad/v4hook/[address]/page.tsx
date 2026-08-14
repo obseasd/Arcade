@@ -213,9 +213,15 @@ function Inner() {
         return Number((currentUsdc * 10n ** 18n) / currentTokens) / 1e6;
     }, [isPump, status, realUsdcReserve, tokensSold]);
 
+    // Curving PUMP market cap: use the SUBGRAPH last-trade price first so the
+    // detail's MC matches the launchpad card + the price chart (both read
+    // stats.priceUsd). The on-chain curve spot is a fallback for a brand-new
+    // token the subgraph hasn't priced yet -- it was the primary before, but its
+    // realUsdcReserve/tokensSold inputs read 0 for V4-hook tokens, so it showed
+    // the seed (~$5k) while the card/chart showed the live price (card was right).
     const effectivePrice = showMarketStats
         ? (poolPrice ?? stats.priceUsd)
-        : (curveSpotPrice ?? stats.priceUsd ?? poolPrice);
+        : (stats.priceUsd ?? curveSpotPrice ?? poolPrice);
     const mcapLabel = effectivePrice
         ? `$${(effectivePrice * Number(LAUNCHPAD_TOTAL_SUPPLY)).toLocaleString(undefined, { maximumFractionDigits: 0 })}`
         : "-";
