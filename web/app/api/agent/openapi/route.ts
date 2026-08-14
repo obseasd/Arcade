@@ -13,7 +13,7 @@ export async function GET(req: NextRequest) {
         openapi: "3.1.0",
         info: {
             title: "Arcade Agent API",
-            version: "1.0.0",
+            version: "1.1.0",
             description:
                 "Lets any AI agent use Arcade (a USDC-native DEX + bonding-curve launchpad on Circle's Arc L1). Read endpoints return market data; build endpoints return ordered contract-call descriptors { contractAddress, abiFunctionSignature, abiParameters } that map 1:1 onto Circle createContractExecutionTransaction. The agent signs with its OWN wallet; Arcade never custodies keys. USDC is the native gas token on Arc, so an agent only needs USDC.",
         },

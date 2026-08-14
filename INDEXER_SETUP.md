@@ -1,5 +1,10 @@
 # Arcade indexer (Ponder) — setup & ops
 
+> **SUPERSEDED.** Charts, `/stats`, and referral volume now run on the managed
+> **Goldsky subgraph** (subgraph name `arcade-charts`; see `GOLDSKY_SETUP.md` and
+> `subgraph/`). This self-hosted Ponder plan is **not used**. The rest of this
+> file is kept for history only.
+
 A Ponder indexer in `indexer/` that replaces the client-side RPC log scan behind
 the price charts. It indexes every launchpad Buy/Sell and every USDC-paired V3
 pool Swap into Postgres and serves OHLC candles + raw trades over HTTP.

@@ -15,7 +15,7 @@ npm publish          # package.json already has publishConfig.access=public
 
 Verify:
 ```bash
-npm view arcade-agent-mcp version          # -> 1.0.0
+npm view arcade-agent-mcp version          # -> 1.1.0
 npx -y arcade-agent-mcp                     # should start (Ctrl+C to stop)
 ```
 

@@ -60,7 +60,7 @@ Claude range tout par **chemin absolu encodé** du projet. Sur ce PC :
 ## 3. État du projet (au 2026-07-29)
 
 **Ce qui tourne :**
-- **Contrats testnet** (voir `deployments.json`) : FeeProtocolManager `0xE1F23B9E37A7eE926E2B56Ab88C2509C77fFeb7a` (owner+treasury = Safe 2-of-3 `0x0bDE09e3`, owne le v3Factory `0x7E875574`), arcadeHook `0x2697c70A` (V4, ~3-4j), v3Zap `0x7a38abe2`, etc.
+- **Contrats testnet** (voir `deployments.json`) : FeeProtocolManager `0xE1F23B9E37A7eE926E2B56Ab88C2509C77fFeb7a` (owner+treasury = Safe 2-of-3 `0x0bDE09e3`, owne le v3Factory `0x7E875574`), arcadeHook `0x6f10738025aA084f90A47cE7B0baCef6f1f63ECe` (V4, **déployé** et en production ; le flux "Launch a token" route vers `/launchpad/v4hook/create` et appelle `createLaunch`), v3Zap `0x7a38abe2`, etc.
 - **Keeper** `web/app/api/keeper/cron` (cron-job.org toutes les 2 min) : leg A (Orbs limit/DCA), leg B (CCTP relay), leg C (auto-sync V3 feeProtocol **+ auto-collect** vers treasury). **Fonctionnel end-to-end** (prouvé : pool sync auto 0→102). + `web/app/api/keeper/sync-pool` = activation on-demand (gap ~2-6min → ~secondes).
 - **Subgraph** Goldsky `arcade-charts` (tag `prod`), lag **~1 bloc** (Goldsky a tuné, mainnet couvert). URL dans `GOLDSKY_SETUP.md`.
 

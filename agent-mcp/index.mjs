@@ -39,7 +39,7 @@ const post = (body) => ({
 // error body for a result.
 const out = (r) => ({ content: [{ type: "text", text: r.text }], isError: !r.ok });
 
-const server = new McpServer({ name: "arcade-agent", version: "1.0.0" });
+const server = new McpServer({ name: "arcade-agent", version: "1.1.0" });
 
 server.tool(
     "arcade_markets",

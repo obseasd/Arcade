@@ -1,8 +1,16 @@
 # Arcade Architecture
 
 > Living document. Last updated 2026-06-03. Reflects the production codebase
-> on the `main` branch of the Arcade monorepo. The V4 stack described in
-> Section 8 is design-frozen but not deployed.
+> on the `main` branch of the Arcade monorepo.
+>
+> **Update:** the V4 stack described in Section 8 is now **LIVE** on Arc testnet.
+> Production V4 = **ArcadeHook** (`0x6f10738025aA084f90A47cE7B0baCef6f1f63ECe`) +
+> **ArcadeV4SwapRouter** (`0x52B380D87837112dB409c050204b3B71aF0702e3`) +
+> **LockedVault**, on **ArcadeV4PoolManager** (`0xb89EC0dB3EFE2a8Ba111791882B6c6C564073112`).
+> The current "Launch a token" flow routes to `/launchpad/v4hook/create` and calls
+> the hook's `createLaunch`. The `ArcadeAntiSniperHook` / `ArcadeV4Launchpad`
+> prototype referenced in older sections is a SUPERSEDED prototype, not the
+> production path. Addresses are canonical in `web/public/deployments.json`.
 
 Arcade is a USDC-native capital formation stack on Arc, the USDC-as-gas L1.
 This document maps the contracts, frontend, and external dependencies that
@@ -87,9 +95,11 @@ Arcade/
 
 ### 3.1 Deployed contracts (Arc testnet)
 
-11 production contracts plus 3 vendored (Orbs TWAP + ExchangeV2 + Lens).
-Full address list is maintained in [`web/lib/constants.ts`](../web/lib/constants.ts)
-and committed in project memory.
+11 production V2/V3/launchpad contracts plus 3 vendored (Orbs TWAP + ExchangeV2 +
+Lens), PLUS the now-live V4 production stack (ArcadeHook + ArcadeV4SwapRouter +
+LockedVault on ArcadeV4PoolManager — see the update banner at the top and Section 8).
+The canonical address list is [`web/public/deployments.json`](../web/public/deployments.json)
+(source of truth); [`web/lib/constants.ts`](../web/lib/constants.ts) mirrors it.
 
 | Module        | Contract                       | Purpose                                            |
 |---------------|--------------------------------|----------------------------------------------------|
@@ -207,9 +217,10 @@ Next.js 15.x (App Router)
 | `/`                              | Landing page                                             |
 | `/swap`                          | Swap + Limit + MultiSwap (tabbed)                        |
 | `/launchpad`                     | Token discovery grid                                     |
-| `/launchpad/create`              | 3-mode launch form (PUMP, CLANKER, CLANKER_V3)           |
+| `/launchpad/create`              | Legacy V2 launch form (deprecated; superseded by v4hook)  |
+| `/launchpad/v4hook/create`       | LIVE launch form (production path), calls hook createLaunch |
 | `/launchpad/[address]`           | Per-token detail page (curve chart, trade panel)         |
-| `/launchpad/v4`                  | V4 prototype discovery (gated by feature flag)           |
+| `/launchpad/v4hook/[address]`    | V4 hook per-token detail page (live)                     |
 | `/bridge`                        | CCTP V2 burn/mint UI (Sepolia → Arc)                     |
 | `/my-tokens`                     | Portfolio (Overview / Tokens / Creator / Activity)       |
 | `/claim`                         | Twitter handle escrow claim flow (OAuth + EIP-712)       |
@@ -258,7 +269,9 @@ transient storage CONFIRMED. CCTP V2 endpoints CONFIRMED:
 Known RPC quirks tracked in [project memory: arc chain issues].
 Most important: `eth_getLogs` silently truncates at 50,000 blocks, which
 breaks the cumulative `/stats` page after ~30 days of mainnet history.
-ArcLens (Milestone 3) replaces the naive scan with a Ponder indexer.
+The naive scan is superseded by a managed **Goldsky subgraph** (subgraph name
+`arcade-charts`, in `subgraph/`) that serves charts, `/stats`, and referral volume.
+(The earlier self-hosted Ponder / ArcLens plan is dead; see `GOLDSKY_SETUP.md`.)
 
 ### 5.2 CCTP V2 flow
 
@@ -388,7 +401,7 @@ Keeper bot watches pool price
 
 | Role              | Power                                         | Mainnet target            |
 |-------------------|-----------------------------------------------|---------------------------|
-| Launchpad owner   | Pause launches, update treasury, set fees     | 3/5 multisig (TBD)        |
+| Launchpad owner   | Pause launches, update treasury, set fees     | 2-of-3 Safe `0x0bDE09e3` (live on testnet) |
 | Twitter signer    | Sign EIP-712 handle ownership attestations    | Multisig with rotation    |
 | Backend keeper    | Submit TWAP bids/fills if Orbs L3 not on Arc  | Separate hot wallet       |
 | Arc validators    | L1 finality, USDC gas pricing                 | Arc team                  |
@@ -423,12 +436,21 @@ review, Milestone 1 of the Circle grant) blocks the mainnet deploy.
 | `setFeeTo`                       | ArcadeV2Factory       | onlyFeeToSetter        |
 | `cancelOrder`                    | Orbs TWAP             | onlyMaker              |
 
-All ownership is held by an EOA on testnet, transitioning to a Safe
-multisig pre-mainnet.
+Governance ownership (launchpad treasury, V2 factory feeTo, V3
+feeProtocolManager, V3 locker, auto-compounder) is already the 2-of-3
+Gnosis Safe `0x0bDE09e3` on testnet (verified on-chain). The one
+exception is the Twitter escrow owner/signer, which is genuinely still
+the EOA `0x3a0Dd9…324A`.
 
-## 8. V4 migration target (designed, not deployed)
+## 8. V4 stack (LIVE on Arc testnet)
 
-`contracts/V4_HOOK_SPEC.md` describes the frozen design for `ArcadeHook`,
+> **Deployed.** `ArcadeHook` is live at `0x6f10738025aA084f90A47cE7B0baCef6f1f63ECe`
+> with `ArcadeV4SwapRouter` (`0x52B380D87837112dB409c050204b3B71aF0702e3`) + `LockedVault`
+> on `ArcadeV4PoolManager` (`0xb89EC0dB3EFE2a8Ba111791882B6c6C564073112`). It is the
+> production launch path (`/launchpad/v4hook`). The `ArcadeAntiSniperHook` /
+> `ArcadeV4Launchpad` prototype below is SUPERSEDED — no production traffic runs on it.
+
+`contracts/V4_HOOK_SPEC.md` describes the design for `ArcadeHook`,
 a single Uniswap V4 hook that collapses the V2 + V3 + Launchpad stack:
 
 ```
@@ -450,8 +472,9 @@ vectors at `contracts/test/fixtures/curve-vectors.json` bit-identically.
 
 EIP-1153 transient storage is the prerequisite; CONFIRMED on Arc testnet.
 
-Phase 1 (this sprint) ships `ArcadeAntiSniperHook.sol` as the first
-production hook + a property-based test suite matching the curve fixture.
+(Historical note: an earlier `ArcadeAntiSniperHook.sol` prototype was
+scoped as the first hook, but the shipped production hook is `ArcadeHook`
+above; the anti-sniper prototype is superseded and not deployed.)
 
 ## 9. Mainnet readiness checklist
 
@@ -467,7 +490,7 @@ A live checklist tracking what blocks Arcade from shipping on Arc mainnet.
 - [x] Internal multi-agent audit closed (16afe44)
 - [ ] External audit complete (Pashov private review, M1 grant blocker)
 - [ ] Mainnet deploy scripts in `script/DeployMainnet.s.sol`
-- [ ] Ownership migrated to Safe multisig pre-deploy
+- [x] Ownership migrated to 2-of-3 Safe `0x0bDE09e3` on testnet (except Twitter escrow, still EOA)
 
 ### 9.2 Frontend
 
@@ -483,8 +506,8 @@ A live checklist tracking what blocks Arcade from shipping on Arc mainnet.
 
 ### 9.3 Indexer + observability
 
-- [ ] ArcLens Ponder schema deployed
-- [ ] GraphQL endpoint at `api.arcade.trading`
+- [x] Indexer shipped as a managed **Goldsky subgraph** (`arcade-charts`, in `subgraph/`); supersedes the ArcLens/Ponder plan
+- [x] GraphQL served by Goldsky (self-hosted `api.arcade.trading` plan dropped)
 - [ ] Grafana dashboards (USDC gas, volume, launches)
 - [ ] Sentry alerting on contract revert spikes
 - [ ] PostHog event tracking on key user flows

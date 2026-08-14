@@ -18,7 +18,7 @@ creator fees programmatically with a funded wallet.
 > testnet-only key**, never one that holds mainnet funds or is reused on a
 > production chain. Treat any key handed to an agent as disposable.
 
-> **Chain:** Arc Testnet · chainId **5042002** · RPC `https://5042002.rpc.thirdweb.com`
+> **Chain:** Arc Testnet · chainId **5042002** · RPC `https://rpc.testnet.arc.network`
 > · explorer `https://testnet.arcscan.app` · gas + default quote token is **USDC**.
 > A (non-official) **WETH** at `A.WETH` is also available as a Clanker pool pairing.
 >
@@ -36,7 +36,7 @@ pulled from the caller on every launch.
 
 1. **Launch a token** — three modes:
    - **Pump** — pump.fun bonding curve, 50/50 platform/creator, LP burned at migration.
-   - **Arcade** — bonding curve, 70/30, optional secondary creator wallet.
+   - **CLANKER** — bonding curve, 70/30, optional secondary creator wallet.
    - **Clanker** — NO curve: full supply locked single-sided in a Uniswap-V3-style
      pool at launch, tradeable instantly, un-ruggable; swap fees flow to up to 3
      configurable recipients.
@@ -47,14 +47,14 @@ pulled from the caller on every launch.
 
 ---
 
-## 1. Launch — Pump / Arcade (bonding curve)
+## 1. Launch — Pump / CLANKER (bonding curve)
 
 `launchpad.createToken(name, symbol, metadataURI, mode, creator2, creator2ShareBps)`
 
 | param | type | notes |
 |---|---|---|
-| `mode` | uint8 | `0` = Pump, `1` = Arcade. (Use `createClankerV3` for Clanker.) |
-| `creator2` | address | Arcade only — optional 2nd fee receiver, else `address(0)` |
+| `mode` | uint8 | `0` = Pump, `1` = CLANKER. (Use `createClankerV3` for CLANKER_V3.) |
+| `creator2` | address | CLANKER only — optional 2nd fee receiver, else `address(0)` |
 | `creator2ShareBps` | uint16 | share of the creator portion to `creator2` (0–10000) |
 
 First approve `A.USDC` to `A.launchpad` for `constants.creationFeeUsdc`. Emits

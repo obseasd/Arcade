@@ -6,6 +6,8 @@ Two applications ready to submit:
 
 Each draft is self-contained. Copy-paste, adjust the personal fields (founder name / contacts), and submit.
 
+> **Note:** any contract addresses / counts referenced in these drafts may be stale (external drafts written against an older generation); see `web/public/deployments.json` for the canonical current addresses before submitting.
+
 ---
 
 ## 1. Arc Builders Fund · Application

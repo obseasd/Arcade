@@ -14,9 +14,9 @@ Last reviewed: 2026-06-13. Re-review before every mainnet deploy.
 
 | Role | Identity | Reachable via | Authority |
 |---|---|---|---|
-| Compounder owner | TBD multisig (mainnet) / `0x3a0D…324A` (testnet) | Signal: @arcade-ops | setPaused / setOperator / setProtocolFeeBps / setFeeRecipient / transferOwnership |
+| Compounder owner | 2-of-3 Gnosis Safe `0x0bDE09e3` (already the owner on testnet) | Signal: @arcade-ops | setPaused / setOperator / setProtocolFeeBps / setFeeRecipient / transferOwnership |
 | Compounder operator | Hot wallet `0x3a0D…324A` (testnet) | n/a (programmatic) | Submits compound/pushFees txs |
-| Fee recipient | Treasury multisig (mainnet) / owner (testnet) | n/a (passive) | Receives protocol fee transfers |
+| Fee recipient | 2-of-3 Gnosis Safe `0x0bDE09e3` (already the feeRecipient on testnet) | n/a (passive) | Receives protocol fee transfers |
 | Vercel project | `arcade` | dashboard | Holds COMPOUNDER_OPERATOR_PRIVATE_KEY + COMPOUNDER_CRON_SECRET |
 | GitHub repo | `obseasd/Arcade` | dashboard | Holds COMPOUNDER_CRON_URL + COMPOUNDER_CRON_SECRET |
 | Neon Postgres | `arcade-stats` | dashboard | Stores compounder_positions / _events / _actions |

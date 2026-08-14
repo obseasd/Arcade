@@ -218,7 +218,7 @@ export async function POST(req: NextRequest) {
             result: {
                 protocolVersion: "2024-11-05",
                 capabilities: { tools: {}, resources: {}, prompts: {} },
-                serverInfo: { name: "arcade-agent", version: "1.0.0" },
+                serverInfo: { name: "arcade-agent", version: "1.1.0" },
             },
         });
     }

@@ -61,7 +61,10 @@ Email: [your-pseudo]@protonmail.com
 
 ## Contract addresses in scope (Arc testnet, Generation 4)
 
-Verify these against current `web/.env.local` before submitting. Contracts that
+> **Addresses below are Generation-4 and likely STALE.** The canonical, current
+> address set is `web/public/deployments.json`; pull from there before submitting.
+
+Verify these against current `web/public/deployments.json` before submitting. Contracts that
 hold user funds or process EIP-712 signatures are the highest priority.
 
 ```

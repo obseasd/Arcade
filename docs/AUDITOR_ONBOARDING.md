@@ -72,7 +72,7 @@ TokenMessenger contracts.
 
 ```
    ┌───────────────────────┐         ┌───────────────────────┐
-   │  Next.js 14 frontend  │────────▶│  Arc testnet (5042002)│
+   │  Next.js 15 frontend  │────────▶│  Arc testnet (5042002)│
    │  wagmi + RainbowKit   │  RPC    │  USDC = gas token     │
    └─────────┬─────────────┘         └───────────┬───────────┘
              │ OAuth                              │
@@ -98,8 +98,8 @@ Full architecture diagram + module-by-module breakdown lives in
 | Boundary | Authority | Notes |
 |----------|-----------|-------|
 | Deployer (creates launchpad) | EOA `0x3a0D...324A` | Single-shot `setV3Infra`; becomes inert after. |
-| Treasury | EOA `0x3a0D...324A` | Migration to Gnosis Safe 3-of-5 BEFORE mainnet. |
-| Owner of escrow | EOA same as Treasury | Powers: pause, setTrustedSigner (timelocked 24 h), rotate locker fields, forfeit stale claims, rescue free balance, pullFromLocker. Cannot touch credited user balances. |
+| Treasury | 2-of-3 Gnosis Safe `0x0bDE09e3` | Already the treasury / protocol-fee sink / factory fee-setter / V3 locker owner / auto-compounder owner on testnet (verified on-chain). No pending EOA→multisig migration. |
+| Owner of escrow | EOA `0x3a0D...324A` | Genuinely still an EOA (NOT the Safe); the one governance role not yet handed to the Safe. Powers: pause, setTrustedSigner (timelocked 24 h), rotate locker fields, forfeit stale claims, rescue free balance, pullFromLocker. Cannot touch credited user balances. |
 | Trusted signer | EOA `0x3a0Dd9...324A` (`twitterEscrowSigner` in deployments.json; Vercel-held key) | Signs EIP-712 Claim payloads. Compromise lets attacker forge claims; bounded by 24 h L-3 timelock + owner veto. (KMS code exists but is dormant/optional; chosen fix = a fresh dedicated key in Vercel Sensitive, `0xd3e19E…`.) |
 | User (token creator / claimant / trader) | self | No custodial dependencies. |
 | Anti-sniper window | smart contract | First N seconds after launch carry a decaying skim on buys + sells. Skim accrues to treasury. |

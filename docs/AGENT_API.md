@@ -76,9 +76,12 @@ two-step flow above.
 | GET  | `/api/agent/portfolio?wallet=0x` | known-token balances |
 | POST | `/api/agent/quote` | best-execution price quote |
 | POST | `/api/agent/swap` | build approve + swap |
+| POST | `/api/agent/swap/finalize` | inject Permit2 signature, return executable calls |
 | POST | `/api/agent/launchpad` | build curve buy/sell or create-token |
 | POST | `/api/agent/multiswap` | build a basket-converge swap |
+| POST | `/api/agent/usyc` | build USDC↔USYC yield route (Teller ERC-4626) |
 | GET  | `/api/agent/openapi` | OpenAPI 3.1 spec for auto-discovery |
+| POST | `/api/agent/mcp` | JSON-RPC MCP endpoint (same 9 tools as the npm package) |
 
 MCP wrapper for Claude-style agents: see `agent-mcp/`.
 
@@ -115,7 +118,8 @@ MCP wrapper for Claude-style agents: see `agent-mcp/`.
   `createContractExecutionTransaction` executes every Arcade descriptor.
 - **CCTP / Bridge Kit** — top up the agent's Arc USDC from another chain (roadmap helper).
 - **Nanopayments** — meter agent API calls (pay-per-quote / pay-per-build) (roadmap).
-- **USYC** — route the agent's idle USDC into yield between actions (gated; architecture-level).
+- **USYC** — route the agent's idle USDC into yield between actions. Shipped: a
+  REST route (`POST /api/agent/usyc`) + an MCP tool (`arcade_usyc`).
 
 ## Circle Product Feedback
 
