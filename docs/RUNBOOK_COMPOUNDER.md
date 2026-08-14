@@ -178,7 +178,7 @@ cast call --rpc-url $ARC_RPC $USDC 'transfer(address,uint256)' \
 
 ## Scenario 5 — V3 NPM gets upgraded mid-flight
 
-**Trigger**: the Arcade NPM (currently `0xB3FDAE…AabD`) gets a new
+**Trigger**: the Arcade NPM (currently `0x9A0955174A200FcaFA232c9A2111771B8Ee4100b`) gets a new
 deployment for a security fix or feature.
 
 **Impact**: positions deposited under the OLD NPM stay custodied in

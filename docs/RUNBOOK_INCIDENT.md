@@ -56,14 +56,14 @@ var has been read by a leak (CI scrape, repo audit, etc.).
    the window means the claim auto-executes regardless of the pause
    state if `nonReentrant` lets it through. Don't be late.
 4. **Rotate the signer**: call
-   `requestTrustedSignerRotation(newSigner)`. This starts a 24 h
+   `startSignerRotation(newSigner)`. This starts a 24 h
    timelock. Communicate to users that claims are paused for 24 h.
 5. **Generate fresh signer key** in AWS KMS (if KMS is wired) or
    `openssl rand -hex 32` for the legacy EOA path. Get the address
    that derives from it.
 6. **Update Vercel env** `ARCADE_BACKEND_PRIVATE_KEY` with the new
    key. Redeploy.
-7. After 24 h timelock elapses: `finalizeTrustedSignerRotation()`.
+7. After 24 h timelock elapses: `finalizeSignerRotation()`.
 8. `unpause()` and resume normal operations.
 
 ### Communications
@@ -97,7 +97,7 @@ on-chain undo because `treasury` is immutable.
    balances on the old escrow stay claimable because the escrow's
    owner powers are bounded (`rescue` can't touch `creditedTotal`).
 4. **Communicate** widely on every channel: any pending
-   `requestTrustedSignerRotation` or `setClaimTimelock` must be
+   `startSignerRotation` or `setClaimTimelock` must be
    considered hostile.
 
 ### Prevention
@@ -252,11 +252,11 @@ cast send <escrow> "pause()" --private-key <owner> --rpc-url <RPC>
 cast send <escrow> "veto(bytes32)" <nonce> --private-key <owner> --rpc-url <RPC>
 
 # Start signer rotation
-cast send <escrow> "requestTrustedSignerRotation(address)" <newSigner> \
+cast send <escrow> "startSignerRotation(address)" <newSigner> \
   --private-key <owner> --rpc-url <RPC>
 
 # Finalize after 24 h
-cast send <escrow> "finalizeTrustedSignerRotation()" \
+cast send <escrow> "finalizeSignerRotation()" \
   --private-key <owner> --rpc-url <RPC>
 
 # Owner-side recovery for stranded locker recipients

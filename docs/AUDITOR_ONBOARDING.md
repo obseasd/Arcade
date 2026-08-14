@@ -100,7 +100,7 @@ Full architecture diagram + module-by-module breakdown lives in
 | Deployer (creates launchpad) | EOA `0x3a0D...324A` | Single-shot `setV3Infra`; becomes inert after. |
 | Treasury | EOA `0x3a0D...324A` | Migration to Gnosis Safe 3-of-5 BEFORE mainnet. |
 | Owner of escrow | EOA same as Treasury | Powers: pause, setTrustedSigner (timelocked 24 h), rotate locker fields, forfeit stale claims, rescue free balance, pullFromLocker. Cannot touch credited user balances. |
-| Trusted signer | EOA `0xa314...82Eda` (Vercel-held key) | Signs EIP-712 Claim payloads. Compromise lets attacker forge claims; bounded by 24 h L-3 timelock + owner veto. Migration to AWS KMS in progress. |
+| Trusted signer | EOA `0x3a0Dd9...324A` (`twitterEscrowSigner` in deployments.json; Vercel-held key) | Signs EIP-712 Claim payloads. Compromise lets attacker forge claims; bounded by 24 h L-3 timelock + owner veto. (KMS code exists but is dormant/optional; chosen fix = a fresh dedicated key in Vercel Sensitive, `0xd3e19E…`.) |
 | User (token creator / claimant / trader) | self | No custodial dependencies. |
 | Anti-sniper window | smart contract | First N seconds after launch carry a decaying skim on buys + sells. Skim accrues to treasury. |
 
@@ -149,7 +149,7 @@ documented". Highlights:
 - [ ] This file (`docs/AUDITOR_ONBOARDING.md`)
 - [ ] `docs/architecture.md`
 - [ ] `contracts/SECURITY.md` (threat model + invariant list)
-- [ ] `AUDIT_2026-06-10.md` (prior 8-agent internal pass)
+- [ ] `audit/archive/AUDIT_2026-06-10.md` (prior 8-agent internal pass)
 - [ ] `AUDIT_PROGRESS.md` (shipped + accepted)
 - [ ] `.research/AUDIT_2026-06-11_V2_INDEX.md` (latest 13-agent v2 pass)
 - [ ] All per-topic `.research/audit-2026-06-11-v2-*.md`
