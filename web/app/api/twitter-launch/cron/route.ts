@@ -195,12 +195,20 @@ async function pinLaunchMetadata(
 }
 
 export async function POST(req: NextRequest) {
-    const secret =
-        process.env.TWEET_LAUNCH_CRON_SECRET ??
-        process.env.KEEPER_CRON_SECRET ??
-        process.env.COMPOUNDER_CRON_SECRET;
-    if (!secret) return NextResponse.json({ error: "cron secret not configured" }, { status: 500 });
-    if (req.headers.get("authorization") !== `Bearer ${secret}`) {
+    // Accept ANY configured cron secret, not just the highest-priority one.
+    // The three share a fallback chain; when KEEPER_CRON_SECRET was introduced
+    // the route started expecting only it, which 401'd the cron-job.org job that
+    // still sends the older COMPOUNDER_CRON_SECRET (it worked for weeks, then
+    // silently broke + got auto-disabled). Matching against all configured
+    // secrets makes the job resilient to which one it was set up with.
+    const secrets = [
+        process.env.TWEET_LAUNCH_CRON_SECRET,
+        process.env.KEEPER_CRON_SECRET,
+        process.env.COMPOUNDER_CRON_SECRET,
+    ].filter((s): s is string => !!s);
+    if (secrets.length === 0) return NextResponse.json({ error: "cron secret not configured" }, { status: 500 });
+    const auth = req.headers.get("authorization");
+    if (!auth || !secrets.some((s) => auth === `Bearer ${s}`)) {
         return NextResponse.json({ error: "unauthorized" }, { status: 401 });
     }
 
