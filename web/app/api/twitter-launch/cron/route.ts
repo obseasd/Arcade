@@ -243,7 +243,13 @@ export async function POST(req: NextRequest) {
     const now = Date.now();
     const dayAgoIso = new Date(now - 86_400_000).toISOString();
 
-    console.log("[tweet-launch] config:", {
+    // This cron runs every minute; per-tick diagnostics are gated so they don't
+    // flood Vercel Observability (billed per log event). Set TWEET_LAUNCH_DEBUG=1
+    // to see them. Real actions (LAUNCHED / FAILED / X API error) always log.
+    const dbg: (...a: unknown[]) => void =
+        process.env.TWEET_LAUNCH_DEBUG === "1" ? console.log : () => {};
+
+    dbg("[tweet-launch] config:", {
         botHandle: botHandle(),
         hook: hook.slice(0, 10),
         operator: account.address.slice(0, 10),
@@ -263,11 +269,11 @@ export async function POST(req: NextRequest) {
     if (storedSince) {
         const createdMs = tweetIdToMs(storedSince);
         if (createdMs !== null && now - createdMs > 6 * 86_400_000) {
-            console.log("[tweet-launch] since_id too old, dropping:", storedSince);
+            dbg("[tweet-launch] since_id too old, dropping:", storedSince);
             sinceId = null;
         }
     }
-    console.log("[tweet-launch] since_id:", sinceId ?? "(none)");
+    dbg("[tweet-launch] since_id:", sinceId ?? "(none)");
     let mentions: Mention[];
     try {
         mentions = await fetchLaunchMentions(bearer, sinceId);
@@ -276,7 +282,7 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ ran: false, reason: e instanceof Error ? e.message : String(e) }, { status: 502 });
     }
     summary.scanned = mentions.length;
-    console.log("[tweet-launch] scanned:", mentions.length, "mentions:", mentions.map((m) => ({
+    dbg("[tweet-launch] scanned:", mentions.length, "mentions:", mentions.map((m) => ({
         id: m.tweetId, author: m.author.username, followers: m.author.followers, text: m.text.slice(0, 80),
     })));
 
@@ -304,26 +310,26 @@ export async function POST(req: NextRequest) {
         cursorId = m.tweetId;
         try {
             if (await isTweetProcessed(m.tweetId)) {
-                console.log(`[tweet-launch] skip ${m.tweetId}: already processed`);
+                dbg(`[tweet-launch] skip ${m.tweetId}: already processed`);
                 summary.skipped++;
                 continue;
             }
             if (!hasLaunchIntent(m.text, botHandle())) {
-                console.log(`[tweet-launch] skip ${m.tweetId}: no launch intent`);
+                dbg(`[tweet-launch] skip ${m.tweetId}: no launch intent`);
                 summary.skipped++;
                 continue;
             }
             const cmd: LaunchCommand | null =
                 (await parseLaunchWithClaude(m.text)) ?? parseLaunchCommand(m.text);
             if (!cmd) {
-                console.log(`[tweet-launch] skip ${m.tweetId}: parse failed`);
+                dbg(`[tweet-launch] skip ${m.tweetId}: parse failed`);
                 summary.skipped++;
                 continue;
             }
-            console.log(`[tweet-launch] parsed ${m.tweetId}: ${cmd.ticker} "${cmd.name}"`);
+            dbg(`[tweet-launch] parsed ${m.tweetId}: ${cmd.ticker} "${cmd.name}"`);
             const gate = passesCriteria(m.author, criteria, now);
             if (!gate.ok) {
-                console.log(`[tweet-launch] reject ${m.tweetId}: ${gate.reason}`);
+                dbg(`[tweet-launch] reject ${m.tweetId}: ${gate.reason}`);
                 summary.rejected++;
                 await recordLaunchTweet({
                     tweetId: m.tweetId,
@@ -427,6 +433,6 @@ export async function POST(req: NextRequest) {
     // ones stay behind it and re-fetch next run). Reserve/idempotency dedupes.
     if (cursorId && cursorId !== sinceId) await setSinceId(cursorId);
 
-    console.log("[tweet-launch] done:", summary);
+    dbg("[tweet-launch] done:", summary);
     return NextResponse.json({ ran: true, sinceId: sinceId ?? null, ...summary });
 }
