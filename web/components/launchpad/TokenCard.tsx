@@ -127,9 +127,7 @@ export function TokenCard({ token, curveSupply, priority, clankerFdvUsdc }: Prop
         </div>
       </div>
 
-      {isClanker ? (
-        <div className="text-xs text-arc-text-faint">Locked single-sided V3 LP · tradeable from launch</div>
-      ) : (
+      {!isClanker && (
         <div>
           <div className="mb-1 flex justify-between text-xs text-arc-text-muted">
             <span>Bonding progress</span>

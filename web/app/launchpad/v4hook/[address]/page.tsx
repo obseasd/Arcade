@@ -668,13 +668,6 @@ function FeesRecipientPanel({
                     {isEstimate && <span className="text-[10px] text-arc-text-faint"> (est.)</span>}
                 </span>
             </div>
-            {claimChecked && (
-                <div className="-mt-1.5 text-[11px] text-arc-text-faint">
-                    {lastClaimSec != null
-                        ? `Last collected ${agoPhrase(Math.max(0, Math.floor(Date.now() / 1000) - lastClaimSec))}`
-                        : "Not collected yet"}
-                </div>
-            )}
             <div className="border-t border-arc-border pt-3">
                 <div className="text-xs text-arc-text-muted">Fees recipient</div>
                 {isTwitter ? (
@@ -734,7 +727,9 @@ function FeesRecipientPanel({
                         {collecting ? "Collecting..." : "Collect fees"}
                     </button>
                     <p className="mt-1 text-[10px] text-arc-text-faint">
-                        Harvests the locked LP's accrued fees to the recipient above. Permissionless: anyone can trigger it.
+                        {claimChecked && lastClaimSec != null
+                            ? `Last collected ${agoPhrase(Math.max(0, Math.floor(Date.now() / 1000) - lastClaimSec))}`
+                            : "Not collected yet"}
                     </p>
                 </div>
             )}
