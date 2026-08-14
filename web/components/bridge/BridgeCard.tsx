@@ -68,7 +68,12 @@ import { BridgeStepsProgress } from "./BridgeStepsProgress";
 import { pushToast } from "@/lib/toast";
 
 const ARC_CHAIN_ID = arcTestnet.id;
-const DEFAULT_SRC_CHAIN_ID = cctpSourceChains[0].id;
+// Defensive: `cctpSourceChains[0].id` used to run at module-eval and threw
+// "Cannot read properties of undefined (reading '0')" (Sentry, /bridge) when the
+// imported array was momentarily undefined during a chunk/init race. Optional
+// chaining + an arc fallback keeps the bridge page from white-screening; the
+// component re-resolves the real default lazily at render (below).
+const DEFAULT_SRC_CHAIN_ID = cctpSourceChains?.[0]?.id ?? arcTestnet.id;
 
 /** Arcade's ALL-IN fee on FAST bridges (Standard is free). REALLY CHARGED, on
  * chain, by ArcadeCctpBuyReceiver, which every fast bridge to Arc routes
@@ -188,7 +193,12 @@ export function BridgeCard() {
   const { switchChainAsync } = useSwitchChain();
   const { writeContractAsync } = useWriteContract();
 
-  const [srcChainId, setSrcChainId] = useState<number>(DEFAULT_SRC_CHAIN_ID);
+  // Lazy initializer resolves at render (all modules initialized by then), so a
+  // module-eval race on cctpSourceChains can't blank the page; falls back to the
+  // module const, then the arc chain.
+  const [srcChainId, setSrcChainId] = useState<number>(
+    () => cctpSourceChains?.[0]?.id ?? DEFAULT_SRC_CHAIN_ID,
+  );
   const [dstChainId, setDstChainId] = useState<number>(ARC_CHAIN_ID);
   const [amountStr, setAmountStr] = useState("");
   const [step, setStep] = useState<Step>({ kind: "idle" });
