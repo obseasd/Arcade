@@ -568,7 +568,7 @@ function ManagedRowCard({
                                     <span>{opt.title}</span>
                                     {opt.info && (
                                         <span title={opt.info} className="inline-flex cursor-help">
-                                            <Info className="h-3 w-3 shrink-0 text-arc-text-faint" />
+                                            <Info aria-hidden className="h-3 w-3 shrink-0 text-arc-text-faint" />
                                         </span>
                                     )}
                                 </div>
