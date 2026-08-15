@@ -84,7 +84,7 @@ export async function postLaunchReply(
     // slot-1 claim link (the only surface that reaches the OP's escrow share).
     if (opHandle) {
         const h = opHandle.replace(/^@/, "");
-        text += `\n\n@${h} you earn 50% of the creator fees — claim: ${APP_ORIGIN}/claim?token=${token}&slot=1&handle=${h}`;
+        text += `\n\n@${h} you earn 50% of the creator fees. Claim: ${APP_ORIGIN}/claim?token=${token}&slot=1&handle=${h}`;
     }
     const url = "https://api.twitter.com/2/tweets";
 

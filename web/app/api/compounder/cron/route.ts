@@ -668,6 +668,25 @@ async function recordOutcome(
 
     if (!succeeded) {
         summary.failed++;
+        // The subcall reverted under Multicall3's allowFailure (no event, no
+        // top-level revert), so its reason never surfaced anywhere. Re-run the
+        // EXACT compound/pushFees calldata as an eth_call at the batch's block
+        // to recover the revert string, and put it in notes so a persistently
+        // failing position is diagnosable (token=N reason=...).
+        let reason = "reverted (reason unavailable)";
+        try {
+            await publicClient.call({
+                to: compounderAddress,
+                data: p.callData,
+                blockNumber: receipt.blockNumber as bigint,
+            });
+            reason = "re-call at batch block SUCCEEDED (transient state/gas at exec time)";
+        } catch (e) {
+            reason = (e instanceof Error ? e.message : String(e))
+                .replace(/\s+/g, " ")
+                .slice(0, 200);
+        }
+        summary.notes.push(`token=${p.position.tokenId} reason=${p.kind}-failed: ${reason}`);
         await enqueueAction(p.position.tokenId, p.kind, {
             error: "subcall-reverted-in-batch",
             txHash: batchHash,
