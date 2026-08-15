@@ -4,8 +4,9 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Address } from "viem";
 import type { PublicClient } from "viem";
 import { useAccount, usePublicClient, useWriteContract } from "wagmi";
+import { Info } from "lucide-react";
 
-import { AUTO_COMPOUNDER_ABI, modeLabelFromId } from "@/lib/abis/autoCompounder";
+import { AUTO_COMPOUNDER_ABI, modeLabelFromId, MODE_INFO } from "@/lib/abis/autoCompounder";
 import { V3_NPM_ABI } from "@/lib/abis/v3-npm";
 import { runSequential } from "@/lib/routing/runSequential";
 import { ADDRESSES } from "@/lib/constants";
@@ -544,9 +545,9 @@ function ManagedRowCard({
                 <div className="grid grid-cols-3 gap-2">
                     {(
                         [
-                            { id: "NORMAL" as const, title: "Normal", body: "Tracked, no actions." },
-                            { id: "RECEIVE" as const, title: "Auto-receive", body: "Push fees to wallet." },
-                            { id: "COMPOUND" as const, title: "Auto-compound", body: "Reinvest into position." },
+                            { id: "NORMAL" as const, title: "Normal", body: "Tracked, no actions.", info: "" },
+                            { id: "RECEIVE" as const, title: "Auto-receive", body: "Push fees to wallet.", info: MODE_INFO.RECEIVE },
+                            { id: "COMPOUND" as const, title: "Auto-compound", body: "Reinvest into position.", info: MODE_INFO.COMPOUND },
                         ] as const
                     ).map((opt) => {
                         const active = mode === opt.id;
@@ -563,7 +564,14 @@ function ManagedRowCard({
                                         : "border-arc-border bg-white/[0.015] hover:border-arc-border-strong",
                                 )}
                             >
-                                <div className="font-semibold text-arc-text">{opt.title}</div>
+                                <div className="flex items-center gap-1 font-semibold text-arc-text">
+                                    <span>{opt.title}</span>
+                                    {opt.info && (
+                                        <span title={opt.info} className="inline-flex cursor-help">
+                                            <Info className="h-3 w-3 shrink-0 text-arc-text-faint" />
+                                        </span>
+                                    )}
+                                </div>
                                 <div className="mt-1 text-[10px] text-arc-text-muted">{opt.body}</div>
                             </button>
                         );

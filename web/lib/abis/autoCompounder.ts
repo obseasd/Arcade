@@ -210,3 +210,15 @@ export function modeIdFromLabel(label: "NORMAL" | "RECEIVE" | "COMPOUND"): Compo
     if (label === "COMPOUND") return COMPOUNDER_MODE_COMPOUND;
     return COMPOUNDER_MODE_NORMAL;
 }
+
+/** Detailed, user-facing copy for the (i) tooltip next to each active mode.
+ *  Kept here so the pool-page inline panel and the positions-page panel stay
+ *  in sync. Describes the real on-chain behaviour: RECEIVE pays fees out;
+ *  COMPOUND reinvests the balanced part, returns the rest (no swap), and pauses
+ *  while out of range. */
+export const MODE_INFO = {
+    RECEIVE:
+        "Collects the fees this position has earned and sends them to your wallet on a regular schedule, minus the protocol fee. Runs whether the position is in range or out of range.",
+    COMPOUND:
+        "Reinvests earned fees back into this position on a regular schedule. If the fees don't match the position's current token ratio, the part that can be added is reinvested and the rest is returned to your wallet (no token swap is performed). Pauses automatically while the position is out of range and resumes when the price moves back in.",
+} as const;

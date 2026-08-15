@@ -1,6 +1,6 @@
 "use client";
 
-import { Sparkles, Plus, Power, RefreshCw, X } from "lucide-react";
+import { Sparkles, Plus, Power, RefreshCw, X, Info } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAccount, usePublicClient, useReadContract, useReadContracts, useWriteContract } from "wagmi";
 import { Address, isAddress } from "viem";
@@ -11,6 +11,7 @@ import { V3_NPM_ABI } from "@/lib/abis/v3-npm";
 import {
     AUTO_COMPOUNDER_ABI,
     modeLabelFromId,
+    MODE_INFO,
     type CompounderModeId,
 } from "@/lib/abis/autoCompounder";
 import { Modal } from "@/components/ui/Modal";
@@ -584,9 +585,9 @@ function DepositModal({
                     <div className="grid grid-cols-3 gap-2">
                         {(
                             [
-                                { id: 0, title: "Normal", body: "Tracked, no actions." },
-                                { id: 1, title: "Auto-receive", body: "Push fees to wallet." },
-                                { id: 2, title: "Auto-compound", body: "Reinvest into position." },
+                                { id: 0, title: "Normal", body: "Tracked, no actions.", info: "" },
+                                { id: 1, title: "Auto-receive", body: "Push fees to wallet.", info: MODE_INFO.RECEIVE },
+                                { id: 2, title: "Auto-compound", body: "Reinvest into position.", info: MODE_INFO.COMPOUND },
                             ] as const
                         ).map((opt) => {
                             const active = mode === opt.id;
@@ -603,8 +604,13 @@ function DepositModal({
                                             : "border-arc-border bg-arc-bg hover:border-arc-border-strong",
                                     )}
                                 >
-                                    <div className="font-semibold text-arc-text">
-                                        {opt.title}
+                                    <div className="flex items-center gap-1 font-semibold text-arc-text">
+                                        <span>{opt.title}</span>
+                                        {opt.info && (
+                                            <span title={opt.info} className="inline-flex cursor-help">
+                                                <Info className="h-3 w-3 shrink-0 text-arc-text-faint" />
+                                            </span>
+                                        )}
                                     </div>
                                     <div className="mt-1 text-[10px] text-arc-text-muted">
                                         {opt.body}
