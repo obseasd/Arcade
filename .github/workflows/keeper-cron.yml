@@ -8,8 +8,14 @@ name: keeper-cron
 # scheduler (cron-job.org, Upstash QStash, a VPS crontab) hitting the same URL.
 #
 # Required repo secrets (Settings -> Secrets and variables -> Actions):
-#   KEEPER_ENDPOINT_URL  = https://<your-app>.vercel.app/api/keeper/cron
-#   KEEPER_CRON_SECRET   = the same value set as KEEPER_CRON_SECRET in Vercel
+#   KEEPER_ENDPOINT_URL     = https://<your-app>.vercel.app/api/keeper/cron
+#   COMPOUNDER_CRON_SECRET  = the shared cron bearer (same value as the Vercel
+#     env of that name; the compounder crons use it too and run green on it).
+#     The /api/keeper/cron route accepts this OR a dedicated KEEPER_CRON_SECRET;
+#     we send the shared one because a stale/mismatched dedicated KEEPER_CRON_SECRET
+#     repo secret was 401ing every 5-min tick. To go back to a dedicated secret,
+#     set KEEPER_CRON_SECRET identically in BOTH Vercel and Actions, then swap it
+#     back into the env below.
 on:
   schedule:
     - cron: "*/5 * * * *"
@@ -27,10 +33,10 @@ jobs:
       - name: POST /api/keeper/cron
         env:
           KEEPER_URL: ${{ secrets.KEEPER_ENDPOINT_URL }}
-          KEEPER_SECRET: ${{ secrets.KEEPER_CRON_SECRET }}
+          KEEPER_SECRET: ${{ secrets.COMPOUNDER_CRON_SECRET }}
         run: |
           if [ -z "$KEEPER_URL" ] || [ -z "$KEEPER_SECRET" ]; then
-            echo "Missing KEEPER_ENDPOINT_URL or KEEPER_CRON_SECRET repo secret" >&2
+            echo "Missing KEEPER_ENDPOINT_URL or COMPOUNDER_CRON_SECRET repo secret" >&2
             exit 1
           fi
           curl -sS -X POST "$KEEPER_URL" \
