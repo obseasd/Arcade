@@ -1,29 +1,25 @@
 name: keeper-cron
 
-# Triggers the self-hosted keeper (limit orders + DCA via Orbs dTWAP, and CCTP
-# bridge-and-buy relays) on a schedule. The route at /api/keeper/cron is POST +
-# Bearer auth, which Vercel's native GET cron cannot call, so an external
-# scheduler drives it. GitHub Actions cron granularity is 5 min (best-effort;
-# can be delayed under load). For tighter/guaranteed cadence use a paid
-# scheduler (cron-job.org, Upstash QStash, a VPS crontab) hitting the same URL.
+# Manual fallback ONLY. The live keeper scheduler is cron-job.org (the
+# "arcade-keeper" job hitting https://www.arcade.trading/api/keeper/cron every
+# ~2 min, running green). This GitHub Actions schedule was a redundant second
+# trigger whose repo secret drifted out of sync with Vercel, so every 5-min tick
+# returned 401 {"error":"Unauthorized"} and emailed a failure -- 469 red runs
+# since early August, zero functional impact (cron-job.org was doing the work).
 #
-# Required repo secrets (Settings -> Secrets and variables -> Actions):
-#   COMPOUNDER_CRON_URL     = the compounder cron URL, e.g.
-#                             https://www.arcade.trading/api/compounder/cron
-#                             (its ORIGIN is reused; the compounder crons run
-#                             green on it, so it is a known-good host).
-#   COMPOUNDER_CRON_SECRET  = the shared cron bearer (same value as the Vercel
-#                             env of that name).
+# The schedule is therefore DISABLED; only manual dispatch remains, as an
+# emergency backup. NOTE: to make a manual run actually authenticate you must
+# first realign the bearer -- the route accepts KEEPER_CRON_SECRET or
+# COMPOUNDER_CRON_SECRET; set one of them identically in BOTH the Vercel env and
+# the GitHub repo secret. Until then a manual dispatch will also 401.
 #
-# Why not the dedicated KEEPER_ENDPOINT_URL / KEEPER_CRON_SECRET pair? It 401'd
-# every 5-min tick: the KEEPER_ENDPOINT_URL secret pointed at a deployment whose
-# env did not match the KEEPER_CRON_SECRET value. The route accepts EITHER
-# KEEPER_CRON_SECRET or COMPOUNDER_CRON_SECRET, so we ride the shared bearer +
-# the proven compounder origin. To return to a dedicated setup, set BOTH
-# KEEPER_ENDPOINT_URL and KEEPER_CRON_SECRET so they actually agree with Vercel.
+# The route at /api/keeper/cron is POST + Bearer auth (Vercel's native GET cron
+# cannot call it), which is why an external POST scheduler drives it.
 on:
-  schedule:
-    - cron: "*/5 * * * *"
+  # schedule DISABLED on purpose (see above). cron-job.org is the live trigger.
+  # To re-enable a GitHub-side schedule, uncomment below AND fix the secret.
+  #   schedule:
+  #     - cron: "*/5 * * * *"
   workflow_dispatch: {}
 
 # Never run two ticks at once (a fill signs on a shared nonce).
@@ -48,7 +44,6 @@ jobs:
           # route on it. Strips everything after the scheme+host.
           ORIGIN="$(printf '%s' "$COMPOUNDER_CRON_URL" | sed -E 's#(https?://[^/]+).*#\1#')"
           KEEPER_URL="$ORIGIN/api/keeper/cron"
-          # Echo the URL (never the secret) so a future 404/401 is diagnosable.
           echo "Keeper URL: $KEEPER_URL"
           curl -sS -X POST "$KEEPER_URL" \
             -H "Authorization: Bearer $KEEPER_SECRET" \
