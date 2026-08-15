@@ -271,6 +271,17 @@ export async function POST(req: NextRequest) {
                 chain: ARC_CHAIN,
                 account,
                 maxFeePerGas: MAX_FEE_PER_GAS_WEI,
+                // Explicit, generous gas budget. viem's auto-estimate for an
+                // aggregate3 with allowFailure:true under-budgets a subcall that
+                // reverts (cheaply) at estimation time, so at execution the
+                // gas-heavy compound (collect + swap + increaseLiquidity, ~500-
+                // 700k) OOG'd inside Multicall3 and allowFailure silently
+                // absorbed it (no event -> recorded failed, e.g. #59). aggregate3
+                // forwards all remaining gas to each subcall, so a roomy outer
+                // limit fixes it. Unused gas is NOT charged, so over-provisioning
+                // is free; 1M/call stays well under Arc's 30M block cap even at
+                // MAX_POSITIONS_PER_RUN (25).
+                gas: 150_000n + BigInt(calls.length) * 1_000_000n,
             });
             receipt = await publicClient.waitForTransactionReceipt({
                 hash: batchHash,
