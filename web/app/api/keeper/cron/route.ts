@@ -75,7 +75,7 @@ import { isDbConfigured } from "@/lib/db";
  * Trigger: external HTTP POST (cron-job.org), same as the compounder.
  */
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+export const maxDuration = 120;
 
 // Orbs bids/fills CANNOT be batched through Multicall3: TWAP records
 // msg.sender as the winning taker and ExchangeV2 gates on allowed[taker],
@@ -128,7 +128,7 @@ const BRIDGE_PENDING_MAX_AGE_MS = 3 * 60 * 60 * 1000;
 
 // The single-run lease covers a full tick (maxDuration=60s) plus slack, so a
 // slow run's lease outlives its execution; it self-expires if the run crashes.
-const LEASE_SECONDS = 90;
+const LEASE_SECONDS = 150; // must exceed maxDuration (120) + slack so a slow tick can't have its lease expire mid-run (double-run guard)
 
 // --- Leg C: V3 fee-protocol sync ---
 // topic0 of PoolCreated(address,address,uint24,int24,address). The pool address
@@ -242,6 +242,11 @@ const ARC_RPC_LIST: readonly string[] = (() => {
     if (ARC_IS_MAINNET) {
         out.push("https://5042.rpc.thirdweb.com");
     } else {
+        // Reliable + fast + no-rate-limit FIRST (benchmark 2026-08-14). The public
+        // rpc.testnet.arc.network 429s and is slow from Vercel's shared IPs, which
+        // was pushing the keeper tick past the 60s ceiling (~25% timeout rate).
+        out.push("https://arc-testnet.drpc.org");
+        out.push("https://testnet.arcscan.app/api/eth-rpc");
         out.push("https://rpc.testnet.arc.network");
         out.push(`https://${arcTestnet.id}.rpc.thirdweb.com`);
     }
@@ -484,7 +489,15 @@ export async function POST(req: NextRequest) {
     }
 
     const account = privateKeyToAccount(keeperKey);
-    const publicClient = createPublicClient({ chain: ARC_CHAIN, transport: http() });
+    // Fallback across the RPC list (drpc/arcscan first) so a slow/rate-limited
+    // endpoint fails over fast instead of stalling the tick into a 60s timeout.
+    const publicClient = createPublicClient({
+        chain: ARC_CHAIN,
+        transport: fallback(
+            ARC_RPC_LIST.map((u) => http(u, { retryCount: 0, timeout: 8_000 })),
+            { retryCount: 0 },
+        ),
+    });
     const walletClient = createWalletClient({ account, chain: ARC_CHAIN, transport: http() });
 
     // Low-balance circuit breaker: the keeper pays Arc gas for every bid,
