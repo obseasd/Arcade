@@ -8,14 +8,19 @@ name: keeper-cron
 # scheduler (cron-job.org, Upstash QStash, a VPS crontab) hitting the same URL.
 #
 # Required repo secrets (Settings -> Secrets and variables -> Actions):
-#   KEEPER_ENDPOINT_URL     = https://<your-app>.vercel.app/api/keeper/cron
+#   COMPOUNDER_CRON_URL     = the compounder cron URL, e.g.
+#                             https://www.arcade.trading/api/compounder/cron
+#                             (its ORIGIN is reused; the compounder crons run
+#                             green on it, so it is a known-good host).
 #   COMPOUNDER_CRON_SECRET  = the shared cron bearer (same value as the Vercel
-#     env of that name; the compounder crons use it too and run green on it).
-#     The /api/keeper/cron route accepts this OR a dedicated KEEPER_CRON_SECRET;
-#     we send the shared one because a stale/mismatched dedicated KEEPER_CRON_SECRET
-#     repo secret was 401ing every 5-min tick. To go back to a dedicated secret,
-#     set KEEPER_CRON_SECRET identically in BOTH Vercel and Actions, then swap it
-#     back into the env below.
+#                             env of that name).
+#
+# Why not the dedicated KEEPER_ENDPOINT_URL / KEEPER_CRON_SECRET pair? It 401'd
+# every 5-min tick: the KEEPER_ENDPOINT_URL secret pointed at a deployment whose
+# env did not match the KEEPER_CRON_SECRET value. The route accepts EITHER
+# KEEPER_CRON_SECRET or COMPOUNDER_CRON_SECRET, so we ride the shared bearer +
+# the proven compounder origin. To return to a dedicated setup, set BOTH
+# KEEPER_ENDPOINT_URL and KEEPER_CRON_SECRET so they actually agree with Vercel.
 on:
   schedule:
     - cron: "*/5 * * * *"
@@ -32,13 +37,19 @@ jobs:
     steps:
       - name: POST /api/keeper/cron
         env:
-          KEEPER_URL: ${{ secrets.KEEPER_ENDPOINT_URL }}
+          COMPOUNDER_CRON_URL: ${{ secrets.COMPOUNDER_CRON_URL }}
           KEEPER_SECRET: ${{ secrets.COMPOUNDER_CRON_SECRET }}
         run: |
-          if [ -z "$KEEPER_URL" ] || [ -z "$KEEPER_SECRET" ]; then
-            echo "Missing KEEPER_ENDPOINT_URL or COMPOUNDER_CRON_SECRET repo secret" >&2
+          if [ -z "$COMPOUNDER_CRON_URL" ] || [ -z "$KEEPER_SECRET" ]; then
+            echo "Missing COMPOUNDER_CRON_URL or COMPOUNDER_CRON_SECRET repo secret" >&2
             exit 1
           fi
+          # Reuse the compounder's origin (proven-good host) and hit the keeper
+          # route on it. Strips everything after the scheme+host.
+          ORIGIN="$(printf '%s' "$COMPOUNDER_CRON_URL" | sed -E 's#(https?://[^/]+).*#\1#')"
+          KEEPER_URL="$ORIGIN/api/keeper/cron"
+          # Echo the URL (never the secret) so a future 404/401 is diagnosable.
+          echo "Keeper URL: $KEEPER_URL"
           curl -sS -X POST "$KEEPER_URL" \
             -H "Authorization: Bearer $KEEPER_SECRET" \
             -H "content-type: application/json" \
