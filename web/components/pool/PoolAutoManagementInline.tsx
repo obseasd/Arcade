@@ -567,8 +567,17 @@ function ManagedRowCard({
                                 <div className="flex items-center gap-1 font-semibold text-arc-text">
                                     <span>{opt.title}</span>
                                     {opt.info && (
-                                        <span title={opt.info} className="inline-flex cursor-help">
-                                            <Info aria-hidden className="h-3 w-3 shrink-0 text-arc-text-faint" />
+                                        <span className="group/tt relative inline-flex">
+                                            <Info
+                                                aria-hidden
+                                                className="h-3 w-3 shrink-0 cursor-help text-arc-text-faint transition-colors group-hover/tt:text-arc-text"
+                                            />
+                                            <span
+                                                role="tooltip"
+                                                className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 w-52 -translate-x-1/2 rounded-lg border border-arc-border bg-arc-surface-2 px-2.5 py-2 text-[11px] font-normal leading-snug text-arc-text-muted opacity-0 shadow-xl transition-opacity duration-150 group-hover/tt:opacity-100"
+                                            >
+                                                {opt.info}
+                                            </span>
                                         </span>
                                     )}
                                 </div>
