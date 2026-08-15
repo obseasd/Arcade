@@ -302,6 +302,11 @@ export async function POST(req: NextRequest) {
         }
     }
 
+    // Ops observability: one concise line per scan (~5-min cadence = negligible
+    // log volume) so each position's skip/fail note (token=N reason=...) lands in
+    // the Vercel function logs, instead of living only in the unread HTTP body.
+    console.log(`[compounder/cron] ${JSON.stringify(summary)}`);
+
     return NextResponse.json({
         ran: true,
         ...summary,
