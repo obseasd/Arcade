@@ -771,6 +771,7 @@ export default function ExplorePage() {
                                 key={`${row.key}-${sub.poolAddress}`}
                                 row={row}
                                 sub={sub}
+                                poolDay={poolDay}
                             />
                         )),
                     )}
@@ -1535,13 +1536,24 @@ function PoolSubRowCard({
 function PoolPairGridCard({
     row,
     sub,
+    poolDay,
 }: {
     row: PoolPairRow;
     sub: PoolSubRow;
+    poolDay: PoolDayMap;
 }) {
     const { image: image0 } = useTokenImage(row.token0.address);
     const { image: image1 } = useTokenImage(row.token1.address);
     const tvlLabel = useMemo(() => formatUsd(sub.tvlUsdc), [sub.tvlUsdc]);
+    // Same day-data lookup + APR math as PoolSubRowCard so the card view shows
+    // the identical APR / 1D Volume / Daily Fees as the expanded row (was
+    // hardcoded "—", the only difference from the row path).
+    const d = poolDay.get(sub.poolAddress.toLowerCase());
+    const subTvlUsd = Number(sub.tvlUsdc) / 1e6;
+    const aprPct = d && subTvlUsd > 0 ? (d.fees1d * 365 * 100) / subTvlUsd : undefined;
+    const aprLabel = aprPct !== undefined ? `${aprPct.toLocaleString(undefined, { maximumFractionDigits: 1 })}%` : "—";
+    const feesLabel = d ? `$${d.fees1d.toLocaleString(undefined, { maximumFractionDigits: 2 })}` : "—";
+    const volLabel = d ? `$${d.vol1d.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : "—";
     const isV3 = sub.version === "v3";
     const addLiqHref = isV3
         ? `/positions/add?type=v3&t0=${row.token0.address}&t1=${row.token1.address}&fee=${sub.feeBps}`
@@ -1612,7 +1624,7 @@ function PoolPairGridCard({
                 <div className="grid grid-cols-2 gap-3">
                     <div>
                         <div className="text-[10px] uppercase tracking-wider text-arc-text-faint">APR</div>
-                        <div className="mt-0.5 text-sm font-semibold tabular-nums text-arc-text-faint">—</div>
+                        <div className={cn("mt-0.5 text-sm font-semibold tabular-nums", aprPct === undefined && "text-arc-text-faint")}>{aprLabel}</div>
                     </div>
                     <div>
                         <div className="text-[10px] uppercase tracking-wider text-arc-text-faint">TVL</div>
@@ -1624,13 +1636,13 @@ function PoolPairGridCard({
                         <div className="text-[10px] uppercase tracking-wider text-arc-text-faint">
                             1D Volume
                         </div>
-                        <div className="mt-0.5 text-sm font-semibold tabular-nums text-arc-text-faint">—</div>
+                        <div className={cn("mt-0.5 text-sm font-semibold tabular-nums", !d && "text-arc-text-faint")}>{volLabel}</div>
                     </div>
                     <div>
                         <div className="text-[10px] uppercase tracking-wider text-arc-text-faint">
                             Daily Fees
                         </div>
-                        <div className="mt-0.5 text-sm font-semibold tabular-nums text-arc-text-faint">—</div>
+                        <div className={cn("mt-0.5 text-sm font-semibold tabular-nums", !d && "text-arc-text-faint")}>{feesLabel}</div>
                     </div>
                 </div>
             </div>
