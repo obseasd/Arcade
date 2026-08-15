@@ -127,7 +127,17 @@ export function TokenCard({ token, curveSupply, priority, clankerFdvUsdc }: Prop
         </div>
       </div>
 
-      {!isClanker && (
+      {isClanker ? (
+        // Reserve the same height as the PUMP progress block so clanker and
+        // pump cards stay identical in height, including on an all-clanker row.
+        <div aria-hidden className="invisible">
+          <div className="mb-1 flex justify-between text-xs">
+            <span>Bonding progress</span>
+            <span>0%</span>
+          </div>
+          <div className="h-2" />
+        </div>
+      ) : (
         <div>
           <div className="mb-1 flex justify-between text-xs text-arc-text-muted">
             <span>Bonding progress</span>

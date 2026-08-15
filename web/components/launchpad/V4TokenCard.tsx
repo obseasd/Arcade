@@ -110,7 +110,19 @@ export function V4TokenCard({ token, priority, preloadedStats }: { token: Arcade
         </div>
       </div>
 
-      {!isClanker && (
+      {isClanker ? (
+        // CLANKER has no bonding curve, but reserve the EXACT same vertical
+        // space as the PUMP progress block (mutedText row + h-2 bar) so a
+        // clanker card keeps an identical height to a pump card -- including on
+        // an all-clanker grid row where there is no pump card to stretch it.
+        <div aria-hidden className="invisible">
+          <div className="mb-1 flex justify-between text-xs">
+            <span>Bonding progress</span>
+            <span>0%</span>
+          </div>
+          <div className="h-2" />
+        </div>
+      ) : (
         <div>
           <div className="mb-1 flex justify-between text-xs text-arc-text-muted">
             <span>Bonding progress</span>
