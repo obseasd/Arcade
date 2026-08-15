@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { getSwapPlan, resolveToken } from "@/lib/agent/arcade";
-import { ok, bad, preflight, addr, big } from "@/lib/agent/http";
+import { ok, bad, preflight, addr, big , agentLimit } from "@/lib/agent/http";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -13,6 +13,8 @@ export const OPTIONS = preflight;
  * `recipient` is the agent's wallet; swap output is sent there.
  */
 export async function POST(req: NextRequest) {
+    const rl = agentLimit(req, "swap");
+    if (rl) return rl;
     let body: Record<string, unknown>;
     try {
         body = await req.json();

@@ -21,6 +21,14 @@ const nextConfig = {
       { protocol: "http", hostname: "127.0.0.1" },
       { protocol: "http", hostname: "localhost" },
     ],
+    // Cost control: bots crawling the launchpad re-trigger /_next/image
+    // optimizations for every token logo. A long minimum cache TTL makes an
+    // optimized image reusable for ~31 days (billed once, then CDN-served),
+    // instead of the 60s default that re-optimizes constantly. NOTE: the
+    // `hostname: "**"` above still lets anyone use the optimizer as a proxy for
+    // ANY url (/_next/image?url=...) -- restrict it to the real image hosts
+    // (IPFS gateways + pbs.twimg.com + arcscan) if that abuse shows up.
+    minimumCacheTTL: 2678400,
   },
   // Audit FSEC-002: every Arcade route is a wallet-signing surface, so
   // refuse to be framed by any origin. DENY + frame-ancestors none is the

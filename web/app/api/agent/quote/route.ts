@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { zeroAddress } from "viem";
 import { getSwapPlan, resolveToken } from "@/lib/agent/arcade";
-import { ok, bad, preflight, big } from "@/lib/agent/http";
+import { ok, bad, preflight, big , agentLimit } from "@/lib/agent/http";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -12,6 +12,8 @@ export const OPTIONS = preflight;
  * Best-execution quote across all Arc venues. Read-only (no calls returned).
  */
 export async function POST(req: NextRequest) {
+    const rl = agentLimit(req, "quote");
+    if (rl) return rl;
     let body: Record<string, unknown>;
     try {
         body = await req.json();

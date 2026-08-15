@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { getMultiswapPlan, resolveToken } from "@/lib/agent/arcade";
-import { ok, bad, preflight, addr, big } from "@/lib/agent/http";
+import { ok, bad, preflight, addr, big , agentLimit } from "@/lib/agent/http";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -12,6 +12,8 @@ export const OPTIONS = preflight;
  * settlement (Arcade's aggregator). Returns approve + swapToSingle descriptors.
  */
 export async function POST(req: NextRequest) {
+    const rl = agentLimit(req, "multiswap");
+    if (rl) return rl;
     let body: Record<string, unknown>;
     try {
         body = await req.json();

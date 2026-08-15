@@ -4,6 +4,7 @@ import { quoteAllRoutes } from "@/lib/routing/aggregate";
 import { encodeBigints } from "@/lib/routing/serialize";
 import { serverQuoteClient } from "@/lib/serverRpc";
 import type { QuoteRequest } from "@/lib/routing/types";
+import { rateLimit } from "@/lib/apiGuard";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -34,6 +35,11 @@ function bad(msg: string) {
 }
 
 export async function POST(req: NextRequest) {
+    // Generous per-IP cap: the swap UI fires a debounced quote per keystroke, so
+    // a real user stays well under 150/min; this only trips bot spam of this
+    // heavy RPC fan-out (which also burns the Canteen RPC quota).
+    const rl = rateLimit(req, "route-quote", 150, 60_000);
+    if (rl) return rl;
     let body: Record<string, unknown>;
     try {
         body = (await req.json()) as Record<string, unknown>;

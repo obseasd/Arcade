@@ -15,5 +15,5 @@ export async function GET() {
             pricing: "POST /api/agent/quote { tokenIn, tokenOut, amountIn }",
             decimals: "Decimals VARY per token (USDC=6, USDT=18, cirBTC=8). Always use each token's decimals; do not assume 6.",
         },
-    });
+    }, 300); // reference tokens rarely change -> CDN-cache 5 min (bot spam served free)
 }
