@@ -26,6 +26,7 @@ import {
 import { isDbConfigured } from "@/lib/db";
 import { AUTO_COMPOUNDER_ABI, modeIdFromLabel } from "@/lib/abis/autoCompounder";
 import { ADDRESSES } from "@/lib/constants";
+import { V3_POOL_ABI } from "@/lib/abis/v3";
 import { quoteUsdcValueForPair } from "@/lib/compounderQuote";
 
 /**
@@ -489,6 +490,56 @@ async function prepareOne(
     }
 
     if (modeId === 2 /* COMPOUND */) {
+        // Skip (but do NOT withdraw) an OUT-OF-RANGE position. A Uni-V3
+        // position outside [tickLower, tickUpper) is 100% one token and earns
+        // no new fees, so compounding into it is pure churn: gas spent + a
+        // protocol cut taken on fees that would then be mostly returned. Leave
+        // it active so the NEXT tick re-checks and auto-resumes compounding the
+        // moment price re-enters the range. RECEIVE mode is intentionally not
+        // gated here -- pushing fees to the wallet is valid regardless of range.
+        const { token0Address: t0, token1Address: t1, feeTier: fee } = position;
+        const { tickLower: tl, tickUpper: tu } = position;
+        if (t0 && t1 && fee != null && tl != null && tu != null) {
+            try {
+                const pool = (await publicClient.readContract({
+                    address: ADDRESSES.v3Factory as Address,
+                    abi: [
+                        {
+                            type: "function",
+                            name: "getPool",
+                            stateMutability: "view",
+                            inputs: [
+                                { name: "a", type: "address" },
+                                { name: "b", type: "address" },
+                                { name: "fee", type: "uint24" },
+                            ],
+                            outputs: [{ name: "pool", type: "address" }],
+                        },
+                    ] as const,
+                    functionName: "getPool",
+                    args: [t0 as Address, t1 as Address, fee],
+                })) as Address;
+                if (pool && pool !== "0x0000000000000000000000000000000000000000") {
+                    const slot0 = (await publicClient.readContract({
+                        address: pool,
+                        abi: V3_POOL_ABI,
+                        functionName: "slot0",
+                    })) as readonly [bigint, number, ...unknown[]];
+                    const tick = Number(slot0[1]);
+                    if (tick < tl || tick >= tu) {
+                        summary.skipped++;
+                        summary.notes.push(`token=${position.tokenId} reason=out-of-range`);
+                        return null;
+                    }
+                }
+            } catch {
+                // Range check failed (RPC hiccup / pool not found): fall through
+                // to the normal compound path rather than skip. The existing sim
+                // + tight mins still protect the tx, so we never lose a compound
+                // just because this pre-check couldn't read the tick.
+            }
+        }
+
         // Audit H1 fix: derive amount0Min / amount1Min off-chain
         // before submitting the real tx. The contract stores
         // cfg.maxSlippageBps but never reads it (see findings H1 +
