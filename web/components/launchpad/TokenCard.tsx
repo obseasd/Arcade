@@ -75,13 +75,19 @@ export function TokenCard({ token, curveSupply, priority, clankerFdvUsdc }: Prop
   const modeLabel = isClanker ? "CLANKER" : isPump ? "PUMP" : isArcade ? "ARCADE" : "TOKEN";
   const createdAtNum = Number(token.createdAt);
   const isNew = createdAtNum > 0 && Date.now() / 1000 - createdAtNum < 86_400;
-  const status = token.migrated
-    ? { label: "Migrated", className: "bg-arc-success/10 text-arc-success border-arc-success/30" }
-    : !isClanker && progress > 95
-      ? { label: "About to migrate", className: "bg-arc-warn/10 text-arc-warn border-arc-warn/30" }
-      : isNew
-        ? { label: "New", className: "bg-arc-cta-hover/15 text-arc-text border-arc-cta-hover/40" }
-        : { label: "Live", className: "bg-arc-success/10 text-arc-success border-arc-success/30" };
+  // CLANKER (mode 2) is a direct launch: never migrates, so New (< 24h) or Live
+  // only -- never Migrated / About to migrate.
+  const status = isClanker
+    ? isNew
+      ? { label: "New", className: "bg-arc-cta-hover/15 text-arc-text border-arc-cta-hover/40" }
+      : { label: "Live", className: "bg-arc-success/10 text-arc-success border-arc-success/30" }
+    : token.migrated
+      ? { label: "Migrated", className: "bg-arc-success/10 text-arc-success border-arc-success/30" }
+      : progress > 95
+        ? { label: "About to migrate", className: "bg-arc-warn/10 text-arc-warn border-arc-warn/30" }
+        : isNew
+          ? { label: "New", className: "bg-arc-cta-hover/15 text-arc-text border-arc-cta-hover/40" }
+          : { label: "Live", className: "bg-arc-success/10 text-arc-success border-arc-success/30" };
 
   // CLANKER: show the fee recipient (@handle or wallet) instead of the deployer.
   const byLabel =
@@ -156,7 +162,7 @@ export function TokenCard({ token, curveSupply, priority, clankerFdvUsdc }: Prop
       {isClanker ? (
         // Reserve the same height as the PUMP progress block so clanker and
         // pump cards stay identical in height, including on an all-clanker row.
-        <div aria-hidden className="invisible">
+        <div aria-hidden className="mt-auto invisible">
           <div className="mb-1 flex justify-between text-xs">
             <span>Bonding progress</span>
             <span>0%</span>
@@ -164,7 +170,7 @@ export function TokenCard({ token, curveSupply, priority, clankerFdvUsdc }: Prop
           <div className="h-2" />
         </div>
       ) : (
-        <div>
+        <div className="mt-auto">
           <div className="mb-1 flex justify-between text-xs text-arc-text-muted">
             <span>Bonding progress</span>
             <span className="tabular-nums text-arc-text">{progress.toFixed(1)}%</span>

@@ -77,10 +77,16 @@ export function V4TokenCard({ token, priority, preloadedStats }: { token: Arcade
   // on line 2). "New" is purely age-based (< 24h, ANY mode); past a day it reads
   // "Live" unless it is migrating / has migrated.
   const isNew = createdAtSec > 0 && Date.now() / 1000 - createdAtSec < 86_400;
-  const status =
-    token.status === ARCADE_HOOK_STATUS.GRADUATED
+  // CLANKER is a direct launch: it never migrates, so it only ever reads
+  // New (< 24h) or Live -- never Migrated / About to migrate (its on-chain
+  // status is GRADUATED from birth, which must NOT surface as "Migrated").
+  const status = isClanker
+    ? isNew
+      ? { label: "New", className: "bg-arc-cta-hover/15 text-arc-text border-arc-cta-hover/40" }
+      : { label: "Live", className: "bg-arc-success/10 text-arc-success border-arc-success/30" }
+    : token.status === ARCADE_HOOK_STATUS.GRADUATED
       ? { label: "Migrated", className: "bg-arc-success/10 text-arc-success border-arc-success/30" }
-      : !isClanker && progress > 95
+      : progress > 95
         ? { label: "About to migrate", className: "bg-arc-warn/10 text-arc-warn border-arc-warn/30" }
         : isNew
           ? { label: "New", className: "bg-arc-cta-hover/15 text-arc-text border-arc-cta-hover/40" }
@@ -151,7 +157,7 @@ export function V4TokenCard({ token, priority, preloadedStats }: { token: Arcade
         // space as the PUMP progress block (mutedText row + h-2 bar) so a
         // clanker card keeps an identical height to a pump card -- including on
         // an all-clanker grid row where there is no pump card to stretch it.
-        <div aria-hidden className="invisible">
+        <div aria-hidden className="mt-auto invisible">
           <div className="mb-1 flex justify-between text-xs">
             <span>Bonding progress</span>
             <span>0%</span>
@@ -159,7 +165,7 @@ export function V4TokenCard({ token, priority, preloadedStats }: { token: Arcade
           <div className="h-2" />
         </div>
       ) : (
-        <div>
+        <div className="mt-auto">
           <div className="mb-1 flex justify-between text-xs text-arc-text-muted">
             <span>Bonding progress</span>
             <span className="tabular-nums text-arc-text">{progress.toFixed(1)}%</span>
