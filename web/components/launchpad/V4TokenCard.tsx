@@ -85,14 +85,14 @@ export function V4TokenCard({ token, priority, preloadedStats }: { token: Arcade
   const status = isClanker
     ? isNew
       ? { label: "New", className: "bg-arc-cta-hover/15 text-arc-text border-arc-cta-hover/40" }
-      : { label: "Live", className: "bg-arc-success/10 text-arc-success border-arc-success/30" }
+      : null
     : token.status === ARCADE_HOOK_STATUS.GRADUATED
       ? { label: "Migrated", className: "bg-arc-success/10 text-arc-success border-arc-success/30" }
       : progress > 95
         ? { label: "About to migrate", className: "bg-arc-warn/10 text-arc-warn border-arc-warn/30" }
         : isNew
           ? { label: "New", className: "bg-arc-cta-hover/15 text-arc-text border-arc-cta-hover/40" }
-          : { label: "Live", className: "bg-arc-success/10 text-arc-success border-arc-success/30" };
+          : null;
 
   // CLANKER: show who earns the creator fees (the @handle or the recipient wallet)
   // instead of the deployer. PUMP / fallback: the deployer/creator.
@@ -111,22 +111,24 @@ export function V4TokenCard({ token, priority, preloadedStats }: { token: Arcade
         isFeatured && "ring-1 ring-arc-cta-hover/40",
       )}
     >
-      {/* Lifecycle status badge, pinned top-right. */}
-      <span
-        className={cn(
-          "absolute right-3 top-3 rounded-full border px-2 py-0.5 text-[10px] font-medium",
-          status.className,
-        )}
-      >
-        {status.label}
-      </span>
+      {/* Lifecycle status badge, pinned top-right (hidden for a steady "Live" token). */}
+      {status && (
+        <span
+          className={cn(
+            "absolute right-3 top-3 rounded-full border px-2 py-0.5 text-[10px] font-medium",
+            status.className,
+          )}
+        >
+          {status.label}
+        </span>
+      )}
 
       {/* Icon + name/mode/socials column. */}
       <div className="flex items-start gap-3">
         <TokenIcon symbol={symbol} image={image} size={56} className="rounded-xl border border-arc-border" priority={priority} />
         <div className="min-w-0 flex-1">
-          {/* Line 1: name + ticker (pr clears the top-right badge). */}
-          <div className="flex items-center gap-2 pr-16">
+          {/* Line 1: name + ticker (pr clears the top-right badge when present). */}
+          <div className={cn("flex items-center gap-2", status && "pr-16")}>
             <div className="truncate font-semibold">{token.name ?? "Unnamed"}</div>
             <div className="rounded-md bg-arc-surface-2 px-1.5 py-0.5 text-xs text-arc-text-muted">${symbol}</div>
           </div>

@@ -81,14 +81,14 @@ export function TokenCard({ token, curveSupply, priority, clankerFdvUsdc }: Prop
   const status = isClanker
     ? isNew
       ? { label: "New", className: "bg-arc-cta-hover/15 text-arc-text border-arc-cta-hover/40" }
-      : { label: "Live", className: "bg-arc-success/10 text-arc-success border-arc-success/30" }
+      : null
     : token.migrated
       ? { label: "Migrated", className: "bg-arc-success/10 text-arc-success border-arc-success/30" }
       : progress > 95
         ? { label: "About to migrate", className: "bg-arc-warn/10 text-arc-warn border-arc-warn/30" }
         : isNew
           ? { label: "New", className: "bg-arc-cta-hover/15 text-arc-text border-arc-cta-hover/40" }
-          : { label: "Live", className: "bg-arc-success/10 text-arc-success border-arc-success/30" };
+          : null;
 
   // CLANKER: show the fee recipient (@handle or wallet) instead of the deployer.
   const byLabel =
@@ -115,9 +115,11 @@ export function TokenCard({ token, curveSupply, priority, clankerFdvUsdc }: Prop
             <Star className="h-2.5 w-2.5 fill-current" /> Featured
           </span>
         )}
-        <span className={cn("rounded-full border px-2 py-0.5 text-[10px] font-medium", status.className)}>
-          {status.label}
-        </span>
+        {status && (
+          <span className={cn("rounded-full border px-2 py-0.5 text-[10px] font-medium", status.className)}>
+            {status.label}
+          </span>
+        )}
       </div>
 
       {/* Icon + name/mode/socials column. */}
@@ -130,8 +132,8 @@ export function TokenCard({ token, curveSupply, priority, clankerFdvUsdc }: Prop
           priority={priority}
         />
         <div className="min-w-0 flex-1">
-          {/* Line 1: name + ticker (pr clears the top-right badges). */}
-          <div className={cn("flex items-center gap-2", isFeatured ? "pr-32" : "pr-16")}>
+          {/* Line 1: name + ticker (pr clears the top-right badges when present). */}
+          <div className={cn("flex items-center gap-2", isFeatured ? "pr-32" : status ? "pr-16" : "")}>
             <div className="truncate font-semibold">{token.name ?? "Unnamed"}</div>
             <div className="rounded-md bg-arc-surface-2 px-1.5 py-0.5 text-xs text-arc-text-muted">
               ${symbol}
