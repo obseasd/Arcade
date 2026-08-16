@@ -73,13 +73,23 @@ export function TokenCard({ token, curveSupply, priority, clankerFdvUsdc }: Prop
   const isFeatured = FEATURED_TOKENS.has(token.address.toLowerCase());
   // Line-2 launch mode (distinct from the lifecycle badge top-right).
   const modeLabel = isClanker ? "CLANKER" : isPump ? "PUMP" : isArcade ? "ARCADE" : "TOKEN";
+  const createdAtNum = Number(token.createdAt);
+  const isNew = createdAtNum > 0 && Date.now() / 1000 - createdAtNum < 86_400;
   const status = token.migrated
     ? { label: "Migrated", className: "bg-arc-success/10 text-arc-success border-arc-success/30" }
-    : progress > 95
+    : !isClanker && progress > 95
       ? { label: "About to migrate", className: "bg-arc-warn/10 text-arc-warn border-arc-warn/30" }
-      : isClanker
-        ? { label: "Live", className: "bg-arc-success/10 text-arc-success border-arc-success/30" }
-        : { label: "New", className: "bg-arc-cta-hover/15 text-arc-text border-arc-cta-hover/40" };
+      : isNew
+        ? { label: "New", className: "bg-arc-cta-hover/15 text-arc-text border-arc-cta-hover/40" }
+        : { label: "Live", className: "bg-arc-success/10 text-arc-success border-arc-success/30" };
+
+  // CLANKER: show the fee recipient (@handle or wallet) instead of the deployer.
+  const byLabel =
+    isClanker && metadata?.creatorTwitter
+      ? `@${metadata.creatorTwitter}`
+      : `by ${formatAddress(
+          (isClanker && metadata?.feeRecipient ? metadata.feeRecipient : token.creator) as `0x${string}`,
+        )}`;
 
   const age = ageString(Number(token.createdAt));
 
@@ -103,7 +113,7 @@ export function TokenCard({ token, curveSupply, priority, clankerFdvUsdc }: Prop
         </span>
       </div>
 
-      {/* Row 1: icon + name + ticker (pr clears the top-right badges). */}
+      {/* Icon + name/mode/socials column. */}
       <div className="flex items-start gap-3">
         <TokenIcon
           symbol={symbol}
@@ -112,14 +122,15 @@ export function TokenCard({ token, curveSupply, priority, clankerFdvUsdc }: Prop
           className="rounded-xl border border-arc-border"
           priority={priority}
         />
-        <div className={cn("min-w-0 flex-1", isFeatured ? "pr-32" : "pr-16")}>
-          <div className="flex items-center gap-2">
+        <div className="min-w-0 flex-1">
+          {/* Line 1: name + ticker (pr clears the top-right badges). */}
+          <div className={cn("flex items-center gap-2", isFeatured ? "pr-32" : "pr-16")}>
             <div className="truncate font-semibold">{token.name ?? "Unnamed"}</div>
             <div className="rounded-md bg-arc-surface-2 px-1.5 py-0.5 text-xs text-arc-text-muted">
               ${symbol}
             </div>
           </div>
-          {/* Row 2: mode · MC · ago */}
+          {/* Line 2: mode · MC · ago */}
           <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-xs text-arc-text-muted">
             <span className="font-semibold text-arc-text">{modeLabel}</span>
             {mcapNode && (
@@ -129,18 +140,15 @@ export function TokenCard({ token, curveSupply, priority, clankerFdvUsdc }: Prop
             )}
             <span>· {age}</span>
           </div>
+          {/* Line 3: socials (left) + fee recipient / creator (right). */}
+          <div className="mt-1.5 flex items-center gap-2">
+            <SocialLinksRow metadata={metadata} />
+            <span className="ml-auto truncate text-xs text-arc-text-faint">{byLabel}</span>
+          </div>
         </div>
       </div>
 
-      {/* Row 3: social icons (left) + creator address (right). */}
-      <div className="flex items-center gap-2">
-        <SocialLinksRow metadata={metadata} />
-        <span className="ml-auto truncate text-xs text-arc-text-faint">
-          by {formatAddress(token.creator)}
-        </span>
-      </div>
-
-      {/* Row 4: description (2-line clamp), only when present. */}
+      {/* Description (2-line clamp), only when present. */}
       {metadata?.description && (
         <p className="line-clamp-2 text-xs text-arc-text-muted">{metadata.description}</p>
       )}

@@ -348,14 +348,22 @@ function Inner() {
             // off-chain extras only (image, description, social links).
             // Validate + drop invalid social links before they enter the metadata.
             const validSocials = buildSocialsForMetadata(socials);
-            const metadataURI =
-                description.trim() || image || Object.keys(validSocials).length > 0
-                    ? encodeMetadataDataUri({
-                          description: description.trim() || undefined,
-                          image: image || undefined,
-                          ...validSocials,
-                      })
-                    : "";
+            // CLANKER: persist who earns the creator fees so cards can show the
+            // @handle (twitter recipient) or the recipient wallet (another wallet)
+            // instead of the deployer. "My wallet" == the deployer, so it needs no
+            // field (cards fall back to token.creator).
+            const feeMeta: { creatorTwitter?: string; feeRecipient?: string } = {};
+            if (isClanker && effectiveHandle) feeMeta.creatorTwitter = effectiveHandle;
+            if (isClanker && creator2Addr !== zeroAddress) feeMeta.feeRecipient = creator2Addr;
+            const metaObj = {
+                description: description.trim() || undefined,
+                image: image || undefined,
+                ...validSocials,
+                ...feeMeta,
+            };
+            const metadataURI = Object.values(metaObj).some((v) => v)
+                ? encodeMetadataDataUri(metaObj)
+                : "";
             const hash = await writeContractAsync({
                 address: ADDRESSES.arcadeHook,
                 abi: ARCADE_HOOK_ABI,

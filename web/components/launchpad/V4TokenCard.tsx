@@ -73,15 +73,27 @@ export function V4TokenCard({ token, priority, preloadedStats }: { token: Arcade
     return Math.min(100, Number((token.tokensSold * 10_000n) / LAUNCHPAD_CURVE_SUPPLY) / 100);
   }, [token.tokensSold]);
 
-  // Top-right STATUS badge = lifecycle state (distinct from the PUMP/CLANKER
-  // mode shown on line 2, so the two never read as redundant).
-  const status = isClanker
-    ? { label: "Live", className: "bg-arc-success/10 text-arc-success border-arc-success/30" }
-    : token.status === ARCADE_HOOK_STATUS.GRADUATED
+  // Top-right STATUS badge = lifecycle state (distinct from the PUMP/CLANKER mode
+  // on line 2). "New" is purely age-based (< 24h, ANY mode); past a day it reads
+  // "Live" unless it is migrating / has migrated.
+  const isNew = createdAtSec > 0 && Date.now() / 1000 - createdAtSec < 86_400;
+  const status =
+    token.status === ARCADE_HOOK_STATUS.GRADUATED
       ? { label: "Migrated", className: "bg-arc-success/10 text-arc-success border-arc-success/30" }
-      : progress > 95
+      : !isClanker && progress > 95
         ? { label: "About to migrate", className: "bg-arc-warn/10 text-arc-warn border-arc-warn/30" }
-        : { label: "New", className: "bg-arc-cta-hover/15 text-arc-text border-arc-cta-hover/40" };
+        : isNew
+          ? { label: "New", className: "bg-arc-cta-hover/15 text-arc-text border-arc-cta-hover/40" }
+          : { label: "Live", className: "bg-arc-success/10 text-arc-success border-arc-success/30" };
+
+  // CLANKER: show who earns the creator fees (the @handle or the recipient wallet)
+  // instead of the deployer. PUMP / fallback: the deployer/creator.
+  const byLabel =
+    isClanker && metadata?.creatorTwitter
+      ? `@${metadata.creatorTwitter}`
+      : `by ${formatAddress(
+          (isClanker && metadata?.feeRecipient ? metadata.feeRecipient : token.creator) as `0x${string}`,
+        )}`;
 
   return (
     <Link
@@ -101,15 +113,16 @@ export function V4TokenCard({ token, priority, preloadedStats }: { token: Arcade
         {status.label}
       </span>
 
-      {/* Row 1: icon + name + ticker (pr keeps the name clear of the badge). */}
+      {/* Icon + name/mode/socials column. */}
       <div className="flex items-start gap-3">
         <TokenIcon symbol={symbol} image={image} size={56} className="rounded-xl border border-arc-border" priority={priority} />
-        <div className="min-w-0 flex-1 pr-16">
-          <div className="flex items-center gap-2">
+        <div className="min-w-0 flex-1">
+          {/* Line 1: name + ticker (pr clears the top-right badge). */}
+          <div className="flex items-center gap-2 pr-16">
             <div className="truncate font-semibold">{token.name ?? "Unnamed"}</div>
             <div className="rounded-md bg-arc-surface-2 px-1.5 py-0.5 text-xs text-arc-text-muted">${symbol}</div>
           </div>
-          {/* Row 2: mode · MC · ago */}
+          {/* Line 2: mode · MC · ago */}
           <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-xs text-arc-text-muted">
             <span className="font-semibold text-arc-text">{isClanker ? "CLANKER" : "PUMP"}</span>
             {mcapNode && (
@@ -119,18 +132,16 @@ export function V4TokenCard({ token, priority, preloadedStats }: { token: Arcade
             )}
             {createdAtSec > 0 && <span>· {ageString(createdAtSec)}</span>}
           </div>
+          {/* Line 3: social icons (left) + fee recipient / creator (right),
+              aligned under the mode line. */}
+          <div className="mt-1.5 flex items-center gap-2">
+            <SocialLinksRow metadata={metadata} />
+            <span className="ml-auto truncate text-xs text-arc-text-faint">{byLabel}</span>
+          </div>
         </div>
       </div>
 
-      {/* Row 3: social icons (left) + creator address (right). */}
-      <div className="flex items-center gap-2">
-        <SocialLinksRow metadata={metadata} />
-        <span className="ml-auto truncate text-xs text-arc-text-faint">
-          by {formatAddress(token.creator)}
-        </span>
-      </div>
-
-      {/* Row 4: description (2-line clamp), only when the token has one. */}
+      {/* Description (2-line clamp), only when the token has one. */}
       {metadata?.description && (
         <p className="line-clamp-2 text-xs text-arc-text-muted">{metadata.description}</p>
       )}

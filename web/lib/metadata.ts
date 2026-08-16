@@ -23,6 +23,12 @@ export interface TokenMetadata {
    */
   creatorTwitter?: string;
   /**
+   * CLANKER: the wallet that receives the creator fees when it differs from the
+   * deployer (the "another wallet" recipient). Cards show this (or creatorTwitter)
+   * instead of token.creator so the fee earner is visible at a glance.
+   */
+  feeRecipient?: string;
+  /**
    * Per-slot Twitter attribution for escrowed claims. Each index maps to a
    * recipient slot. A non-undefined value means the slot's payouts route to
    * the ArcadeTwitterEscrow; the verified owner of that @handle can later
