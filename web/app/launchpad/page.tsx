@@ -10,6 +10,7 @@ import { useArcadeHookTokens } from "@/lib/hooks/useArcadeHookTokens";
 import { useClankerSortMcaps } from "@/lib/hooks/useClankerSortMcaps";
 import { useV4TokenStatsBatch } from "@/lib/hooks/useV4TokenStatsBatch";
 import { useTokenDayVolumes } from "@/lib/hooks/useTokenDayVolumes";
+import { useTradeSignals } from "@/lib/hooks/useTradeSignals";
 import { parseInlineMetadata } from "@/lib/metadata";
 import { TokenCard } from "@/components/launchpad/TokenCard";
 import { V4TokenCard } from "@/components/launchpad/V4TokenCard";
@@ -32,6 +33,11 @@ export default function LaunchpadIndexPage() {
   // sorts (Trending / All / Migrated) and the card's "24h Vol" line.
   const { volMap } = useTokenDayVolumes();
   const volOf = (addr: string): number => volMap.get(addr.toLowerCase()) ?? 0;
+  // Tier 2 sort signals derived from the Trade entity (blockTime): exact 1h
+  // volume (Trending) + last-trade time (All / Migrated). No subgraph change.
+  const { vol1h, lastTradeAt } = useTradeSignals();
+  const vol1hOf = (addr: string): number => vol1h.get(addr.toLowerCase()) ?? 0;
+  const lastTxOf = (addr: string): number => lastTradeAt.get(addr.toLowerCase()) ?? 0;
   const [filter, setFilter] = useState<Filter>("all");
   const [q, setQ] = useState("");
   const [launchOpen, setLaunchOpen] = useState(false);
@@ -58,16 +64,16 @@ export default function LaunchpadIndexPage() {
       // Newest to oldest.
       list.sort((a, b) => created(b) - created(a));
     } else if (filter === "trending") {
-      // Most 24h volume (proxy for 1h until the subgraph carries hourly).
-      list = list.filter((t) => volOf(t.address) > 0);
-      list.sort((a, b) => volOf(b.address) - volOf(a.address));
+      // Most 1h volume.
+      list = list.filter((t) => vol1hOf(t.address) > 0);
+      list.sort((a, b) => vol1hOf(b.address) - vol1hOf(a.address));
     } else {
-      // "all": most-active first (24h volume desc), newest as the tiebreak.
-      list.sort((a, b) => volOf(b.address) - volOf(a.address) || created(b) - created(a));
+      // "all": most recently traded first, newest as the tiebreak.
+      list.sort((a, b) => lastTxOf(b.address) - lastTxOf(a.address) || created(b) - created(a));
     }
     return list;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [v4HookTokens, q, filter, volMap]);
+  }, [v4HookTokens, q, filter, vol1h, lastTradeAt]);
 
   const filtered = useMemo(() => {
     // HARD filter: the public /launchpad grid only ever surfaces tokens
@@ -107,27 +113,29 @@ export default function LaunchpadIndexPage() {
     // rank by actual size instead of always sinking to the bottom.
 
     // Filter + sort per the active tab.
-    const vol = (t: LaunchpadTokenInfo) => volOf(t.address);
     const created = (t: LaunchpadTokenInfo) => Number(t.createdAt);
+    const lastTx = (t: LaunchpadTokenInfo) => lastTxOf(t.address);
     const progressBps = (t: LaunchpadTokenInfo) =>
       LAUNCHPAD_CURVE_SUPPLY > 0n ? Number((t.tokensSold * 10_000n) / LAUNCHPAD_CURVE_SUPPLY) : 0;
     if (filter === "new") {
       // Newest to oldest.
       list.sort((a, b) => created(b) - created(a));
     } else if (filter === "trending") {
-      // Most 24h volume first (proxy for 1h until the subgraph carries hourly).
-      list = list.filter((t) => !t.migrated && vol(t) > 0).sort((a, b) => vol(b) - vol(a));
+      // Most 1h volume.
+      list = list
+        .filter((t) => !t.migrated && vol1hOf(t.address) > 0)
+        .sort((a, b) => vol1hOf(b.address) - vol1hOf(a.address));
     } else if (filter === "migrating") {
       // >= 80% of the curve, closest to migration first.
       list = list
         .filter((t) => !t.migrated && progressBps(t) >= 8_000)
         .sort((a, b) => progressBps(b) - progressBps(a));
     } else if (filter === "migrated") {
-      // Migrated PUMPs (CLANKER never migrates), most-active (24h volume) first.
-      list = list.filter((t) => t.migrated && t.mode === LaunchMode.PUMP).sort((a, b) => vol(b) - vol(a));
+      // Migrated PUMPs (CLANKER never migrates), most recently traded first.
+      list = list.filter((t) => t.migrated && t.mode === LaunchMode.PUMP).sort((a, b) => lastTx(b) - lastTx(a));
     } else {
-      // "all": most-active first (24h volume desc), newest as the tiebreak.
-      list.sort((a, b) => vol(b) - vol(a) || created(b) - created(a));
+      // "all": most recently traded first, newest as the tiebreak.
+      list.sort((a, b) => lastTx(b) - lastTx(a) || created(b) - created(a));
     }
 
     // Sort. The main "all" view is ordered by market-cap proxy
@@ -164,7 +172,8 @@ export default function LaunchpadIndexPage() {
       list = [...featured, ...others];
     }
     return list;
-  }, [tokens, filter, q, clankerMcaps]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tokens, filter, q, vol1h, lastTradeAt]);
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-10 sm:px-6">
