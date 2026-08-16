@@ -31,7 +31,7 @@ function ageString(createdAtSec: number): string {
  * V4 lifecycle: CLANKER is a direct single-sided locked-LP launch (NEVER shows
  * "Graduated"); PUMP shows its bonding-curve progress.
  */
-export function V4TokenCard({ token, priority, preloadedStats }: { token: ArcadeHookTokenInfo; priority?: boolean; preloadedStats?: Omit<V4TokenStats, "isLoading"> }) {
+export function V4TokenCard({ token, priority, preloadedStats, vol24hUsd }: { token: ArcadeHookTokenInfo; priority?: boolean; preloadedStats?: Omit<V4TokenStats, "isLoading">; vol24hUsd?: number }) {
   const liveStats = useV4TokenStats(token.address, !preloadedStats);
   const stats: V4TokenStats = preloadedStats
     ? { ...preloadedStats, isLoading: false }
@@ -142,11 +142,15 @@ export function V4TokenCard({ token, priority, preloadedStats }: { token: Arcade
             )}
             {createdAtSec > 0 && <span>· {ageString(createdAtSec)}</span>}
           </div>
-          {/* Line 3: social icons (left) + fee recipient / creator (right),
-              aligned under the mode line. */}
+          {/* Line 3: social icons (left) + 24h volume (right). */}
           <div className="mt-1.5 flex items-center gap-2">
             <SocialLinksRow metadata={metadata} />
-            <span className="ml-auto truncate text-xs text-arc-text-faint">{byLabel}</span>
+            <span className="ml-auto shrink-0 text-xs text-arc-text-muted">
+              24h Vol{" "}
+              <span className="tabular-nums text-arc-text">
+                ${(vol24hUsd ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+              </span>
+            </span>
           </div>
         </div>
       </div>
@@ -157,17 +161,9 @@ export function V4TokenCard({ token, priority, preloadedStats }: { token: Arcade
       )}
 
       {isClanker ? (
-        // CLANKER has no bonding curve, but reserve the EXACT same vertical
-        // space as the PUMP progress block (mutedText row + h-2 bar) so a
-        // clanker card keeps an identical height to a pump card -- including on
-        // an all-clanker grid row where there is no pump card to stretch it.
-        <div aria-hidden className="mt-auto invisible">
-          <div className="mb-1 flex justify-between text-xs">
-            <span>Bonding progress</span>
-            <span>0%</span>
-          </div>
-          <div className="h-2" />
-        </div>
+        // CLANKER has no bonding curve: show the fee recipient (@handle or wallet)
+        // at the bottom-left, where PUMP shows its progress bar.
+        <div className="mt-auto truncate pt-1 text-xs text-arc-text-faint">{byLabel}</div>
       ) : (
         <div className="mt-auto">
           <div className="mb-1 flex justify-between text-xs text-arc-text-muted">

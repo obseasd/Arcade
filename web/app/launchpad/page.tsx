@@ -9,6 +9,7 @@ import { getLaunchpadGenerations } from "@/lib/launchpadGenerations";
 import { useArcadeHookTokens } from "@/lib/hooks/useArcadeHookTokens";
 import { useClankerSortMcaps } from "@/lib/hooks/useClankerSortMcaps";
 import { useV4TokenStatsBatch } from "@/lib/hooks/useV4TokenStatsBatch";
+import { useTokenDayVolumes } from "@/lib/hooks/useTokenDayVolumes";
 import { parseInlineMetadata } from "@/lib/metadata";
 import { TokenCard } from "@/components/launchpad/TokenCard";
 import { V4TokenCard } from "@/components/launchpad/V4TokenCard";
@@ -27,6 +28,10 @@ export default function LaunchpadIndexPage() {
   const clankerMcaps = useClankerSortMcaps(tokens);
   const v4Addresses = useMemo(() => v4HookTokens.map((t) => t.address), [v4HookTokens]);
   const { statsMap: v4StatsMap } = useV4TokenStatsBatch(v4Addresses);
+  // 24h volume (USD) per token from the subgraph TokenDayData, for the volume
+  // sorts (Trending / All / Migrated) and the card's "24h Vol" line.
+  const { volMap } = useTokenDayVolumes();
+  const volOf = (addr: string): number => volMap.get(addr.toLowerCase()) ?? 0;
   const [filter, setFilter] = useState<Filter>("all");
   const [q, setQ] = useState("");
   const [launchOpen, setLaunchOpen] = useState(false);
@@ -38,7 +43,7 @@ export default function LaunchpadIndexPage() {
   const v4Filtered = useMemo(() => {
     if (!V4_HOOK_ENABLED) return [];
     if (filter === "migrated" || filter === "migrating") return [];
-    let list = [...v4HookTokens].reverse();
+    let list = [...v4HookTokens];
     const term = q.trim().toLowerCase().replace(/^@/, "");
     if (term) {
       list = list.filter(
@@ -48,8 +53,21 @@ export default function LaunchpadIndexPage() {
           t.address.toLowerCase().includes(term),
       );
     }
+    const created = (t: { createdAt: number }) => Number(t.createdAt) || 0;
+    if (filter === "new") {
+      // Newest to oldest.
+      list.sort((a, b) => created(b) - created(a));
+    } else if (filter === "trending") {
+      // Most 24h volume (proxy for 1h until the subgraph carries hourly).
+      list = list.filter((t) => volOf(t.address) > 0);
+      list.sort((a, b) => volOf(b.address) - volOf(a.address));
+    } else {
+      // "all": most-active first (24h volume desc), newest as the tiebreak.
+      list.sort((a, b) => volOf(b.address) - volOf(a.address) || created(b) - created(a));
+    }
     return list;
-  }, [v4HookTokens, q, filter]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [v4HookTokens, q, filter, volMap]);
 
   const filtered = useMemo(() => {
     // HARD filter: the public /launchpad grid only ever surfaces tokens
@@ -87,25 +105,29 @@ export default function LaunchpadIndexPage() {
     // (monotonic with mcap on a bonding curve). For USDC-paired Clankers
     // (no curve → reserve 0) it's the implied FDV in USDC micros, so they
     // rank by actual size instead of always sinking to the bottom.
-    const mcKey = (t: LaunchpadTokenInfo): bigint =>
-      t.mode === 2
-        ? clankerMcaps.get(t.address.toLowerCase()) ?? 0n
-        : t.realUsdcReserve;
 
-    // Filter
+    // Filter + sort per the active tab.
+    const vol = (t: LaunchpadTokenInfo) => volOf(t.address);
+    const created = (t: LaunchpadTokenInfo) => Number(t.createdAt);
+    const progressBps = (t: LaunchpadTokenInfo) =>
+      LAUNCHPAD_CURVE_SUPPLY > 0n ? Number((t.tokensSold * 10_000n) / LAUNCHPAD_CURVE_SUPPLY) : 0;
     if (filter === "new") {
-      list = list.filter((t) => !t.migrated && t.tokensSold === 0n);
+      // Newest to oldest.
+      list.sort((a, b) => created(b) - created(a));
     } else if (filter === "trending") {
-      list = list
-        .filter((t) => !t.migrated && t.tokensSold > 0n)
-        .sort((a, b) => (mcKey(b) > mcKey(a) ? 1 : mcKey(b) < mcKey(a) ? -1 : 0));
+      // Most 24h volume first (proxy for 1h until the subgraph carries hourly).
+      list = list.filter((t) => !t.migrated && vol(t) > 0).sort((a, b) => vol(b) - vol(a));
     } else if (filter === "migrating") {
-      list = list.filter((t) => !t.migrated && (t.tokensSold * 100n) / LAUNCHPAD_CURVE_SUPPLY > 80n);
+      // >= 80% of the curve, closest to migration first.
+      list = list
+        .filter((t) => !t.migrated && progressBps(t) >= 8_000)
+        .sort((a, b) => progressBps(b) - progressBps(a));
     } else if (filter === "migrated") {
-      // "Migrated" = a PUMP that graduated off its bonding curve into an AMM.
-      // CLANKER launches are direct (no curve, no migration), so they never
-      // belong here even if their state carries a migrated-like flag.
-      list = list.filter((t) => t.migrated && t.mode === LaunchMode.PUMP);
+      // Migrated PUMPs (CLANKER never migrates), most-active (24h volume) first.
+      list = list.filter((t) => t.migrated && t.mode === LaunchMode.PUMP).sort((a, b) => vol(b) - vol(a));
+    } else {
+      // "all": most-active first (24h volume desc), newest as the tiebreak.
+      list.sort((a, b) => vol(b) - vol(a) || created(b) - created(a));
     }
 
     // Sort. The main "all" view is ordered by market-cap proxy
@@ -119,17 +141,7 @@ export default function LaunchpadIndexPage() {
     // the post-migration V2 pool value here). Ties fall back to
     // newest-first. Compared with bigint operators, not Number(b - a),
     // so a large reserve delta never overflows the 2^53 float range.
-    if (filter === "all") {
-      list = list.sort((a, b) => {
-        const ka = mcKey(a);
-        const kb = mcKey(b);
-        if (kb > ka) return 1;
-        if (kb < ka) return -1;
-        return Number(b.createdAt - a.createdAt);
-      });
-    } else if (filter === "new") {
-      list = list.sort((a, b) => Number(b.createdAt - a.createdAt));
-    }
+    // (filtering + sorting are handled per-tab above)
 
     // Search (name, symbol, address, creator @handle).
     const term = q.trim().toLowerCase().replace(/^@/, "");
@@ -233,7 +245,7 @@ export default function LaunchpadIndexPage() {
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {/* ArcadeHook (V4) tokens render as regular cards, newest first. */}
           {v4Filtered.map((t, i) => (
-            <V4TokenCard key={t.address} token={t} priority={i < 6} preloadedStats={v4StatsMap.get(t.address.toLowerCase())} />
+            <V4TokenCard key={t.address} token={t} priority={i < 6} preloadedStats={v4StatsMap.get(t.address.toLowerCase())} vol24hUsd={volOf(t.address)} />
           ))}
           {filtered.map((t, i) => (
             <TokenCard
@@ -241,6 +253,7 @@ export default function LaunchpadIndexPage() {
               token={t}
               curveSupply={LAUNCHPAD_CURVE_SUPPLY}
               clankerFdvUsdc={clankerMcaps.get(t.address.toLowerCase())}
+              vol24hUsd={volOf(t.address)}
               priority={v4Filtered.length === 0 && i < 6}
             />
           ))}

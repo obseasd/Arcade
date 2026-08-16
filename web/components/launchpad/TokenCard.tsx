@@ -24,6 +24,8 @@ interface Props {
   /** Pre-computed USDC FDV from the page-level useClankerSortMcaps multicall.
    *  When set, the per-card useClankerMcap hook is disabled (no duplicate reads). */
   clankerFdvUsdc?: bigint;
+  /** 24h volume in USD (from the page-level TokenDayData fetch). */
+  vol24hUsd?: number;
 }
 
 // Display sanity ceiling for a launchpad token's market cap ($100M in 6-dp
@@ -34,7 +36,7 @@ interface Props {
 // and is unaffected.
 const MAX_PLAUSIBLE_MCAP_MICRO = 100_000_000_000_000n; // $100,000,000
 
-export function TokenCard({ token, curveSupply, priority, clankerFdvUsdc }: Props) {
+export function TokenCard({ token, curveSupply, priority, clankerFdvUsdc, vol24hUsd }: Props) {
   const progress = curveSupply > 0n ? Number((token.tokensSold * 10_000n) / curveSupply) / 100 : 0;
   // The bulk launchpad scan has ALREADY discovered each token's
   // metadataURI via useLaunchpadTokens' cross-generation TokenCreated
@@ -149,10 +151,15 @@ export function TokenCard({ token, curveSupply, priority, clankerFdvUsdc }: Prop
             )}
             <span>· {age}</span>
           </div>
-          {/* Line 3: socials (left) + fee recipient / creator (right). */}
+          {/* Line 3: socials (left) + 24h volume (right). */}
           <div className="mt-1.5 flex items-center gap-2">
             <SocialLinksRow metadata={metadata} />
-            <span className="ml-auto truncate text-xs text-arc-text-faint">{byLabel}</span>
+            <span className="ml-auto shrink-0 text-xs text-arc-text-muted">
+              24h Vol{" "}
+              <span className="tabular-nums text-arc-text">
+                ${(vol24hUsd ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+              </span>
+            </span>
           </div>
         </div>
       </div>
@@ -163,15 +170,9 @@ export function TokenCard({ token, curveSupply, priority, clankerFdvUsdc }: Prop
       )}
 
       {isClanker ? (
-        // Reserve the same height as the PUMP progress block so clanker and
-        // pump cards stay identical in height, including on an all-clanker row.
-        <div aria-hidden className="mt-auto invisible">
-          <div className="mb-1 flex justify-between text-xs">
-            <span>Bonding progress</span>
-            <span>0%</span>
-          </div>
-          <div className="h-2" />
-        </div>
+        // CLANKER has no bonding curve: show the fee recipient at the bottom-left,
+        // where PUMP shows its progress bar.
+        <div className="mt-auto truncate pt-1 text-xs text-arc-text-faint">{byLabel}</div>
       ) : (
         <div className="mt-auto">
           <div className="mb-1 flex justify-between text-xs text-arc-text-muted">
