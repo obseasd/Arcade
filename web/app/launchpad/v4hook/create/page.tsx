@@ -19,6 +19,8 @@ import { encodeMetadataDataUri, resolveIpfs } from "@/lib/metadata";
 import { pushToast } from "@/lib/toast";
 import { TxStatus, type TxState } from "@/components/ui/TxStatus";
 import { cn, formatUSDC } from "@/lib/utils";
+import { SocialLinksInput } from "@/components/launchpad/SocialLinksInput";
+import { buildSocialsForMetadata, type SocialKey } from "@/lib/socials";
 
 const MAX_NAME = 32;
 const MAX_SYMBOL = 12;
@@ -128,6 +130,7 @@ function Inner() {
     const [name, setName] = useState("");
     const [symbol, setSymbol] = useState("");
     const [description, setDescription] = useState("");
+    const [socials, setSocials] = useState<Partial<Record<SocialKey, string>>>({});
     const [image, setImage] = useState("");
     const [imagePreview, setImagePreview] = useState("");
     const [imageUploading, setImageUploading] = useState(false);
@@ -343,12 +346,16 @@ function Inner() {
             // a network fetch.
             // name + symbol live on the ERC20 itself; metadataURI carries the
             // off-chain extras only (image, description, social links).
-            const metadataURI = description.trim() || image
-                ? encodeMetadataDataUri({
-                    description: description.trim() || undefined,
-                    image: image || undefined,
-                })
-                : "";
+            // Validate + drop invalid social links before they enter the metadata.
+            const validSocials = buildSocialsForMetadata(socials);
+            const metadataURI =
+                description.trim() || image || Object.keys(validSocials).length > 0
+                    ? encodeMetadataDataUri({
+                          description: description.trim() || undefined,
+                          image: image || undefined,
+                          ...validSocials,
+                      })
+                    : "";
             const hash = await writeContractAsync({
                 address: ADDRESSES.arcadeHook,
                 abi: ARCADE_HOOK_ABI,
@@ -477,7 +484,7 @@ function Inner() {
                             <>
                                 A bonding curve (starts ~$5k mcap) that graduates near ~$60k into a
                                 locked full-range V4 LP. Post-graduation the swap fee decays from 1%
-                                to 0.30% as market cap grows, 80% to you / 20% protocol.
+                                to 0.30% as market cap grows.
                             </>
                         )}{" "}
                         <Link href="/launchpad" className="text-arc-cta-hover hover:underline">
@@ -548,21 +555,32 @@ function Inner() {
                         </label>
                     </div>
                 </div>
-                <label className="block text-sm">
-                    <span className="text-arc-text-muted">
-                        Description{" "}
-                        <span className="text-xs text-arc-text-faint">
-                            ({description.length} / {MAX_DESCRIPTION})
+                {/* Description: CLANKER shows it here (before starting market cap);
+                    PUMP shows it lower, after the anti-sniper section. */}
+                {isClanker && (
+                    <label className="block text-sm">
+                        <span className="text-arc-text-muted">
+                            Description{" "}
+                            <span className="text-xs text-arc-text-faint">
+                                ({description.length} / {MAX_DESCRIPTION})
+                            </span>
                         </span>
-                    </span>
-                    <textarea
-                        value={description}
-                        onChange={(e) => setDescription(e.target.value.slice(0, MAX_DESCRIPTION))}
-                        placeholder="A short pitch your token deserves..."
-                        rows={3}
-                        className="mt-1 w-full resize-none rounded-lg border border-arc-border bg-arc-bg-elevated px-3 py-2 text-sm focus:border-arc-cta-hover focus:outline-none"
+                        <textarea
+                            value={description}
+                            onChange={(e) => setDescription(e.target.value.slice(0, MAX_DESCRIPTION))}
+                            placeholder="A short pitch your token deserves..."
+                            rows={3}
+                            className="mt-1 w-full resize-none rounded-lg border border-arc-border bg-arc-bg-elevated px-3 py-2 text-sm focus:border-arc-cta-hover focus:outline-none"
+                        />
+                    </label>
+                )}
+                {/* CLANKER socials: between description and starting market cap. */}
+                {isClanker && (
+                    <SocialLinksInput
+                        values={socials}
+                        onChange={(k, v) => setSocials((s) => ({ ...s, [k]: v }))}
                     />
-                </label>
+                )}
 
                 {/* Start market cap (CLANKER only) --------------------------- */}
                 {isClanker && (
@@ -772,6 +790,31 @@ function Inner() {
                         post-graduation BUYs through the V4 router.
                     </p>
                 </div>
+                )}
+
+                {/* PUMP socials: between anti-sniper and description. */}
+                {!isClanker && (
+                    <SocialLinksInput
+                        values={socials}
+                        onChange={(k, v) => setSocials((s) => ({ ...s, [k]: v }))}
+                    />
+                )}
+                {!isClanker && (
+                    <label className="block text-sm">
+                        <span className="text-arc-text-muted">
+                            Description{" "}
+                            <span className="text-xs text-arc-text-faint">
+                                ({description.length} / {MAX_DESCRIPTION})
+                            </span>
+                        </span>
+                        <textarea
+                            value={description}
+                            onChange={(e) => setDescription(e.target.value.slice(0, MAX_DESCRIPTION))}
+                            placeholder="A short pitch your token deserves..."
+                            rows={3}
+                            className="mt-1 w-full resize-none rounded-lg border border-arc-border bg-arc-bg-elevated px-3 py-2 text-sm focus:border-arc-cta-hover focus:outline-none"
+                        />
+                    </label>
                 )}
 
                 {/* Creator buy (PUMP only) -------------------------------- */}

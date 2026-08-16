@@ -11,7 +11,9 @@ export interface TokenMetadata {
   description?: string;
   twitter?: string;
   telegram?: string;
+  discord?: string;
   website?: string;
+  farcaster?: string;
   /**
    * Creator attribution: the @handle the deployer claims on Twitter. The
    * on-chain fee recipient is always an Ethereum address (see the V3 locker);

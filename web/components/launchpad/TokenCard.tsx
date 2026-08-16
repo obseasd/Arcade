@@ -6,7 +6,8 @@ import { Address } from "viem";
 import { TokenIcon } from "@/components/ui/TokenIcon";
 import { LaunchpadTokenInfo } from "@/lib/hooks/useLaunchpadTokens";
 import { useClankerMcap } from "@/lib/hooks/useClankerMcap";
-import { useTokenImage } from "@/lib/hooks/useTokenImage";
+import { useTokenImage, useTokenMetadata } from "@/lib/hooks/useTokenImage";
+import { SocialLinksRow } from "@/components/launchpad/SocialLinksRow";
 import { FEATURED_TOKENS } from "@/lib/constants";
 import { formatToken, formatUSDC, formatAddress } from "@/lib/utils";
 import { cn } from "@/lib/utils";
@@ -46,6 +47,7 @@ export function TokenCard({ token, curveSupply, priority, clankerFdvUsdc }: Prop
   // trip slower.
   const uriOverride = token.metadataURI || undefined;
   const { image } = useTokenImage(token.address, uriOverride);
+  const { metadata } = useTokenMetadata(token.address, uriOverride);
   const symbol = token.symbol ?? "?";
 
   // CLANKER_V3 = no bonding curve, locked single-sided V3 LP from birth.
@@ -69,17 +71,15 @@ export function TokenCard({ token, curveSupply, priority, clankerFdvUsdc }: Prop
   const isPump = token.mode === 0;
   const isArcade = token.mode === 1;
   const isFeatured = FEATURED_TOKENS.has(token.address.toLowerCase());
-  const status = isClanker
-    ? { label: "Clanker", className: "bg-arc-cta-hover/15 text-arc-text border-arc-cta-hover/40" }
-    : token.migrated
-      ? { label: "Migrated", className: "bg-arc-success/10 text-arc-success border-arc-success/30" }
-      : progress > 95
-        ? { label: "About to migrate", className: "bg-arc-warn/10 text-arc-warn border-arc-warn/30" }
-        : isPump
-          ? { label: "Pump", className: "bg-arc-cta-hover/15 text-arc-text border-arc-cta-hover/40" }
-          : isArcade
-            ? { label: "Arcade", className: "bg-arc-cta-hover/15 text-arc-text border-arc-cta-hover/40" }
-            : { label: "Active", className: "bg-arc-primary-soft text-arc-primary border-arc-border-strong" };
+  // Line-2 launch mode (distinct from the lifecycle badge top-right).
+  const modeLabel = isClanker ? "CLANKER" : isPump ? "PUMP" : isArcade ? "ARCADE" : "TOKEN";
+  const status = token.migrated
+    ? { label: "Migrated", className: "bg-arc-success/10 text-arc-success border-arc-success/30" }
+    : progress > 95
+      ? { label: "About to migrate", className: "bg-arc-warn/10 text-arc-warn border-arc-warn/30" }
+      : isClanker
+        ? { label: "Live", className: "bg-arc-success/10 text-arc-success border-arc-success/30" }
+        : { label: "New", className: "bg-arc-cta-hover/15 text-arc-text border-arc-cta-hover/40" };
 
   const age = ageString(Number(token.createdAt));
 
@@ -87,10 +87,23 @@ export function TokenCard({ token, curveSupply, priority, clankerFdvUsdc }: Prop
     <Link
       href={`/launchpad/${token.address}`}
       className={cn(
-        "arc-card group flex flex-col gap-3 p-4 transition-colors hover:border-arc-border-strong",
+        "arc-card group relative flex flex-col gap-2.5 p-4 transition-colors hover:border-arc-border-strong",
         isFeatured && "ring-1 ring-arc-cta-hover/40",
       )}
     >
+      {/* Featured + lifecycle status badges, pinned top-right. */}
+      <div className="absolute right-3 top-3 flex items-center gap-1.5">
+        {isFeatured && (
+          <span className="inline-flex items-center gap-1 rounded-full border border-arc-cta-hover/40 bg-arc-cta-hover/20 px-2 py-0.5 text-[10px] font-medium text-arc-text">
+            <Star className="h-2.5 w-2.5 fill-current" /> Featured
+          </span>
+        )}
+        <span className={cn("rounded-full border px-2 py-0.5 text-[10px] font-medium", status.className)}>
+          {status.label}
+        </span>
+      </div>
+
+      {/* Row 1: icon + name + ticker (pr clears the top-right badges). */}
       <div className="flex items-start gap-3">
         <TokenIcon
           symbol={symbol}
@@ -99,33 +112,38 @@ export function TokenCard({ token, curveSupply, priority, clankerFdvUsdc }: Prop
           className="rounded-xl border border-arc-border"
           priority={priority}
         />
-        <div className="min-w-0 flex-1">
+        <div className={cn("min-w-0 flex-1", isFeatured ? "pr-32" : "pr-16")}>
           <div className="flex items-center gap-2">
             <div className="truncate font-semibold">{token.name ?? "Unnamed"}</div>
             <div className="rounded-md bg-arc-surface-2 px-1.5 py-0.5 text-xs text-arc-text-muted">
               ${symbol}
             </div>
           </div>
-          <div className="mt-0.5 text-xs text-arc-text-muted">
-            by {formatAddress(token.creator)} · {age}
-          </div>
-          <div className="mt-2 flex flex-wrap items-center gap-2 gap-y-1">
-            {isFeatured && (
-              <span className="inline-flex items-center gap-1 rounded-full border border-arc-cta-hover/40 bg-arc-cta-hover/20 px-2 py-0.5 text-[10px] font-medium text-arc-text">
-                <Star className="h-2.5 w-2.5 fill-current" /> Featured
-              </span>
-            )}
-            <span className={cn("rounded-full border px-2 py-0.5 text-[10px] font-medium", status.className)}>
-              {status.label}
-            </span>
+          {/* Row 2: mode · MC · ago */}
+          <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-xs text-arc-text-muted">
+            <span className="font-semibold text-arc-text">{modeLabel}</span>
             {mcapNode && (
-              <span className="text-xs text-arc-text-muted">
-                MC <span className="tabular-nums text-arc-text">{mcapNode}</span>
+              <span>
+                · MC <span className="tabular-nums text-arc-text">{mcapNode}</span>
               </span>
             )}
+            <span>· {age}</span>
           </div>
         </div>
       </div>
+
+      {/* Row 3: social icons (left) + creator address (right). */}
+      <div className="flex items-center gap-2">
+        <SocialLinksRow metadata={metadata} />
+        <span className="ml-auto truncate text-xs text-arc-text-faint">
+          by {formatAddress(token.creator)}
+        </span>
+      </div>
+
+      {/* Row 4: description (2-line clamp), only when present. */}
+      {metadata?.description && (
+        <p className="line-clamp-2 text-xs text-arc-text-muted">{metadata.description}</p>
+      )}
 
       {isClanker ? (
         // Reserve the same height as the PUMP progress block so clanker and

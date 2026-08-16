@@ -5,7 +5,8 @@ import { useMemo } from "react";
 import { TokenIcon } from "@/components/ui/TokenIcon";
 import { ARCADE_HOOK_MODE, ARCADE_HOOK_STATUS } from "@/lib/abis/arcadeHook";
 import { type ArcadeHookTokenInfo } from "@/lib/hooks/useArcadeHookTokens";
-import { useTokenImage } from "@/lib/hooks/useTokenImage";
+import { useTokenImage, useTokenMetadata } from "@/lib/hooks/useTokenImage";
+import { SocialLinksRow } from "@/components/launchpad/SocialLinksRow";
 import { useV4TokenStats, type V4TokenStats } from "@/lib/hooks/useV4TokenStats";
 import { useV4PoolPrice } from "@/lib/hooks/useV4PoolPrice";
 import { LAUNCHPAD_CURVE_SUPPLY, LAUNCHPAD_TOTAL_SUPPLY, FEATURED_TOKENS } from "@/lib/constants";
@@ -36,7 +37,9 @@ export function V4TokenCard({ token, priority, preloadedStats }: { token: Arcade
     : liveStats;
   // Prefer the hook-cached metadataURI (from TokenLaunched); fall back to the
   // subgraph's when the on-chain scan came up empty, so the logo still resolves.
-  const { image } = useTokenImage(token.address, token.metadataURI || stats.metadataURI || undefined);
+  const metadataURI = token.metadataURI || stats.metadataURI || undefined;
+  const { image } = useTokenImage(token.address, metadataURI);
+  const { metadata } = useTokenMetadata(token.address, metadataURI);
   const symbol = token.symbol ?? "?";
   // Prefer the subgraph launch time (reliable) over the flaky on-chain event
   // scan; fall back to the scan only when the subgraph hasn't indexed it yet.
@@ -70,45 +73,67 @@ export function V4TokenCard({ token, priority, preloadedStats }: { token: Arcade
     return Math.min(100, Number((token.tokensSold * 10_000n) / LAUNCHPAD_CURVE_SUPPLY) / 100);
   }, [token.tokensSold]);
 
+  // Top-right STATUS badge = lifecycle state (distinct from the PUMP/CLANKER
+  // mode shown on line 2, so the two never read as redundant).
   const status = isClanker
-    ? { label: "Clanker", className: "bg-arc-cta-hover/15 text-arc-text border-arc-cta-hover/40" }
+    ? { label: "Live", className: "bg-arc-success/10 text-arc-success border-arc-success/30" }
     : token.status === ARCADE_HOOK_STATUS.GRADUATED
-      ? { label: "Graduated", className: "bg-arc-success/10 text-arc-success border-arc-success/30" }
+      ? { label: "Migrated", className: "bg-arc-success/10 text-arc-success border-arc-success/30" }
       : progress > 95
         ? { label: "About to migrate", className: "bg-arc-warn/10 text-arc-warn border-arc-warn/30" }
-        : { label: "Pump", className: "bg-arc-cta-hover/15 text-arc-text border-arc-cta-hover/40" };
+        : { label: "New", className: "bg-arc-cta-hover/15 text-arc-text border-arc-cta-hover/40" };
 
   return (
     <Link
       href={`/launchpad/v4hook/${token.address}`}
       className={cn(
-        "arc-card group flex flex-col gap-3 p-4 transition-colors hover:border-arc-border-strong",
+        "arc-card group relative flex flex-col gap-2.5 p-4 transition-colors hover:border-arc-border-strong",
         isFeatured && "ring-1 ring-arc-cta-hover/40",
       )}
     >
+      {/* Lifecycle status badge, pinned top-right. */}
+      <span
+        className={cn(
+          "absolute right-3 top-3 rounded-full border px-2 py-0.5 text-[10px] font-medium",
+          status.className,
+        )}
+      >
+        {status.label}
+      </span>
+
+      {/* Row 1: icon + name + ticker (pr keeps the name clear of the badge). */}
       <div className="flex items-start gap-3">
         <TokenIcon symbol={symbol} image={image} size={56} className="rounded-xl border border-arc-border" priority={priority} />
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0 flex-1 pr-16">
           <div className="flex items-center gap-2">
             <div className="truncate font-semibold">{token.name ?? "Unnamed"}</div>
             <div className="rounded-md bg-arc-surface-2 px-1.5 py-0.5 text-xs text-arc-text-muted">${symbol}</div>
           </div>
-          <div className="mt-0.5 text-xs text-arc-text-muted">
-            by {formatAddress(token.creator)}
-            {createdAtSec > 0 && <> · {ageString(createdAtSec)}</>}
-          </div>
-          <div className="mt-2 flex flex-wrap items-center gap-2 gap-y-1">
-            <span className={cn("rounded-full border px-2 py-0.5 text-[10px] font-medium", status.className)}>
-              {status.label}
-            </span>
+          {/* Row 2: mode · MC · ago */}
+          <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-xs text-arc-text-muted">
+            <span className="font-semibold text-arc-text">{isClanker ? "CLANKER" : "PUMP"}</span>
             {mcapNode && (
-              <span className="text-xs text-arc-text-muted">
-                MC <span className="tabular-nums text-arc-text">{mcapNode}</span>
+              <span>
+                · MC <span className="tabular-nums text-arc-text">{mcapNode}</span>
               </span>
             )}
+            {createdAtSec > 0 && <span>· {ageString(createdAtSec)}</span>}
           </div>
         </div>
       </div>
+
+      {/* Row 3: social icons (left) + creator address (right). */}
+      <div className="flex items-center gap-2">
+        <SocialLinksRow metadata={metadata} />
+        <span className="ml-auto truncate text-xs text-arc-text-faint">
+          by {formatAddress(token.creator)}
+        </span>
+      </div>
+
+      {/* Row 4: description (2-line clamp), only when the token has one. */}
+      {metadata?.description && (
+        <p className="line-clamp-2 text-xs text-arc-text-muted">{metadata.description}</p>
+      )}
 
       {isClanker ? (
         // CLANKER has no bonding curve, but reserve the EXACT same vertical
