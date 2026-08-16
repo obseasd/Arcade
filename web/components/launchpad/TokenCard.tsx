@@ -8,6 +8,7 @@ import { LaunchpadTokenInfo } from "@/lib/hooks/useLaunchpadTokens";
 import { useClankerMcap } from "@/lib/hooks/useClankerMcap";
 import { useTokenImage, useTokenMetadata } from "@/lib/hooks/useTokenImage";
 import { SocialLinksRow } from "@/components/launchpad/SocialLinksRow";
+import { getFreshMeta } from "@/lib/freshMeta";
 import { FEATURED_TOKENS } from "@/lib/constants";
 import { formatToken, formatUSDC, formatAddress } from "@/lib/utils";
 import { cn } from "@/lib/utils";
@@ -45,7 +46,7 @@ export function TokenCard({ token, curveSupply, priority, clankerFdvUsdc }: Prop
   // discovered yet), the override is undefined and the hook falls back
   // to its own scan; cards still resolve eventually, just one round
   // trip slower.
-  const uriOverride = token.metadataURI || undefined;
+  const uriOverride = token.metadataURI || getFreshMeta(token.address) || undefined;
   const { image } = useTokenImage(token.address, uriOverride);
   const { metadata } = useTokenMetadata(token.address, uriOverride);
   const symbol = token.symbol ?? "?";

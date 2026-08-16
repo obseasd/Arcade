@@ -7,6 +7,7 @@ import { ARCADE_HOOK_MODE, ARCADE_HOOK_STATUS } from "@/lib/abis/arcadeHook";
 import { type ArcadeHookTokenInfo } from "@/lib/hooks/useArcadeHookTokens";
 import { useTokenImage, useTokenMetadata } from "@/lib/hooks/useTokenImage";
 import { SocialLinksRow } from "@/components/launchpad/SocialLinksRow";
+import { getFreshMeta } from "@/lib/freshMeta";
 import { useV4TokenStats, type V4TokenStats } from "@/lib/hooks/useV4TokenStats";
 import { useV4PoolPrice } from "@/lib/hooks/useV4PoolPrice";
 import { LAUNCHPAD_CURVE_SUPPLY, LAUNCHPAD_TOTAL_SUPPLY, FEATURED_TOKENS } from "@/lib/constants";
@@ -37,7 +38,8 @@ export function V4TokenCard({ token, priority, preloadedStats }: { token: Arcade
     : liveStats;
   // Prefer the hook-cached metadataURI (from TokenLaunched); fall back to the
   // subgraph's when the on-chain scan came up empty, so the logo still resolves.
-  const metadataURI = token.metadataURI || stats.metadataURI || undefined;
+  const metadataURI =
+    token.metadataURI || stats.metadataURI || getFreshMeta(token.address) || undefined;
   const { image } = useTokenImage(token.address, metadataURI);
   const { metadata } = useTokenMetadata(token.address, metadataURI);
   const symbol = token.symbol ?? "?";

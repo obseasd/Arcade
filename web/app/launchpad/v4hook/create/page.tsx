@@ -21,6 +21,7 @@ import { TxStatus, type TxState } from "@/components/ui/TxStatus";
 import { cn, formatUSDC } from "@/lib/utils";
 import { SocialLinksInput } from "@/components/launchpad/SocialLinksInput";
 import { buildSocialsForMetadata, type SocialKey } from "@/lib/socials";
+import { setFreshMeta } from "@/lib/freshMeta";
 
 const MAX_NAME = 32;
 const MAX_SYMBOL = 12;
@@ -435,6 +436,11 @@ function Inner() {
                 }
             }
             if (!newToken) throw new Error("TokenLaunched event not found in receipt");
+
+            // Prime the fresh-metadata cache so the launchpad list renders this
+            // token's image immediately in this session, before the on-chain scan
+            // / subgraph index the TokenLaunched event (~2-3 min).
+            if (metadataURI) setFreshMeta(newToken, metadataURI);
 
             // The creator buy (PUMP) now runs ATOMICALLY inside createLaunch via
             // the creatorBuyUsdc arg above -- provable first buy, unbypassable, one
