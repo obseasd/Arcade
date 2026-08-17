@@ -22,6 +22,7 @@ import {
     fetchAttestationDetailed,
     mintRecipientFromMessage,
     parseCctpV2Message,
+    cctpNetwork,
 } from "@/lib/cctp";
 import { ROUTER_ABI } from "@/lib/abis/dex";
 import { V3_QUOTER_ABI } from "@/lib/abis/v3";
@@ -1123,6 +1124,19 @@ async function runCctpLeg(
     now: number,
     summary: RunSummary,
 ) {
+    // Config cross-check (audit CCTP M-1): the keeper's chain is chosen from
+    // NEXT_PUBLIC_ARC_ENV, but the CCTP transmitter + Iris host come from
+    // NEXT_PUBLIC_CCTP_NETWORK (cctpNetwork()). If those disagree the keeper
+    // would read usedNonces / poll Iris on the wrong network, so bail loudly
+    // instead of relaying blind. Both must be flipped together at the cutover.
+    const cctpMainnet = cctpNetwork() === "mainnet";
+    if (cctpMainnet !== ARC_IS_MAINNET) {
+        summary.notes.push(
+            `cctp-leg SKIPPED: env mismatch (NEXT_PUBLIC_ARC_ENV mainnet=${ARC_IS_MAINNET}, NEXT_PUBLIC_CCTP_NETWORK mainnet=${cctpMainnet}) -- set both to the same network`,
+        );
+        return;
+    }
+
     // Bulk-expire aged pending intents in ONE statement (not one-at-a-time as
     // they surface in the poll window) so an unauthenticated flood cannot hold
     // the oldest-first slots longer than the age window, and prune old terminal

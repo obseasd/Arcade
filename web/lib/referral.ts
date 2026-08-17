@@ -90,7 +90,10 @@ export const REGISTER_TYPES = {
 
 /** The signature is valid for an hour; the verifier caps how far ahead a
  *  deadline may sit, so this must stay under MAX_DEADLINE_SECONDS. */
-const REGISTER_DEADLINE_SECONDS = 3600;
+// Must stay <= MAX_DEADLINE_SECONDS (900) in referralPayout.ts, or a signed
+// register would always fail verification. Matches the live claim/stats paths
+// (now+300). Was 3600 (audit L-1: dead-on-arrival if the signed flow is re-wired).
+const REGISTER_DEADLINE_SECONDS = 300;
 
 type SignTypedData = (args: {
     domain: typeof REGISTER_DOMAIN;
