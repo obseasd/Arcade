@@ -4,6 +4,7 @@ import { isAddress, parseEventLogs, parseAbiItem, type Address, type Hex } from 
 import { ADDRESSES } from "@/lib/constants";
 import { serverReadClient } from "@/lib/serverRpc";
 import { forwardTokenSide, previewTokenSideOwed } from "@/lib/twitterTokenForward";
+import { ensureTokenFwdRow } from "@/lib/twitterLaunchPersistence";
 
 /**
  * Forward the launch-token side of a claimant's creator fees (see
@@ -141,6 +142,17 @@ export async function POST(req: NextRequest) {
     }
     if (!proven) {
         return NextResponse.json({ error: "no matching Claimed event (unproven)" }, { status: 403 });
+    }
+
+    // A UI launch (creator = the launcher, no cron tweet row) has no token-forward
+    // cursor row, so forwardTokenSide would bail "unknown pool". Lazily insert a
+    // sentinel row (gated behind the proven Claimed event above, so no unproven
+    // caller can create rows); a no-op for cron-launched pools that already have a
+    // row. Non-fatal: on DB error we still attempt the forward (it will no-op).
+    try {
+        await ensureTokenFwdRow(poolIdHex);
+    } catch {
+        /* non-fatal: forwardTokenSide degrades to "unknown pool" if the row is absent */
     }
 
     const result = await forwardTokenSide(poolIdHex, slotIndex, recipient as Address, token as Address);

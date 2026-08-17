@@ -230,6 +230,32 @@ export async function advanceTokenFwdIf(
     return rows.length > 0;
 }
 
+/**
+ * Ensure a token-forward cursor row exists for a UI-launched pool (no cron tweet
+ * row). A UI CLANKER-to-@handle launch writes nothing to Postgres, so getTokenFwd
+ * would return null and the token-side forward would bail "unknown pool". Insert a
+ * SENTINEL row (status/user_id = 'ui', empty handle) so the slot0_token_fwd /
+ * slot1_token_fwd cursors (DEFAULT 0) exist for advanceTokenFwdIf to CAS against.
+ *
+ * The sentinel is INVISIBLE to getLaunchByPool / getReplyLaunchByPool / the
+ * launch-count breakers (all filter status='launched' or is_reply=true), so it
+ * cannot flip the claim gate (which for UI launches resolves the handle from the
+ * subgraph, not this row). WHERE NOT EXISTS keeps exactly one row per pool so
+ * getTokenFwd's LIMIT 1 stays deterministic even if a cron row also exists; the
+ * synthetic tweet_id PK + ON CONFLICT make concurrent first-forwards converge.
+ * Idempotent + race-safe; a no-op once any row (cron or sentinel) exists.
+ */
+export async function ensureTokenFwdRow(poolId: string): Promise<void> {
+    if (!isDbConfigured()) return;
+    const sql = getSql();
+    await sql`
+        INSERT INTO twitter_launches (tweet_id, user_id, handle, status, pool_id)
+        SELECT ${"ui:" + poolId}, 'ui', '', 'ui', ${poolId}
+        WHERE NOT EXISTS (SELECT 1 FROM twitter_launches WHERE pool_id = ${poolId})
+        ON CONFLICT (tweet_id) DO NOTHING
+    `;
+}
+
 /** Every launched reply-launch pool (for the safety-net batch reconciliation). */
 export async function listReplyLaunchPools(): Promise<string[]> {
     if (!isDbConfigured()) return [];
