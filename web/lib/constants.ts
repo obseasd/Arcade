@@ -7,6 +7,13 @@ import deploymentsJson from "../public/deployments.json";
 const DEPLOYMENTS = (deploymentsJson as unknown as { addresses?: Record<string, string | undefined> })
   .addresses ?? {};
 
+/** Block the current ArcadeHook was deployed at (deployments.json, source of
+ *  truth). Bounds RoyaltyPaid / launch-event getLogs scans so they don't walk
+ *  the whole chain. 0 when absent (caller falls back to a full-range scan). */
+export const ARCADE_HOOK_DEPLOY_BLOCK = BigInt(
+  Number((DEPLOYMENTS as Record<string, unknown>).arcadeHookDeployBlock ?? 0) || 0,
+);
+
 function safeAddress(v: string | undefined): Address {
   // Trim whitespace + drop strict EIP-55 checksum validation. Without
   // .trim(), an env var pasted with a trailing newline / leading space

@@ -1,5 +1,4 @@
 import {
-    createPublicClient,
     createWalletClient,
     http,
     parseAbiItem,
@@ -9,8 +8,9 @@ import {
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 
-import { ARC_CHAIN } from "@/lib/serverRpc";
-import { ADDRESSES } from "@/lib/constants";
+import { ARC_CHAIN, serverReadClient } from "@/lib/serverRpc";
+import { ADDRESSES, ARCADE_HOOK_DEPLOY_BLOCK } from "@/lib/constants";
+import { scanLogsChunked, CHUNK_SMALL } from "@/lib/eventScan";
 import { getReplyLaunchByPool, advanceSlot1CreditedIf } from "@/lib/twitterLaunchPersistence";
 
 /**
@@ -30,10 +30,6 @@ import { getReplyLaunchByPool, advanceSlot1CreditedIf } from "@/lib/twitterLaunc
  * Requires: the operator (COMPOUNDER_OPERATOR_PRIVATE_KEY) is an allowedCrediter
  * on the escrow (owner/Safe runs escrow.setCrediter(operator, true) once).
  */
-
-// The hook's deploy block (deployments.json arcadeHookDeployBlock) bounds the
-// RoyaltyPaid scan. BUMP with the hook address at each redeploy.
-const HOOK_DEPLOY_BLOCK = 52470498n;
 
 const ROYALTY_PAID = parseAbiItem(
     "event RoyaltyPaid(bytes32 indexed poolId, address indexed creator, uint256 creatorAmount, uint256 treasuryAmount, address currency)",
@@ -82,25 +78,40 @@ export async function reconcileReplySlot(poolIdHex: string): Promise<ReconcileRe
     const row = await getReplyLaunchByPool(poolIdHex);
     if (!row) return { ok: true, credited: false, reason: "not a reply-launch (no slot-1 owner)" };
 
-    const publicClient = createPublicClient({ chain: ARC_CHAIN, transport: http() });
+    // Fallback-aware client (drpc/arcscan-first), NOT the chain-default RPC.
+    const publicClient = serverReadClient();
 
     // Sum the operator's accrual = Σ RoyaltyPaid(poolId).creatorAmount, USDC side.
+    // Arc caps eth_getLogs ranges at ~10k blocks AND ignores indexed-topic
+    // filters, so we (a) walk in ≤10k backward windows bounded to the hook's
+    // deploy block via the shared chunked scanner, and (b) re-filter poolId +
+    // currency in JS. A partial scan (RPC stress) under-counts -> we credit less
+    // this run and the delta is picked up on a later run (the accrual is
+    // cumulative and gated by the DB cursor), never a silent no-credit that
+    // strands the original poster's half.
     let accrued = 0n;
+    let latest: bigint;
     try {
-        const logs = await publicClient.getLogs({
-            address: hook,
-            event: ROYALTY_PAID,
-            args: { poolId: poolIdHex as Hex },
-            fromBlock: HOOK_DEPLOY_BLOCK,
-            toBlock: "latest",
-        });
-        for (const l of logs) {
-            const currency = (l.args.currency ?? "0x") as string;
-            if (currency.toLowerCase() !== usdc.toLowerCase()) continue; // token-side leg
-            accrued += (l.args.creatorAmount ?? 0n) as bigint;
-        }
+        latest = await publicClient.getBlockNumber();
     } catch (e) {
-        return { ok: false, error: `getLogs failed: ${e instanceof Error ? e.message : String(e)}` };
+        return { ok: false, error: `getBlockNumber failed: ${e instanceof Error ? e.message : String(e)}` };
+    }
+    const deployBlock = ARCADE_HOOK_DEPLOY_BLOCK > 0n ? ARCADE_HOOK_DEPLOY_BLOCK : 0n;
+    const maxBack = latest > deployBlock ? latest - deployBlock + 1n : latest + 1n;
+
+    const logs = await scanLogsChunked(
+        publicClient,
+        { address: hook, event: ROYALTY_PAID, args: { poolId: poolIdHex as Hex } },
+        latest,
+        { maxBack, chunk: CHUNK_SMALL, label: `replyReconcile ${poolIdHex.slice(0, 10)}` },
+    );
+    const wantPool = poolIdHex.toLowerCase();
+    const wantUsdc = usdc.toLowerCase();
+    for (const l of logs) {
+        // Arc ignores topic filters -> re-check poolId (and skip the token-side leg).
+        if (((l.args?.poolId ?? "0x") as string).toLowerCase() !== wantPool) continue;
+        if (((l.args?.currency ?? "0x") as string).toLowerCase() !== wantUsdc) continue;
+        accrued += (l.args?.creatorAmount ?? 0n) as bigint;
     }
 
     const already = BigInt(row.slot1CreditedUsdc || "0");

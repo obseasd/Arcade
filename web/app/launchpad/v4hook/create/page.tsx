@@ -717,10 +717,11 @@ function Inner() {
                                         className="mt-1 w-full rounded-lg border border-arc-border bg-arc-bg px-3 py-2 text-sm focus:border-arc-cta-hover focus:outline-none"
                                     />
                                     <p className="mt-1 text-xs text-arc-text-faint">
-                                        Creator fees are held for the @ (USDC in a handle-gated escrow,
-                                        launch-token side forwarded on claim); the verified owner of the
-                                        @ receives both after connecting a wallet. Useful when launching
-                                        on behalf of someone who has not joined yet.
+                                        The USDC side of the creator fees is escrowed for the @ (claimable
+                                        once its verified owner connects a wallet); the launch-token side
+                                        goes to your connected wallet. To route <em>both</em> sides to the
+                                        @, launch by tweeting @ArcadeSwap instead. Useful when launching on
+                                        behalf of someone who has not joined yet.
                                     </p>
                                 </label>
                             )}
