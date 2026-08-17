@@ -276,10 +276,19 @@ function protocolFeeForTrade(source: string, pool: Bytes | null, volumeUsdc: Big
     return BigDecimal.fromString("0");
   }
   if (source == "v2") {
-    return volumeUsdc.times(BigDecimal.fromString("0.0015"));
+    // Only OUR V2 pairs carry the pair-level LaunchFeePaid (0.15% protocol). A
+    // canonical Uniswap V2 pair pays Arcade nothing, so referral must not credit
+    // it. Gate on arcadeOwned (fail-closed: a non-Arcade / untracked pool -> 0).
+    if (pool === null) return BigDecimal.fromString("0");
+    const p = Pool.load((pool as Bytes).toHexString());
+    if (p != null && p.arcadeOwned) return volumeUsdc.times(BigDecimal.fromString("0.0015"));
+    return BigDecimal.fromString("0");
   }
   if (source == "v3" && pool !== null) {
     const p = Pool.load((pool as Bytes).toHexString());
+    // Canonical Uniswap V3 pools may be indexed for charts but pay Arcade no
+    // protocol fee; only credit pools created by the Arcade factory dataSource.
+    if (p != null && !p.arcadeOwned) return BigDecimal.fromString("0");
     if (p != null) {
       // feeTier is hundredths of a bip (3000 => 0.30% => /1e6). LP fee on the
       // swap = volume * feeRate.
@@ -666,6 +675,7 @@ export function handlePoolCreated(event: PoolCreated): void {
   p.feeTier = event.params.fee;
   p.kind = "v3";
   p.usdcReserve = BigDecimal.fromString("0");
+  p.arcadeOwned = true; // created by the Arcade V3 factory dataSource
   p.arcadeLocked = false;
   // Pools ship with the protocol fee OFF (v3-core default). Kept in sync by
   // handleSetFeeProtocol below once the factory owner (the Safe) flips it.
@@ -736,6 +746,7 @@ export function handleV2PairCreated(event: PairCreated): void {
   p.feeTier = 3000; // V2 flat 0.30%
   p.kind = "v2";
   p.usdcReserve = BigDecimal.fromString("0");
+  p.arcadeOwned = true; // created by the Arcade V2 factory dataSource
   p.arcadeLocked = false; // V2 protocol fee is the pair-level LaunchFeePaid, always Arcade's
   // feeProtocol is a V3-only mechanism; V2 pools carry 0 (non-nullable field).
   p.feeProtocol0 = 0;

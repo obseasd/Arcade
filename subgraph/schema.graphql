@@ -44,6 +44,15 @@ type Pool @entity(immutable: false) {
   feeTier: Int!
   # "v2" | "v3" -- how the pool's USDC reserve is tracked (Sync vs balanceOf).
   kind: String!
+  # True only for pools created by an ARCADE factory dataSource (handlePoolCreated
+  # / handleV2PairCreated). On Arc mainnet the canonical Uniswap V2/V3 factories
+  # are also deployed; if their pools are ever indexed (e.g. for charts), their
+  # trades must NOT credit a referral protocol fee -- a canonical pool pays Arcade
+  # nothing. protocolFeeForTrade gates every non-curve venue on this flag, and it
+  # is FAIL-CLOSED: a pool from any non-Arcade dataSource that never sets it
+  # defaults to false and is credited nothing. Requires a full re-index (a new
+  # field) so every existing Arcade pool is re-created with arcadeOwned = true.
+  arcadeOwned: Boolean!
   # True once the V3 locker reports a PositionLocked for this pool: only then
   # does Arcade actually collect a protocol cut of the pool's LP fees (via the
   # compounder). A V3 pool anyone can create through the factory but never lock
