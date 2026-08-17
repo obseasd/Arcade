@@ -720,6 +720,12 @@ async function recordOutcome(
                     const gross1 = args.fee1Collected ?? p.fee1;
                     resolvedFee0 = gross0 > resolvedProtocolFee0 ? gross0 - resolvedProtocolFee0 : 0n;
                     resolvedFee1 = gross1 > resolvedProtocolFee1 ? gross1 - resolvedProtocolFee1 : 0n;
+                } else {
+                    // pushFees (RECEIVE): FeesPushed emits NET amounts (already in
+                    // p.fee*), plus the protocol cut separately. Capture the cut for
+                    // the breakdown columns, which otherwise stayed 0 (audit LOW-2).
+                    resolvedProtocolFee0 = args.protocolFee0 ?? 0n;
+                    resolvedProtocolFee1 = args.protocolFee1 ?? 0n;
                 }
                 break;
             }
