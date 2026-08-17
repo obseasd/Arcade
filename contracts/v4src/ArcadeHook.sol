@@ -176,6 +176,16 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
     ///         creator-fee escrow path entirely.
     address public twitterEscrow;
 
+    /// @notice Recipient of the TOKEN-side CLANKER fees for a handle-attributed
+    ///         launch (the USDC side is escrowed on-chain; the escrow slot pins
+    ///         one token, so the token side cannot co-habit it). Set to the
+    ///         backend operator so the off-chain forwarder delivers the token
+    ///         side to the verified @ owner on claim -- WITHOUT this, a UI launch
+    ///         (FeeOwner.creator = the launcher) leaves the token side in the
+    ///         launcher's wallet. Owner-mutable; address(0) falls back to the
+    ///         launcher (legacy behaviour). Only affects handle launches.
+    address public tokenForwarder;
+
     // -------------------------------------------------------------------
     // Constants (curve math lives in ArcadeV4Curve; these are V4-specific)
     // -------------------------------------------------------------------
@@ -369,6 +379,7 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
     event FeeHarvested(bytes32 indexed positionKey, uint256 amount0, uint256 amount1);
     event TreasuryUpdated(address indexed oldTreasury, address indexed newTreasury);
     event TwitterEscrowUpdated(address indexed oldEscrow, address indexed newEscrow);
+    event TokenForwarderUpdated(address indexed oldForwarder, address indexed newForwarder);
     event ClankerBuyCapSet(uint16 maxBuyBps, uint32 windowSecs);
     event SnipeConfigured(address indexed token, uint16 startBps, uint32 decaySeconds);
     event TokenCredited(address indexed token, address indexed recipient, uint256 amount);
@@ -587,8 +598,21 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
             launchEscrow = twitterEscrow;
         }
 
+        // Token-side fee recipient. The USDC side of a handle launch is escrowed
+        // on-chain (below), but the escrow slot pins a single token so the token
+        // side cannot share it. Route the token side to the owner-configured
+        // tokenForwarder (the backend operator) so the off-chain forwarder can
+        // deliver it to the verified @ owner on claim -- otherwise a UI launch
+        // (creator = launcher) would strand the token side in the launcher's
+        // wallet (audit M-2 Option A). No handle, or no forwarder set => the
+        // launcher, i.e. legacy behaviour. This is the FEE recipient only; the
+        // launch's identity (CurveState.creator) + the locked-LP owner stay the
+        // real launcher.
+        address feeCreator =
+            (launchEscrow != address(0) && tokenForwarder != address(0)) ? tokenForwarder : msg.sender;
+
         feeOwners[poolId] = FeeOwner({
-            creator: msg.sender,
+            creator: feeCreator,
             creator2: creator2,
             creator2Bps: creator2Bps,
             feeTierBps: feeTierBps,
@@ -708,6 +732,15 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         // Zero address is intentional: clears the escrow target entirely.
         emit TwitterEscrowUpdated(twitterEscrow, newEscrow);
         twitterEscrow = newEscrow;
+    }
+
+    /// @notice Set the token-side fee forwarder for handle-attributed launches
+    ///         (see tokenForwarder). Zero clears it (token side falls back to the
+    ///         launcher). Only affects launches created AFTER this call -- each
+    ///         launch snapshots FeeOwner.creator at createLaunch time.
+    function setTokenForwarder(address newForwarder) external onlyOwner {
+        emit TokenForwarderUpdated(tokenForwarder, newForwarder);
+        tokenForwarder = newForwarder;
     }
 
     /// @notice Tune the CLANKER first-window anti-snipe buy cap. A single buy
@@ -836,7 +869,10 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
             bytes32 positionKey = keccak256(
                 abi.encodePacked(sender, params.tickLower, params.tickUpper, params.salt)
             );
-            address positionOwner = feeOwners[key.toId()].creator;
+            // The locked-LP owner is the real launcher (CurveState.creator), NOT
+            // FeeOwner.creator -- for a handle launch the latter is the token-fee
+            // forwarder, which must not appear as the position owner.
+            address positionOwner = curveStates[key.toId()].creator;
             uint128 liquidity = uint128(uint256(params.liquidityDelta));
             positions[positionKey] =
                 PositionInfo({owner: positionOwner, liquidity: liquidity, locked: true});

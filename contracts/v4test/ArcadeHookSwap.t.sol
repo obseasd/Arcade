@@ -1043,6 +1043,59 @@ contract ArcadeHookSwapTest is Test {
         assertApproxEqRel(slotBal, treasuryGot * 4, 0.05e18, "80/20 into escrow vs treasury");
     }
 
+    /// M-2 (Option A / Design 1): with a tokenForwarder configured, a
+    /// handle-attributed CLANKER launch routes the TOKEN side of its fees to the
+    /// forwarder (the backend operator, which delivers it to the @ owner on
+    /// claim), NOT to the launcher's wallet -- while the USDC side still escrows
+    /// and the launch IDENTITY + locked-LP owner stay the real launcher.
+    function test_tokenForwarder_handleLaunch_routesTokenSideToForwarder() public {
+        ArcadeTwitterEscrowV4 escrow = _wireEscrow();
+        address FORWARDER = address(0xF0F0F0);
+        vm.prank(OWNER);
+        hook.setTokenForwarder(FORWARDER);
+
+        vm.prank(CREATOR);
+        (address token,) = hook.createLaunch("Clk", "CLK", "ipfs://x", 1, address(0), 0, 0, 0, 1, "arcade", 0, 0);
+        PoolKey memory key = _buildKey(token);
+        PoolId pid = key.toId();
+        uint256 poolId = uint256(PoolId.unwrap(pid));
+
+        // FeeOwner.creator is the forwarder (fee routing); the launch identity is
+        // still the real launcher (display / locked-LP owner).
+        assertEq(hook.getFeeOwner(pid).creator, FORWARDER, "fee-creator = forwarder");
+        assertEq(hook.getCurveState(pid).creator, CREATOR, "launch identity = launcher");
+
+        // Buy then SELL so a TOKEN-side LP fee accrues (sells pay in the token).
+        _buyViaV4(key, ALICE, 50_000e6);
+        _sellViaV4(key, token, ALICE, 10_000_000e18);
+
+        uint256 fwdBefore = IERC20(token).balanceOf(FORWARDER);
+        uint256 launcherBefore = IERC20(token).balanceOf(CREATOR);
+        hook.collectFees(token);
+
+        assertGt(IERC20(token).balanceOf(FORWARDER) - fwdBefore, 0, "forwarder got the token side");
+        assertEq(IERC20(token).balanceOf(CREATOR), launcherBefore, "launcher NOT paid the token side");
+        assertGt(escrow.balances(poolId, 0, address(usdc)), 0, "USDC side still escrowed to the handle");
+    }
+
+    /// A tokenForwarder has NO effect on a launch WITHOUT a handle: the token
+    /// side stays with the launcher (the forwarder only reroutes handle launches).
+    function test_tokenForwarder_noHandle_hasNoEffect() public {
+        vm.prank(OWNER);
+        hook.setTokenForwarder(address(0xF0F0F0));
+        vm.prank(CREATOR);
+        (address token,) = hook.createLaunch("Clk", "CLK", "ipfs://x", 1, address(0), 0, 0, 0, 1, "", 0, 0);
+        PoolId pid = _buildKey(token).toId();
+        assertEq(hook.getFeeOwner(pid).creator, CREATOR, "no handle => fee-creator stays the launcher");
+    }
+
+    /// setTokenForwarder is owner-gated.
+    function test_setTokenForwarder_onlyOwner() public {
+        vm.prank(ALICE);
+        vm.expectRevert();
+        hook.setTokenForwarder(address(0xBEEF));
+    }
+
     /// PUMP ignores the handle: fees go direct to the creator even if a handle
     /// is passed (Twitter attribution is CLANKER-only).
     function test_escrow_pumpIgnoresHandle() public {
