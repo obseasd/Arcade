@@ -112,12 +112,16 @@ export function SendModal({ open, onClose, defaultToken }: Props) {
     }, [open, token, tokenOptions]);
 
     // Reset form state every time the modal opens so a previous half-
-    // filled send doesn't leak into the next session.
+    // filled send doesn't leak into the next session. Includes the amount
+    // + recipient (a prior send used to persist both on reopen).
     useEffect(() => {
         if (open) {
             setStep("form");
             setTxHash(undefined);
             setErrorMessage(undefined);
+            setAmount("");
+            setRecipientInput("");
+            setUnverified(false);
         }
     }, [open]);
 
