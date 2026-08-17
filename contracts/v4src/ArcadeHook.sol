@@ -232,6 +232,12 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
     /// @notice Max allowed anti-sniper starting tax (50%). Decays linearly to 0.
     uint16 internal constant MAX_SNIPE_START_BPS = 5_000;
 
+    /// @notice Max anti-sniper decay window (1h). Bounds a self-routed skim so a
+    ///         creator cannot levy a near-50% buy tax over a multi-year window.
+    ///         The UI already caps this at 60min; this is the on-chain backstop
+    ///         for direct (non-UI) createLaunch calls. (Audit fee M-1, 2026-08-16.)
+    uint32 internal constant MAX_SNIPE_DECAY_SECONDS = 3_600;
+
     /// @notice Flat USDC creation fee charged at createLaunch (6 dp).
     uint256 internal constant CREATION_FEE = 3e6; // 3 USDC
 
@@ -495,6 +501,9 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         if (creator2Bps > 10_000) revert InvalidFeeOwner();
         if (snipeStartBps > MAX_SNIPE_START_BPS) revert InvalidSnipeBps();
         if (snipeStartBps > 0 && snipeDecaySeconds == 0) revert InvalidDecaySeconds();
+        // Bound the decay window (audit fee M-1): an unbounded window + up to 50%
+        // start, routed 100% to the creator, is a rug-adjacent buy tax.
+        if (snipeDecaySeconds > MAX_SNIPE_DECAY_SECONDS) revert InvalidDecaySeconds();
         // Anti-sniper rides the hook fee-take, which CLANKER's single-sided pool
         // cannot support (no USDC reserve to take). Reject a snipe config on
         // CLANKER instead of silently accepting a no-op the creator pays for --

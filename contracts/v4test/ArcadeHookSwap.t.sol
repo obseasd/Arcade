@@ -850,6 +850,18 @@ contract ArcadeHookSwapTest is Test {
         hook.createLaunch("S", "S", "ipfs://s", 1, address(0), 0, 1_000, 600, 1, "", 0, 0);
     }
 
+    /// Anti-sniper decay window is capped at 1h on-chain (audit fee M-1): a PUMP
+    /// launch with a longer window reverts, so a creator cannot levy a near-50%
+    /// self-routed buy tax over a multi-year window. Exactly 1h is accepted.
+    function test_createLaunch_pumpRejectsOverlongSnipeDecay() public {
+        vm.prank(CREATOR);
+        vm.expectRevert(ArcadeHook.InvalidDecaySeconds.selector);
+        hook.createLaunch("P", "P", "ipfs://p", 0, address(0), 0, 5_000, 3_601, 0, "", 0, 0);
+        // Boundary: exactly MAX_SNIPE_DECAY_SECONDS (1h) is allowed.
+        vm.prank(CREATOR);
+        hook.createLaunch("P2", "P2", "ipfs://p2", 0, address(0), 0, 5_000, 3_600, 0, "", 0, 0);
+    }
+
     /// creator2 is a CLANKER-only split; PUMP would ignore it everywhere, so a
     /// creator2 config on PUMP is rejected rather than silently dropped.
     function test_createLaunch_pumpRejectsCreator2() public {
