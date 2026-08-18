@@ -11,7 +11,7 @@ import { privateKeyToAccount } from "viem/accounts";
 import { ARC_CHAIN, serverReadClient } from "@/lib/serverRpc";
 import { ADDRESSES, ARCADE_HOOK_DEPLOY_BLOCK } from "@/lib/constants";
 import { scanLogsChunked, CHUNK_SMALL } from "@/lib/eventScan";
-import { forwarderKey } from "@/lib/twitterTokenForward";
+import { forwarderKey, forwarderMismatch } from "@/lib/twitterTokenForward";
 import { getReplyLaunchByPool, advanceSlot1CreditedIf } from "@/lib/twitterLaunchPersistence";
 
 /**
@@ -68,6 +68,10 @@ export async function reconcileReplySlot(poolIdHex: string): Promise<ReconcileRe
     if (!operatorKey) {
         return { ok: false, error: "forwarder key missing/malformed" };
     }
+    // Bail if the on-chain tokenForwarder disagrees with our key (rollout window):
+    // the creator2 USDC leg would land elsewhere and this sweep would mis-credit.
+    const mism = await forwarderMismatch();
+    if (mism) return { ok: false, error: mism };
     const hook = ADDRESSES.arcadeHook as Address;
     const escrow = ADDRESSES.twitterEscrow as Address;
     const usdc = ADDRESSES.usdc as Address;

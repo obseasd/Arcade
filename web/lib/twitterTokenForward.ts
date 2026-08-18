@@ -2,8 +2,45 @@ import { createWalletClient, http, erc20Abi, type Address, type Hex } from "viem
 import { privateKeyToAccount } from "viem/accounts";
 
 import { ARC_CHAIN, serverPublicClient, serverReadClient } from "@/lib/serverRpc";
+import { ADDRESSES } from "@/lib/constants";
 import { getTokenFwd, advanceTokenFwdIf, getReplyLaunchByPool } from "@/lib/twitterLaunchPersistence";
 import { REPLY_SPLIT_BPS } from "@/lib/twitterLaunch";
+
+const TOKEN_FORWARDER_ABI = [
+    { type: "function", name: "tokenForwarder", stateMutability: "view", inputs: [], outputs: [{ type: "address" }] },
+] as const;
+const ZERO_ADDR = "0x0000000000000000000000000000000000000000";
+
+/**
+ * Guard the cross-domain invariant: when the hook's on-chain tokenForwarder is
+ * SET (non-zero), it MUST equal our forwarder key's address, else the token side
+ * lands on a different address than the one we read/sign from -> a silent
+ * mis-split during a mainnet rollout window (FORWARDER_PRIVATE_KEY and
+ * setTokenForwarder configured out of order / to different addresses). Returns an
+ * error string on mismatch, null when OK. tokenForwarder == 0 (or the function
+ * absent on the pre-redeploy hook -> read reverts) is legacy mode (feeCreator =
+ * msg.sender = the operator for cron launches = forwarderAddress()), left
+ * UNGUARDED so testnet and the currently-deployed hook keep working.
+ */
+export async function forwarderMismatch(): Promise<string | null> {
+    const fwd = forwarderAddress();
+    if (!fwd) return "forwarder key missing/malformed";
+    let onchain: Address;
+    try {
+        onchain = (await serverReadClient().readContract({
+            address: ADDRESSES.arcadeHook as Address,
+            abi: TOKEN_FORWARDER_ABI,
+            functionName: "tokenForwarder",
+        })) as Address;
+    } catch {
+        return null; // function absent (pre-redeploy hook) or read failed: don't block
+    }
+    if (onchain.toLowerCase() === ZERO_ADDR) return null; // legacy mode, unguarded
+    if (onchain.toLowerCase() !== fwd.toLowerCase()) {
+        return `tokenForwarder mismatch: on-chain ${onchain} != forwarder key ${fwd} -- set both to the same address`;
+    }
+    return null;
+}
 
 /**
  * Token-side fee forwarding. CLANKER fees accrue in BOTH USDC (routed to the
@@ -55,9 +92,16 @@ export type ForwardResult =
  * all three derive from this one function so they cannot drift.
  */
 export function forwarderKey(): Hex | null {
-    const key = (process.env.FORWARDER_PRIVATE_KEY ?? process.env.COMPOUNDER_OPERATOR_PRIVATE_KEY) as
-        | Hex
-        | undefined;
+    // Use the DEDICATED key only when present AND well-formed; a blank or
+    // malformed FORWARDER_PRIVATE_KEY (a defined-but-empty Vercel var) falls back
+    // to the operator key CONSISTENTLY -- NOT `??`, which keeps a blank string and
+    // would split-brain (off-chain bails while the cron routes to the operator).
+    const dedicated = process.env.FORWARDER_PRIVATE_KEY;
+    const key = (
+        dedicated && /^0x[0-9a-fA-F]{64}$/.test(dedicated)
+            ? dedicated
+            : process.env.COMPOUNDER_OPERATOR_PRIVATE_KEY
+    ) as Hex | undefined;
     return key && /^0x[0-9a-fA-F]{64}$/.test(key) ? key : null;
 }
 
@@ -165,6 +209,10 @@ export async function forwardTokenSide(
     if (!fwdKey) {
         return { ok: false, error: "forwarder key missing/malformed" };
     }
+    // Refuse to forward into a mis-split state if the on-chain tokenForwarder
+    // disagrees with our key (rollout window). Funds stay safe; retry once fixed.
+    const mism = await forwarderMismatch();
+    if (mism) return { ok: false, error: mism };
 
     let computed: { owed: bigint; already: bigint } | null;
     try {
