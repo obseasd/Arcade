@@ -98,7 +98,7 @@ export function V4TokenCard({ token, priority, preloadedStats, vol24hUsd }: { to
   // instead of the deployer. PUMP / fallback: the deployer/creator.
   const byLabel =
     isClanker && metadata?.creatorTwitter
-      ? `@${metadata.creatorTwitter}`
+      ? `fees to @${metadata.creatorTwitter}`
       : `by ${formatAddress(
           (isClanker && metadata?.feeRecipient ? metadata.feeRecipient : token.creator) as `0x${string}`,
         )}`;

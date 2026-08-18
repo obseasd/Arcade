@@ -38,6 +38,7 @@ import { arcTestnet } from "@/lib/chains";
 import { pushToast } from "@/lib/toast";
 import { useArcadeHookCurveState } from "@/lib/hooks/useArcadeHookTokens";
 import { useV4TokenStats } from "@/lib/hooks/useV4TokenStats";
+import { useToken1hVolumeUsd } from "@/lib/hooks/useToken1hVolume";
 import { useV4PoolPrice } from "@/lib/hooks/useV4PoolPrice";
 import { useTokenImage, useTokenMetadata } from "@/lib/hooks/useTokenImage";
 import { ClankerV4TradePanel } from "@/components/launchpad/ClankerV4TradePanel";
@@ -86,6 +87,7 @@ function Inner() {
     const addrParam = (params.address as string) ?? "";
     const valid = isAddress(addrParam);
     const token = valid ? (addrParam as Address) : (zeroAddress as Address);
+    const vol1hUsd = useToken1hVolumeUsd(valid ? token : undefined);
 
     const { status, tokensSold, realUsdcReserve, mode, isLoading } = useArcadeHookCurveState(
         valid ? token : undefined,
@@ -354,9 +356,9 @@ function Inner() {
                                         hint="Total value in the V4 pool (USDC net bought plus the token side at the current price). The LP is locked permanently."
                                     />
                                     <Stat
-                                        label="Type"
-                                        value={isClanker ? "Direct (V4)" : "Graduated (V4)"}
-                                        hint={isClanker ? "No bonding curve: tradable on the canonical V4 pool from launch." : "This PUMP graduated: it now trades on its locked full-range V4 pool."}
+                                        label="1h volume"
+                                        value={`$${vol1hUsd.toLocaleString(undefined, { maximumFractionDigits: vol1hUsd < 1 ? 2 : 0 })}`}
+                                        hint="USDC traded against this token in the trailing hour."
                                     />
                                 </>
                             ) : (
