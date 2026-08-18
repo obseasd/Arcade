@@ -11,6 +11,7 @@ import { privateKeyToAccount } from "viem/accounts";
 import { ARC_CHAIN, serverReadClient } from "@/lib/serverRpc";
 import { ADDRESSES, ARCADE_HOOK_DEPLOY_BLOCK } from "@/lib/constants";
 import { scanLogsChunked, CHUNK_SMALL } from "@/lib/eventScan";
+import { forwarderKey } from "@/lib/twitterTokenForward";
 import { getReplyLaunchByPool, advanceSlot1CreditedIf } from "@/lib/twitterLaunchPersistence";
 
 /**
@@ -61,9 +62,11 @@ export type ReconcileResult =
  * poolIdHex is the bytes32 PoolId (0x…) recorded at launch.
  */
 export async function reconcileReplySlot(poolIdHex: string): Promise<ReconcileResult> {
-    const operatorKey = process.env.COMPOUNDER_OPERATOR_PRIVATE_KEY as Hex | undefined;
-    if (!operatorKey || !/^0x[0-9a-fA-F]{64}$/.test(operatorKey)) {
-        return { ok: false, error: "operator key missing/malformed" };
+    // The reply-split USDC creator2 leg lands on the FORWARDER (the cron passes
+    // creator2 = forwarderAddress()), so sweep it to slot 1 from the forwarder key.
+    const operatorKey = forwarderKey();
+    if (!operatorKey) {
+        return { ok: false, error: "forwarder key missing/malformed" };
     }
     const hook = ADDRESSES.arcadeHook as Address;
     const escrow = ADDRESSES.twitterEscrow as Address;

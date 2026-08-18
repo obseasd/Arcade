@@ -24,6 +24,7 @@ import {
     type LaunchCommand,
 } from "@/lib/twitterLaunch";
 import { hasLaunchIntent, parseLaunchWithClaude } from "@/lib/twitterLaunchParse";
+import { forwarderAddress } from "@/lib/twitterTokenForward";
 import { postLaunchReply } from "@/lib/twitterReply";
 import {
     isTweetProcessed,
@@ -364,13 +365,17 @@ export async function POST(req: NextRequest) {
             // Token logo from the tweet image (best-effort).
             const metadataURI = await pinLaunchMetadata(m.imageUrl, cmd.name, cmd.ticker);
 
-            // Reply-to-launch: route 50% of the creator fee to the operator,
-            // which the claim-time reconciliation forwards to the original
-            // poster's escrow slot 1.
+            // Reply-to-launch: route 50% of the creator fee to the FORWARDER
+            // (creator2), which the claim-time reconciliation sweeps to the
+            // original poster's escrow slot 1. creator2 must equal the forwarder
+            // key's address (= hook.tokenForwarder) so ALL handle-launch
+            // creator-side custody sits on one isolated key; falls back to the
+            // operator (account) when FORWARDER_PRIVATE_KEY is unset (testnet).
             const isReply = m.opUser !== null;
+            const creator2 = (forwarderAddress() ?? account.address) as `0x${string}`;
             const args = buildCreateLaunchArgs(cmd, m.author.username, {
                 metadataURI,
-                creator2: isReply ? (account.address as `0x${string}`) : undefined,
+                creator2: isReply ? creator2 : undefined,
                 creator2Bps: isReply ? REPLY_SPLIT_BPS : 0,
             });
 

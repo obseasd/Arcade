@@ -8,18 +8,25 @@ import { REPLY_SPLIT_BPS } from "@/lib/twitterLaunch";
 /**
  * Token-side fee forwarding. CLANKER fees accrue in BOTH USDC (routed to the
  * handle escrow) and the LAUNCH TOKEN. The token side is sent by the hook direct
- * to the on-chain `creator` = the OPERATOR (for tweet-launches), so it never
- * reaches the attributed @handle. This forwards the operator's accrued token
- * side to the claimant AFTER they've proven ownership (their on-chain USDC
- * claim, verified by the endpoint).
+ * to the on-chain FeeOwner.creator = the FORWARDER (hook.tokenForwarder, set to
+ * the forwarder key's address), so it never reaches the attributed @handle. This
+ * forwards the forwarder's accrued token side to the claimant AFTER they've
+ * proven ownership (their on-chain USDC claim, verified by the endpoint).
  *
  * HOW WE KNOW THE AMOUNT OWED, WITHOUT SCANNING LOGS: forwarding TRANSFERS the
- * token out of the operator, so the operator's remaining balance of a given
- * launch token IS the un-forwarded token-side fee for that token (the operator
+ * token out of the forwarder, so the forwarder's remaining balance of a given
+ * launch token IS the un-forwarded token-side fee for that token (the forwarder
  * gets no CLANKER allocation and never trades, so it holds nothing else of it;
  * the treasury 20% goes to the Safe, the USDC side to the escrow). Total ever
  * accrued = balance + already-forwarded. We split that by the fixed creator2
  * ratio into the two slots and subtract each slot's forwarded cursor.
+ *
+ * KEY ISOLATION (P2 level 4): the forwarder key custodies ALL handle-launch
+ * creator-side fees (token side of every handle launch + the USDC creator2 leg of
+ * a reply launch, since the cron passes creator2 = forwarderAddress()). So the
+ * bps split below stays valid reading ONE address, and the compounder/keeper
+ * operator never touches these fees. Defaults to the operator key when
+ * FORWARDER_PRIVATE_KEY is unset (single-key testnet behaviour).
  *
  *   solo launch (creator2Bps 0): slot 0 (launcher) owns 100% of the token cut.
  *   reply launch (creator2Bps 5000, both cuts land on the operator): slots 0/1
@@ -37,12 +44,28 @@ export type ForwardResult =
     | { ok: true; forwarded: true; amountRaw: string; tx: Hex }
     | { ok: false; error: string };
 
-/** The operator EOA that holds token-side fees (createLaunch msg.sender). Derived
- *  from the operator key; null if the key is unset/malformed. */
-function operatorAddress(): Address | null {
-    const key = process.env.COMPOUNDER_OPERATOR_PRIVATE_KEY as Hex | undefined;
-    if (!key || !/^0x[0-9a-fA-F]{64}$/.test(key)) return null;
-    return privateKeyToAccount(key).address;
+/**
+ * The FORWARDER key that custodies ALL handle-launch creator-side fees off-chain
+ * (the token side of every handle launch, plus the USDC creator2 leg of a reply
+ * launch). Prefer a DEDICATED `FORWARDER_PRIVATE_KEY` so the honeypot of unclaimed
+ * fees is isolated from the compounder/keeper operator (P2 key-split, level 4);
+ * falls back to COMPOUNDER_OPERATOR_PRIVATE_KEY when unset, which reproduces the
+ * pre-split single-key behaviour (testnet). It MUST equal the on-chain
+ * `hook.tokenForwarder()` AND the `creator2` the cron passes for reply launches --
+ * all three derive from this one function so they cannot drift.
+ */
+export function forwarderKey(): Hex | null {
+    const key = (process.env.FORWARDER_PRIVATE_KEY ?? process.env.COMPOUNDER_OPERATOR_PRIVATE_KEY) as
+        | Hex
+        | undefined;
+    return key && /^0x[0-9a-fA-F]{64}$/.test(key) ? key : null;
+}
+
+/** Address of the forwarder key (where handle-launch creator-side fees land).
+ *  null if the key is unset/malformed. */
+export function forwarderAddress(): Address | null {
+    const key = forwarderKey();
+    return key ? privateKeyToAccount(key).address : null;
 }
 
 /** creator2 split (bps) for a pool: REPLY_SPLIT_BPS for a reply-launch, else 0. */
@@ -61,8 +84,8 @@ async function computeOwed(
     slotIndex: 0 | 1,
     launchToken: Address,
 ): Promise<{ owed: bigint; already: bigint } | null> {
-    const operator = operatorAddress();
-    if (!operator) return null;
+    const forwarder = forwarderAddress();
+    if (!forwarder) return null;
     const cursors = await getTokenFwd(poolIdHex);
     if (!cursors) return null;
 
@@ -74,7 +97,7 @@ async function computeOwed(
         address: launchToken,
         abi: erc20Abi,
         functionName: "balanceOf",
-        args: [operator],
+        args: [forwarder],
     })) as bigint;
 
     // Everything ever accrued to the operator for this token = still-held +
@@ -138,9 +161,9 @@ export async function forwardTokenSide(
     recipient: Address,
     launchToken: Address,
 ): Promise<ForwardResult> {
-    const operatorKey = process.env.COMPOUNDER_OPERATOR_PRIVATE_KEY as Hex | undefined;
-    if (!operatorKey || !/^0x[0-9a-fA-F]{64}$/.test(operatorKey)) {
-        return { ok: false, error: "operator key missing/malformed" };
+    const fwdKey = forwarderKey();
+    if (!fwdKey) {
+        return { ok: false, error: "forwarder key missing/malformed" };
     }
 
     let computed: { owed: bigint; already: bigint } | null;
@@ -159,7 +182,7 @@ export async function forwardTokenSide(
     if (!reserved) return { ok: true, forwarded: false, reason: "already forwarded / concurrent run" };
 
     const client = serverPublicClient();
-    const account = privateKeyToAccount(operatorKey);
+    const account = privateKeyToAccount(fwdKey);
     const walletClient = createWalletClient({ account, chain: ARC_CHAIN, transport: http() });
     let tx: Hex;
     try {
