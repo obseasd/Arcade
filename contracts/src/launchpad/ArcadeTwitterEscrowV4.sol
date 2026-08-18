@@ -115,6 +115,15 @@ contract ArcadeTwitterEscrowV4 is Ownable2Step, Pausable, ReentrancyGuard {
     ///         Pins forfeit/claim to that token so the owner can't name another.
     mapping(uint256 => mapping(uint256 => address)) public slotToken;
 
+    /// @notice Fixed destination for the PERMISSIONLESS stale-slot forfeit
+    ///         (forfeitStaleToTreasury). Owner-set; 0 disables that path (the
+    ///         owner-only forfeitStaleClaim still works). Funds can ONLY go here,
+    ///         so a permissionless trigger has no redirection vector -- it lets an
+    ///         automated keeper settle a stale USDC slot to the treasury without an
+    ///         owner tx, mirroring the off-chain token-side sweep so BOTH sides
+    ///         land at the treasury once the 180d clock elapses.
+    address public forfeitTreasury;
+
     /// @notice Pull-payment ledger for forfeit payouts whose transfer reverted.
     mapping(address => mapping(address => uint256)) public pendingForfeit;
     /// @notice Sum of `pendingForfeit[token][*]`. These tokens are earmarked for
@@ -155,6 +164,7 @@ contract ArcadeTwitterEscrowV4 is Ownable2Step, Pausable, ReentrancyGuard {
     event Rescued(address indexed token, address indexed to, uint256 amount);
     event Forfeited(uint256 indexed positionId, uint256 indexed slotIndex, address indexed to, address token, uint256 amount);
     event ForfeitTransferFailed(uint256 indexed positionId, uint256 indexed slotIndex, address indexed token, address to, uint256 amount);
+    event ForfeitTreasuryUpdated(address indexed previous, address indexed next);
 
     // ====================== Errors ======================
 
@@ -201,6 +211,13 @@ contract ArcadeTwitterEscrowV4 is Ownable2Step, Pausable, ReentrancyGuard {
         if (crediter == address(0)) revert ZeroAddress();
         allowedCrediter[crediter] = allowed;
         emit CrediterSet(crediter, allowed);
+    }
+
+    /// @notice Set the fixed destination for permissionless stale forfeits. 0
+    ///         disables forfeitStaleToTreasury. Should be the treasury Safe.
+    function setForfeitTreasury(address newTreasury) external onlyOwner {
+        emit ForfeitTreasuryUpdated(forfeitTreasury, newTreasury);
+        forfeitTreasury = newTreasury;
     }
 
     function setClaimTimelock(uint64 newTimelock) external onlyOwner {
@@ -402,6 +419,26 @@ contract ArcadeTwitterEscrowV4 is Ownable2Step, Pausable, ReentrancyGuard {
      */
     function forfeitStaleClaim(uint256 positionId, uint256 slotIndex, address to) external onlyOwner {
         if (to == address(0)) revert ZeroAddress();
+        _forfeit(positionId, slotIndex, to);
+    }
+
+    /// @notice Permissionless forfeit of an abandoned slot to the FIXED
+    ///         `forfeitTreasury`. Anyone may trigger it once the slot is stale,
+    ///         but the funds can only go to the owner-set treasury, so there is no
+    ///         redirection vector. Lets an automated keeper settle stale USDC to
+    ///         the treasury without an owner tx -- the on-chain half of "both
+    ///         sides to the treasury at 180d" (the token side is swept off-chain).
+    ///         Reverts if `forfeitTreasury` is unset.
+    function forfeitStaleToTreasury(uint256 positionId, uint256 slotIndex) external {
+        address to = forfeitTreasury;
+        if (to == address(0)) revert ZeroAddress();
+        _forfeit(positionId, slotIndex, to);
+    }
+
+    /// @dev Shared forfeit core. CEI: all state (balance, creditedTotal, anchor)
+    ///      is cleared BEFORE the transfer, so even the permissionless entrypoint
+    ///      cannot reenter (a second call sees amount == 0 -> NothingToClaim).
+    function _forfeit(uint256 positionId, uint256 slotIndex, address to) internal {
         uint64 anchor = forfeitAnchorAt[positionId][slotIndex];
         if (anchor == 0 || block.timestamp < anchor + FORFEIT_DELAY) revert NotStaleYet();
         if (hasPending[positionId][slotIndex]) revert SlotPending();

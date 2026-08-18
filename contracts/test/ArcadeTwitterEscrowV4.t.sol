@@ -258,6 +258,46 @@ contract ArcadeTwitterEscrowV4Test is Test {
         assertEq(escrow.balances(POS, SLOT, address(usdc)), 0, "slot cleared");
     }
 
+    // ============ forfeitStaleToTreasury (permissionless, fixed dest) ============
+
+    function test_forfeitToTreasury_permissionless_afterDelay() public {
+        address TREASURY = address(0x7EA5);
+        address anyone = address(0xBEEF);
+        vm.prank(OWNER);
+        escrow.setForfeitTreasury(TREASURY);
+
+        _credit(100e6);
+        vm.warp(block.timestamp + escrow.FORFEIT_DELAY() + 1);
+
+        // A NON-owner triggers it; funds can only reach the fixed treasury.
+        vm.prank(anyone);
+        escrow.forfeitStaleToTreasury(POS, SLOT);
+        assertEq(usdc.balanceOf(TREASURY), 100e6, "forfeited to the fixed treasury");
+        assertEq(usdc.balanceOf(anyone), 0, "caller gets nothing");
+        assertEq(escrow.balances(POS, SLOT, address(usdc)), 0, "slot cleared");
+    }
+
+    function test_forfeitToTreasury_revertsBeforeDelay() public {
+        vm.prank(OWNER);
+        escrow.setForfeitTreasury(address(0x7EA5));
+        _credit(100e6);
+        vm.expectRevert(ArcadeTwitterEscrowV4.NotStaleYet.selector);
+        escrow.forfeitStaleToTreasury(POS, SLOT);
+    }
+
+    function test_forfeitToTreasury_revertsWhenTreasuryUnset() public {
+        _credit(100e6);
+        vm.warp(block.timestamp + escrow.FORFEIT_DELAY() + 1);
+        vm.expectRevert(ArcadeTwitterEscrowV4.ZeroAddress.selector);
+        escrow.forfeitStaleToTreasury(POS, SLOT); // forfeitTreasury unset -> revert
+    }
+
+    function test_setForfeitTreasury_onlyOwner() public {
+        vm.prank(address(0xBEEF));
+        vm.expectRevert();
+        escrow.setForfeitTreasury(address(0x7EA5));
+    }
+
     /// Later credits must NOT push the forfeit clock out (the grief the re-anchor
     /// fixes): the clock stays anchored on the FIRST credit (launch).
     function test_forfeit_ongoingCreditsDoNotResetClock() public {

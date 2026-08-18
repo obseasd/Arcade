@@ -16,14 +16,15 @@ import { forwarderKey, forwarderAddress, forwarderMismatch } from "@/lib/twitter
  * anchored at first credit, RESET on every successful claim) has elapsed PLUS a
  * grace buffer.
  *
- * WHY THE GRACE (audit MEDIUM-1): the USDC side stays claimable indefinitely
- * (claimByTwitter has no staleness gate; forfeitStaleClaim is discretionary
- * onlyOwner), while this sweep is automated. Sweeping at exactly the USDC window
- * would let a late-but-valid claimant (claiming USDC at, say, T+200d, still
- * allowed) find the token side already gone. Sweeping at FORFEIT_DELAY + GRACE
- * (270d > the 180d USDC window) guarantees the token side is NEVER forfeited
- * before the USDC side. An actively-claimed slot resets the anchor and never
- * reaches the window.
+ * SYMMETRY: the same cron ALSO forfeits the USDC side on-chain
+ * (escrow.forfeitStaleToTreasury via forfeitStaleUsdc below), so both sides settle
+ * to the treasury at the SAME 180d threshold -- they always fire together or not
+ * at all (if the cron is down, neither does, and a claimant keeps both). That is
+ * why there is no grace buffer: there is no "late USDC claimant" to protect once
+ * the USDC is forfeited on the same pass. ORDER MATTERS: sweep the token FIRST
+ * (reads the slot-0 anchor), THEN forfeit the USDC (which RESETS that anchor) --
+ * doing it the other way would zero the anchor and make the token sweep skip.
+ * An actively-claimed slot resets the anchor and never reaches the window.
  *
  * Idempotent: after a sweep balanceOf(forwarder) is 0, so a re-run skips.
  * NOT COVERED (funds safe on the controlled forwarder EOA; move manually):
@@ -37,9 +38,6 @@ import { forwarderKey, forwarderAddress, forwarderMismatch } from "@/lib/twitter
  */
 
 const FORFEIT_DELAY = 180n * 24n * 60n * 60n; // 180 days, matches the escrow constant
-// Grace beyond the USDC forfeit window so the token side is never forfeited first
-// (audit MEDIUM-1). Total sweep threshold = 270d from the last claim.
-const SWEEP_GRACE = 90n * 24n * 60n * 60n; // 90 days
 
 const ESCROW_ANCHOR_ABI = [
     {
@@ -52,6 +50,30 @@ const ESCROW_ANCHOR_ABI = [
 ] as const;
 const HOOK_TREASURY_ABI = [
     { type: "function", name: "TREASURY", stateMutability: "view", inputs: [], outputs: [{ type: "address" }] },
+] as const;
+const ESCROW_FORFEIT_ABI = [
+    {
+        type: "function",
+        name: "forfeitStaleToTreasury",
+        stateMutability: "nonpayable",
+        inputs: [{ type: "uint256" }, { type: "uint256" }],
+        outputs: [],
+    },
+    { type: "function", name: "forfeitTreasury", stateMutability: "view", inputs: [], outputs: [{ type: "address" }] },
+    {
+        type: "function",
+        name: "balances",
+        stateMutability: "view",
+        inputs: [{ type: "uint256" }, { type: "uint256" }, { type: "address" }],
+        outputs: [{ type: "uint256" }],
+    },
+    {
+        type: "function",
+        name: "slotToken",
+        stateMutability: "view",
+        inputs: [{ type: "uint256" }, { type: "uint256" }],
+        outputs: [{ type: "address" }],
+    },
 ] as const;
 
 export type SweepResult =
@@ -101,10 +123,10 @@ export async function sweepStaleTokenSide(
         return { ok: false, error: `anchor read failed: ${e instanceof Error ? e.message : String(e)}` };
     }
     if (anchor === 0n) return { ok: true, swept: false, reason: "no forfeit anchor (never credited / reset)" };
-    // FORFEIT_DELAY + grace, so the token side is never forfeited before the USDC
-    // side (which stays claimable past 180d). See MEDIUM-1 above.
-    if (nowSec < anchor + FORFEIT_DELAY + SWEEP_GRACE) {
-        return { ok: true, swept: false, reason: "not stale yet (< 270d)" };
+    // 180d, same threshold as the USDC forfeit done on the same cron pass (no
+    // grace needed -- both sides settle together; see the header).
+    if (nowSec < anchor + FORFEIT_DELAY) {
+        return { ok: true, swept: false, reason: "not stale yet (< 180d)" };
     }
 
     // Balance held for this token. Nothing to do if already claimed/swept.
@@ -152,6 +174,100 @@ export async function sweepStaleTokenSide(
         return { ok: false, error: `sweep transfer failed: ${e instanceof Error ? e.message : String(e)}` };
     }
     return { ok: true, swept: true, amountRaw: balance.toString(), to: safe, tx };
+}
+
+export type ForfeitResult =
+    | { ok: true; forfeited: false; reason: string }
+    | { ok: true; forfeited: true; amountRaw: string; tx: Hex }
+    | { ok: false; error: string };
+
+/**
+ * Forfeit one stale escrow USDC slot to the fixed treasury via the escrow's
+ * PERMISSIONLESS forfeitStaleToTreasury (funds can only reach the treasury Safe,
+ * so any funded key may trigger it -- we use the forwarder key). The on-chain half
+ * of "both sides to the treasury at 180d". Reads staleness client-side first to
+ * avoid burning gas on a revert. MUST run AFTER the token sweep for the same pool
+ * (this resets the slot-0 anchor the token sweep reads). Idempotent (a forfeited
+ * slot has balance 0 + anchor 0 -> skip).
+ */
+export async function forfeitStaleUsdc(
+    poolIdHex: string,
+    slotIndex: 0 | 1,
+    nowSec: bigint = BigInt(Math.floor(Date.now() / 1000)),
+): Promise<ForfeitResult> {
+    const fwdKey = forwarderKey();
+    if (!fwdKey) return { ok: false, error: "forwarder key missing/malformed" };
+    const escrow = ADDRESSES.twitterEscrow as Address;
+    if (!escrow || escrow === "0x0000000000000000000000000000000000000000") {
+        return { ok: false, error: "escrow not configured" };
+    }
+    const client = serverReadClient();
+    const positionId = BigInt(poolIdHex);
+    const slot = BigInt(slotIndex);
+
+    // Staleness (slot-0/1 anchor), treasury configured, and a non-zero balance --
+    // all read before sending so a non-stale/empty slot costs no gas.
+    let anchorSec: bigint;
+    let treasury: Address;
+    let token: Address;
+    try {
+        anchorSec = (await client.readContract({
+            address: escrow,
+            abi: ESCROW_ANCHOR_ABI,
+            functionName: "forfeitAnchorAt",
+            args: [positionId, slot],
+        })) as bigint;
+        treasury = (await client.readContract({
+            address: escrow,
+            abi: ESCROW_FORFEIT_ABI,
+            functionName: "forfeitTreasury",
+        })) as Address;
+        token = (await client.readContract({
+            address: escrow,
+            abi: ESCROW_FORFEIT_ABI,
+            functionName: "slotToken",
+            args: [positionId, slot],
+        })) as Address;
+    } catch (e) {
+        return { ok: false, error: `escrow read failed: ${e instanceof Error ? e.message : String(e)}` };
+    }
+    if (anchorSec === 0n) return { ok: true, forfeited: false, reason: "no anchor (never credited / reset)" };
+    if (nowSec < anchorSec + FORFEIT_DELAY) return { ok: true, forfeited: false, reason: "not stale yet (< 180d)" };
+    if (!treasury || treasury === "0x0000000000000000000000000000000000000000") {
+        return { ok: true, forfeited: false, reason: "forfeitTreasury unset on the escrow" };
+    }
+    if (!token || token === "0x0000000000000000000000000000000000000000") {
+        return { ok: true, forfeited: false, reason: "slot never credited" };
+    }
+    let bal: bigint;
+    try {
+        bal = (await client.readContract({
+            address: escrow,
+            abi: ESCROW_FORFEIT_ABI,
+            functionName: "balances",
+            args: [positionId, slot, token],
+        })) as bigint;
+    } catch (e) {
+        return { ok: false, error: `balance read failed: ${e instanceof Error ? e.message : String(e)}` };
+    }
+    if (bal === 0n) return { ok: true, forfeited: false, reason: "nothing to forfeit" };
+
+    const pub = serverPublicClient();
+    const account = privateKeyToAccount(fwdKey);
+    const walletClient = createWalletClient({ account, chain: ARC_CHAIN, transport: http() });
+    let tx: Hex;
+    try {
+        tx = await walletClient.writeContract({
+            address: escrow,
+            abi: ESCROW_FORFEIT_ABI,
+            functionName: "forfeitStaleToTreasury",
+            args: [positionId, slot],
+        });
+        await pub.waitForTransactionReceipt({ hash: tx });
+    } catch (e) {
+        return { ok: false, error: `forfeit failed: ${e instanceof Error ? e.message : String(e)}` };
+    }
+    return { ok: true, forfeited: true, amountRaw: bal.toString(), tx };
 }
 
 /**
