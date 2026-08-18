@@ -6,6 +6,46 @@ import { usePublicClient } from "wagmi";
 import { RouteQuote, QuoteRequest } from "./types";
 import { quoteAllRoutes, sortQuotes } from "./aggregate";
 import { decodeBigints } from "./serialize";
+import { ADDRESSES } from "@/lib/constants";
+import { PERMIT2_ADDRESS } from "@/lib/abis/permit2";
+import { USYC_TELLER_ADDRESS } from "@/lib/abis/usyc";
+
+/**
+ * Every router/spender a LEGITIMATE quote executor may target -- all sourced from
+ * trusted client-side config, never from a quote payload. A quote whose
+ * executor.router / approval.spender / permit2.permitSpender is not in here is
+ * DROPPED: it could only come from a tampered /api/routes/quote response (XSS, a
+ * malicious extension intercepting fetch, MITM, or server compromise) trying to
+ * induce the user to approve/transact to an attacker address. Defense-in-depth on
+ * top of the same-origin first-party API (the local fallback builds the same
+ * executors, so a real route never fails this). (Audit swap MEDIUM-2.)
+ */
+const TRUSTED_SPENDERS: ReadonlySet<string> = new Set(
+    [
+        ADDRESSES.router,
+        ADDRESSES.v3Router,
+        ADDRESSES.v4Router,
+        ADDRESSES.migratedRouter,
+        ADDRESSES.launchpad,
+        ADDRESSES.multiSwap,
+        ADDRESSES.synthraRouter,
+        ADDRESSES.synthraUniversalRouter,
+        ADDRESSES.unitflowRouter,
+        ADDRESSES.unitflowUniversalRouter,
+        ADDRESSES.xyloRouter,
+        USYC_TELLER_ADDRESS,
+        PERMIT2_ADDRESS,
+    ]
+        .map((a) => (a ?? "").toLowerCase())
+        .filter((a) => a && a !== "0x0000000000000000000000000000000000000000"),
+);
+
+/** Reject a quote that would route an approval or a swap to a non-allowlisted
+ *  address (see TRUSTED_SPENDERS). Absent optional fields are OK. */
+function trustedQuote(q: RouteQuote): boolean {
+    const ok = (a?: string) => !a || TRUSTED_SPENDERS.has(a.toLowerCase());
+    return ok(q.executor?.router) && ok(q.approval?.spender) && ok(q.permit2?.permitSpender);
+}
 
 /**
  * Aggregator hook: fans out a quote request to every registered provider
@@ -181,7 +221,9 @@ export function useRouteQuotes(args: UseRouteQuotesArgs): UseRouteQuotesResult {
       })
       .then((results) => {
       if (cancelled) return;
-      const good = results;
+      // Drop any quote whose executor/approval targets a non-allowlisted address
+      // before it can reach the UI or be signed (tamper defense, MEDIUM-2).
+      const good = results.filter(trustedQuote);
       // Ranking lives in ./aggregate so the server's "best" and the
       // client's "best" can never disagree. Re-applied here because the
       // fallback path returns unsorted results.

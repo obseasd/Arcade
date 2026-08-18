@@ -81,10 +81,14 @@ export async function POST(req: NextRequest) {
         return bad("decimals out of range");
     }
 
-    const slippageBps = Number(body.slippageBps);
-    if (!Number.isInteger(slippageBps) || slippageBps < 0 || slippageBps > 10_000) {
+    const rawSlippageBps = Number(body.slippageBps);
+    if (!Number.isInteger(rawSlippageBps) || rawSlippageBps < 0 || rawSlippageBps > 10_000) {
         return bad("slippageBps out of range");
     }
+    // Clamp to the UI's 50% max so a returned executor can NEVER carry
+    // amountOutMinimum = 0 (100% slippage). Only a hand-crafted request could send
+    // >5000; the UI + agent lib already cap there. (Audit swap LOW-2.)
+    const slippageBps = Math.min(rawSlippageBps, 5_000);
 
     const quoteReq: QuoteRequest = {
         tokenIn: tokenIn as Address,
