@@ -42,6 +42,21 @@ export async function forwarderMismatch(): Promise<string | null> {
     return null;
 }
 
+/** The hook's on-chain tokenForwarder (address(0) = legacy/unconfigured). Lets
+ *  callers gate off the DEDICATED-forwarder regime (e.g. the stale sweep is a
+ *  no-op until this is set on mainnet). Returns null on a read error. */
+export async function onchainTokenForwarder(): Promise<Address | null> {
+    try {
+        return (await serverReadClient().readContract({
+            address: ADDRESSES.arcadeHook as Address,
+            abi: TOKEN_FORWARDER_ABI,
+            functionName: "tokenForwarder",
+        })) as Address;
+    } catch {
+        return null;
+    }
+}
+
 /**
  * Token-side fee forwarding. CLANKER fees accrue in BOTH USDC (routed to the
  * handle escrow) and the LAUNCH TOKEN. The token side is sent by the hook direct

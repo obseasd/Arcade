@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { timingSafeEqual } from "node:crypto";
 
 import { listHandleLaunchPools, sweepStaleTokenSide } from "@/lib/twitterTokenSweep";
+import { onchainTokenForwarder } from "@/lib/twitterTokenForward";
 
 /**
  * Stale token-side sweep cron (P2 level 4, C). Walks every handle-launch pool and
@@ -42,6 +43,16 @@ export async function POST(req: NextRequest) {
             return timingSafeEqual(Buffer.from(auth), Buffer.from(expected));
         });
     if (!authed) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+
+    // Dormant until the DEDICATED forwarder is configured on-chain (mainnet). In
+    // legacy mode (tokenForwarder == 0) the forwarder key falls back to the
+    // operator, which holds legacy token fees we do NOT want this cron to move --
+    // so bail entirely (audit LOW-3: structurally inert, not merely time-inert).
+    const onchainFwd = await onchainTokenForwarder();
+    const ZERO = "0x0000000000000000000000000000000000000000";
+    if (!onchainFwd || onchainFwd.toLowerCase() === ZERO) {
+        return NextResponse.json({ ok: true, skipped: "tokenForwarder not set (legacy mode)" });
+    }
 
     const startedAt = Date.now();
     const pools = await listHandleLaunchPools();

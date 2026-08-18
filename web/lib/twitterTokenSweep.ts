@@ -10,21 +10,36 @@ import { forwarderKey, forwarderAddress, forwarderMismatch } from "@/lib/twitter
  * launch-token side of every handle launch's fees until the @ owner claims. If a
  * handle is NEVER claimed, that token sits on the forwarder forever -- the token
  * side has NO on-chain forfeit, unlike the USDC side which the owner reclaims via
- * escrow.forfeitStaleClaim after FORFEIT_DELAY. This caps that honeypot: once the
- * escrow's slot-0 forfeit clock has elapsed (FORFEIT_DELAY = 180d, anchored at
- * first credit and RESET on every successful claim -- so an actively-claimed slot
- * never qualifies), sweep the forwarder's remaining balance of that launch token
- * to the treasury Safe (hook.TREASURY()), mirroring the USDC forfeit.
+ * escrow.forfeitStaleClaim after FORFEIT_DELAY. This caps that honeypot: sweep the
+ * forwarder's remaining balance of a launch token to the treasury Safe
+ * (hook.TREASURY()) once the escrow's slot-0 forfeit clock (forfeitAnchorAt,
+ * anchored at first credit, RESET on every successful claim) has elapsed PLUS a
+ * grace buffer.
  *
- * Staleness uses the SAME clock as the USDC forfeit (escrow.forfeitAnchorAt), so
- * the two stay in lockstep and a claim protects both. Naturally idempotent: after
- * a sweep balanceOf(forwarder) is 0, so a re-run skips. NOT covered: a slot whose
- * USDC was already owner-forfeited (anchor reset to 0) -- rare tail; the operator
- * can move those manually. Reuses the forwarder-identity guard so a mis-configured
- * rollout never sweeps against the wrong balance.
+ * WHY THE GRACE (audit MEDIUM-1): the USDC side stays claimable indefinitely
+ * (claimByTwitter has no staleness gate; forfeitStaleClaim is discretionary
+ * onlyOwner), while this sweep is automated. Sweeping at exactly the USDC window
+ * would let a late-but-valid claimant (claiming USDC at, say, T+200d, still
+ * allowed) find the token side already gone. Sweeping at FORFEIT_DELAY + GRACE
+ * (270d > the 180d USDC window) guarantees the token side is NEVER forfeited
+ * before the USDC side. An actively-claimed slot resets the anchor and never
+ * reaches the window.
+ *
+ * Idempotent: after a sweep balanceOf(forwarder) is 0, so a re-run skips.
+ * NOT COVERED (funds safe on the controlled forwarder EOA; move manually):
+ *   - a slot whose USDC was already owner-forfeited (anchor reset to 0);
+ *   - a launch whose harvested fees have been TOKEN-SIDE ONLY so far (no USDC
+ *     credit -> anchor still 0), until its first USDC-fee buy is harvested;
+ *   - token balances left on a PRIOR forwarder after setTokenForwarder rotates.
+ * Reuses the forwarder-identity guard so a mis-configured rollout never sweeps
+ * against the wrong balance; the CALLER gates on a non-zero on-chain
+ * tokenForwarder so this is fully dormant in legacy/testnet mode.
  */
 
 const FORFEIT_DELAY = 180n * 24n * 60n * 60n; // 180 days, matches the escrow constant
+// Grace beyond the USDC forfeit window so the token side is never forfeited first
+// (audit MEDIUM-1). Total sweep threshold = 270d from the last claim.
+const SWEEP_GRACE = 90n * 24n * 60n * 60n; // 90 days
 
 const ESCROW_ANCHOR_ABI = [
     {
@@ -86,7 +101,11 @@ export async function sweepStaleTokenSide(
         return { ok: false, error: `anchor read failed: ${e instanceof Error ? e.message : String(e)}` };
     }
     if (anchor === 0n) return { ok: true, swept: false, reason: "no forfeit anchor (never credited / reset)" };
-    if (nowSec < anchor + FORFEIT_DELAY) return { ok: true, swept: false, reason: "not stale yet (< 180d)" };
+    // FORFEIT_DELAY + grace, so the token side is never forfeited before the USDC
+    // side (which stays claimable past 180d). See MEDIUM-1 above.
+    if (nowSec < anchor + FORFEIT_DELAY + SWEEP_GRACE) {
+        return { ok: true, swept: false, reason: "not stale yet (< 270d)" };
+    }
 
     // Balance held for this token. Nothing to do if already claimed/swept.
     let balance: bigint;
