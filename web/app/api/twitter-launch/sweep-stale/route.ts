@@ -77,33 +77,42 @@ export async function POST(req: NextRequest) {
             break;
         }
         scanned += 1;
-        // 1) TOKEN side FIRST -- reads the slot-0 forfeit anchor.
+        // 1) TOKEN side FIRST -- reads the slot-0 forfeit anchor. Track whether the
+        //    token leg SETTLED (swept, or nothing to sweep) vs errored.
+        let tokenSettled = false;
         try {
             const r = await sweepStaleTokenSide(p.poolId, p.token);
-            if (r.ok && r.swept) {
-                swept += 1;
-                writes += 1;
-                sweeps.push({ poolId: p.poolId, token: p.token, amountRaw: r.amountRaw, tx: r.tx, to: r.to });
-            } else if (!r.ok) {
+            if (r.ok) {
+                tokenSettled = true;
+                if (r.swept) {
+                    swept += 1;
+                    writes += 1;
+                    sweeps.push({ poolId: p.poolId, token: p.token, amountRaw: r.amountRaw, tx: r.tx, to: r.to });
+                }
+            } else {
                 errors += 1;
             }
         } catch {
             errors += 1;
         }
-        // 2) USDC side -- slot 0 then slot 1. forfeitStaleToTreasury RESETS the
-        //    anchor, so it must run AFTER the token sweep above.
-        for (const slot of [0, 1] as const) {
-            try {
-                const f = await forfeitStaleUsdc(p.poolId, slot);
-                if (f.ok && f.forfeited) {
-                    forfeited += 1;
-                    writes += 1;
-                    forfeits.push({ poolId: p.poolId, slot, amountRaw: f.amountRaw, tx: f.tx });
-                } else if (!f.ok) {
+        // 2) USDC side -- ONLY if the token leg settled. forfeitStaleToTreasury
+        //    RESETS the slot anchor, so forfeiting while the token sweep is still
+        //    failing would zero the anchor and strand the token forever (audit
+        //    MEDIUM-2). Slot 0 then slot 1; retry both next run on a token error.
+        if (tokenSettled) {
+            for (const slot of [0, 1] as const) {
+                try {
+                    const f = await forfeitStaleUsdc(p.poolId, slot);
+                    if (f.ok && f.forfeited) {
+                        forfeited += 1;
+                        writes += 1;
+                        forfeits.push({ poolId: p.poolId, slot, amountRaw: f.amountRaw, tx: f.tx });
+                    } else if (!f.ok) {
+                        errors += 1;
+                    }
+                } catch {
                     errors += 1;
                 }
-            } catch {
-                errors += 1;
             }
         }
     }

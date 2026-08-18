@@ -129,6 +129,25 @@ export async function sweepStaleTokenSide(
         return { ok: true, swept: false, reason: "not stale yet (< 180d)" };
     }
 
+    // COUPLE the token leg to the USDC leg (audit MEDIUM-1/2): do NOT sweep the
+    // token unless the escrow can ALSO forfeit the USDC (forfeitTreasury set).
+    // Otherwise the token would leave the forwarder while the USDC stays claimable
+    // -- the exact asymmetry the design forbids. A pre-forfeit escrow (no
+    // forfeitTreasury getter -> read reverts) is treated the same: skip.
+    let forfeitTreasury: Address;
+    try {
+        forfeitTreasury = (await client.readContract({
+            address: escrow,
+            abi: ESCROW_FORFEIT_ABI,
+            functionName: "forfeitTreasury",
+        })) as Address;
+    } catch {
+        return { ok: true, swept: false, reason: "escrow has no forfeitTreasury (pre-forfeit escrow) -- token sweep held" };
+    }
+    if (!forfeitTreasury || forfeitTreasury === "0x0000000000000000000000000000000000000000") {
+        return { ok: true, swept: false, reason: "forfeitTreasury unset -- token sweep coupled to USDC forfeit" };
+    }
+
     // Balance held for this token. Nothing to do if already claimed/swept.
     let balance: bigint;
     try {

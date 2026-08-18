@@ -298,6 +298,37 @@ contract ArcadeTwitterEscrowV4Test is Test {
         escrow.setForfeitTreasury(address(0x7EA5));
     }
 
+    /// A permissionless forfeit must NOT snatch a slot a handle owner is mid-claim
+    /// on (has an authorized pending claim).
+    function test_forfeitToTreasury_revertsWhenSlotPending() public {
+        vm.prank(OWNER);
+        escrow.setForfeitTreasury(address(0x7EA5));
+        _credit(100e6);
+        vm.warp(block.timestamp + escrow.FORFEIT_DELAY() + 1);
+
+        uint256 deadline = block.timestamp + 1 days;
+        bytes32 nonce = keccak256("n-pending");
+        bytes memory sig = _sign(USER, address(usdc), 100e6, deadline, nonce);
+        vm.prank(USER);
+        escrow.authorize(POS, SLOT, USER, address(usdc), 100e6, deadline, nonce, sig);
+
+        vm.expectRevert(ArcadeTwitterEscrowV4.SlotPending.selector);
+        escrow.forfeitStaleToTreasury(POS, SLOT);
+    }
+
+    /// A successful claim resets the anchor, restarting the 180d clock, so a
+    /// permissionless forfeit right after is not stale.
+    function test_forfeitToTreasury_blockedByClaimAnchorReset() public {
+        vm.prank(OWNER);
+        escrow.setForfeitTreasury(address(0x7EA5));
+        _credit(100e6);
+        vm.warp(block.timestamp + escrow.FORFEIT_DELAY() - 5);
+        _authorizeAndClaim(USER, 100e6, keccak256("n-claim"));
+
+        vm.expectRevert(ArcadeTwitterEscrowV4.NotStaleYet.selector);
+        escrow.forfeitStaleToTreasury(POS, SLOT);
+    }
+
     /// Later credits must NOT push the forfeit clock out (the grief the re-anchor
     /// fixes): the clock stays anchored on the FIRST credit (launch).
     function test_forfeit_ongoingCreditsDoNotResetClock() public {
