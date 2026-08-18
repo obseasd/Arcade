@@ -614,12 +614,19 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
   // the proven legacy exact-output path, exactly as before this change.
   const activeRoute: RouteQuote | null =
     lastEdited === "in" ? (selectedRoute ?? routeQuotes.best ?? null) : null;
+  // Routes executed by running their pre-built `executor` verbatim (router + abi
+  // + args from the provider) with a classic ERC20 approve to `approval.spender`.
+  // arcade-v4 is Arcade's OWN V4 router but uses the exact same execution shape
+  // (v4Router.exactInputSingle, no Permit2), so it rides this path -- without it
+  // a V4 token picked on /swap fell through to a V2 swap on a non-existent pair
+  // and reverted (audit swap MEDIUM-1). The name is kept for continuity.
   const isExternalRoute =
     !!activeRoute &&
     (activeRoute.provider === "synthra-v3" ||
       activeRoute.provider === "unitflow-v3" ||
       activeRoute.provider === "xylonet-v1" ||
-      activeRoute.provider === "usyc-teller");
+      activeRoute.provider === "usyc-teller" ||
+      activeRoute.provider === "arcade-v4");
   // Non-Permit2 external routes (XyloNet, and the USYC Teller deposit leg)
   // execute through their own pre-built executor but still pull the input via
   // transferFrom, so they need a classic ERC20 approve to the route's spender.
