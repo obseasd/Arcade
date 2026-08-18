@@ -129,9 +129,19 @@ function resolveArcRpc(): string {
 function arcTransports() {
   const publicRpc = arcTestnet.rpcUrls.default.http[0];
   const dedicated = resolveArcRpc(); // NEXT_PUBLIC_ARC_RPC_URL override, else publicRpc
+  // Same-origin proxy so the browser can use drpc (the fastest Arc RPC) even
+  // though drpc.org sends NO CORS header -- a direct browser fetch to it is
+  // blocked, which was the root cause of "tokens won't load" (the benchmark
+  // below was run from a server, so it never hit the CORS wall). /api/rpc relays
+  // server-side to drpc/arcscan/public; same-origin is always CORS-ok and shares
+  // drpc's per-IP limit server-side instead of per-user.
+  const sameOrigin = typeof window !== "undefined" ? window.location.origin : "";
   const legs = [
-    // Primary: reliable + fast, never 429 under burst.
-    http("https://arc-testnet.drpc.org", { retryCount: 0 }),
+    // Primary: the same-origin proxy (CORS-ok, drpc-backed on the server).
+    http(`${sameOrigin}/api/rpc`, { retryCount: 0 }),
+    // Direct browser fallbacks if the proxy itself is down. arcscan sends CORS
+    // headers; the public RPC is last (it 429s under burst). drpc is NOT here:
+    // it has no CORS and can only be reached via the proxy above.
     http("https://testnet.arcscan.app/api/eth-rpc", { batch: { batchSize: 5, wait: 50 }, retryCount: 0 }),
   ];
   // Optional dedicated override (Alchemy/thirdweb client-id/custom) above the

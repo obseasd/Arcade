@@ -56,7 +56,7 @@ export function serverPublicClient() {
 // (both getLogs-to-10k, no token, separate limits) before arc.network. thirdweb
 // is gone (it capped getLogs at 1000). Override with ARC_READ_RPC_URLS to
 // prepend the Canteen server-token RPC (no rate limit) in production.
-const READ_RPC_URLS = (process.env.ARC_READ_RPC_URLS ?? DEFAULT_ARC_RPCS)
+export const READ_RPC_URLS = (process.env.ARC_READ_RPC_URLS ?? DEFAULT_ARC_RPCS)
     .split(",")
     .map((u) => u.trim())
     .filter(Boolean);
