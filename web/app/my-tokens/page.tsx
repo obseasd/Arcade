@@ -522,35 +522,21 @@ function OverviewTab({
     const [createPoolOpen, setCreatePoolOpen] = useState(false);
     const moreWrapRef = useRef<HTMLDivElement | null>(null);
 
-    // Token list for the CreatePoolModal opened from the More dropdown.
-    // Same shape as /positions/page.tsx: USDC pinned + every launchpad
-    // token, deduplicated.
-    const { tokens: launchpadTokensForPool } = useLaunchpadTokens();
-    const createPoolTokens: TokenOption[] = useMemo(() => {
-        const seen = new Set<string>();
-        const out: TokenOption[] = [
-            {
-                address: ADDRESSES.usdc as Address,
-                symbol: "USDC",
-                name: "USD Coin",
-                decimals: USDC_DECIMALS,
-                pinned: true,
-            },
-        ];
-        seen.add(ADDRESSES.usdc.toLowerCase());
-        for (const t of launchpadTokensForPool) {
-            const k = t.address.toLowerCase();
-            if (seen.has(k)) continue;
-            seen.add(k);
-            out.push({
-                address: t.address,
-                symbol: t.symbol,
-                name: t.name,
-                decimals: 18,
-            });
-        }
-        return out;
-    }, [launchpadTokensForPool]);
+    // Token list for the CreatePoolModal (More dropdown): BASE ASSETS ONLY, same
+    // as /positions + /explore. The old launchpad tokens are deliberately kept out
+    // (noise); the modal's paste-an-address flow still reaches any token.
+    const createPoolTokens: TokenOption[] = useMemo(
+        () =>
+            (
+                [
+                    { address: ADDRESSES.usdc as Address, symbol: "USDC", name: "USD Coin", decimals: USDC_DECIMALS, pinned: true },
+                    { address: ADDRESSES.eurc as Address, symbol: "EURC", name: "Euro Coin", decimals: 6 },
+                    { address: ADDRESSES.cirBtc as Address, symbol: "cirBTC", name: "Circle BTC", decimals: 8 },
+                    { address: ADDRESSES.seedEth as Address, symbol: "ETH", name: "SeedETH", decimals: 18 },
+                ] as TokenOption[]
+            ).filter((t) => t.address && t.address !== "0x0000000000000000000000000000000000000000"),
+        [],
+    );
 
     // Close the More popover when the user clicks anywhere outside of it,
     // including elsewhere inside the page. Mirrors the pattern used by the

@@ -791,11 +791,14 @@ export default function ExplorePage() {
                         ? { token0: allRows[0].token0, token1: allRows[0].token1 }
                         : undefined
                 }
-                tokens={Array.from(tokenLookup.entries()).map(([addr, meta]) => ({
-                    address: addr as Address,
-                    symbol: meta.symbol,
-                    decimals: meta.decimals,
-                }))}
+                tokens={(
+                    [
+                        { address: ADDRESSES.usdc as Address, symbol: "USDC", name: "USD Coin", decimals: USDC_DECIMALS, pinned: true },
+                        { address: ADDRESSES.eurc as Address, symbol: "EURC", name: "Euro Coin", decimals: 6 },
+                        { address: ADDRESSES.cirBtc as Address, symbol: "cirBTC", name: "Circle BTC", decimals: 8 },
+                        { address: ADDRESSES.seedEth as Address, symbol: "ETH", name: "SeedETH", decimals: 18 },
+                    ] as { address: Address; symbol: string; name: string; decimals: number; pinned?: boolean }[]
+                ).filter((t) => t.address && t.address !== "0x0000000000000000000000000000000000000000")}
             />
         </div>
     );

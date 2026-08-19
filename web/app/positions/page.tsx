@@ -19,8 +19,6 @@ import { V3Positions } from "@/components/pool/V3Positions";
 import { AutoCompounderPanel } from "@/components/pool/AutoCompounderPanel";
 import { ClaimAllFeesModal } from "@/components/pool/ClaimAllFeesModal";
 import { ADDRESSES, USDC_DECIMALS } from "@/lib/constants";
-import { useV2Tokens } from "@/lib/hooks/useV2Tokens";
-import { useV3Tokens } from "@/lib/hooks/useV3Tokens";
 import type { TokenOption } from "@/components/ui/TokenSelectModal";
 import { cn } from "@/lib/utils";
 
@@ -102,35 +100,23 @@ function PositionsInner() {
     if (t === "amm" || t === "burned" || t === "concentrated") setTab(t);
   }, [sp]);
 
-  // Token list passed to CreatePoolModal. Dedupes V2 + V3 catalogs and
-  // always surfaces USDC so the modal's pickers have a sane starting set.
-  const { tokens: v2Tokens } = useV2Tokens();
-  const { tokens: v3Tokens } = useV3Tokens();
-  const createPoolTokens: TokenOption[] = useMemo(() => {
-    const seen = new Set<string>();
-    const out: TokenOption[] = [
-      {
-        address: ADDRESSES.usdc as Address,
-        symbol: "USDC",
-        name: "USD Coin",
-        decimals: USDC_DECIMALS,
-        pinned: true,
-      },
-    ];
-    seen.add(ADDRESSES.usdc.toLowerCase());
-    for (const t of [...v2Tokens, ...v3Tokens]) {
-      const k = t.address.toLowerCase();
-      if (seen.has(k)) continue;
-      seen.add(k);
-      out.push({
-        address: t.address,
-        symbol: t.symbol,
-        name: t.name,
-        decimals: t.decimals,
-      });
-    }
-    return out;
-  }, [v2Tokens, v3Tokens]);
+  // Token list passed to CreatePoolModal: BASE ASSETS ONLY. The prior list came
+  // from useV2Tokens + useV3Tokens, which are entirely OLD-launchpad tokens
+  // (post-migration V2 pairs + CLANKER_V3 mode-2 tokens) -- deliberately excluded
+  // as noise, matching the swap selector. The modal's paste-an-address flow still
+  // reaches any token, so nothing is unreachable.
+  const createPoolTokens: TokenOption[] = useMemo(
+    () =>
+      (
+        [
+          { address: ADDRESSES.usdc as Address, symbol: "USDC", name: "USD Coin", decimals: USDC_DECIMALS, pinned: true },
+          { address: ADDRESSES.eurc as Address, symbol: "EURC", name: "Euro Coin", decimals: 6 },
+          { address: ADDRESSES.cirBtc as Address, symbol: "cirBTC", name: "Circle BTC", decimals: 8 },
+          { address: ADDRESSES.seedEth as Address, symbol: "ETH", name: "SeedETH", decimals: 18 },
+        ] as TokenOption[]
+      ).filter((t) => t.address && t.address !== "0x0000000000000000000000000000000000000000"),
+    [],
+  );
   // refreshKey is still used to remount the position lists when the user
   // closes the modal (the redirect happens client-side via router.push on
   // /positions/add after a successful add).
