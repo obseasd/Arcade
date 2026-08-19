@@ -301,6 +301,22 @@ export const ARCADE_HOOK_ABI = [
             { name: "twitterHandle", type: "string" },
             { name: "startMcapUsdc", type: "uint256" },
             { name: "creatorBuyUsdc", type: "uint256" },
+            {
+                name: "allocations",
+                type: "tuple[]",
+                components: [
+                    { name: "recipient", type: "address" },
+                    { name: "bps", type: "uint16" },
+                    {
+                        name: "steps",
+                        type: "tuple[]",
+                        components: [
+                            { name: "unlockTime", type: "uint64" },
+                            { name: "cumulativeBps", type: "uint16" },
+                        ],
+                    },
+                ],
+            },
         ],
         outputs: [
             { name: "tokenAddr", type: "address" },

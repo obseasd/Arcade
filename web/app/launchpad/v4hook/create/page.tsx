@@ -22,6 +22,7 @@ import { cn, formatUSDC } from "@/lib/utils";
 import { SocialLinksInput } from "@/components/launchpad/SocialLinksInput";
 import { buildSocialsForMetadata, type SocialKey } from "@/lib/socials";
 import { setFreshMeta } from "@/lib/freshMeta";
+import { AllocationsBuilder, type AllocationsResult } from "@/components/launchpad/AllocationsBuilder";
 
 const MAX_NAME = 32;
 const MAX_SYMBOL = 12;
@@ -171,6 +172,15 @@ function Inner() {
         }
     })();
 
+    // Creator allocations + trustless vesting carved from the 1B supply. Empty
+    // (the default) = legacy full-market launch. The builder emits the exact
+    // createLaunch `allocations` tuple array + a validity flag.
+    const [allocResult, setAllocResult] = useState<AllocationsResult>({
+        allocations: [],
+        totalPct: 0,
+        valid: true,
+    });
+
     const [txState, setTxState] = useState<TxState>({ status: "idle" });
     // Anti-double-deploy: `submitted` latches TRUE the instant the createLaunch tx
     // is broadcast (hash obtained), and permanently locks the submit button. A
@@ -233,6 +243,7 @@ function Inner() {
         (mode === ARCADE_HOOK_MODE.PUMP || mode === ARCADE_HOOK_MODE.CLANKER) &&
         recipientValid &&
         startMcapValid &&
+        allocResult.valid &&
         !imageUploading;
 
     /**
@@ -393,6 +404,11 @@ function Inner() {
                     // createLaunch (the provable first buy, unbypassable). 0 on
                     // CLANKER (the hook reverts a creator-buy there).
                     creatorBuyRaw,
+                    // Creator allocations (immediate + staircase vesting), carved
+                    // from the 1B supply. Empty = legacy full-market launch. The
+                    // curve is parameterized to the reduced market fraction so
+                    // price continuity + $60k graduation FDV hold.
+                    allocResult.allocations,
                 ],
             });
 
@@ -883,6 +899,11 @@ function Inner() {
                             </div>
                         </>
                     )}
+                </div>
+
+                {/* Allocations + vesting (both modes) --------------------- */}
+                <div className="arc-card p-5">
+                    <AllocationsBuilder account={account} onChange={setAllocResult} />
                 </div>
 
                 {/* Submit -------------------------------------------------- */}

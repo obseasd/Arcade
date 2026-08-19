@@ -130,7 +130,7 @@ export function buildCreateLaunchArgs(
     cmd: LaunchCommand,
     handle: string,
     extras: LaunchExtras = {},
-): readonly [string, string, string, number, `0x${string}`, number, number, number, number, string, bigint, bigint] {
+): readonly [string, string, string, number, `0x${string}`, number, number, number, number, string, bigint, bigint, readonly { recipient: `0x${string}`; bps: number; steps: readonly { unlockTime: bigint; cumulativeBps: number }[] }[]] {
     return [
         cmd.name, // name
         cmd.ticker, // symbol
@@ -147,6 +147,9 @@ export function buildCreateLaunchArgs(
         // creator-buy on CLANKER) and the bot has no funds to buy on the
         // launcher's behalf anyway.
         0n,
+        // allocations: none. A tweet launch is a pure fair launch (no team/
+        // treasury carve); the whole supply seeds the market.
+        [] as readonly { recipient: `0x${string}`; bps: number; steps: readonly { unlockTime: bigint; cumulativeBps: number }[] }[],
     ] as const;
 }
 
