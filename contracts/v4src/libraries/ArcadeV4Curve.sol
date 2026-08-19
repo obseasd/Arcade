@@ -32,40 +32,53 @@ library ArcadeV4Curve {
     // Constants (mirror src/launchpad/ArcadeLaunchpad.sol)
     // -------------------------------------------------------------------
 
-    /// @notice Curve constants CALIBRATED 2026-07-17 for a graduation that opens
-    ///         the AMM at ~$60k FDV with (near-)PRICE-CONTINUITY -- pump.fun's
-    ///         method. The trick: VIRTUAL_TOKEN_RESERVE is set LARGER than
-    ///         TOTAL_SUPPLY, so at graduation the virtual tokens remaining
-    ///         (V_T - CURVE_SUPPLY = 329M) exceed the real tokens seeded into the
-    ///         LP (TOTAL - CURVE_SUPPLY = 194M) by ~the amount that offsets the
-    ///         virtual USDC reserve. Seeding all 194M migration tokens with the
-    ///         real raise then lands on the curve's final marginal price to
-    ///         within ~0.76% -- and on the SAFE side (the AMM opens slightly
-    ///         BELOW marginal, so late curve buyers take a <1% markdown rather
-    ///         than the first AMM buyer getting a free profit). The residual is
-    ///         MIGRATION_FEE (2,500) overshooting exact continuity by ~90 USDC;
-    ///         negligible vs the ~43% cliff naive seeding had. Open FDV ~$60k,
-    ///         start FDV $5k. A PURE constant calibration: no graduation-logic
-    ///         change, no token burn.
+    /// @notice Curve constants RE-CALIBRATED 2026-08-19 so the graduation
+    ///         MIGRATION FEE is 1% of the raise (was a fixed 2,500 USDC = ~17.6%),
+    ///         WHILE preserving the pump.fun price-continuity property (the AMM
+    ///         opens at the curve's final marginal price, no cliff) and the
+    ///         start ~$5k / graduation ~$60k FDV band.
+    ///
+    ///         The trick: VIRTUAL_TOKEN_RESERVE is set LARGER than TOTAL_SUPPLY,
+    ///         so at graduation the virtual tokens remaining
+    ///         (V_T - CURVE_SUPPLY = 317.2M) exceed the real tokens seeded into
+    ///         the LP (TOTAL - CURVE_SUPPLY = 223M) by ~the amount that offsets
+    ///         the virtual USDC reserve. Seeding all 223M migration tokens with
+    ///         the raise MINUS the 1% migration fee then lands on the curve's
+    ///         final marginal price to within ~0.003% -- and on the SAFE side
+    ///         (the AMM opens fractionally BELOW marginal: seed 59.8110 vs
+    ///         marginal 59.8127 microUSDC/token, so late curve buyers take a
+    ///         negligible markdown rather than the first AMM buyer getting a free
+    ///         profit). The migration "over-raise" is now structurally exactly
+    ///         the 1% fee: the curve raises ~13,473 USDC, 1% (~134.7) goes to
+    ///         treasury and the remaining ~13,338 seeds the LP at the continuous
+    ///         price. Open FDV ~$59,813, start FDV ~$5,026. A PURE constant +
+    ///         fee-formula calibration: no graduation-logic change, no token burn.
     ///
     ///         The V4 curve DIVERGES from the V2 production launchpad (which keeps
     ///         its own 800M / $125k constants); the V4 hook is the successor.
-    ///         Only ~194M + 806M = 1B tokens are ever minted; the 135M excess in
+    ///         Only ~223M + 777M = 1B tokens are ever minted; the 94.2M excess in
     ///         VIRTUAL_TOKEN_RESERVE is a formula-only virtual reserve, never
-    ///         minted (exactly like pump.fun's ~270M virtual tokens).
-    uint256 internal constant VIRTUAL_USDC_RESERVE = 5_800e6;
-    uint256 internal constant VIRTUAL_TOKEN_RESERVE = 1_135_000_000e18;
-    uint256 internal constant CURVE_SUPPLY = 806_000_000e18;
+    ///         minted (exactly like pump.fun's virtual tokens).
+    uint256 internal constant VIRTUAL_USDC_RESERVE = 5_500e6;
+    uint256 internal constant VIRTUAL_TOKEN_RESERVE = 1_094_200_000e18;
+    uint256 internal constant CURVE_SUPPLY = 777_000_000e18;
     uint256 internal constant TOTAL_SUPPLY = 1_000_000_000e18;
-    uint256 internal constant MIGRATION_LP_TOKENS = TOTAL_SUPPLY - CURVE_SUPPLY; // 194M
+    uint256 internal constant MIGRATION_LP_TOKENS = TOTAL_SUPPLY - CURVE_SUPPLY; // 223M
     uint256 internal constant K_CONSTANT = VIRTUAL_USDC_RESERVE * VIRTUAL_TOKEN_RESERVE;
     uint256 internal constant TRADE_FEE_BPS = 100; // 1%
     uint256 internal constant FEE_DENOMINATOR = 10_000;
-    uint256 internal constant MIGRATION_FEE = 2_500e6; // 2,500 USDC
+    /// @notice Graduation migration fee, now 1% of the actual raise (was a fixed
+    ///         2,500 USDC). Taken off the top of realUsdcReserve at graduation
+    ///         before the LP is seeded, via `migrationFee()`. Structurally this
+    ///         1% IS the curve's "over-raise" beyond what the LP needs to open at
+    ///         the continuous price -- lowering it below 1% would open the AMM
+    ///         ABOVE the curve's final price (an upward cliff), so it is coupled
+    ///         to the reserve calibration above.
+    uint256 internal constant MIGRATION_FEE_BPS = 100; // 1%
     /// @notice The realUsdcReserve value (approx) at graduation. Informational:
     ///         graduation is triggered by tokensSold >= CURVE_SUPPLY, not by
-    ///         this. At CURVE_SUPPLY = 806M the curve raises ~14,209 USDC.
-    uint256 internal constant GRADUATION_USDC = 14_209e6;
+    ///         this. At CURVE_SUPPLY = 777M the curve raises ~13,473 USDC.
+    uint256 internal constant GRADUATION_USDC = 13_473e6;
 
     // -------------------------------------------------------------------
     // Return structs
@@ -253,12 +266,22 @@ library ArcadeV4Curve {
     }
 
     /**
+     * @notice The migration fee taken at graduation: 1% (MIGRATION_FEE_BPS) of
+     *         the raise. Single source of truth for both `graduationLiquidityUsdc`
+     *         and `ArcadeHookLib.graduate()`.
+     */
+    function migrationFee(uint256 realUsdcReserveAtGrad) internal pure returns (uint256) {
+        return (realUsdcReserveAtGrad * MIGRATION_FEE_BPS) / FEE_DENOMINATOR;
+    }
+
+    /**
      * @notice USDC available to seed the V2/V4 graduation pool. Equals
-     *         realUsdcReserve - MIGRATION_FEE at graduation; the fee is taken
-     *         off the top before the LP is funded.
+     *         realUsdcReserve - migrationFee(realUsdcReserve) at graduation; the
+     *         1% fee is taken off the top before the LP is funded. Seeding the
+     *         223M migration tokens with this amount opens the AMM at the curve's
+     *         final marginal price (continuity: the 1% over-raise IS the fee).
      */
     function graduationLiquidityUsdc(uint256 realUsdcReserveAtGrad) internal pure returns (uint256) {
-        if (realUsdcReserveAtGrad < MIGRATION_FEE) return 0;
-        return realUsdcReserveAtGrad - MIGRATION_FEE;
+        return realUsdcReserveAtGrad - migrationFee(realUsdcReserveAtGrad);
     }
 }

@@ -297,7 +297,7 @@ export const LAUNCHPAD_GRADUATION_USDC = 20_000n * 10n ** BigInt(USDC_DECIMALS);
  * progress bar reads wrong. Mirror of
  * `contracts/v4src/libraries/ArcadeV4Curve.sol` (CURVE_SUPPLY / GRADUATION_USDC).
  */
-export const V4_HOOK_CURVE_SUPPLY = 806_000_000n * 10n ** BigInt(LAUNCHPAD_TOKEN_DECIMALS);
+export const V4_HOOK_CURVE_SUPPLY = 777_000_000n * 10n ** BigInt(LAUNCHPAD_TOKEN_DECIMALS);
 export const V4_HOOK_GRADUATION_USDC = 14_209n * 10n ** BigInt(USDC_DECIMALS);
 
 /** Featured token addresses surfaced at the top of the launchpad list. Set via

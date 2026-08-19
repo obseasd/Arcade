@@ -45,8 +45,8 @@ const TICK_SPACING = 200;
 
 // Curve virtuals: MUST mirror ArcadeV4Curve VIRTUAL_USDC_RESERVE /
 // VIRTUAL_TOKEN_RESERVE or the preview diverges from the on-chain out.
-const VIRT_USDC = 5_800n * 10n ** BigInt(USDC_DECIMALS);
-const VIRT_TOKEN = 1_135_000_000n * 10n ** BigInt(LAUNCHPAD_TOKEN_DECIMALS);
+const VIRT_USDC = 5_500n * 10n ** BigInt(USDC_DECIMALS);
+const VIRT_TOKEN = 1_094_200_000n * 10n ** BigInt(LAUNCHPAD_TOKEN_DECIMALS);
 const CURVE_K = VIRT_USDC * VIRT_TOKEN;
 // 3% slippage floor on curve trades (the hook enforces minOut via Slippage()).
 const CURVE_SLIPPAGE_BPS = 300n;

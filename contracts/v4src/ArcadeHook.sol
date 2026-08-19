@@ -94,12 +94,12 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
     // -------------------------------------------------------------------
 
     struct CurveState {
-        // Stored at init = ArcadeV4Curve.VIRTUAL_USDC_RESERVE (5_800e6), but
+        // Stored at init = ArcadeV4Curve.VIRTUAL_USDC_RESERVE (5_500e6), but
         // INFORMATIONAL ONLY: the curve math reads the library constant, never
         // this field. Kept for off-chain readers; do not compute against it.
         uint128 virtualUsdcReserve;
-        uint128 realUsdcReserve; // climbs to ~14_209e6 at graduation (GRADUATION_USDC)
-        uint128 tokensSold; // climbs to CURVE_SUPPLY (806M)
+        uint128 realUsdcReserve; // climbs to ~13_473e6 at graduation (GRADUATION_USDC)
+        uint128 tokensSold; // climbs to CURVE_SUPPLY (777M)
         uint8 mode; // LaunchMode cast
         uint8 status; // 0=Curving, 1=GraduationStarted, 2=Graduated
         address creator;

@@ -208,9 +208,9 @@ function Inner() {
     // indexer needed. Must mirror ArcadeV4Curve's virtual reserves.
     const curveSpotPrice = useMemo(() => {
         if (!isPump || status === ARCADE_HOOK_STATUS.GRADUATED) return undefined;
-        const currentUsdc = 5_800n * 10n ** BigInt(USDC_DECIMALS) + realUsdcReserve;
+        const currentUsdc = 5_500n * 10n ** BigInt(USDC_DECIMALS) + realUsdcReserve;
         const currentTokens =
-            1_135_000_000n * 10n ** BigInt(LAUNCHPAD_TOKEN_DECIMALS) - tokensSold;
+            1_094_200_000n * 10n ** BigInt(LAUNCHPAD_TOKEN_DECIMALS) - tokensSold;
         if (currentTokens <= 0n) return undefined;
         // (usdcRaw * 1e18) / tokenRaw == price-per-whole-token * 1e6.
         return Number((currentUsdc * 10n ** 18n) / currentTokens) / 1e6;

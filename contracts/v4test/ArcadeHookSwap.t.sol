@@ -223,9 +223,9 @@ contract ArcadeHookSwapTest is Test {
 
         // Alice received the full CURVE_SUPPLY (cap path delivers maxOut).
         assertEq(tokensOut, ArcadeV4Curve.CURVE_SUPPLY, "alice gets full curve supply");
-        // Calibrated curve (806M): a cap-path buy from an empty curve consumes
-        // actualGross = 14_352_644_992 USDC (raise ~14.2k + 1% fee headroom).
-        assertEq(actualGross, 14_352_644_992, "matches calibrated cap actualGross");
+        // Calibrated curve (777M): a cap-path buy from an empty curve consumes
+        // actualGross = 13_608_659_102 USDC (raise ~13.47k + 1% fee headroom).
+        assertEq(actualGross, 13_608_659_102, "matches calibrated cap actualGross");
         // Refund stays with alice automatically (we only transferFrom actualGross).
         assertEq(aliceUsdcBefore - usdc.balanceOf(ALICE), actualGross, "alice only paid actualGross");
 
@@ -234,10 +234,12 @@ contract ArcadeHookSwapTest is Test {
         assertEq(uint256(s.status), 2, "status = Graduated");
         assertEq(s.tokensSold, ArcadeV4Curve.CURVE_SUPPLY, "tokensSold at cap");
 
-        // Treasury received MIGRATION_FEE (plus its share of the curve trade
-        // fee on the cap-filling buy). At MINIMUM treasuryBefore + 2_500e6.
-        assertGe(
-            usdc.balanceOf(TREASURY) - treasuryBefore, 2_500e6, "treasury at least migration fee"
+        // Treasury received the 1% migration fee (134_725_725 = 1% of the
+        // ~13_472.57 USDC raise) plus its 50% share of the curve trade fee on
+        // the cap-filling buy. Exact delta = 68_043_295 (trade-fee cut) +
+        // 134_725_725 (migration fee) = 202_769_020.
+        assertEq(
+            usdc.balanceOf(TREASURY) - treasuryBefore, 202_769_020, "treasury migration fee + trade cut"
         );
     }
 

@@ -120,7 +120,17 @@ constructor time and reverts if the mine missed.
 
 ## 4. Curve math (frozen)
 
-Constants (replicated from `contracts/src/launchpad/ArcadeLaunchpad.sol`):
+> **DIVERGED — authoritative source is `contracts/v4src/libraries/ArcadeV4Curve.sol`.**
+> The block below shows the ORIGINAL V2-mirrored constants. The V4 curve has since
+> been RE-calibrated (2026-08-19) for a graduation that opens the AMM at ~$60k FDV
+> with price continuity AND a migration fee of **1% of the raise** (not a fixed
+> 2,500 USDC). Current values: `VIRTUAL_USDC_RESERVE = 5_500e6`,
+> `VIRTUAL_TOKEN_RESERVE = 1_094_200_000e18` (> TOTAL_SUPPLY on purpose),
+> `CURVE_SUPPLY = 777_000_000e18`, `MIGRATION_LP_TOKENS = 223_000_000e18`,
+> `MIGRATION_FEE_BPS = 100` (fee = `realUsdcReserve * 100 / 10_000`),
+> `GRADUATION_USDC ~= 13_473e6`. The pseudocode below is otherwise accurate.
+
+Constants (ORIGINAL frozen spec; see divergence note above for live values):
 
 ```solidity
 uint256 public constant VIRTUAL_USDC_RESERVE  = 5_000e6;
@@ -131,7 +141,7 @@ uint256 public constant MIGRATION_LP_TOKENS   = 200_000_000e18;
 uint256 public constant K_CONSTANT            = 5_000_000_000_000_000_000_000_000_000_000_000_000; // 5e36
 uint256 public constant TRADE_FEE_BPS         = 100;     // 1%
 uint256 public constant FEE_DENOMINATOR       = 10_000;
-uint256 public constant MIGRATION_FEE         = 2_500e6; // 2,500 USDC
+uint256 public constant MIGRATION_FEE         = 2_500e6; // 2,500 USDC (now MIGRATION_FEE_BPS = 100, 1%)
 uint256 public constant GRADUATION_USDC       = 20_000e6;
 ```
 
@@ -253,8 +263,9 @@ Graduation routine (inside beforeSwap, when threshold crossed mid-swap):
 
 ```
 1. state.status = Status.GraduationStarted
-2. pm.take(USDC, TREASURY, MIGRATION_FEE)                        // 2,500 USDC
-3. _seedGraduationLiquidity(key, MIGRATION_LP_TOKENS, 17_500e6)  // seed LP
+2. migrationFee = realUsdcReserve * MIGRATION_FEE_BPS / 10_000    // 1% of raise
+   pm.take(USDC, TREASURY, migrationFee)                          // ~134.7 USDC
+3. _seedGraduationLiquidity(key, MIGRATION_LP_TOKENS, realUsdcReserve - migrationFee) // seed LP (~13,338 USDC)
 4. state.status = Status.Graduated
 5. continue with the remainder of the user's swap against canonical AMM
 ```

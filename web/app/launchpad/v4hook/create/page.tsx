@@ -35,10 +35,10 @@ const CLANKER_MIN_START_MCAP = 1_000;
 const CLANKER_MAX_START_MCAP = 10_000_000;
 
 // Curve virtuals: MUST mirror ArcadeV4Curve VIRTUAL_USDC_RESERVE /
-// VIRTUAL_TOKEN_RESERVE (5_800e6 / 1_135_000_000e18) and the 1% curve fee, so
+// VIRTUAL_TOKEN_RESERVE (5_500e6 / 1_094_200_000e18) and the 1% curve fee, so
 // the creator-buy minOut matches the on-chain out.
-const CURVE_VIRT_USDC = 5_800n * 10n ** 6n;
-const CURVE_VIRT_TOKEN = 1_135_000_000n * 10n ** 18n;
+const CURVE_VIRT_USDC = 5_500n * 10n ** 6n;
+const CURVE_VIRT_TOKEN = 1_094_200_000n * 10n ** 18n;
 const CURVE_K = CURVE_VIRT_USDC * CURVE_VIRT_TOKEN;
 /** Tokens out for a buy of `usdcInRaw` against the fresh (empty) curve. */
 function initialCurveTokensOut(usdcInRaw: bigint): bigint {

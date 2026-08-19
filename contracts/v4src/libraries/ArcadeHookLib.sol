@@ -269,12 +269,13 @@ library ArcadeHookLib {
         state.status = uint8(1); // GraduationStarted
 
         uint256 totalUsdc = state.realUsdcReserve;
-        uint256 lpUsdc = ArcadeV4Curve.graduationLiquidityUsdc(totalUsdc);
+        uint256 migrationFee = ArcadeV4Curve.migrationFee(totalUsdc);
+        uint256 lpUsdc = totalUsdc - migrationFee;
         if (lpUsdc == 0) revert ZeroAmount();
         uint256 lpTokens = ArcadeV4Curve.MIGRATION_LP_TOKENS;
 
-        // Migration fee off the top -> treasury (pull-payment safe).
-        safePayUsdc(usdc, pending, treasury, ArcadeV4Curve.MIGRATION_FEE);
+        // Migration fee (1% of the raise) off the top -> treasury (pull-payment safe).
+        safePayUsdc(usdc, pending, treasury, migrationFee);
 
         bool usdcIsCurrency0 = Currency.unwrap(key.currency0) == Currency.unwrap(usdc);
         (uint256 amount0, uint256 amount1) = usdcIsCurrency0 ? (lpUsdc, lpTokens) : (lpTokens, lpUsdc);
