@@ -94,6 +94,66 @@ library ArcadeV4Curve {
     }
 
     // -------------------------------------------------------------------
+    // Per-launch parameterization (creator allocations)
+    // -------------------------------------------------------------------
+
+    /// @notice Per-launch curve parameters. The library is intrinsically stated
+    ///         by the constants above; a launch that carves out a creator
+    ///         ALLOCATION scales the WHOLE curve down by the market fraction
+    ///         Mt/T (Mt = TOTAL_SUPPLY - allocation) so both price-continuity and
+    ///         the graduation FDV are preserved:
+    ///           - start price virtualUsdc/virtualToken == Vu/Vt (unchanged);
+    ///           - final marginal price virtualUsdc*virtualToken/(virtualToken -
+    ///             curveSupply)^2 is invariant under the common scale;
+    ///           - the AMM seed price (lpUsdc - migrationFee)/migrationLpTokens
+    ///             scales numerator and denominator by the same Mt/T.
+    ///         `virtualUsdc * virtualToken` is the per-launch K. At allocation 0
+    ///         these equal the library constants EXACTLY (see {defaultParams}),
+    ///         which is the zero-regression guarantee.
+    struct CurveParams {
+        uint256 virtualUsdc;
+        uint256 virtualToken;
+        uint256 curveSupply;
+        uint256 migrationLpTokens;
+        uint256 migrationFee;
+    }
+
+    /// @notice Default (allocation-0) curve params: exactly the library
+    ///         constants. Used by the constant-signature wrappers so existing
+    ///         call sites and pinned vectors are byte-for-byte unchanged.
+    function defaultParams() internal pure returns (CurveParams memory) {
+        return CurveParams({
+            virtualUsdc: VIRTUAL_USDC_RESERVE,
+            virtualToken: VIRTUAL_TOKEN_RESERVE,
+            curveSupply: CURVE_SUPPLY,
+            migrationLpTokens: MIGRATION_LP_TOKENS,
+            migrationFee: MIGRATION_FEE
+        });
+    }
+
+    /// @notice Curve params for a creator allocation of `allocBps` (0..9000) of
+    ///         TOTAL_SUPPLY. A = T*allocBps/10000, Mt = T - A. Every reserve /
+    ///         supply / fee is scaled by Mt/T, and the curve + LP seed then use
+    ///         exactly Mt tokens (curveSupply' + migrationLpTokens' == Mt), so
+    ///         the caller can place the remaining A wei to the creator with the
+    ///         invariant curveSupply' + migrationLpTokens' + A == T. allocBps==0
+    ///         reproduces {defaultParams} / the constants EXACTLY (T*Sc/T == Sc,
+    ///         Vu*T/T == Vu, ... all divide evenly).
+    function paramsForAllocation(uint256 allocBps) internal pure returns (CurveParams memory p) {
+        uint256 t = TOTAL_SUPPLY;
+        uint256 a = (t * allocBps) / FEE_DENOMINATOR;
+        uint256 mt = t - a;
+        uint256 curveSupply_ = (mt * CURVE_SUPPLY) / t;
+        p = CurveParams({
+            virtualUsdc: (VIRTUAL_USDC_RESERVE * mt) / t,
+            virtualToken: (VIRTUAL_TOKEN_RESERVE * mt) / t,
+            curveSupply: curveSupply_,
+            migrationLpTokens: mt - curveSupply_, // Mt - curveSupply' (exact)
+            migrationFee: (MIGRATION_FEE * mt) / t
+        });
+    }
+
+    // -------------------------------------------------------------------
     // Buy
     // -------------------------------------------------------------------
 
@@ -119,20 +179,36 @@ library ArcadeV4Curve {
         pure
         returns (BuyResult memory r)
     {
+        return simulateBuy(defaultParams(), tokensSold, realUsdcReserve, grossUsdcIn);
+    }
+
+    /// @notice Parameterized curve buy. Identical shape to the constant version
+    ///         above; every constant is replaced by its per-launch value from
+    ///         `p` (K = p.virtualUsdc * p.virtualToken). Same rounding policy
+    ///         (floors, cap-path ceil bumps). At `p == defaultParams()` this is
+    ///         byte-for-byte the legacy behaviour.
+    function simulateBuy(
+        CurveParams memory p,
+        uint256 tokensSold,
+        uint256 realUsdcReserve,
+        uint256 grossUsdcIn
+    ) internal pure returns (BuyResult memory r) {
         if (grossUsdcIn == 0) return r;
-        if (tokensSold >= CURVE_SUPPLY) return r; // curve already at cap
+        if (tokensSold >= p.curveSupply) return r; // curve already at cap
+
+        uint256 k = p.virtualUsdc * p.virtualToken;
 
         uint256 fee = (grossUsdcIn * TRADE_FEE_BPS) / FEE_DENOMINATOR;
         uint256 netIn = grossUsdcIn - fee;
 
-        uint256 currentUsdc = VIRTUAL_USDC_RESERVE + realUsdcReserve;
-        uint256 currentTokens = VIRTUAL_TOKEN_RESERVE - tokensSold;
+        uint256 currentUsdc = p.virtualUsdc + realUsdcReserve;
+        uint256 currentTokens = p.virtualToken - tokensSold;
 
         uint256 newUsdcReserve = currentUsdc + netIn;
-        uint256 newTokenReserve = K_CONSTANT / newUsdcReserve; // floor
+        uint256 newTokenReserve = k / newUsdcReserve; // floor
         uint256 desiredOut = currentTokens - newTokenReserve;
 
-        uint256 maxOut = CURVE_SUPPLY - tokensSold;
+        uint256 maxOut = p.curveSupply - tokensSold;
 
         if (desiredOut <= maxOut) {
             r.tokensOut = desiredOut;
@@ -142,12 +218,12 @@ library ArcadeV4Curve {
             return r;
         }
 
-        // Cap path: this buy crosses CURVE_SUPPLY. Tighten to the exact tokens
+        // Cap path: this buy crosses curveSupply. Tighten to the exact tokens
         // remaining and compute the precise USDC the curve will accept; the
         // rest is refunded.
         uint256 capTokenReserve = currentTokens - maxOut;
-        uint256 capUsdcReserve = K_CONSTANT / capTokenReserve; // floor
-        if (K_CONSTANT % capTokenReserve != 0) {
+        uint256 capUsdcReserve = k / capTokenReserve; // floor
+        if (k % capTokenReserve != 0) {
             // Bump by 1 wei to ensure the cap is REACHABLE (the floor on its
             // own would leave the curve a hair short of capacity).
             capUsdcReserve += 1;
@@ -195,17 +271,29 @@ library ArcadeV4Curve {
         pure
         returns (SellResult memory r)
     {
+        return simulateSell(defaultParams(), tokensSold, realUsdcReserve, tokensIn);
+    }
+
+    /// @notice Parameterized curve sell. Same shape as the constant version;
+    ///         constants replaced by `p` (K = p.virtualUsdc * p.virtualToken).
+    function simulateSell(
+        CurveParams memory p,
+        uint256 tokensSold,
+        uint256 realUsdcReserve,
+        uint256 tokensIn
+    ) internal pure returns (SellResult memory r) {
         if (tokensIn == 0) return r;
         if (tokensIn > tokensSold) {
             // Defensive: cannot sell more than the curve has issued.
             tokensIn = tokensSold;
         }
 
-        uint256 currentUsdc = VIRTUAL_USDC_RESERVE + realUsdcReserve;
-        uint256 currentTokens = VIRTUAL_TOKEN_RESERVE - tokensSold;
+        uint256 k = p.virtualUsdc * p.virtualToken;
+        uint256 currentUsdc = p.virtualUsdc + realUsdcReserve;
+        uint256 currentTokens = p.virtualToken - tokensSold;
 
         uint256 newTokenReserve = currentTokens + tokensIn;
-        uint256 newUsdcReserve = K_CONSTANT / newTokenReserve; // floor
+        uint256 newUsdcReserve = k / newTokenReserve; // floor
         // V2 production behavior: this subtraction is unchecked and would
         // revert on underflow when floor rounding produces newUsdcReserve >
         // currentUsdc (degenerate dust sells deep in the curve). V4 must NOT
@@ -236,8 +324,17 @@ library ArcadeV4Curve {
      *         the curve math itself, which always derives from K.
      */
     function spotPrice(uint256 tokensSold, uint256 realUsdcReserve) internal pure returns (uint256) {
-        uint256 currentUsdc = VIRTUAL_USDC_RESERVE + realUsdcReserve;
-        uint256 currentTokens = VIRTUAL_TOKEN_RESERVE - tokensSold;
+        return spotPrice(defaultParams(), tokensSold, realUsdcReserve);
+    }
+
+    /// @notice Parameterized spot price.
+    function spotPrice(CurveParams memory p, uint256 tokensSold, uint256 realUsdcReserve)
+        internal
+        pure
+        returns (uint256)
+    {
+        uint256 currentUsdc = p.virtualUsdc + realUsdcReserve;
+        uint256 currentTokens = p.virtualToken - tokensSold;
         if (currentTokens == 0) return 0;
         return (currentUsdc * 1e18) / currentTokens;
     }
@@ -252,13 +349,28 @@ library ArcadeV4Curve {
         return tokensSold >= CURVE_SUPPLY;
     }
 
+    /// @notice Parameterized graduation check: tokensSold >= p.curveSupply.
+    function isGraduated(CurveParams memory p, uint256 tokensSold) internal pure returns (bool) {
+        return tokensSold >= p.curveSupply;
+    }
+
     /**
      * @notice USDC available to seed the V2/V4 graduation pool. Equals
      *         realUsdcReserve - MIGRATION_FEE at graduation; the fee is taken
      *         off the top before the LP is funded.
      */
     function graduationLiquidityUsdc(uint256 realUsdcReserveAtGrad) internal pure returns (uint256) {
-        if (realUsdcReserveAtGrad < MIGRATION_FEE) return 0;
-        return realUsdcReserveAtGrad - MIGRATION_FEE;
+        return graduationLiquidityUsdc(defaultParams(), realUsdcReserveAtGrad);
+    }
+
+    /// @notice Parameterized: USDC available to seed the pool = reserve minus the
+    ///         per-launch migration fee.
+    function graduationLiquidityUsdc(CurveParams memory p, uint256 realUsdcReserveAtGrad)
+        internal
+        pure
+        returns (uint256)
+    {
+        if (realUsdcReserveAtGrad < p.migrationFee) return 0;
+        return realUsdcReserveAtGrad - p.migrationFee;
     }
 }

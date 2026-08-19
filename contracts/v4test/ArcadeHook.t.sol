@@ -5,6 +5,7 @@ import {Test, console2} from "forge-std/Test.sol";
 
 import {ArcadeHook} from "../v4src/ArcadeHook.sol";
 import {ArcadeV4Curve} from "../v4src/libraries/ArcadeV4Curve.sol";
+import {StaircaseVestingVault} from "../v4src/StaircaseVestingVault.sol";
 
 import {PoolManager} from "v4-core/PoolManager.sol";
 import {IHooks} from "v4-core/interfaces/IHooks.sol";
@@ -48,9 +49,19 @@ contract ArcadeHookTest is Test {
     address constant ESCROW = address(0xE5C);
     address constant OWNER = address(0x0123);
     address constant ALICE = address(0xA11CE);
+    /// @dev Placeholder vesting vault for the constructor-only tests (the real
+    ///      setUp deploys a live one wired to the hook address).
+    address constant VESTING = address(0xDEED);
+
+    address vestingVaultAddr;
 
     /// @dev Permission bitmap from the spec: 10 callbacks claimed.
     uint160 internal constant TARGET_FLAGS = uint160(0x3ECE);
+
+    /// @dev Empty allocations array for the legacy (no-allocation) call sites.
+    function _al() internal pure returns (ArcadeHook.LaunchAllocation[] memory) {
+        return new ArcadeHook.LaunchAllocation[](0);
+    }
 
     function setUp() public {
         pm = new PoolManager(address(this));
@@ -62,9 +73,20 @@ contract ArcadeHookTest is Test {
         // We pick a fixed high-bit prefix so the address is deterministic per
         // run and easy to assert in failure messages.
         address hookAddr = address(uint160(0xCAFE0000 | TARGET_FLAGS));
+        // The vesting vault is wired to the (known, fixed) hook address; the hook
+        // is then placed at that address via deployCodeTo with the vault baked in.
+        vestingVaultAddr = address(new StaircaseVestingVault(hookAddr));
         deployCodeTo(
             "ArcadeHook.sol:ArcadeHook",
-            abi.encode(IPoolManager(poolManagerAddr), Currency.wrap(address(usdc)), LOCKED_VAULT, TREASURY, ESCROW, OWNER),
+            abi.encode(
+                IPoolManager(poolManagerAddr),
+                Currency.wrap(address(usdc)),
+                LOCKED_VAULT,
+                TREASURY,
+                ESCROW,
+                vestingVaultAddr,
+                OWNER
+            ),
             hookAddr
         );
         hook = ArcadeHook(hookAddr);
@@ -96,29 +118,29 @@ contract ArcadeHookTest is Test {
     function test_constructor_rejectsZeroPoolManager() public {
         vm.expectRevert(ArcadeHook.ZeroAddress.selector);
         new ArcadeHook(
-            IPoolManager(address(0)), Currency.wrap(address(usdc)), LOCKED_VAULT, TREASURY, ESCROW, OWNER
+            IPoolManager(address(0)), Currency.wrap(address(usdc)), LOCKED_VAULT, TREASURY, ESCROW, VESTING, OWNER
         );
     }
 
     function test_constructor_rejectsZeroUsdc() public {
         vm.expectRevert(ArcadeHook.ZeroAddress.selector);
-        new ArcadeHook(IPoolManager(poolManagerAddr), Currency.wrap(address(0)), LOCKED_VAULT, TREASURY, ESCROW, OWNER);
+        new ArcadeHook(IPoolManager(poolManagerAddr), Currency.wrap(address(0)), LOCKED_VAULT, TREASURY, ESCROW, VESTING, OWNER);
     }
 
     function test_constructor_rejectsZeroLockedVault() public {
         vm.expectRevert(ArcadeHook.ZeroAddress.selector);
-        new ArcadeHook(IPoolManager(poolManagerAddr), Currency.wrap(address(usdc)), address(0), TREASURY, ESCROW, OWNER);
+        new ArcadeHook(IPoolManager(poolManagerAddr), Currency.wrap(address(usdc)), address(0), TREASURY, ESCROW, VESTING, OWNER);
     }
 
     function test_constructor_rejectsZeroTreasury() public {
         vm.expectRevert(ArcadeHook.ZeroAddress.selector);
-        new ArcadeHook(IPoolManager(poolManagerAddr), Currency.wrap(address(usdc)), LOCKED_VAULT, address(0), ESCROW, OWNER);
+        new ArcadeHook(IPoolManager(poolManagerAddr), Currency.wrap(address(usdc)), LOCKED_VAULT, address(0), ESCROW, VESTING, OWNER);
     }
 
     function test_constructor_allowsZeroTwitterEscrow() public {
         // Escrow may be zero at bootstrap; admin wires it in later.
         ArcadeHook h = new ArcadeHook(
-            IPoolManager(poolManagerAddr), Currency.wrap(address(usdc)), LOCKED_VAULT, TREASURY, address(0), OWNER
+            IPoolManager(poolManagerAddr), Currency.wrap(address(usdc)), LOCKED_VAULT, TREASURY, address(0), VESTING, OWNER
         );
         assertEq(h.twitterEscrow(), address(0), "escrow allowed zero at init");
     }
@@ -142,7 +164,7 @@ contract ArcadeHookTest is Test {
         usdc.approve(address(hook), type(uint256).max);
         uint256 treasuryBefore = usdc.balanceOf(TREASURY);
         (address tokenAddr,) = hook.createLaunch(
-            "Demo", "DEMO", "ipfs://demo", 0, address(0), 0, 0, 0, 0, "", 0, 0
+            "Demo", "DEMO", "ipfs://demo", 0, address(0), 0, 0, 0, 0, "", 0, 0, _al()
         );
         vm.stopPrank();
 
@@ -159,15 +181,15 @@ contract ArcadeHookTest is Test {
         uint256 usdcBefore = usdc.balanceOf(ALICE);
         uint256 buyAmt = 100e6;
         (address tokenAddr, PoolId poolId) =
-            hook.createLaunch("Demo", "DEMO", "ipfs://demo", 0, address(0), 0, 0, 0, 0, "", 0, buyAmt);
+            hook.createLaunch("Demo", "DEMO", "ipfs://demo", 0, address(0), 0, 0, 0, 0, "", 0, buyAmt, _al());
         vm.stopPrank();
 
         // The creator received a bag from the atomic first buy...
         assertGt(TestERC20(tokenAddr).balanceOf(ALICE), 0, "creator got the first bag");
         // ...the curve reflects it (tokensSold + realUsdcReserve moved)...
-        (, uint128 realUsdcReserve, uint128 tokensSold,,,,,) = hook.curveStates(poolId);
-        assertGt(tokensSold, 0, "curve tokensSold advanced");
-        assertGt(realUsdcReserve, 0, "curve reserve advanced");
+        ArcadeHook.CurveState memory st = hook.getCurveState(poolId);
+        assertGt(st.tokensSold, 0, "curve tokensSold advanced");
+        assertGt(st.realUsdcReserve, 0, "curve reserve advanced");
         // ...and the creator's net USDC spend is the 3 USDC fee + the buy, minus
         // the creator's own rebate of the curve fee (ALICE is the creator, and the
         // PUMP curve fee is split 50/50 platform/creator, so up to 1% of the buy
@@ -182,7 +204,7 @@ contract ArcadeHookTest is Test {
         vm.startPrank(ALICE);
         usdc.approve(address(hook), type(uint256).max);
         vm.expectRevert(ArcadeHook.InvalidMode.selector);
-        hook.createLaunch("Demo", "DEMO", "ipfs://demo", 1, address(0), 0, 0, 0, 1, "", 0, 100e6);
+        hook.createLaunch("Demo", "DEMO", "ipfs://demo", 1, address(0), 0, 0, 0, 1, "", 0, 100e6, _al());
         vm.stopPrank();
     }
 
@@ -193,11 +215,11 @@ contract ArcadeHookTest is Test {
 
         vm.prank(ALICE);
         vm.expectRevert(ArcadeHook.EmptyName.selector);
-        hook.createLaunch("", "DEMO", "ipfs://demo", 0, address(0), 0, 0, 0, 0, "", 0, 0);
+        hook.createLaunch("", "DEMO", "ipfs://demo", 0, address(0), 0, 0, 0, 0, "", 0, 0, _al());
 
         vm.prank(ALICE);
         vm.expectRevert(ArcadeHook.EmptyName.selector);
-        hook.createLaunch("Demo", "", "ipfs://demo", 0, address(0), 0, 0, 0, 0, "", 0, 0);
+        hook.createLaunch("Demo", "", "ipfs://demo", 0, address(0), 0, 0, 0, 0, "", 0, 0, _al());
     }
 
     function test_createLaunch_revertsOnInvalidMode() public {
@@ -205,7 +227,7 @@ contract ArcadeHookTest is Test {
         vm.startPrank(ALICE);
         usdc.approve(address(hook), type(uint256).max);
         vm.expectRevert(ArcadeHook.InvalidMode.selector);
-        hook.createLaunch("Demo", "DEMO", "ipfs://demo", 3, address(0), 0, 0, 0, 0, "", 0, 0);
+        hook.createLaunch("Demo", "DEMO", "ipfs://demo", 3, address(0), 0, 0, 0, 0, "", 0, 0, _al());
         vm.stopPrank();
     }
 
@@ -215,7 +237,7 @@ contract ArcadeHookTest is Test {
         usdc.approve(address(hook), type(uint256).max);
         vm.expectRevert(ArcadeHook.InvalidSnipeBps.selector);
         // 6000 bps > MAX_SNIPE_START_BPS (5000)
-        hook.createLaunch("Demo", "DEMO", "ipfs://demo", 0, address(0), 0, 6_000, 600, 0, "", 0, 0);
+        hook.createLaunch("Demo", "DEMO", "ipfs://demo", 0, address(0), 0, 6_000, 600, 0, "", 0, 0, _al());
         vm.stopPrank();
     }
 
@@ -224,7 +246,7 @@ contract ArcadeHookTest is Test {
         vm.startPrank(ALICE);
         usdc.approve(address(hook), type(uint256).max);
         vm.expectRevert(ArcadeHook.InvalidDecaySeconds.selector);
-        hook.createLaunch("Demo", "DEMO", "ipfs://demo", 0, address(0), 0, 500, 0, 0, "", 0, 0);
+        hook.createLaunch("Demo", "DEMO", "ipfs://demo", 0, address(0), 0, 500, 0, 0, "", 0, 0, _al());
         vm.stopPrank();
     }
 
@@ -236,7 +258,7 @@ contract ArcadeHookTest is Test {
         vm.startPrank(ALICE);
         usdc.approve(address(hook), type(uint256).max);
         vm.expectRevert(); // Pausable.EnforcedPause
-        hook.createLaunch("Demo", "DEMO", "ipfs://demo", 0, address(0), 0, 0, 0, 0, "", 0, 0);
+        hook.createLaunch("Demo", "DEMO", "ipfs://demo", 0, address(0), 0, 0, 0, 0, "", 0, 0, _al());
         vm.stopPrank();
     }
 
@@ -245,7 +267,7 @@ contract ArcadeHookTest is Test {
         vm.startPrank(ALICE);
         usdc.approve(address(hook), type(uint256).max);
         (address tokenAddr,) = hook.createLaunch(
-            "Demo", "DEMO", "ipfs://demo", 0, address(0), 0, 1_000, 600, 0, "", 0, 0
+            "Demo", "DEMO", "ipfs://demo", 0, address(0), 0, 1_000, 600, 0, "", 0, 0, _al()
         );
         vm.stopPrank();
 
@@ -271,7 +293,7 @@ contract ArcadeHookTest is Test {
         vm.startPrank(ALICE);
         usdc.approve(address(hook), type(uint256).max);
         (address tokenAddr,) = hook.createLaunch(
-            "Demo", "DEMO", "ipfs://demo", 0, address(0), 0, 2_000, 1_000, 0, "", 0, 0
+            "Demo", "DEMO", "ipfs://demo", 0, address(0), 0, 2_000, 1_000, 0, "", 0, 0, _al()
         );
         vm.stopPrank();
 

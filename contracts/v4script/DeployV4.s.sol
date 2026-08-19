@@ -7,6 +7,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ArcadeHook} from "../v4src/ArcadeHook.sol";
 import {ArcadeV4SwapRouter} from "../v4src/ArcadeV4SwapRouter.sol";
 import {LockedVault} from "../v4src/LockedVault.sol";
+import {StaircaseVestingVault} from "../v4src/StaircaseVestingVault.sol";
 import {ArcadeTwitterEscrowV4} from "../src/launchpad/ArcadeTwitterEscrowV4.sol";
 
 // Upstream v4-core.
@@ -177,14 +178,32 @@ contract DeployV4 is Script {
             console2.log("ArcadeTwitterEscrowV4 (existing):", twitterEscrow);
         }
 
+        // 3c. Predict the StaircaseVestingVault address. The hook and the vault
+        //     have a MUTUAL immutable reference (hook.vestingVault <-> vault.
+        //     launchpad), which is a circular CREATE2/CREATE dependency. We break
+        //     it here: a CREATE address depends only on (deployer, nonce), NOT on
+        //     the constructor args, so we can predict the vault's address BEFORE
+        //     we know the hook's address, bake that predicted vault into the
+        //     hook's creation code (and mined address), then deploy the vault with
+        //     the mined hook address as its immutable launchpad. The vault MUST be
+        //     the very next CREATE from the deployer (no deployer tx runs between
+        //     this prediction and the `new StaircaseVestingVault` below).
+        address predictedVault = vm.computeCreateAddress(deployer, vm.getNonce(deployer));
+
         // 4. Mine a CREATE2 salt so the deployed hook address encodes the
         //    permission bitmap. The hook constructor bakes in its
         //    dependencies, so the creation-code hash depends on EVERYTHING
-        //    we resolved above.
+        //    we resolved above (including the predicted vesting vault).
         bytes memory hookCreationCode = abi.encodePacked(
             type(ArcadeHook).creationCode,
             abi.encode(
-                IPoolManager(poolManager), Currency.wrap(usdc), address(vault), treasury, twitterEscrow, owner
+                IPoolManager(poolManager),
+                Currency.wrap(usdc),
+                address(vault),
+                treasury,
+                twitterEscrow,
+                predictedVault,
+                owner
             )
         );
         bytes32 codeHash = keccak256(hookCreationCode);
@@ -207,11 +226,25 @@ contract DeployV4 is Script {
         }
         require(predicted != address(0), "salt-mining exhausted MAX_ATTEMPTS");
 
+        // 4b. Deploy the vesting vault with the MINED hook address as its
+        //     immutable launchpad. This is the CREATE the prediction above
+        //     accounted for, so its address must equal predictedVault (which is
+        //     already baked into the hook's mined address).
+        StaircaseVestingVault vestingVault = new StaircaseVestingVault(predicted);
+        require(address(vestingVault) == predictedVault, "vesting vault != predicted");
+
         // 5. Deploy ArcadeHook at the mined CREATE2 address.
         ArcadeHook hook = new ArcadeHook{salt: salt}(
-            IPoolManager(poolManager), Currency.wrap(usdc), address(vault), treasury, twitterEscrow, owner
+            IPoolManager(poolManager),
+            Currency.wrap(usdc),
+            address(vault),
+            treasury,
+            twitterEscrow,
+            address(vestingVault),
+            owner
         );
         require(address(hook) == predicted, "deployed hook != predicted");
+        require(hook.vestingVault() == address(vestingVault), "hook vault wiring drift");
         // REAL drift guard (the `TARGET_FLAGS == 0x3ECE` require above is a
         // tautology). ArcadeHook skips Hooks.validateHookAddress, so nothing
         // ELSE enforces that the mined address bits equal the permissions the
@@ -260,6 +293,7 @@ contract DeployV4 is Script {
         console2.log("Owner:              ", owner);
         console2.log("PoolManager:        ", poolManager);
         console2.log("LockedVault:        ", address(vault));
+        console2.log("StaircaseVault:     ", address(vestingVault));
         console2.log("ArcadeHook:         ", address(hook));
         console2.log("TwitterEscrowV4:    ", twitterEscrow);
         console2.log("StateView (lens):   ", address(stateView));
@@ -272,6 +306,7 @@ contract DeployV4 is Script {
         console2.log("Frontend wiring:");
         console2.log("  ADDRESSES.arcadeHook   =", address(hook));
         console2.log("  ADDRESSES.lockedVault  =", address(vault));
+        console2.log("  ADDRESSES.vestingVault =", address(vestingVault));
         console2.log("  ADDRESSES.v4PoolManager=", poolManager);
         console2.log("  ADDRESSES.v4StateView  =", address(stateView));
         console2.log("  ADDRESSES.v4Quoter     =", address(quoter));
