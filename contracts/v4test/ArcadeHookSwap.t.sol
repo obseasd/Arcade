@@ -6,6 +6,7 @@ import {Vm} from "forge-std/Vm.sol";
 
 import {ArcadeHook} from "../v4src/ArcadeHook.sol";
 import {ArcadeV4Curve} from "../v4src/libraries/ArcadeV4Curve.sol";
+import {ArcadeV4Math} from "../v4src/libraries/ArcadeV4Math.sol";
 import {ArcadeV4SwapRouter} from "../v4src/ArcadeV4SwapRouter.sol";
 import {ArcadeTwitterEscrowV4} from "../src/launchpad/ArcadeTwitterEscrowV4.sol";
 import {StaircaseVestingVault} from "../v4src/StaircaseVestingVault.sol";
@@ -19,6 +20,7 @@ import {Currency} from "v4-core/types/Currency.sol";
 import {PoolId} from "v4-core/types/PoolId.sol";
 import {PoolKey} from "v4-core/types/PoolKey.sol";
 import {SwapParams} from "v4-core/types/PoolOperation.sol";
+import {StateLibrary} from "v4-core/libraries/StateLibrary.sol";
 import {TickMath} from "v4-core/libraries/TickMath.sol";
 import {BalanceDelta} from "v4-core/types/BalanceDelta.sol";
 import {PoolSwapTest} from "v4-core/test/PoolSwapTest.sol";
@@ -129,6 +131,44 @@ contract ArcadeHookSwapTest is Test {
         vm.prank(CREATOR);
         (tokenAddr,) = hook.createLaunch("ClankerTok", "CLNK", "ipfs://demo", 1, address(0), 0, 0, 0, 1, "", 0, 0, _al());
         key = _buildKey(tokenAddr);
+    }
+
+    function _expectedClankerSqrt(address token, uint256 mcap) internal view returns (uint160) {
+        // launchDirect prices the pool on the FULL 1B supply (never on the seeded
+        // float), so the expected opening sqrt depends only on (startMcap, TOTAL)
+        // and the currency ordering -- NOT on the allocation.
+        return address(usdc) < token
+            ? ArcadeV4Math.sqrtPriceX96FromAmounts(mcap, ArcadeV4Curve.TOTAL_SUPPLY)
+            : ArcadeV4Math.sqrtPriceX96FromAmounts(ArcadeV4Curve.TOTAL_SUPPLY, mcap);
+    }
+
+    /// @dev L-1 fix: a CLANKER creator allocation must NOT inflate the opening
+    ///      market cap. The pool is priced on the full 1B supply, so the opening
+    ///      sqrtPrice (hence FDV == startMcap) is INVARIANT to the allocation;
+    ///      only the seeded float shrinks. An alloc-0 and an alloc-50% launch at
+    ///      the same startMcap both open at sqrtPriceX96FromAmounts(mcap, TOTAL).
+    function test_clankerAllocation_openingFdvInvariant() public {
+        uint256 mcap = 50_000e6;
+
+        vm.prank(CREATOR);
+        (address t0, PoolId id0) =
+            hook.createLaunch("C0", "C0", "ipfs://x", 1, address(0), 0, 0, 0, 1, "", mcap, 0, _al());
+
+        ArcadeHook.LaunchAllocation[] memory al = new ArcadeHook.LaunchAllocation[](1);
+        al[0] = ArcadeHook.LaunchAllocation({
+            recipient: CREATOR,
+            bps: 5000,
+            steps: new IStaircaseVestingVault.Step[](0)
+        });
+        vm.prank(CREATOR);
+        (address t1, PoolId id1) =
+            hook.createLaunch("C1", "C1", "ipfs://x", 1, address(0), 0, 0, 0, 1, "", mcap, 0, al);
+
+        (uint160 s0,,,) = StateLibrary.getSlot0(IPoolManager(address(pm)), id0);
+        (uint160 s1,,,) = StateLibrary.getSlot0(IPoolManager(address(pm)), id1);
+        assertEq(s0, _expectedClankerSqrt(t0, mcap), "alloc-0 must price on TOTAL_SUPPLY");
+        assertEq(s1, _expectedClankerSqrt(t1, mcap), "alloc-50 must price on TOTAL_SUPPLY (FDV held)");
+        assertEq(IERC20(t1).balanceOf(CREATOR), ArcadeV4Curve.TOTAL_SUPPLY / 2, "50% carved to creator");
     }
 
     function _buildKey(address token) internal view returns (PoolKey memory) {
