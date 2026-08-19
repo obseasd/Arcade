@@ -244,16 +244,7 @@ library ArcadeHookLib {
     ) public {
         bool usdcIsCurrency0 = Currency.unwrap(key.currency0) == Currency.unwrap(usdc);
 
-        // Price the pool at `startMcap` measured on the FULL 1B supply, so the
-        // opening FDV == startMcap regardless of any creator allocation. The
-        // seeded single-sided FLOAT below is `supply` (= TOTAL_SUPPLY - allocated),
-        // which just makes the book thinner for a larger allocation; without
-        // pricing on TOTAL_SUPPLY a CLANKER allocation would silently inflate the
-        // opening FDV by T/supply (audit L-1). At allocation 0, supply ==
-        // TOTAL_SUPPLY so the price is byte-for-byte unchanged.
-        uint256 priceSupply = ArcadeV4Curve.TOTAL_SUPPLY;
-        (uint256 amount0, uint256 amount1) =
-            usdcIsCurrency0 ? (startMcap, priceSupply) : (priceSupply, startMcap);
+        (uint256 amount0, uint256 amount1) = usdcIsCurrency0 ? (startMcap, supply) : (supply, startMcap);
         uint160 startSqrt = ArcadeV4Math.sqrtPriceX96FromAmounts(amount0, amount1);
         pm.initialize(key, startSqrt);
 
