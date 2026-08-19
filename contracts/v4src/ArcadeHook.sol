@@ -791,6 +791,10 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
 
         // CEI: mark swept BEFORE the external unlock / transfers. Combined with
         // nonReentrant + the one-shot flag, the removal can never run twice.
+        // INVARIANT (audit L-1): a qualifying pool (graduated/seeded + not yet
+        // swept) always holds liq > 0 because this is the ONLY removal path, so
+        // marking swept here never strands real liquidity. If a future change adds
+        // another way to zero the position, gate this on liq > 0 instead.
         graveyardSwept[poolId] = true;
 
         _graveyardSweeping = true;
