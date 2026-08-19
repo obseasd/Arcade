@@ -354,6 +354,52 @@ library ArcadeHookLib {
             return "";
         }
 
+        // kind 3 = graveyard sweep: remove the FULL liquidity of the hook-owned
+        // locked position of a DEAD pool and send BOTH withdrawn sides to the
+        // treasury via the pull-safe path. The hook has already enforced the
+        // >=180d no-trade window + one-shot flag; here we only execute the
+        // removal. Returns (usdcOut, tokenOut) so the hook can emit its event.
+        if (kind == 3) {
+            PoolId gpid = key.toId();
+            int24 gLower;
+            int24 gUpper;
+            if (curveStates[gpid].mode == uint8(1)) {
+                // CLANKER: the single-sided seed range.
+                ArcadeHook.ClankerPos memory pos = clankerPos[token];
+                (gLower, gUpper) = (pos.tickLower, pos.tickUpper);
+            } else {
+                // PUMP graduation: the full-range two-sided seed.
+                (gLower, gUpper) = ArcadeV4Math.fullRange(spacing);
+            }
+            // The seed is keyed to the HOOK (address(this)) with salt 0 -- the
+            // only position the hook ever owns per pool.
+            bytes32 posKey = keccak256(abi.encodePacked(address(this), gLower, gUpper, bytes32(0)));
+            uint128 liq = pm.getPositionLiquidity(gpid, posKey);
+            uint256 usdcOut;
+            uint256 tokenOut;
+            if (liq > 0) {
+                (BalanceDelta rd,) = pm.modifyLiquidity(
+                    key,
+                    ModifyLiquidityParams({
+                        tickLower: gLower,
+                        tickUpper: gUpper,
+                        liquidityDelta: -int256(uint256(liq)),
+                        salt: bytes32(0)
+                    }),
+                    ""
+                );
+                // Removal returns positive deltas (principal + any accrued fees)
+                // owed to the hook. Take BOTH sides to the treasury, pull-safe.
+                uint256 out0 = rd.amount0() > 0 ? uint256(uint128(rd.amount0())) : 0;
+                uint256 out1 = rd.amount1() > 0 ? uint256(uint128(rd.amount1())) : 0;
+                _safeTake(pm, pending, key.currency0, treasury, out0);
+                _safeTake(pm, pending, key.currency1, treasury, out1);
+                bool usdcIs0 = Currency.unwrap(key.currency0) == Currency.unwrap(usdc);
+                (usdcOut, tokenOut) = usdcIs0 ? (out0, out1) : (out1, out0);
+            }
+            return abi.encode(usdcOut, tokenOut);
+        }
+
         int24 tickLower;
         int24 tickUpper;
         uint128 liquidity;

@@ -12,6 +12,7 @@ import {ArcadeTwitterEscrowV4} from "../src/launchpad/ArcadeTwitterEscrowV4.sol"
 import {PoolManager} from "v4-core/PoolManager.sol";
 import {IHooks} from "v4-core/interfaces/IHooks.sol";
 import {IPoolManager} from "v4-core/interfaces/IPoolManager.sol";
+import {StateLibrary} from "v4-core/libraries/StateLibrary.sol";
 import {Hooks} from "v4-core/libraries/Hooks.sol";
 import {Currency} from "v4-core/types/Currency.sol";
 import {PoolId} from "v4-core/types/PoolId.sol";
@@ -47,6 +48,8 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
  *             LiquidityNotPermitted to force traders through hook.buy/sell.
  */
 contract ArcadeHookSwapTest is Test {
+    using StateLibrary for IPoolManager;
+
     PoolManager pm;
     ArcadeHook hook;
     TestERC20 usdc;
@@ -1133,6 +1136,183 @@ contract ArcadeHookSwapTest is Test {
 
         assertEq(fBefore, fMid, "no EMA move intra-block (buy)");
         assertEq(fMid, fAfter, "no EMA move intra-block (sell)");
+    }
+
+    // -------------------------------------------------------------------
+    // Graveyard sweep: a graduated PUMP / seeded CLANKER pool with ZERO
+    // trading for graveyardPeriod (>= 180d) may have its stranded locked LP
+    // permissionlessly swept to the treasury. It must be IMPOSSIBLE to trigger
+    // on a live pool: ANY trade resets the clock. Runs in BOTH currency
+    // orderings (inherited by ArcadeHookSwapUsdcCurrency0Test).
+    // -------------------------------------------------------------------
+
+    function _period() internal view returns (uint256) {
+        return uint256(hook.graveyardPeriod());
+    }
+
+    /// Cannot sweep before the no-trade period elapses (PUMP).
+    function test_graveyard_pump_revertsBeforePeriod() public {
+        (address token,) = _graduatePump();
+        vm.warp(block.timestamp + _period() - 1); // one second short
+        vm.prank(ALICE);
+        vm.expectRevert(ArcadeHook.NotDead.selector);
+        hook.graveyardSweep(token);
+    }
+
+    /// Sweep succeeds exactly AT the period boundary and sends BOTH sides to the
+    /// treasury; the pool's LP is emptied (PUMP full-range: active liq -> 0).
+    function test_graveyard_pump_sweepsAtBoundary_toTreasury() public {
+        (address token, PoolKey memory key) = _graduatePump();
+        PoolId poolId = key.toId();
+        assertGt(IPoolManager(address(pm)).getLiquidity(poolId), 0, "pool has LP before sweep");
+
+        uint256 tBefore = usdc.balanceOf(TREASURY);
+        uint256 tokBefore = IERC20(token).balanceOf(TREASURY);
+
+        vm.warp(block.timestamp + _period()); // exactly the boundary (>=)
+        vm.prank(ALICE); // permissionless: a non-owner sweeps
+        hook.graveyardSweep(token);
+
+        assertTrue(hook.graveyardSwept(poolId), "marked swept");
+        assertEq(IPoolManager(address(pm)).getLiquidity(poolId), 0, "LP emptied");
+        assertGt(usdc.balanceOf(TREASURY) - tBefore, 0, "treasury got USDC side");
+        assertGt(IERC20(token).balanceOf(TREASURY) - tokBefore, 0, "treasury got token side");
+    }
+
+    /// Sweep a dead CLANKER pool (single-sided all-token seed): treasury gets the
+    /// token side, sweep is marked one-shot.
+    function test_graveyard_clanker_sweepsAfterPeriod() public {
+        (address token, PoolKey memory key) = _launchClanker();
+        PoolId poolId = key.toId();
+        uint256 tokBefore = IERC20(token).balanceOf(TREASURY);
+
+        vm.warp(block.timestamp + _period() + 1);
+        vm.prank(ALICE);
+        hook.graveyardSweep(token);
+
+        assertTrue(hook.graveyardSwept(poolId), "marked swept");
+        assertGt(IERC20(token).balanceOf(TREASURY) - tokBefore, 0, "treasury got token side");
+    }
+
+    /// ANY graduated swap resets the clock: a pool traded within the window can
+    /// never be swept. Warp to the edge, trade, warp again -> still NotDead.
+    function test_graveyard_pump_graduatedSwapResetsClock() public {
+        (address token, PoolKey memory key) = _graduatePump();
+        usdc.mint(ALICE, 100_000e6);
+
+        vm.warp(block.timestamp + _period() - 1); // just before dead
+        _buyViaV4(key, ALICE, 1_000e6); // a real V4 swap resets lastTradeAt
+
+        vm.warp(block.timestamp + _period() - 1); // window not re-elapsed since trade
+        vm.prank(ALICE);
+        vm.expectRevert(ArcadeHook.NotDead.selector);
+        hook.graveyardSweep(token);
+    }
+
+    /// A CLANKER SELL also resets the clock (afterSwap fires for both sides).
+    function test_graveyard_clanker_sellResetsClock() public {
+        (address token, PoolKey memory key) = _launchClanker();
+        _buyViaV4(key, ALICE, 5_000e6); // give ALICE tokens (also resets)
+
+        vm.warp(block.timestamp + _period() - 1);
+        _sellViaV4(key, token, ALICE, 1_000_000e18); // reset via sell
+
+        vm.warp(block.timestamp + _period() - 1);
+        vm.prank(ALICE);
+        vm.expectRevert(ArcadeHook.NotDead.selector);
+        hook.graveyardSweep(token);
+    }
+
+    /// Cannot double-sweep: the second call reverts AlreadySwept.
+    function test_graveyard_doubleSweepReverts() public {
+        (address token,) = _graduatePump();
+        vm.warp(block.timestamp + _period());
+        vm.prank(ALICE);
+        hook.graveyardSweep(token);
+
+        vm.prank(ALICE);
+        vm.expectRevert(ArcadeHook.AlreadySwept.selector);
+        hook.graveyardSweep(token);
+    }
+
+    /// After a sweep the LP is empty and the pool is dead: a subsequent swap
+    /// reverts for lack of liquidity (the spec's expected end state). Proves the
+    /// sweep cannot run again against a re-funded pool -- there is no liquidity.
+    function test_graveyard_pump_afterSweep_poolDead() public {
+        (address token, PoolKey memory key) = _graduatePump();
+        PoolId poolId = key.toId();
+        vm.warp(block.timestamp + _period());
+        vm.prank(ALICE);
+        hook.graveyardSweep(token);
+        assertEq(IPoolManager(address(pm)).getLiquidity(poolId), 0, "LP emptied");
+
+        // A swap on the dead pool reverts (no liquidity to trade against).
+        usdc.mint(ALICE, 10_000e6);
+        vm.startPrank(ALICE);
+        usdc.approve(address(swapRouter), type(uint256).max);
+        bool zeroForOne = Currency.unwrap(key.currency0) == address(usdc);
+        uint160 priceLimit = zeroForOne ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1;
+        vm.expectRevert();
+        swapRouter.swap(
+            key,
+            SwapParams({zeroForOne: zeroForOne, amountSpecified: -int256(uint256(1_000e6)), sqrtPriceLimitX96: priceLimit}),
+            PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}),
+            ""
+        );
+        vm.stopPrank();
+    }
+
+    /// A curving PUMP pool (not graduated) has no LP to sweep: NothingToSweep,
+    /// even long after the period would have elapsed.
+    function test_graveyard_revertsNothingToSweep_curvingPump() public {
+        (address token,) = _launchPump();
+        vm.warp(block.timestamp + _period() + 30 days);
+        vm.prank(ALICE);
+        vm.expectRevert(ArcadeHook.NothingToSweep.selector);
+        hook.graveyardSweep(token);
+    }
+
+    /// An unregistered token reverts UnknownToken.
+    function test_graveyard_revertsUnknownToken() public {
+        vm.prank(ALICE);
+        vm.expectRevert(ArcadeHook.UnknownToken.selector);
+        hook.graveyardSweep(address(0xDEAD));
+    }
+
+    /// setGraveyardPeriod enforces the hard 180-day floor.
+    function test_setGraveyardPeriod_floorEnforced() public {
+        vm.prank(OWNER);
+        vm.expectRevert(ArcadeHook.GraveyardPeriodTooShort.selector);
+        hook.setGraveyardPeriod(uint40(180 days) - 1);
+
+        vm.prank(OWNER);
+        hook.setGraveyardPeriod(uint40(180 days)); // exactly the floor is allowed
+        assertEq(uint256(hook.graveyardPeriod()), 180 days, "period set to floor");
+    }
+
+    /// Only the owner can change the period.
+    function test_setGraveyardPeriod_onlyOwner() public {
+        vm.prank(ALICE);
+        vm.expectRevert();
+        hook.setGraveyardPeriod(uint40(200 days));
+    }
+
+    /// Lowering the period (to the floor) shortens the window but still cannot
+    /// touch a pool traded within it: a fresh graduate is not immediately dead.
+    function test_graveyard_lowerPeriod_stillProtectsFreshPool() public {
+        (address token,) = _graduatePump();
+        vm.prank(OWNER);
+        hook.setGraveyardPeriod(uint40(180 days));
+
+        vm.warp(block.timestamp + 180 days - 1);
+        vm.prank(ALICE);
+        vm.expectRevert(ArcadeHook.NotDead.selector);
+        hook.graveyardSweep(token);
+
+        vm.warp(block.timestamp + 1); // now exactly 180d since graduation
+        vm.prank(ALICE);
+        hook.graveyardSweep(token); // sweeps at the new (lowered) boundary
+        assertTrue(hook.graveyardSwept(_buildKey(token).toId()), "swept at lowered period");
     }
 }
 

@@ -314,6 +314,35 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
     mapping(address => mapping(address => uint256)) public pendingTokenWithdrawals;
 
     // -------------------------------------------------------------------
+    // Graveyard sweep (permissionless recovery of a DEAD pool's locked LP)
+    // -------------------------------------------------------------------
+
+    /// @notice Last time the pool was traded. Written once per trade: on every
+    ///         curve buy / curve sell during Curving, and on every swap on a
+    ///         Graduated pool (both PUMP and CLANKER, either side). Seeded when
+    ///         the LP first exists (curve buy that graduates the pool / CLANKER
+    ///         seed at launch) so the graveyard clock starts from a real LP.
+    ///         ANY trade resets it, so a live pool can never look "dead".
+    mapping(PoolId => uint40) public lastTradeAt;
+    /// @notice True once a dead pool's stranded locked LP has been swept to the
+    ///         treasury. One-shot per pool: a second sweep reverts AlreadySwept.
+    mapping(PoolId => bool) public graveyardSwept;
+    /// @notice No-trade period after which a pool's locked LP may be swept.
+    ///         Set to 365 days in the constructor; owner-tunable DOWN TO A HARD
+    ///         180-day FLOOR only (setGraveyardPeriod). The floor is the critical
+    ///         anti-rug guard -- without it an owner could shrink the window to
+    ///         ~0 and sweep a live pool.
+    uint40 public graveyardPeriod;
+    /// @dev Set true only for the duration of the graveyardSweep unlock so the
+    ///      beforeRemoveLiquidity guard admits ONLY the hook's own sweep removal.
+    ///      DEFENSIVE: v4-core's `noSelfCall` already skips beforeRemoveLiquidity
+    ///      for the hook's self-initiated modifyLiquidity, so this flag never
+    ///      actually gates an external LP (which is neither address(this) nor
+    ///      able to set it). It exists as belt-and-suspenders around the single
+    ///      negative-delta removal path in the whole contract.
+    bool internal _graveyardSweeping;
+
+    // -------------------------------------------------------------------
     // Errors (frozen per V4_HOOK_SPEC.md Section 13)
     // -------------------------------------------------------------------
 
@@ -339,6 +368,11 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
     error BuyExceedsCap();
     error AlreadyLaunched();
     error NothingToWithdraw();
+    error GraveyardPeriodTooShort(); // setGraveyardPeriod below the 180-day floor
+    error UnknownToken(); // graveyardSweep on an unregistered token
+    error NothingToSweep(); // no live sweepable LP (curving PUMP / unseeded)
+    error NotDead(); // pool traded within graveyardPeriod
+    error AlreadySwept(); // graveyard sweep already run for this pool
 
     // -------------------------------------------------------------------
     // Events (frozen per V4_HOOK_SPEC.md Section 14)
@@ -392,6 +426,9 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         string symbol,
         string metadataURI
     );
+    /// @notice A dead pool's stranded locked LP was swept to the treasury.
+    event GraveyardSwept(PoolId indexed poolId, address indexed token, uint256 usdcOut, uint256 tokenOut);
+    event GraveyardPeriodUpdated(uint40 oldPeriod, uint40 newPeriod);
 
     // -------------------------------------------------------------------
     // Modifiers
@@ -432,6 +469,11 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         // minutes. Owner-tunable (or disable with 0 bps) via setClankerBuyCap.
         clankerMaxBuyBps = 100;
         clankerCapWindowSecs = 300;
+
+        // Graveyard sweep: a pool with ZERO trading for a full year is treated
+        // as dead and its stranded locked LP may be permissionlessly swept to
+        // the treasury. Owner-tunable down to a hard 180-day floor only.
+        graveyardPeriod = 365 days;
     }
 
     // -------------------------------------------------------------------
@@ -645,6 +687,9 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         // starting market cap. No bonding curve -- the pool is live immediately.
         if (mode == uint8(LaunchMode.CLANKER)) {
             ArcadeHookLib.launchDirect(POOL_MANAGER, USDC, clankerPos, tokenAddr, key, poolId, startMcap);
+            // Seed the graveyard clock: the single-sided LP exists from now, so
+            // an untraded CLANKER pool can only be swept graveyardPeriod later.
+            lastTradeAt[poolId] = uint40(block.timestamp);
         }
 
         // PUMP optional CREATOR BUY: an atomic first purchase in the SAME tx as
@@ -710,6 +755,52 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         POOL_MANAGER.unlock(abi.encode(uint8(2), token, uint256(0), uint256(0), int24(0)));
     }
 
+    /// @notice Permissionlessly sweep a DEAD pool's stranded locked LP to the
+    ///         treasury. Dead tokens otherwise strand their permanently-locked
+    ///         liquidity forever. This is the ONLY removal path on the locked LP;
+    ///         it is gated so it is IMPOSSIBLE to trigger on a live pool:
+    ///           - the token must be registered (UnknownToken);
+    ///           - a live sweepable LP must exist: PUMP must be GRADUATED, or
+    ///             CLANKER must be seeded (NothingToSweep);
+    ///           - the pool must have traded at least once (lastTradeAt != 0);
+    ///           - and NOT traded for `graveyardPeriod` (>= 180 days) -- ANY
+    ///             curve trade or graduated swap resets lastTradeAt, so a pool
+    ///             touched within the window reverts NotDead;
+    ///           - one-shot: a second sweep reverts AlreadySwept.
+    ///         Both withdrawn sides go to the treasury via the SAME pull-safe
+    ///         path fee distribution uses (_safeTake, with a pending fallback),
+    ///         so a blocked treasury can never brick the sweep. Permissionless,
+    ///         nonReentrant, CEI-ordered (graveyardSwept set before the unlock).
+    function graveyardSweep(address token) external nonReentrant {
+        if (!registeredLaunches[token]) revert UnknownToken();
+        PoolId poolId = poolIdOf[token];
+        CurveState memory state = curveStates[poolId];
+
+        // A live, sweepable LP must exist. PUMP: only a GRADUATED pool has an LP
+        // (a curving pool holds none). CLANKER: the single-sided seed must be in.
+        bool pumpGraduated = state.mode == uint8(LaunchMode.PUMP) && state.status == uint8(Status.Graduated);
+        bool clankerSeeded = state.mode == uint8(LaunchMode.CLANKER) && clankerPos[token].seeded;
+        if (!pumpGraduated && !clankerSeeded) revert NothingToSweep();
+
+        uint40 last = lastTradeAt[poolId];
+        // Never traded/seeded (defensive: seeding always stamps it) OR still
+        // within the no-trade window => the pool is alive, not dead.
+        if (last == 0) revert NotDead();
+        if (block.timestamp - uint256(last) < uint256(graveyardPeriod)) revert NotDead();
+        if (graveyardSwept[poolId]) revert AlreadySwept();
+
+        // CEI: mark swept BEFORE the external unlock / transfers. Combined with
+        // nonReentrant + the one-shot flag, the removal can never run twice.
+        graveyardSwept[poolId] = true;
+
+        _graveyardSweeping = true;
+        bytes memory ret = POOL_MANAGER.unlock(abi.encode(uint8(3), token, uint256(0), uint256(0), int24(0)));
+        _graveyardSweeping = false;
+
+        (uint256 usdcOut, uint256 tokenOut) = abi.decode(ret, (uint256, uint256));
+        emit GraveyardSwept(poolId, token, usdcOut, tokenOut);
+    }
+
     // -------------------------------------------------------------------
     // Owner controls
     // -------------------------------------------------------------------
@@ -754,6 +845,17 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         clankerMaxBuyBps = maxBuyBps;
         clankerCapWindowSecs = windowSecs;
         emit ClankerBuyCapSet(maxBuyBps, windowSecs);
+    }
+
+    /// @notice Tune the graveyard no-trade period. Hard 180-day FLOOR: a shorter
+    ///         window is rejected (GraveyardPeriodTooShort). This floor is the
+    ///         critical anti-rug guard -- it makes it impossible for the owner to
+    ///         shrink the window toward zero and sweep a live pool. There is no
+    ///         upper bound (a longer window only makes sweeping harder).
+    function setGraveyardPeriod(uint40 newPeriod) external onlyOwner {
+        if (newPeriod < 180 days) revert GraveyardPeriodTooShort();
+        emit GraveyardPeriodUpdated(graveyardPeriod, newPeriod);
+        graveyardPeriod = newPeriod;
     }
 
     // -------------------------------------------------------------------
@@ -892,6 +994,17 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         // locked check, or a fee harvest of a locked position would revert.
         // Inverting these creates a fee-harvest DOS on the hook's own LP.
         if (params.liquidityDelta == 0 && sender == address(this)) {
+            return IHooks.beforeRemoveLiquidity.selector;
+        }
+
+        // Graveyard-sweep exception: the hook's own FULL-liquidity removal of a
+        // dead pool's locked LP, admitted ONLY while a sweep is in progress.
+        // NARROW: requires BOTH sender == this hook AND the in-progress flag,
+        // which only graveyardSweep sets (and clears in the same tx). An external
+        // LP is neither, so this never weakens the lock for anyone else. In
+        // practice v4-core's noSelfCall skips this callback for the hook's own
+        // modifyLiquidity, so this branch is a defensive belt, never the gate.
+        if (sender == address(this) && _graveyardSweeping) {
             return IHooks.beforeRemoveLiquidity.selector;
         }
 
@@ -1086,6 +1199,11 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
 
         emit CurveBuy(poolId, buyer, r.actualGross, r.tokensOut);
 
+        // Graveyard clock: a trade just moved the pool. The graduating buy runs
+        // through here too, so this also SEEDS the clock at graduation (the LP
+        // first exists), satisfying "start the clock when the LP exists".
+        lastTradeAt[poolId] = uint40(block.timestamp);
+
         // The curve is exhausted when tokensSold reaches CURVE_SUPPLY. Graduate
         // on that, NOT on `refund > 0`: an exact-fill buy (newUsdcReserve lands
         // exactly at the cap) and the cap-branch ceil-clip both fill the curve
@@ -1155,6 +1273,7 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         state.realUsdcReserve -= uint128(r.grossOut);
 
         emit CurveSell(poolId, msg.sender, tokensIn, r.usdcOut);
+        lastTradeAt[poolId] = uint40(block.timestamp); // graveyard clock reset
         return r.usdcOut;
     }
 
@@ -1175,6 +1294,12 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         if (state.status != uint8(Status.Graduated)) {
             return (IHooks.afterSwap.selector, int128(0));
         }
+
+        // Graveyard clock: reset on EVERY graduated swap (both modes, either
+        // side), once per swap. afterSwap fires exactly once per swap for a
+        // graduated pool, so this single cheap write keeps any live pool from
+        // ever aging into a sweepable "dead" state.
+        lastTradeAt[poolId] = uint40(block.timestamp);
 
         // CLANKER: fee is the pool's native LP fee (no hook take, no PUMP
         // oracle). The only hook action is the first-window anti-snipe buy cap.
