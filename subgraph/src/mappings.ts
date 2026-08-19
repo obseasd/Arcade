@@ -276,12 +276,17 @@ function protocolFeeForTrade(source: string, pool: Bytes | null, volumeUsdc: Big
     return BigDecimal.fromString("0");
   }
   if (source == "v2") {
-    // Only OUR V2 pairs carry the pair-level LaunchFeePaid (0.15% protocol). A
-    // canonical Uniswap V2 pair pays Arcade nothing, so referral must not credit
-    // it. Gate on arcadeOwned (fail-closed: a non-Arcade / untracked pool -> 0).
+    // Only OUR LAUNCH V2 pairs carry the pair-level LaunchFeePaid (0.15% protocol).
+    // arcadeOwned is NOT enough (audit HIGH-1): ArcadeV2Factory.createPair is
+    // permissionless, so anyone can spin up an arcadeOwned USDC/<token> pair whose
+    // launchCreator stays 0 -- swap() then skips the fee block and Arcade earns
+    // nothing, yet crediting on arcadeOwned would mint a phantom 0.15% that drains
+    // the referral wallet on wash volume. Gate on v2FeeTaking, which flips true only
+    // on a real LaunchFeePaid, so a rogue permissionless pair never credits
+    // (fail-closed: a non-Arcade / untracked / fee-less pool -> 0).
     if (pool === null) return BigDecimal.fromString("0");
     const p = Pool.load((pool as Bytes).toHexString());
-    if (p != null && p.arcadeOwned) return volumeUsdc.times(BigDecimal.fromString("0.0015"));
+    if (p != null && p.v2FeeTaking) return volumeUsdc.times(BigDecimal.fromString("0.0015"));
     return BigDecimal.fromString("0");
   }
   if (source == "v3" && pool !== null) {
@@ -676,6 +681,7 @@ export function handlePoolCreated(event: PoolCreated): void {
   p.kind = "v3";
   p.usdcReserve = BigDecimal.fromString("0");
   p.arcadeOwned = true; // created by the Arcade V3 factory dataSource
+  p.v2FeeTaking = false; // V2-only gate; V3 credits via feeProtocol/arcadeLocked
   p.arcadeLocked = false;
   // Pools ship with the protocol fee OFF (v3-core default). Kept in sync by
   // handleSetFeeProtocol below once the factory owner (the Safe) flips it.
@@ -747,6 +753,9 @@ export function handleV2PairCreated(event: PairCreated): void {
   p.kind = "v2";
   p.usdcReserve = BigDecimal.fromString("0");
   p.arcadeOwned = true; // created by the Arcade V2 factory dataSource
+  // Not yet proven to charge the launch fee: createPair is permissionless, so this
+  // stays false until the pair emits its first LaunchFeePaid (audit HIGH-1).
+  p.v2FeeTaking = false;
   p.arcadeLocked = false; // V2 protocol fee is the pair-level LaunchFeePaid, always Arcade's
   // feeProtocol is a V3-only mechanism; V2 pools carry 0 (non-nullable field).
   p.feeProtocol0 = 0;
@@ -826,6 +835,16 @@ export function handleV2LaunchFee(event: LaunchFeePaid): void {
   f.v2ProtocolUsdc = f.v2ProtocolUsdc.plus(protoUsdc);
   f.v2CreatorUsdc = f.v2CreatorUsdc.plus(creatorUsdc);
   f.save();
+
+  // Proof this pair actually levies the launch fee: only a real launch pair
+  // (launchCreator != 0) ever emits LaunchFeePaid. Flip v2FeeTaking so the referral
+  // credit in protocolFeeForTrade trusts this pair -- a rogue permissionless pair
+  // never reaches here, so it can never mint phantom referral fees (audit HIGH-1).
+  const pool = Pool.load(event.address.toHexString());
+  if (pool != null && !pool.v2FeeTaking) {
+    pool.v2FeeTaking = true;
+    pool.save();
+  }
 }
 
 /**

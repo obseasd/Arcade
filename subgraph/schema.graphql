@@ -53,6 +53,15 @@ type Pool @entity(immutable: false) {
   # defaults to false and is credited nothing. Requires a full re-index (a new
   # field) so every existing Arcade pool is re-created with arcadeOwned = true.
   arcadeOwned: Boolean!
+  # V2 ONLY, referral-drain fix (audit HIGH-1): arcadeOwned is necessary but NOT
+  # sufficient for a V2 fee credit -- ArcadeV2Factory.createPair is PERMISSIONLESS,
+  # so anyone can make an arcadeOwned pair whose launchCreator stays 0 and whose
+  # swap() pays Arcade NOTHING. Only a real launch pair takes the 0.15% protocol
+  # fee, and only it emits LaunchFeePaid. This flips true on the pair's first
+  # LaunchFeePaid; protocolFeeForTrade credits the v2 branch ONLY when it is true,
+  # so a rogue permissionless pair can never mint phantom referral fees. (V3 is
+  # already safe: its credit also requires the onlyFactoryOwner feeProtocol switch.)
+  v2FeeTaking: Boolean!
   # True once the V3 locker reports a PositionLocked for this pool: only then
   # does Arcade actually collect a protocol cut of the pool's LP fees (via the
   # compounder). A V3 pool anyone can create through the factory but never lock
