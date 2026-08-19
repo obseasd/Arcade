@@ -10,7 +10,6 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ArcadeLaunchToken} from "../src/launchpad/ArcadeLaunchToken.sol";
 import {ArcadeV4Curve} from "./libraries/ArcadeV4Curve.sol";
 import {ILaunchpadSnipe} from "./interfaces/ILaunchpadSnipe.sol";
-import {IStaircaseVestingVault} from "./interfaces/IStaircaseVestingVault.sol";
 
 /// @notice Minimal subset of the ArcadeTwitterEscrowV4 surface the hook calls
 ///         to credit a Twitter-handle slot with creator fees. Kept in this file
@@ -90,18 +89,6 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         CLANKER_V3 // 2
     }
 
-    /// @notice One creator-allocation entry for {createLaunch}. `bps` is a share
-    ///         of TOTAL_SUPPLY (the sum across all entries must be <=
-    ///         MAX_ALLOC_BPS). `steps` empty => the amount is transferred to
-    ///         `recipient` immediately; non-empty => the amount is escrowed in
-    ///         the immutable {vestingVault} on a staircase schedule (first step
-    ///         must unlock >= 1 day after launch).
-    struct LaunchAllocation {
-        address recipient;
-        uint16 bps;
-        IStaircaseVestingVault.Step[] steps;
-    }
-
     // -------------------------------------------------------------------
     // State structs (frozen per V4_HOOK_SPEC.md Section 2)
     // -------------------------------------------------------------------
@@ -118,18 +105,6 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         address creator;
         address creator2; // optional secondary recipient
         uint16 creator2Bps; // share of creator fee that routes to creator2
-        // --- Per-launch curve parameters (creator allocations, 2026-08-19). At
-        //     allocation 0 these equal the ArcadeV4Curve constants EXACTLY, so a
-        //     zero-allocation launch is byte-for-byte the legacy curve. A non-zero
-        //     allocation scales the whole curve down by Mt/T (see
-        //     ArcadeV4Curve.paramsForAllocation) preserving price continuity + the
-        //     $60k graduation FDV. The curve buy/sell/graduation paths read THESE,
-        //     never the library constants, once populated in createLaunch.
-        uint256 virtualUsdc;
-        uint256 virtualToken;
-        uint256 curveSupply;
-        uint256 migrationLpTokens;
-        uint256 migrationFee;
     }
 
     struct FeeOwner {
@@ -211,15 +186,6 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
     ///         launcher (legacy behaviour). Only affects handle launches.
     address public tokenForwarder;
 
-    /// @notice Immutable, admin-less StaircaseVestingVault that holds VESTED
-    ///         creator allocations (see {createLaunch}'s `allocations`). Set once
-    ///         at construction; there is deliberately NO setter (a mutable vault
-    ///         would let an admin redirect vested creator tokens). May be
-    ///         address(0) on a bootstrap deploy that only ever uses IMMEDIATE
-    ///         allocations; a vested allocation then reverts (see
-    ///         ArcadeHookLib.applyAllocations).
-    address public immutable vestingVault;
-
     // -------------------------------------------------------------------
     // Constants (curve math lives in ArcadeV4Curve; these are V4-specific)
     // -------------------------------------------------------------------
@@ -284,11 +250,6 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
 
     /// @notice Flat USDC creation fee charged at createLaunch (6 dp).
     uint256 internal constant CREATION_FEE = 3e6; // 3 USDC
-
-    /// @notice Max share of TOTAL_SUPPLY a creator can allocate to itself
-    ///         (immediate + vested), 90%. The residual >= 10% stays as the
-    ///         curve/CLANKER market so the launch is never a pure creator dump.
-    uint256 internal constant MAX_ALLOC_BPS = 9_000;
 
     // -------------------------------------------------------------------
     // State
@@ -378,7 +339,6 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
     error BuyExceedsCap();
     error AlreadyLaunched();
     error NothingToWithdraw();
-    error AllocExceedsMax(); // sum of allocation bps > MAX_ALLOC_BPS
 
     // -------------------------------------------------------------------
     // Events (frozen per V4_HOOK_SPEC.md Section 14)
@@ -452,7 +412,6 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         address lockedVault_,
         address treasury_,
         address twitterEscrow_,
-        address vestingVault_,
         address owner_
     ) Ownable(owner_) {
         if (address(poolManager_) == address(0)) revert ZeroAddress();
@@ -462,15 +421,12 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         // twitterEscrow_ allowed to be zero; disables the escrow path until
         // an admin wires it via setTwitterEscrow. Keeps mainnet bootstrap from
         // requiring all peripheral contracts to be live on day 1.
-        // vestingVault_ likewise allowed to be zero (immediate-only allocations);
-        // a VESTED allocation reverts when it is unset. Immutable, no setter.
 
         POOL_MANAGER = poolManager_;
         USDC = usdc_;
         LOCKED_VAULT = lockedVault_;
         TREASURY = treasury_;
         twitterEscrow = twitterEscrow_;
-        vestingVault = vestingVault_;
 
         // Default CLANKER anti-snipe cap: 1% of supply per buy for the first 5
         // minutes. Owner-tunable (or disable with 0 bps) via setClankerBuyCap.
@@ -533,14 +489,6 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
      *                          curve ATOMICALLY in this same tx (the first buy,
      *                          unbypassable). 0 = no creator buy. Reverts on
      *                          CLANKER. Approve CREATION_FEE + creatorBuyUsdc.
-     * @param allocations      optional creator allocations carved from
-     *                          TOTAL_SUPPLY (immediate transfer or vested via the
-     *                          immutable vestingVault). Sum of bps <=
-     *                          MAX_ALLOC_BPS (90%). Empty = the legacy behaviour
-     *                          (whole supply to the curve/CLANKER market). The
-     *                          curve is parameterized to the reduced market
-     *                          supply so price continuity + the $60k graduation
-     *                          FDV hold at every allocation level.
      */
     function createLaunch(
         string calldata name,
@@ -554,8 +502,7 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         uint8 feeTier,
         string calldata twitterHandle,
         uint256 startMcapUsdc,
-        uint256 creatorBuyUsdc,
-        LaunchAllocation[] calldata allocations
+        uint256 creatorBuyUsdc
     ) external nonReentrant whenNotPaused returns (address tokenAddr, PoolId poolId) {
         if (bytes(name).length == 0 || bytes(symbol).length == 0) revert EmptyName();
         // Two modes: PUMP(0) = bonding curve -> graduate; CLANKER(1) = DIRECT
@@ -584,19 +531,6 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         // its launcher buys on the router post-seed). Reject it on CLANKER rather
         // than silently ignore USDC the caller approved. (Creator-buy 2026-07-22.)
         if (mode != uint8(LaunchMode.PUMP) && creatorBuyUsdc > 0) revert InvalidMode();
-
-        // Creator allocations: sum the per-recipient bps and bound the total at
-        // MAX_ALLOC_BPS (90%) so at least 10% of supply always seeds the market.
-        // allocBps drives the per-launch curve parameters (paramsForAllocation);
-        // allocBps == 0 reproduces the legacy constants EXACTLY.
-        uint256 allocBps = 0;
-        for (uint256 i = 0; i < allocations.length; ++i) {
-            allocBps += allocations[i].bps;
-        }
-        if (allocBps > MAX_ALLOC_BPS) revert AllocExceedsMax();
-        ArcadeV4Curve.CurveParams memory cp = ArcadeV4Curve.paramsForAllocation(allocBps);
-        // Tokens carved to the creator; the market keeps TOTAL_SUPPLY - allocated.
-        uint256 allocated = ArcadeV4Curve.TOTAL_SUPPLY * allocBps / 10_000;
 
         // CLANKER creators pick a fixed fee tier (1/2/3 = 1%/2%/3%) and a
         // starting market cap for the single-sided seed. PUMP ignores both and
@@ -641,19 +575,14 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         // PUMP starts in the Curving phase; CLANKER is seeded directly into the
         // AMM below and is Graduated (fee-capturing) from the first swap.
         curveStates[poolId] = CurveState({
-            virtualUsdcReserve: uint128(cp.virtualUsdc),
+            virtualUsdcReserve: uint128(ArcadeV4Curve.VIRTUAL_USDC_RESERVE),
             realUsdcReserve: 0,
             tokensSold: 0,
             mode: mode,
             status: mode == uint8(LaunchMode.PUMP) ? uint8(Status.Curving) : uint8(Status.Graduated),
             creator: msg.sender,
             creator2: creator2,
-            creator2Bps: creator2Bps,
-            virtualUsdc: cp.virtualUsdc,
-            virtualToken: cp.virtualToken,
-            curveSupply: cp.curveSupply,
-            migrationLpTokens: cp.migrationLpTokens,
-            migrationFee: cp.migrationFee
+            creator2Bps: creator2Bps
         });
 
         // Optional Twitter-handle fee attribution (CLANKER only). A non-empty
@@ -712,27 +641,10 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         emit LaunchCreated(poolId, tokenAddr, msg.sender, mode);
         if (launchEscrow != address(0)) emit FeeAttributedToHandle(poolId, launchEscrow, twitterHandle);
 
-        // Apply creator allocations AFTER the mint (the hook holds TOTAL_SUPPLY)
-        // and BEFORE the curve/CLANKER seed. Each entry either transfers
-        // immediately or vests via the immutable vestingVault. The hook then
-        // holds exactly TOTAL_SUPPLY - allocated == curveSupply' +
-        // migrationLpTokens' (the market fraction Mt), which the curve + LP seed
-        // consume. The lib returns the exact wei placed; assert it equals the
-        // carved allocation so the mint is fully accounted (curve + LP + alloc).
-        if (allocations.length > 0) {
-            uint256 placed = ArcadeHookLib.applyAllocations(
-                tokenAddr, allocations, vestingVault, block.timestamp + 1 days
-            );
-            if (placed != allocated) revert InvariantBroken();
-        }
-
-        // CLANKER: seed the market supply (TOTAL_SUPPLY - allocated) single-sided
-        // into a locked V4 LP at the starting market cap. No bonding curve -- the
-        // pool is live immediately. allocated == 0 => the full supply, unchanged.
+        // CLANKER: seed the full supply single-sided into a locked V4 LP at the
+        // starting market cap. No bonding curve -- the pool is live immediately.
         if (mode == uint8(LaunchMode.CLANKER)) {
-            ArcadeHookLib.launchDirect(
-                POOL_MANAGER, USDC, clankerPos, tokenAddr, key, poolId, startMcap, ArcadeV4Curve.TOTAL_SUPPLY - allocated
-            );
+            ArcadeHookLib.launchDirect(POOL_MANAGER, USDC, clankerPos, tokenAddr, key, poolId, startMcap);
         }
 
         // PUMP optional CREATOR BUY: an atomic first purchase in the SAME tx as
@@ -1146,9 +1058,8 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         uint256 amountIn,
         uint256 minTokensOut
     ) internal returns (uint256 tokensOut, uint256 actualGross) {
-        ArcadeV4Curve.CurveParams memory p = _curveParamsOf(state);
         ArcadeV4Curve.BuyResult memory r =
-            ArcadeV4Curve.simulateBuy(p, state.tokensSold, state.realUsdcReserve, amountIn);
+            ArcadeV4Curve.simulateBuy(state.tokensSold, state.realUsdcReserve, amountIn);
 
         if (r.tokensOut == 0) revert ZeroAmount();
         if (r.tokensOut < minTokensOut) revert Slippage(); // slippage guard
@@ -1181,7 +1092,7 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         // with refund == 0, and gating on refund would leave the launch
         // permanently stuck at the cap (every later buy reverts ZeroAmount, so
         // _graduate becomes unreachable and the AMM pool is never seeded).
-        if (ArcadeV4Curve.isGraduated(p, state.tokensSold)) {
+        if (ArcadeV4Curve.isGraduated(state.tokensSold)) {
             ArcadeHookLib.graduate(
                 POOL_MANAGER,
                 USDC,
@@ -1226,9 +1137,8 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         if (state.status == uint8(Status.Graduated)) revert LiquidityNotPermitted();
         if (state.mode == uint8(LaunchMode.CLANKER_V3)) revert InvalidMode();
 
-        ArcadeV4Curve.SellResult memory r = ArcadeV4Curve.simulateSell(
-            _curveParamsOf(state), state.tokensSold, state.realUsdcReserve, tokensIn
-        );
+        ArcadeV4Curve.SellResult memory r =
+            ArcadeV4Curve.simulateSell(state.tokensSold, state.realUsdcReserve, tokensIn);
         if (r.usdcOut == 0) revert ZeroAmount();
         if (r.usdcOut < minUsdcOut) revert Slippage();
 
@@ -1579,24 +1489,6 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
     ///      100bps(1%)->10000, 200->20000, 300->30000.
     function _tierToV4Fee(uint16 tierBps) internal pure returns (uint24) {
         return uint24(tierBps) * 100;
-    }
-
-    /// @dev Build the per-launch curve params from stored CurveState. The curve
-    ///      buy/sell/graduation paths pass these to the ArcadeV4Curve overloads
-    ///      so a launch with a creator allocation runs on its scaled-down curve.
-    ///      For an allocation-0 launch these equal the library constants exactly.
-    function _curveParamsOf(CurveState storage state)
-        internal
-        view
-        returns (ArcadeV4Curve.CurveParams memory)
-    {
-        return ArcadeV4Curve.CurveParams({
-            virtualUsdc: state.virtualUsdc,
-            virtualToken: state.virtualToken,
-            curveSupply: state.curveSupply,
-            migrationLpTokens: state.migrationLpTokens,
-            migrationFee: state.migrationFee
-        });
     }
 
     /// @dev PUMP curve fee split = 50/50 platform/creator. Only PUMP reaches

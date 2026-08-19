@@ -16,7 +16,6 @@ import {IHooks} from "v4-core/interfaces/IHooks.sol";
 import {ArcadeV4Curve} from "./ArcadeV4Curve.sol";
 import {ArcadeV4Math} from "./ArcadeV4Math.sol";
 import {ArcadeHook, IArcadeTwitterEscrowV4Min} from "../ArcadeHook.sol";
-import {IStaircaseVestingVault} from "../interfaces/IStaircaseVestingVault.sol";
 
 /// @title ArcadeHookLib
 /// @notice EXTERNAL library carrying the ArcadeHook fee-routing + LP
@@ -56,19 +55,6 @@ library ArcadeHookLib {
     event Graduated(PoolId indexed poolId, uint256 finalUsdcReserve, uint256 tokensInLP);
 
     error ZeroAmount();
-    error TooManyRecipients(); // > 128 allocation entries
-    error TooManyVested(); // > 64 vested allocation entries
-    error VestStartTooSoon(); // first vest step unlocks < launch + 1 day
-    error ZeroAllocRecipient(); // allocation recipient is address(0)
-    error ZeroAllocBps(); // allocation entry with 0 bps
-    error VestingVaultUnset(); // vested allocation but hook has no vestingVault
-
-    event VestScheduled(address indexed token, address indexed recipient, uint256 amount, uint256 vestId);
-
-    /// @dev Bounds on {applyAllocations} (o1 limits): total entries and the
-    ///      subset that vests. Keep the whole-supply carve cheap and bounded.
-    uint256 internal constant MAX_ALLOC_RECIPIENTS = 128;
-    uint256 internal constant MAX_VESTED_ALLOCS = 64;
 
     // -------------------------------------------------------------------
     // Internal money-movement helpers (inlined into the public entrypoints)
@@ -239,10 +225,10 @@ library ArcadeHookLib {
         address token,
         PoolKey memory key,
         PoolId poolId,
-        uint256 startMcap,
-        uint256 supply
+        uint256 startMcap
     ) public {
         bool usdcIsCurrency0 = Currency.unwrap(key.currency0) == Currency.unwrap(usdc);
+        uint256 supply = ArcadeV4Curve.TOTAL_SUPPLY;
 
         (uint256 amount0, uint256 amount1) = usdcIsCurrency0 ? (startMcap, supply) : (supply, startMcap);
         uint160 startSqrt = ArcadeV4Math.sqrtPriceX96FromAmounts(amount0, amount1);
@@ -266,52 +252,6 @@ library ArcadeHookLib {
         emit Graduated(poolId, 0, supply);
     }
 
-    /// @dev Apply creator allocations carved from the freshly-minted supply. For
-    ///      each entry: amount = TOTAL_SUPPLY * bps / 10000 (exact: T = 1e27 is
-    ///      divisible by 10000). Empty `steps` => transfer immediately to the
-    ///      recipient; non-empty => escrow the amount in the immutable
-    ///      `vestingVault` on a staircase schedule (the vault re-validates the
-    ///      schedule). The hook must have transferred nothing else out yet: the
-    ///      caller (createLaunch) runs this right after the mint and asserts the
-    ///      returned total equals the carved allocation so the whole supply is
-    ///      accounted for (curve/LP market + allocations == TOTAL_SUPPLY).
-    /// @param minFirstUnlock  earliest allowed first-step unlock (launch + 1 day).
-    /// @return totalAllocated exact wei placed across all entries.
-    function applyAllocations(
-        address token,
-        ArcadeHook.LaunchAllocation[] calldata allocations,
-        address vestingVault,
-        uint256 minFirstUnlock
-    ) public returns (uint256 totalAllocated) {
-        uint256 n = allocations.length;
-        if (n > MAX_ALLOC_RECIPIENTS) revert TooManyRecipients();
-        uint256 vestedCount = 0;
-        for (uint256 i = 0; i < n; ++i) {
-            ArcadeHook.LaunchAllocation calldata a = allocations[i];
-            if (a.recipient == address(0)) revert ZeroAllocRecipient();
-            if (a.bps == 0) revert ZeroAllocBps();
-            uint256 amount = (ArcadeV4Curve.TOTAL_SUPPLY * a.bps) / 10_000;
-            totalAllocated += amount;
-            if (a.steps.length == 0) {
-                // Immediate transfer.
-                IERC20(token).safeTransfer(a.recipient, amount);
-            } else {
-                // Vested: escrow in the immutable vault. Hook enforces a >= 1-day
-                // first unlock; the vault re-validates monotonicity + last==100%.
-                if (vestingVault == address(0)) revert VestingVaultUnset();
-                if (a.steps[0].unlockTime < minFirstUnlock) revert VestStartTooSoon();
-                unchecked {
-                    ++vestedCount;
-                }
-                if (vestedCount > MAX_VESTED_ALLOCS) revert TooManyVested();
-                IERC20(token).safeTransfer(vestingVault, amount);
-                uint256 vestId =
-                    IStaircaseVestingVault(vestingVault).createVest(token, a.recipient, amount, a.steps);
-                emit VestScheduled(token, a.recipient, amount, vestId);
-            }
-        }
-    }
-
     /// @dev Atomic curve -> AMM migration. Frozen sequence per V4_HOOK_SPEC.md
     ///      Section 5. `state` and `key` come from the calling hook (the curve
     ///      buy that filled the curve); the mappings are the hook's own storage.
@@ -329,17 +269,12 @@ library ArcadeHookLib {
         state.status = uint8(1); // GraduationStarted
 
         uint256 totalUsdc = state.realUsdcReserve;
-        // Per-launch migration fee + LP token count (creator-allocation aware).
-        // For an allocation-0 launch these equal the ArcadeV4Curve constants
-        // exactly, so behaviour is unchanged. Same `<` fee-underwater semantics
-        // as ArcadeV4Curve.graduationLiquidityUsdc.
-        uint256 migrationFee = state.migrationFee;
-        uint256 lpUsdc = totalUsdc < migrationFee ? 0 : totalUsdc - migrationFee;
+        uint256 lpUsdc = ArcadeV4Curve.graduationLiquidityUsdc(totalUsdc);
         if (lpUsdc == 0) revert ZeroAmount();
-        uint256 lpTokens = state.migrationLpTokens;
+        uint256 lpTokens = ArcadeV4Curve.MIGRATION_LP_TOKENS;
 
         // Migration fee off the top -> treasury (pull-payment safe).
-        safePayUsdc(usdc, pending, treasury, migrationFee);
+        safePayUsdc(usdc, pending, treasury, ArcadeV4Curve.MIGRATION_FEE);
 
         bool usdcIsCurrency0 = Currency.unwrap(key.currency0) == Currency.unwrap(usdc);
         (uint256 amount0, uint256 amount1) = usdcIsCurrency0 ? (lpUsdc, lpTokens) : (lpTokens, lpUsdc);

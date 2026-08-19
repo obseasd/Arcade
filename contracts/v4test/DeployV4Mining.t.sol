@@ -42,14 +42,13 @@ contract DeployV4MiningTest is Test {
         address vault = address(new LockedVault());
         address treasury = address(0xBEEF);
         address twitterEscrow = address(0xE5C);
-        address vestingVault = address(0xDEED);
         address owner = address(0x0123);
         address poolManager = address(0xAAAAAA);
 
         bytes memory creationCode = abi.encodePacked(
             type(ArcadeHook).creationCode,
             abi.encode(
-                IPoolManager(poolManager), Currency.wrap(usdc), vault, treasury, twitterEscrow, vestingVault, owner
+                IPoolManager(poolManager), Currency.wrap(usdc), vault, treasury, twitterEscrow, owner
             )
         );
         bytes32 codeHash = keccak256(creationCode);

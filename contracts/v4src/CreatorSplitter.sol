@@ -9,22 +9,6 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 ///      bytes32 avoids pulling v4-core into this contract (PoolId is a
 ///      bytes32-wrapping value type, ABI-identical to bytes32).
 interface IArcadeHookLaunch {
-    /// @dev Mirrors ArcadeHook.LaunchAllocation / IStaircaseVestingVault.Step so
-    ///      the ABI tuple (and thus the createLaunch selector) matches the hook.
-    ///      The splitter never allocates (it is a pure fee-splitter), so it always
-    ///      passes an empty array; the types must still line up for the call to
-    ///      dispatch.
-    struct AllocStep {
-        uint64 unlockTime;
-        uint16 cumulativeBps;
-    }
-
-    struct Allocation {
-        address recipient;
-        uint16 bps;
-        AllocStep[] steps;
-    }
-
     function createLaunch(
         string calldata name,
         string calldata symbol,
@@ -37,8 +21,7 @@ interface IArcadeHookLaunch {
         uint8 feeTier,
         string calldata twitterHandle,
         uint256 startMcapUsdc,
-        uint256 creatorBuyUsdc,
-        Allocation[] calldata allocations
+        uint256 creatorBuyUsdc
     ) external returns (address tokenAddr, bytes32 poolId);
 }
 
@@ -146,19 +129,7 @@ contract CreatorSplitter is ReentrancyGuard {
         // creatorBuyUsdc = 0: the splitter launches on behalf of a creator and
         // holds only the creation fee, so there is no atomic dev-buy here.
         (token, pid) = HOOK.createLaunch(
-            name,
-            symbol,
-            metadataURI,
-            mode,
-            address(0),
-            0,
-            snipeStartBps,
-            snipeDecaySeconds,
-            feeTier,
-            "",
-            startMcapUsdc,
-            0,
-            new IArcadeHookLaunch.Allocation[](0)
+            name, symbol, metadataURI, mode, address(0), 0, snipeStartBps, snipeDecaySeconds, feeTier, "", startMcapUsdc, 0
         );
         launchToken = token;
         poolId = pid;

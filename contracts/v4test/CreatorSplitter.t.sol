@@ -59,8 +59,7 @@ contract MockHook is IArcadeHookLaunch {
         uint8,
         string calldata,
         uint256,
-        uint256,
-        IArcadeHookLaunch.Allocation[] calldata
+        uint256
     ) external returns (address tokenAddr, bytes32 poolId) {
         USDC.transferFrom(msg.sender, TREASURY, CREATION_FEE);
         lastCreator = msg.sender;

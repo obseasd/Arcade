@@ -8,8 +8,6 @@ import {ArcadeHook} from "../v4src/ArcadeHook.sol";
 import {ArcadeV4Curve} from "../v4src/libraries/ArcadeV4Curve.sol";
 import {ArcadeV4SwapRouter} from "../v4src/ArcadeV4SwapRouter.sol";
 import {ArcadeTwitterEscrowV4} from "../src/launchpad/ArcadeTwitterEscrowV4.sol";
-import {StaircaseVestingVault} from "../v4src/StaircaseVestingVault.sol";
-import {IStaircaseVestingVault} from "../v4src/interfaces/IStaircaseVestingVault.sol";
 
 import {PoolManager} from "v4-core/PoolManager.sol";
 import {IHooks} from "v4-core/interfaces/IHooks.sol";
@@ -53,12 +51,6 @@ contract ArcadeHookSwapTest is Test {
     ArcadeHook hook;
     TestERC20 usdc;
     PoolSwapTest swapRouter;
-    StaircaseVestingVault vestingVault;
-
-    /// @dev Empty allocations array for the legacy (no-allocation) call sites.
-    function _al() internal pure returns (ArcadeHook.LaunchAllocation[] memory) {
-        return new ArcadeHook.LaunchAllocation[](0);
-    }
 
     address constant LOCKED_VAULT = address(0xCAFE);
     address constant TREASURY = address(0xBEEF);
@@ -81,18 +73,9 @@ contract ArcadeHookSwapTest is Test {
         usdc = _makeUsdc();
 
         address hookAddr = address(uint160(0xBEEF0000 | TARGET_FLAGS));
-        vestingVault = new StaircaseVestingVault(hookAddr);
         deployCodeTo(
             "ArcadeHook.sol:ArcadeHook",
-            abi.encode(
-                IPoolManager(address(pm)),
-                Currency.wrap(address(usdc)),
-                LOCKED_VAULT,
-                TREASURY,
-                ESCROW,
-                address(vestingVault),
-                OWNER
-            ),
+            abi.encode(IPoolManager(address(pm)), Currency.wrap(address(usdc)), LOCKED_VAULT, TREASURY, ESCROW, OWNER),
             hookAddr
         );
         hook = ArcadeHook(hookAddr);
@@ -120,14 +103,14 @@ contract ArcadeHookSwapTest is Test {
     /// @dev Spawn a launch in PUMP mode.
     function _launchPump() internal returns (address tokenAddr, PoolKey memory key) {
         vm.prank(CREATOR);
-        (tokenAddr,) = hook.createLaunch("PumpToken", "PUMP", "ipfs://demo", 0, address(0), 0, 0, 0, 0, "", 0, 0, _al());
+        (tokenAddr,) = hook.createLaunch("PumpToken", "PUMP", "ipfs://demo", 0, address(0), 0, 0, 0, 0, "", 0, 0);
         key = _buildKey(tokenAddr);
     }
 
     /// @dev CLANKER variant with 70/30 split.
     function _launchClanker() internal returns (address tokenAddr, PoolKey memory key) {
         vm.prank(CREATOR);
-        (tokenAddr,) = hook.createLaunch("ClankerTok", "CLNK", "ipfs://demo", 1, address(0), 0, 0, 0, 1, "", 0, 0, _al());
+        (tokenAddr,) = hook.createLaunch("ClankerTok", "CLNK", "ipfs://demo", 1, address(0), 0, 0, 0, 1, "", 0, 0);
         key = _buildKey(tokenAddr);
     }
 
@@ -335,7 +318,7 @@ contract ArcadeHookSwapTest is Test {
     {
         vm.prank(CREATOR);
         (tokenAddr,) =
-            hook.createLaunch("SnipePump", "SNP", "ipfs://demo", 0, address(0), 0, startBps, decaySeconds, 0, "", 0, 0, _al());
+            hook.createLaunch("SnipePump", "SNP", "ipfs://demo", 0, address(0), 0, startBps, decaySeconds, 0, "", 0, 0);
         key = _buildKey(tokenAddr);
         vm.warp(block.timestamp + uint256(decaySeconds) + 3_600);
         usdc.mint(ALICE, 100_000e6);
@@ -473,7 +456,7 @@ contract ArcadeHookSwapTest is Test {
     function test_createLaunch_rejectsClankerV3Mode() public {
         vm.prank(CREATOR);
         vm.expectRevert(ArcadeHook.InvalidMode.selector);
-        hook.createLaunch("V3", "V3", "ipfs://x", 2, address(0), 0, 0, 0, 0, "", 0, 0, _al());
+        hook.createLaunch("V3", "V3", "ipfs://x", 2, address(0), 0, 0, 0, 0, "", 0, 0);
     }
 
     function test_postGradFee_PUMP_splits80_20_inUsdcOnSell() public {
@@ -791,7 +774,7 @@ contract ArcadeHookSwapTest is Test {
     /// and the pool is live (Graduated) immediately -- no curve buy to graduate.
     function _graduateClankerTier(uint8 tier) internal returns (address tokenAddr, PoolKey memory key) {
         vm.prank(CREATOR);
-        (tokenAddr,) = hook.createLaunch("ClkTier", "CLK", "ipfs://demo", 1, address(0), 0, 0, 0, tier, "", 0, 0, _al());
+        (tokenAddr,) = hook.createLaunch("ClkTier", "CLK", "ipfs://demo", 1, address(0), 0, 0, 0, tier, "", 0, 0);
         key = _buildKey(tokenAddr);
     }
 
@@ -800,7 +783,7 @@ contract ArcadeHookSwapTest is Test {
     function test_clankerDirect_singleSidedLiveAtCreation() public {
         uint256 creatorUsdcBefore = usdc.balanceOf(CREATOR);
         vm.prank(CREATOR);
-        (address token,) = hook.createLaunch("D", "D", "ipfs://d", 1, address(0), 0, 0, 0, 2, "", 0, 0, _al());
+        (address token,) = hook.createLaunch("D", "D", "ipfs://d", 1, address(0), 0, 0, 0, 2, "", 0, 0);
 
         // Creator paid ONLY the 3 USDC creation fee -- no LP capital.
         assertEq(creatorUsdcBefore - usdc.balanceOf(CREATOR), 3e6, "creator paid only the creation fee");
@@ -830,7 +813,7 @@ contract ArcadeHookSwapTest is Test {
             [uint256(1_232e6), 1_475e6, 1_630e6, 1_663e6, 1_875e6, 100_000e6];
         for (uint256 i = 0; i < mcaps.length; i++) {
             vm.prank(CREATOR);
-            hook.createLaunch("B", "B", "ipfs://b", 1, address(0), 0, 0, 0, 1, "", mcaps[i], 0, _al());
+            hook.createLaunch("B", "B", "ipfs://b", 1, address(0), 0, 0, 0, 1, "", mcaps[i], 0);
             // Single-sided: the seed pulled NO USDC out of the hook.
             assertEq(usdc.balanceOf(address(hook)), hookUsdcBefore, "no USDC pulled into CLANKER LP");
         }
@@ -853,10 +836,10 @@ contract ArcadeHookSwapTest is Test {
     function test_createLaunch_clankerRevertsInvalidStartMcap() public {
         vm.prank(CREATOR);
         vm.expectRevert(ArcadeHook.InvalidStartMcap.selector);
-        hook.createLaunch("X", "X", "ipfs://x", 1, address(0), 0, 0, 0, 1, "", 999e6, 0, _al()); // below $1k
+        hook.createLaunch("X", "X", "ipfs://x", 1, address(0), 0, 0, 0, 1, "", 999e6, 0); // below $1k
         vm.prank(CREATOR);
         vm.expectRevert(ArcadeHook.InvalidStartMcap.selector);
-        hook.createLaunch("Y", "Y", "ipfs://y", 1, address(0), 0, 0, 0, 1, "", 10_000_001e6, 0, _al()); // above $10M
+        hook.createLaunch("Y", "Y", "ipfs://y", 1, address(0), 0, 0, 0, 1, "", 10_000_001e6, 0); // above $10M
     }
 
     /// Anti-sniper cannot work on the single-sided CLANKER pool -> a snipe config
@@ -864,7 +847,7 @@ contract ArcadeHookSwapTest is Test {
     function test_createLaunch_clankerRejectsSnipeConfig() public {
         vm.prank(CREATOR);
         vm.expectRevert(ArcadeHook.InvalidSnipeBps.selector);
-        hook.createLaunch("S", "S", "ipfs://s", 1, address(0), 0, 1_000, 600, 1, "", 0, 0, _al());
+        hook.createLaunch("S", "S", "ipfs://s", 1, address(0), 0, 1_000, 600, 1, "", 0, 0);
     }
 
     /// Anti-sniper decay window is capped at 1h on-chain (audit fee M-1): a PUMP
@@ -873,10 +856,10 @@ contract ArcadeHookSwapTest is Test {
     function test_createLaunch_pumpRejectsOverlongSnipeDecay() public {
         vm.prank(CREATOR);
         vm.expectRevert(ArcadeHook.InvalidDecaySeconds.selector);
-        hook.createLaunch("P", "P", "ipfs://p", 0, address(0), 0, 5_000, 3_601, 0, "", 0, 0, _al());
+        hook.createLaunch("P", "P", "ipfs://p", 0, address(0), 0, 5_000, 3_601, 0, "", 0, 0);
         // Boundary: exactly MAX_SNIPE_DECAY_SECONDS (1h) is allowed.
         vm.prank(CREATOR);
-        hook.createLaunch("P2", "P2", "ipfs://p2", 0, address(0), 0, 5_000, 3_600, 0, "", 0, 0, _al());
+        hook.createLaunch("P2", "P2", "ipfs://p2", 0, address(0), 0, 5_000, 3_600, 0, "", 0, 0);
     }
 
     /// creator2 is a CLANKER-only split; PUMP would ignore it everywhere, so a
@@ -884,7 +867,7 @@ contract ArcadeHookSwapTest is Test {
     function test_createLaunch_pumpRejectsCreator2() public {
         vm.prank(CREATOR);
         vm.expectRevert(ArcadeHook.InvalidFeeOwner.selector);
-        hook.createLaunch("P", "P", "ipfs://p", 0, address(0xBEEF), 2_000, 0, 0, 0, "", 0, 0, _al());
+        hook.createLaunch("P", "P", "ipfs://p", 0, address(0xBEEF), 2_000, 0, 0, 0, "", 0, 0);
     }
 
     // --- CLANKER anti-snipe first-window buy cap ---
@@ -999,11 +982,11 @@ contract ArcadeHookSwapTest is Test {
     function test_createLaunch_revertsOnInvalidClankerTier() public {
         vm.prank(CREATOR);
         vm.expectRevert(ArcadeHook.InvalidFeeTier.selector);
-        hook.createLaunch("X", "X", "ipfs://x", 1, address(0), 0, 0, 0, 0, "", 0, 0, _al());
+        hook.createLaunch("X", "X", "ipfs://x", 1, address(0), 0, 0, 0, 0, "", 0, 0);
 
         vm.prank(CREATOR);
         vm.expectRevert(ArcadeHook.InvalidFeeTier.selector);
-        hook.createLaunch("Y", "Y", "ipfs://y", 1, address(0), 0, 0, 0, 4, "", 0, 0, _al());
+        hook.createLaunch("Y", "Y", "ipfs://y", 1, address(0), 0, 0, 0, 4, "", 0, 0);
     }
 
     /// PUMP ignores the fee-tier argument entirely: its fee is the mcap-decaying
@@ -1011,7 +994,7 @@ contract ArcadeHookSwapTest is Test {
     /// are NOT creator-customisable (only CLANKER's are).
     function test_createLaunch_pumpIgnoresFeeTier() public {
         vm.prank(CREATOR);
-        (address token,) = hook.createLaunch("P", "P", "ipfs://p", 0, address(0), 0, 0, 0, 3, "", 0, 0, _al());
+        (address token,) = hook.createLaunch("P", "P", "ipfs://p", 0, address(0), 0, 0, 0, 3, "", 0, 0);
         vm.prank(ALICE);
         hook.buy(token, 30_000e6, 0);
         // Dynamic fee starts at 1% at graduation, NOT tier 3's 3%.
@@ -1040,7 +1023,7 @@ contract ArcadeHookSwapTest is Test {
         // at createLaunch; ALICE buys via V4 and the creator cut of that swap
         // routes to the handle-gated escrow slot.
         vm.prank(CREATOR);
-        (address token,) = hook.createLaunch("Clk", "CLK", "ipfs://x", 1, address(0), 0, 0, 0, 1, "arcade", 0, 0, _al());
+        (address token,) = hook.createLaunch("Clk", "CLK", "ipfs://x", 1, address(0), 0, 0, 0, 1, "arcade", 0, 0);
         PoolKey memory key = _buildKey(token);
 
         uint256 poolId = uint256(PoolId.unwrap(key.toId()));
@@ -1072,7 +1055,7 @@ contract ArcadeHookSwapTest is Test {
         hook.setTokenForwarder(FORWARDER);
 
         vm.prank(CREATOR);
-        (address token,) = hook.createLaunch("Clk", "CLK", "ipfs://x", 1, address(0), 0, 0, 0, 1, "arcade", 0, 0, _al());
+        (address token,) = hook.createLaunch("Clk", "CLK", "ipfs://x", 1, address(0), 0, 0, 0, 1, "arcade", 0, 0);
         PoolKey memory key = _buildKey(token);
         PoolId pid = key.toId();
         uint256 poolId = uint256(PoolId.unwrap(pid));
@@ -1101,7 +1084,7 @@ contract ArcadeHookSwapTest is Test {
         vm.prank(OWNER);
         hook.setTokenForwarder(address(0xF0F0F0));
         vm.prank(CREATOR);
-        (address token,) = hook.createLaunch("Clk", "CLK", "ipfs://x", 1, address(0), 0, 0, 0, 1, "", 0, 0, _al());
+        (address token,) = hook.createLaunch("Clk", "CLK", "ipfs://x", 1, address(0), 0, 0, 0, 1, "", 0, 0);
         PoolId pid = _buildKey(token).toId();
         assertEq(hook.getFeeOwner(pid).creator, CREATOR, "no handle => fee-creator stays the launcher");
     }
@@ -1118,7 +1101,7 @@ contract ArcadeHookSwapTest is Test {
     function test_escrow_pumpIgnoresHandle() public {
         _wireEscrow();
         vm.prank(CREATOR);
-        (address token,) = hook.createLaunch("P", "P", "ipfs://p", 0, address(0), 0, 0, 0, 0, "arcade", 0, 0, _al());
+        (address token,) = hook.createLaunch("P", "P", "ipfs://p", 0, address(0), 0, 0, 0, 0, "arcade", 0, 0);
         PoolKey memory key = _buildKey(token);
         vm.prank(ALICE);
         hook.buy(token, 30_000e6, 0);
@@ -1148,97 +1131,6 @@ contract ArcadeHookSwapTest is Test {
 
         assertEq(fBefore, fMid, "no EMA move intra-block (buy)");
         assertEq(fMid, fAfter, "no EMA move intra-block (sell)");
-    }
-
-    // -------------------------------------------------------------------
-    // Creator allocations + trustless vesting (2026-08-19)
-    // -------------------------------------------------------------------
-
-    /// (e) sum of allocation bps > MAX_ALLOC_BPS (90%) reverts.
-    function test_alloc_exceedsMaxReverts() public {
-        ArcadeHook.LaunchAllocation[] memory a = new ArcadeHook.LaunchAllocation[](1);
-        a[0].recipient = CREATOR;
-        a[0].bps = 9_001; // > 9000
-        vm.prank(CREATOR);
-        vm.expectRevert(ArcadeHook.AllocExceedsMax.selector);
-        hook.createLaunch("A", "A", "ipfs://a", 0, address(0), 0, 0, 0, 0, "", 0, 0, a);
-    }
-
-    /// (d) createLaunch with an IMMEDIATE + a VESTED allocation transfers /
-    ///     vests the right amounts and the curve opens with the reduced supply.
-    function test_alloc_immediateAndVested_reducedCurve() public {
-        address BOB = address(0xB0BB1E);
-        uint256 t = ArcadeV4Curve.TOTAL_SUPPLY;
-
-        ArcadeHook.LaunchAllocation[] memory a = new ArcadeHook.LaunchAllocation[](2);
-        // 20% immediate to ALICE.
-        a[0].recipient = ALICE;
-        a[0].bps = 2_000;
-        // 30% vested to BOB over two steps (50% at +2d, 100% at +4d).
-        a[1].recipient = BOB;
-        a[1].bps = 3_000;
-        IStaircaseVestingVault.Step[] memory steps = new IStaircaseVestingVault.Step[](2);
-        steps[0] = IStaircaseVestingVault.Step({unlockTime: uint64(block.timestamp + 2 days), cumulativeBps: 5_000});
-        steps[1] = IStaircaseVestingVault.Step({unlockTime: uint64(block.timestamp + 4 days), cumulativeBps: 10_000});
-        a[1].steps = steps;
-
-        vm.prank(CREATOR);
-        (address token, PoolId pid) =
-            hook.createLaunch("Alloc", "ALC", "ipfs://a", 0, address(0), 0, 0, 0, 0, "", 0, 0, a);
-
-        // Immediate 20% landed on ALICE (who holds no launch tokens pre-launch).
-        assertEq(IERC20(token).balanceOf(ALICE), (t * 2_000) / 10_000, "alice got 20% immediately");
-        // Vested 30% escrowed in the immutable vault.
-        assertEq(IERC20(token).balanceOf(address(vestingVault)), (t * 3_000) / 10_000, "vault holds 30%");
-        // The hook holds exactly the market fraction Mt = 50% for the curve+LP.
-        assertEq(IERC20(token).balanceOf(address(hook)), (t * 5_000) / 10_000, "hook holds market 50%");
-
-        // The stored curve params reflect the reduced (50%) market supply.
-        ArcadeHook.CurveState memory s = hook.getCurveState(pid);
-        ArcadeV4Curve.CurveParams memory p = ArcadeV4Curve.paramsForAllocation(5_000);
-        assertEq(s.curveSupply, p.curveSupply, "curveSupply reduced");
-        assertEq(s.virtualUsdc, p.virtualUsdc, "virtualUsdc reduced");
-        assertEq(s.virtualToken, p.virtualToken, "virtualToken reduced");
-        assertEq(s.migrationLpTokens, p.migrationLpTokens, "migrationLpTokens reduced");
-        assertEq(s.migrationFee, p.migrationFee, "migrationFee reduced");
-
-        // The vest schedule is live in the vault (id 1). 50% claimable at +2d.
-        vm.warp(block.timestamp + 2 days);
-        assertEq(vestingVault.claimable(1), (t * 3_000 / 10_000) / 2, "50% of BOB's vest claimable at step 1");
-        vestingVault.claim(1);
-        assertEq(IERC20(token).balanceOf(BOB), (t * 3_000 / 10_000) / 2, "BOB claimed 15% of supply");
-    }
-
-    /// (f) a PUMP launch WITH an allocation still graduates, and the LP seed uses
-    ///     the REDUCED migrationLpTokens'. The hook only holds
-    ///     migrationLpTokens' launch tokens at graduation (it sold curveSupply'
-    ///     on the curve and carved the allocation), so a successful graduation is
-    ///     itself proof the seed used the reduced count -- using the constant
-    ///     194M would revert on settle (the hook lacks the tokens).
-    function test_alloc_pumpGraduatesWithReducedLpTokens() public {
-        ArcadeHook.LaunchAllocation[] memory a = new ArcadeHook.LaunchAllocation[](1);
-        a[0].recipient = ALICE;
-        a[0].bps = 5_000; // 50% allocation -> half-size curve
-        vm.prank(CREATOR);
-        (address token, PoolId pid) =
-            hook.createLaunch("Grad", "GRD", "ipfs://g", 0, address(0), 0, 0, 0, 0, "", 0, 0, a);
-
-        ArcadeV4Curve.CurveParams memory p = ArcadeV4Curve.paramsForAllocation(5_000);
-
-        // A large buy caps + graduates the reduced curve (raise ~= half of the
-        // allocation-0 ~14.2k USDC). ALICE funds are minted in setUp.
-        vm.prank(ALICE);
-        hook.buy(token, 100_000e6, 0);
-
-        ArcadeHook.CurveState memory s = hook.getCurveState(pid);
-        assertEq(uint8(s.status), 2, "graduated"); // Status.Graduated
-        assertEq(s.tokensSold, p.curveSupply, "sold exactly the reduced curveSupply'");
-        assertEq(s.migrationLpTokens, p.migrationLpTokens, "LP seed used reduced migrationLpTokens'");
-        // The pool now holds the seeded launch tokens (the reduced LP count, minus
-        // at most rounding dust from liquidityForAmounts). Sanity: it is far below
-        // the allocation-0 194M and near the reduced 97M.
-        assertLe(IERC20(token).balanceOf(address(pm)), p.migrationLpTokens, "pool token seed <= reduced LP");
-        assertGt(IERC20(token).balanceOf(address(pm)), (p.migrationLpTokens * 99) / 100, "pool token seed ~= reduced LP");
     }
 }
 
