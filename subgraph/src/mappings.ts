@@ -48,6 +48,7 @@ import {
   Referrer,
   ReferralAttribution,
   V4TreasuryFee,
+  Comment,
 } from "../generated/schema";
 import { Memo } from "../generated/MemoContract/MemoAbi";
 
@@ -991,6 +992,10 @@ export function handleReferralFeePaid(event: ReferralFeePaid): void {
 // Memo with. Verified on-chain 2026-07-23. Kept as a literal because graph-ts
 // has no keccak at map time.
 const REFERRAL_MEMO_ID = "0x32ccdb145c3f184a7362b767a671bcddc66b89ba0e02e9e82bda34dfffc07183";
+// keccak256("arcade:comment"): the namespaced memoId on-chain launchpad comments
+// tag their Memo with. Kept as a literal (graph-ts has no keccak at map time);
+// keep in lockstep with web/lib/commentsOnchain.ts COMMENT_MEMO_ID.
+const COMMENT_MEMO_ID = "0x58f411c95f54351dd120300e1d77a597298a00f2ca99fa31c7adaa8feae8330b";
 
 /**
  * Index first-touch referral attribution from the Memo predeploy. graph-node
@@ -1003,7 +1008,13 @@ const REFERRAL_MEMO_ID = "0x32ccdb145c3f184a7362b767a671bcddc66b89ba0e02e9e82bda
  * it from serverless IPs, so the scan returned nothing in production).
  */
 export function handleMemo(event: Memo): void {
-  if (!event.params.memoId.equals(Bytes.fromHexString(REFERRAL_MEMO_ID))) return;
+  const memoId = event.params.memoId;
+  // On-chain launchpad comments ride the same predeploy under a distinct memoId.
+  if (memoId.equals(Bytes.fromHexString(COMMENT_MEMO_ID))) {
+    handleCommentMemo(event);
+    return;
+  }
+  if (!memoId.equals(Bytes.fromHexString(REFERRAL_MEMO_ID))) return;
 
   const referred = event.params.sender;
   // memoData carries the referrer as its trailing 20 bytes (written raw, but a
@@ -1025,6 +1036,35 @@ export function handleMemo(event: Memo): void {
   a.blockTime = event.block.timestamp.toI32();
   a.txHash = event.transaction.hash;
   a.save();
+}
+
+/**
+ * Index an on-chain launchpad comment from the Memo predeploy. The memo payload
+ * is abi.encode(address token, string text) (the head/tail param-list layout
+ * ethereum.decode reads directly, matching viem's encodeAbiParameters on the
+ * client). The SENDER is the comment author (the tx signer -- unforgeable). One
+ * Comment per (txHash, logIndex); malformed payloads are dropped.
+ */
+function handleCommentMemo(event: Memo): void {
+  const decoded = ethereum.decode("(address,string)", event.params.memo);
+  if (decoded == null) return;
+  const t = decoded.toTuple();
+  if (t.length < 2) return;
+  const token = t[0].toAddress();
+  if (token.equals(Address.zero())) return;
+  const text = t[1].toString();
+  if (text.length == 0) return;
+
+  const id = event.transaction.hash.toHexString() + "-" + event.logIndex.toString();
+  if (Comment.load(id) != null) return;
+
+  const c = new Comment(id);
+  c.token = token;
+  c.author = event.params.sender;
+  c.text = text;
+  c.blockTime = event.block.timestamp.toI32();
+  c.txHash = event.transaction.hash;
+  c.save();
 }
 
 function npmAddress(): Address {

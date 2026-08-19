@@ -43,6 +43,7 @@ import { useV4PoolPrice } from "@/lib/hooks/useV4PoolPrice";
 import { useTokenImage, useTokenMetadata } from "@/lib/hooks/useTokenImage";
 import { ClankerV4TradePanel } from "@/components/launchpad/ClankerV4TradePanel";
 import { TokenActivityPanel } from "@/components/launchpad/TokenActivityPanel";
+import { Comments } from "@/components/launchpad/Comments";
 import { TokenIcon } from "@/components/ui/TokenIcon";
 import { Tooltip } from "@/components/ui/Tooltip";
 import { formatAddress, formatUSDC } from "@/lib/utils";
@@ -411,12 +412,11 @@ function Inner() {
                         source="v4"
                     />
 
-                    {/* Comments intentionally omitted for V4-hook tokens: the
-                        on-chain guestbook lives on the legacy ArcadeLaunchpad and
-                        gates postComment on tokens[tokenAddr] registration, which
-                        the hook never populates -> every post reverts
-                        UnknownToken(). Restore with an off-chain store or a
-                        hook-side comment registry. */}
+                    {/* On-chain comments via the Memo predeploy (no hook
+                        registry gate): the author signs a Memo tagged
+                        arcade:comment; the subgraph indexes it and we read it
+                        back from Goldsky. Works on every V4-hook token. */}
+                    <Comments token={token} />
                 </div>
 
                 {/* Right: trade panel + fees/recipient (order-first on mobile) */}

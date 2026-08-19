@@ -372,6 +372,22 @@ type ReferralAttribution @entity(immutable: false) {
   txHash: Bytes!
 }
 
+# On-chain launchpad comment, indexed from the Memo predeploy (memoId =
+# keccak256("arcade:comment")). The legacy string-storage comments gated on the
+# launchpad's tokens[] registry, which the V4 hook never populates, so V4-hook
+# tokens had no comments. Riding the Memo predeploy instead needs NO contract
+# redeploy and works for every token. `author` is the Memo sender (the tx
+# signer), so it is unforgeable; `token` + `text` come from the abi(address,
+# string) memo payload. Immutable: a comment is a historical event.
+type Comment @entity(immutable: true) {
+  id: ID! # txHash-logIndex
+  token: Bytes! # the launchpad token the comment is on (lowercased hex)
+  author: Bytes! # the Memo sender = the tx signer (unforgeable)
+  text: String!
+  blockTime: Int!
+  txHash: Bytes!
+}
+
 # EXACT per-swap treasury (protocol) fee on a graduated pool, attributed to the
 # trader, sourced from the hook's SwapTreasuryFee event. That event is emitted
 # ONLY in the swap fee path (beforeSwap/afterSwap), NEVER by the permissionless

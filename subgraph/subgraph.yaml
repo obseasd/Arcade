@@ -323,6 +323,7 @@ dataSources:
       language: wasm/assemblyscript
       entities:
         - ReferralAttribution
+        - Comment
       abis:
         - name: MemoAbi
           file: ./abis/Memo.json
