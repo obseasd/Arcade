@@ -113,6 +113,7 @@ dataSources:
         - HandleAttribution
         - FeeStats
         - V4TreasuryFee
+        - Harvest
       abis:
         - name: ArcadeHook
           file: ./abis/ArcadeHook.json

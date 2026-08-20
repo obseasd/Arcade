@@ -49,6 +49,7 @@ import {
   ReferralAttribution,
   V4TreasuryFee,
   Comment,
+  Harvest,
 } from "../generated/schema";
 import { Memo } from "../generated/MemoContract/MemoAbi";
 
@@ -1381,6 +1382,20 @@ export function handleFeeHarvestedV4(event: FeeHarvested): void {
   const f = loadFeeStats();
   f.clankerHarvests = f.clankerHarvests.plus(BigInt.fromI32(1));
   f.save();
+
+  // Durable per-pool "last collected" timestamp. The event's positionKey is
+  // PoolId.unwrap(poolId), so key the Harvest by the poolId hex; the token page
+  // reads it so a wallet-recipient CLANKER pool shows "Last collected N ago"
+  // across refreshes (it emits FeeHarvested, not the escrow Claimed).
+  const id = event.params.positionKey.toHexString();
+  let h = Harvest.load(id);
+  if (h == null) {
+    h = new Harvest(id);
+    h.count = BigInt.fromI32(0);
+  }
+  h.lastHarvestAt = event.block.timestamp.toI32();
+  h.count = h.count.plus(BigInt.fromI32(1));
+  h.save();
 }
 
 export function handleAntiSnipeV4(event: AntiSnipeApplied): void {

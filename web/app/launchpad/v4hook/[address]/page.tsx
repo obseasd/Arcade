@@ -544,9 +544,12 @@ function FeesRecipientPanel({
     }, [isTwitter, token]);
 
     // Recency of the last collect/claim, so a viewer can judge whether the fees
-    // are worth collecting now (a big "Fees generated" that hasn't been
-    // collected in a while = worth triggering). The Claim entity is keyed by
-    // positionId = uint256(poolId).
+    // are worth collecting now (a big "Pending fees" that hasn't been collected
+    // in a while = worth triggering). Two sources, whichever is more recent:
+    //   - Harvest (keyed by poolId): every collectFees emits FeeHarvested, so a
+    //     wallet-recipient CLANKER pool records its collect here. Durable.
+    //   - Claim (keyed by positionId = uint256(poolId)): the escrow Claimed for a
+    //     twitter/@ recipient. Kept as a fallback so tweet-launched pools resolve.
     const [lastClaimSec, setLastClaimSec] = useState<number | null>(null);
     const [claimChecked, setClaimChecked] = useState(false);
     useEffect(() => {
@@ -554,13 +557,16 @@ function FeesRecipientPanel({
         if (!url || !poolId) return;
         let cancelled = false;
         const positionId = BigInt(poolId).toString();
-        const q = `{ claims(first: 1, orderBy: blockTime, orderDirection: desc, where: { positionId: "${positionId}" }) { blockTime } }`;
+        const harvestId = poolId.toLowerCase();
+        const q = `{ harvest(id: "${harvestId}") { lastHarvestAt } claims(first: 1, orderBy: blockTime, orderDirection: desc, where: { positionId: "${positionId}" }) { blockTime } }`;
         fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ query: q }) })
             .then((r) => (r.ok ? r.json() : null))
             .then((j) => {
                 if (cancelled) return;
-                const bt = j?.data?.claims?.[0]?.blockTime;
-                setLastClaimSec(bt != null ? Number(bt) : null);
+                const harv = j?.data?.harvest?.lastHarvestAt;
+                const claim = j?.data?.claims?.[0]?.blockTime;
+                const times = [harv, claim].filter((v) => v != null).map(Number);
+                setLastClaimSec(times.length ? Math.max(...times) : null);
                 setClaimChecked(true);
             })
             .catch(() => {

@@ -276,6 +276,17 @@ type Claim @entity(immutable: true) {
   txHash: Bytes!
 }
 
+# Last collectFees (harvest) time per pool, keyed by poolId (the FeeHarvested
+# event's positionKey IS PoolId.unwrap(poolId)). Lets the token page show a
+# durable "Last collected N ago" for a WALLET-recipient CLANKER pool, which emits
+# FeeHarvested (not the escrow Claimed the Claim entity indexes). Mutable: bumped
+# on every harvest.
+type Harvest @entity(immutable: false) {
+  id: ID! # poolId (lowercased hex)
+  lastHarvestAt: Int!
+  count: BigInt!
+}
+
 # One row per PUMP graduation (Graduated event). Queried by token so the activity
 # feed can show "graduated to the AMM" as a milestone row. Immutable.
 type Graduation @entity(immutable: true) {
