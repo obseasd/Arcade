@@ -226,12 +226,20 @@ export async function forwardTokenSide(
     recipient: Address,
     launchToken: Address,
 ): Promise<ForwardResult> {
+    // Refuse to forward into a mis-split state if the on-chain tokenForwarder
+    // disagrees with our key (rollout window). Checked BEFORE the lock so the
+    // in-lock hold stays short and the read isn't duplicated (audit item-5).
+    const mism = await forwarderMismatch();
+    if (mism) return { ok: false, error: mism };
+
     // Serialize per pool (audit M-1): concurrent forwards (the client claim POST +
     // the delivery cron(s)) must not read the same live balanceOf mid-transfer and
     // mis-split a reply 50/50. A lock loser skips this run; delivery is idempotent so
     // a later run/cron completes it. Neon serverless has no session advisory locks,
-    // so this is a DB lease lock.
-    if (!(await acquireForwardLock(poolIdHex))) {
+    // so this is a DB lease lock. TTL 120s covers the worst-case in-lock hold
+    // (computeOwed + transfer + the Q5 receipt-confirm retries, ~30-45s), so a
+    // second run can't steal the lease mid-transfer (audit item-5).
+    if (!(await acquireForwardLock(poolIdHex, 120))) {
         return { ok: true, forwarded: false, reason: "locked (concurrent forward)" };
     }
     try {
@@ -247,14 +255,11 @@ async function forwardTokenSideInner(
     recipient: Address,
     launchToken: Address,
 ): Promise<ForwardResult> {
+    // forwarderMismatch is checked by the caller (forwardTokenSide) before the lock.
     const fwdKey = forwarderKey();
     if (!fwdKey) {
         return { ok: false, error: "forwarder key missing/malformed" };
     }
-    // Refuse to forward into a mis-split state if the on-chain tokenForwarder
-    // disagrees with our key (rollout window). Funds stay safe; retry once fixed.
-    const mism = await forwarderMismatch();
-    if (mism) return { ok: false, error: mism };
 
     let computed: { owed: bigint; already: bigint } | null;
     try {
