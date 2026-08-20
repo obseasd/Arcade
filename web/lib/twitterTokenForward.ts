@@ -247,7 +247,7 @@ export async function forwardTokenSide(
     const client = serverPublicClient();
     const account = privateKeyToAccount(fwdKey);
     const walletClient = createWalletClient({ account, chain: ARC_CHAIN, transport: http() });
-    let tx: Hex;
+    let tx: Hex | undefined;
     try {
         tx = await walletClient.writeContract({
             address: launchToken,
@@ -257,10 +257,39 @@ export async function forwardTokenSide(
         });
         await client.waitForTransactionReceipt({ hash: tx });
     } catch (e) {
-        // Roll the cursor back so a retry re-attempts (worst case: under-forward,
-        // tokens stay safe on the operator).
-        await advanceTokenFwdIf(poolIdHex, slotIndex, (already + owed).toString(), already.toString()).catch(() => {});
-        return { ok: false, error: `transfer failed: ${e instanceof Error ? e.message : String(e)}` };
+        // waitForTransactionReceipt can TIME OUT on Arc even when the transfer
+        // actually mined (documented Arc RPC condition). Rolling the cursor back
+        // blindly would then re-forward a landed transfer on the next claim ->
+        // mis-split (e.g. 75/25 instead of 50/50) or double-pay. So confirm the
+        // real outcome by hash before touching the cursor (audit Q5).
+        let outcome: "success" | "reverted" | "unknown" = tx ? "unknown" : "reverted";
+        if (tx) {
+            for (let i = 0; i < 5 && outcome === "unknown"; i++) {
+                try {
+                    const r = await client.getTransactionReceipt({ hash: tx });
+                    if (r) outcome = r.status === "success" ? "success" : "reverted";
+                } catch {
+                    /* not mined yet / transient RPC error */
+                }
+                if (outcome === "unknown") await new Promise((res) => setTimeout(res, 1500 * (i + 1)));
+            }
+        }
+        if (outcome === "success") {
+            // The transfer DID land; keep the cursor advanced (do NOT re-forward).
+            return { ok: true, forwarded: true, amountRaw: owed.toString(), tx: tx! };
+        }
+        if (outcome === "reverted") {
+            // Genuinely failed (reverted or never sent); roll back so a retry re-attempts.
+            await advanceTokenFwdIf(poolIdHex, slotIndex, (already + owed).toString(), already.toString()).catch(() => {});
+            return { ok: false, error: `transfer failed: ${e instanceof Error ? e.message : String(e)}` };
+        }
+        // Indeterminate after retries: do NOT roll back. A delayed under-pay (that a
+        // reconciliation can finish) is safer than double-paying a mined tx. Leave
+        // the cursor advanced and flag it loudly for manual reconciliation.
+        console.error(
+            `[token-forward] indeterminate outcome for tx ${tx} (pool ${poolIdHex} slot ${slotIndex}); cursor kept advanced, needs reconciliation`,
+        );
+        return { ok: false, error: `receipt timeout, outcome unknown for ${tx}` };
     }
 
     return { ok: true, forwarded: true, amountRaw: owed.toString(), tx };

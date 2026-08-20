@@ -32,6 +32,28 @@ import { getReplyLaunchByPool, advanceSlot1CreditedIf } from "@/lib/twitterLaunc
  * on the escrow (owner/Safe runs escrow.setCrediter(operator, true) once).
  */
 
+/**
+ * Positively resolve a tx outcome by hash. viem's waitForTransactionReceipt can
+ * TIME OUT on Arc even when the tx actually mined, so on a receipt-wait error we
+ * re-check by hash before rolling a cursor back (audit Q5) -- a blind rollback of
+ * a landed tx causes a double-spend/over-credit on retry. "unknown" after retries.
+ */
+async function confirmTxOutcome(
+    client: ReturnType<typeof serverReadClient>,
+    hash: Hex,
+): Promise<"success" | "reverted" | "unknown"> {
+    for (let i = 0; i < 5; i++) {
+        try {
+            const r = await client.getTransactionReceipt({ hash });
+            if (r) return r.status === "success" ? "success" : "reverted";
+        } catch {
+            /* not mined yet / transient RPC error */
+        }
+        await new Promise((res) => setTimeout(res, 1500 * (i + 1)));
+    }
+    return "unknown";
+}
+
 const ROYALTY_PAID = parseAbiItem(
     "event RoyaltyPaid(bytes32 indexed poolId, address indexed creator, uint256 creatorAmount, uint256 treasuryAmount, address currency)",
 );
@@ -139,8 +161,8 @@ export async function reconcileReplySlot(poolIdHex: string): Promise<ReconcileRe
     const walletClient = createWalletClient({ account, chain: ARC_CHAIN, transport: http() });
     const positionId = BigInt(poolIdHex); // uint256(PoolId), matches the hook's slot-0 key
 
-    let txTransfer: Hex;
-    let txCredit: Hex;
+    let txTransfer: Hex | undefined;
+    let txCredit: Hex | undefined;
     try {
         // Deliver USDC to the escrow FIRST, then credit slot 1 (the escrow's
         // balance-diff invariant: amount <= balanceOf - creditedTotal).
@@ -160,9 +182,32 @@ export async function reconcileReplySlot(poolIdHex: string): Promise<ReconcileRe
         });
         await publicClient.waitForTransactionReceipt({ hash: txCredit });
     } catch (e) {
-        // Roll back the reservation so the delta is retried next run.
-        await advanceSlot1CreditedIf(poolIdHex, (already + owed).toString(), already.toString()).catch(() => {});
-        return { ok: false, error: `credit failed: ${e instanceof Error ? e.message : String(e)}` };
+        // A receipt-wait timeout can hit a MINED tx (Arc RPC). Rolling the cursor
+        // back blindly would re-transfer the USDC AND re-credit slot 1 next run =
+        // double-spend of operator USDC + over-credit of the original poster. So we
+        // ONLY roll back when we can positively confirm the USDC transfer did NOT
+        // land; otherwise keep the cursor and reconcile the credit manually (audit Q5).
+        const transferOutcome = txTransfer ? await confirmTxOutcome(publicClient, txTransfer) : "reverted";
+        if (transferOutcome === "reverted") {
+            // Nothing left the operator wallet: safe to roll back and retry both.
+            await advanceSlot1CreditedIf(poolIdHex, (already + owed).toString(), already.toString()).catch(() => {});
+            return { ok: false, error: `reconcile failed (transfer not landed): ${e instanceof Error ? e.message : String(e)}` };
+        }
+        const creditOutcome = txCredit ? await confirmTxOutcome(publicClient, txCredit) : "reverted";
+        if (transferOutcome === "success" && creditOutcome === "success") {
+            // Both landed; the receipt-wait just timed out. Keep the cursor.
+            return { ok: true, credited: true, amountMicros: owed.toString(), txTransfer: txTransfer!, txCredit: txCredit! };
+        }
+        // USDC delivered (or indeterminate) but slot 1 not confirmed credited. Do NOT
+        // roll back (would double-transfer). Keep the cursor and flag for reconcile:
+        // the USDC sits at the escrow and only needs a creditSlot(positionId,1,...).
+        console.error(
+            `[reply-reconcile] transfer=${transferOutcome} credit=${creditOutcome} for pool ${poolIdHex} (transfer ${txTransfer}, credit ${txCredit}); cursor kept, needs slot-1 credit reconciliation`,
+        );
+        return {
+            ok: false,
+            error: `reconcile partial: transfer=${transferOutcome} credit=${creditOutcome} (transfer ${txTransfer}, credit ${txCredit})`,
+        };
     }
 
     return { ok: true, credited: true, amountMicros: owed.toString(), txTransfer, txCredit };
