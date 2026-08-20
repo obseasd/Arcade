@@ -193,6 +193,20 @@ export async function advanceSlot1CreditedIf(
     return rows.length > 0;
 }
 
+/** All launched handle-launch pools that carry a token, for the token-delivery
+ *  cron (Q6). Returns (poolId, token); the RECIPIENT is never trusted from here --
+ *  it is taken from the on-chain Claimed event so a delivery can only go to the
+ *  wallet that actually claimed. */
+export async function getDeliverablePools(): Promise<{ poolId: string; token: string }[]> {
+    if (!isDbConfigured()) return [];
+    const sql = getSql();
+    const rows = (await sql`
+        SELECT pool_id, token FROM twitter_launches
+        WHERE status = 'launched' AND token IS NOT NULL AND pool_id IS NOT NULL
+    `) as { pool_id: string; token: string }[];
+    return rows.map((r) => ({ poolId: r.pool_id, token: r.token }));
+}
+
 /** Current token-forward cursors (raw 18-dp launch-token) for a pool's slots. */
 export async function getTokenFwd(poolId: string): Promise<{ slot0: string; slot1: string } | null> {
     if (!isDbConfigured()) return null;
