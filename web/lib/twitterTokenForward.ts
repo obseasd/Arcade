@@ -1,4 +1,4 @@
-import { createWalletClient, http, erc20Abi, type Address, type Hex } from "viem";
+import { createWalletClient, http, erc20Abi, keccak256, encodePacked, type Address, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 
 import { ARC_CHAIN, serverPublicClient, serverReadClient } from "@/lib/serverRpc";
@@ -139,15 +139,123 @@ async function creator2BpsFor(poolIdHex: string): Promise<bigint> {
     return reply ? BigInt(REPLY_SPLIT_BPS) : 0n;
 }
 
+const CLANKER_POS_ABI = [
+    {
+        type: "function",
+        name: "clankerPos",
+        stateMutability: "view",
+        inputs: [{ type: "address" }],
+        outputs: [
+            { name: "tickLower", type: "int24" },
+            { name: "tickUpper", type: "int24" },
+            { name: "seeded", type: "bool" },
+            { name: "launchedAt", type: "uint64" },
+        ],
+    },
+] as const;
+const STATE_VIEW_ABI = [
+    {
+        type: "function",
+        name: "getPositionInfo",
+        stateMutability: "view",
+        inputs: [
+            { name: "poolId", type: "bytes32" },
+            { name: "positionId", type: "bytes32" },
+        ],
+        outputs: [
+            { name: "liquidity", type: "uint128" },
+            { name: "feeGrowthInside0LastX128", type: "uint256" },
+            { name: "feeGrowthInside1LastX128", type: "uint256" },
+        ],
+    },
+    {
+        type: "function",
+        name: "getFeeGrowthInside",
+        stateMutability: "view",
+        inputs: [
+            { name: "poolId", type: "bytes32" },
+            { name: "tickLower", type: "int24" },
+            { name: "tickUpper", type: "int24" },
+        ],
+        outputs: [
+            { name: "feeGrowthInside0X128", type: "uint256" },
+            { name: "feeGrowthInside1X128", type: "uint256" },
+        ],
+    },
+] as const;
+const ZERO32 = ("0x" + "0".repeat(64)) as Hex;
+
+/**
+ * Pending (un-harvested) launch-TOKEN creator fee sitting in the hook's locked
+ * CLANKER position -- exactly what a `collectFees` would move to the forwarder.
+ * Reproduces the on-chain harvest math (liquidity * feeGrowth delta >> 128, the
+ * creator's 80% cut) via StateView so the claim card can show the FULL claimable
+ * token BEFORE the harvest runs. PREVIEW ONLY (the execute path never counts it).
+ * Returns 0 on any miss/error so it can only ever ADD to the shown amount.
+ */
+async function previewPendingCreatorToken(poolIdHex: string, launchToken: Address): Promise<bigint> {
+    try {
+        const hook = ADDRESSES.arcadeHook as Address;
+        const stateView = ADDRESSES.v4StateView as Address;
+        const usdc = ADDRESSES.usdc as Address;
+        if (!hook || /^0x0*$/.test(hook) || !stateView || /^0x0*$/.test(stateView)) return 0n;
+        const client = serverReadClient();
+        const pos = (await client.readContract({
+            address: hook,
+            abi: CLANKER_POS_ABI,
+            functionName: "clankerPos",
+            args: [launchToken],
+        })) as readonly [number, number, boolean, bigint];
+        const [tickLower, tickUpper, seeded] = pos;
+        if (!seeded) return 0n; // not a seeded CLANKER pool (e.g. a PUMP curve) -> nothing here
+        const positionId = keccak256(
+            encodePacked(["address", "int24", "int24", "bytes32"], [hook, tickLower, tickUpper, ZERO32]),
+        );
+        const poolId = poolIdHex as Hex;
+        const [info, growth] = await Promise.all([
+            client.readContract({
+                address: stateView,
+                abi: STATE_VIEW_ABI,
+                functionName: "getPositionInfo",
+                args: [poolId, positionId],
+            }) as Promise<readonly [bigint, bigint, bigint]>,
+            client.readContract({
+                address: stateView,
+                abi: STATE_VIEW_ABI,
+                functionName: "getFeeGrowthInside",
+                args: [poolId, tickLower, tickUpper],
+            }) as Promise<readonly [bigint, bigint]>,
+        ]);
+        const [liquidity, fgi0Last, fgi1Last] = info;
+        const [fgi0, fgi1] = growth;
+        if (liquidity === 0n) return 0n;
+        // The launch token is currency1 iff USDC sorts first (currency0). Same test
+        // as useV4PoolPrice / the hook's usdcIsCurrency0.
+        const usdcIsCurrency0 = usdc.toLowerCase() < launchToken.toLowerCase();
+        const MASK = (1n << 256n) - 1n; // feeGrowth is a wrapping uint256 accumulator
+        const delta = usdcIsCurrency0 ? (fgi1 - fgi1Last) & MASK : (fgi0 - fgi0Last) & MASK;
+        const uncollected = (liquidity * delta) >> 128n;
+        return (uncollected * 8000n) / 10000n; // POST_GRAD_CREATOR_BPS: 80% creator, 20% treasury
+    } catch {
+        return 0n;
+    }
+}
+
 /**
  * Compute the launch-token amount owed to (poolId, slotIndex) from the operator's
  * live balance and the per-slot forwarded cursors. Returns { owed, already } so
  * the executing path can reserve the exact delta. Owed is clamped to >= 0.
+ *
+ * `includePending` (PREVIEW ONLY): also count the un-harvested creator token still
+ * in the locked CLANKER position, so the claim card shows the full claimable amount
+ * before the harvest. The execute path MUST leave it false (nothing to transfer yet)
+ * and keeps the physical-balance clamp.
  */
 async function computeOwed(
     poolIdHex: string,
     slotIndex: 0 | 1,
     launchToken: Address,
+    includePending = false,
 ): Promise<{ owed: bigint; already: bigint } | null> {
     const forwarder = forwarderAddress();
     if (!forwarder) return null;
@@ -165,18 +273,20 @@ async function computeOwed(
         args: [forwarder],
     })) as bigint;
 
-    // Everything ever accrued to the operator for this token = still-held +
-    // already forwarded out.
-    const totalAccrued = balance + fwd0 + fwd1;
+    // Everything ever accrued to the operator for this token = still-held + already
+    // forwarded out, plus (preview only) the un-harvested creator cut still in the LP.
+    const pending = includePending ? await previewPendingCreatorToken(poolIdHex, launchToken) : 0n;
+    const totalAccrued = balance + pending + fwd0 + fwd1;
     const bps = await creator2BpsFor(poolIdHex);
     const slotTotal =
         slotIndex === 0 ? (totalAccrued * (10_000n - bps)) / 10_000n : (totalAccrued * bps) / 10_000n;
     const already = slotIndex === 0 ? fwd0 : fwd1;
     let owed = slotTotal - already;
     if (owed < 0n) owed = 0n;
-    // Never try to move more than is physically held (guards a slot-race / stray
-    // deposit); the transfer would revert anyway.
-    if (owed > balance) owed = balance;
+    // Execute path only: never try to move more than is physically held (a slot-race
+    // / stray deposit would revert). The preview intentionally counts un-harvested
+    // fees the forwarder does not hold yet, so it skips this clamp.
+    if (!includePending && owed > balance) owed = balance;
     return { owed, already };
 }
 
@@ -205,7 +315,10 @@ export async function previewTokenSideOwed(
     const cached = owedCache.get(key);
     if (cached && nowMs - cached.at < OWED_TTL_MS) return cached.value; // fresh hit
     try {
-        const r = await computeOwed(poolIdHex, slotIndex, launchToken);
+        // includePending=true: show forwarder balance + the un-harvested creator
+        // token still in the locked CLANKER LP, so the claim card shows the FULL
+        // claimable token before the claim's harvest runs.
+        const r = await computeOwed(poolIdHex, slotIndex, launchToken, true);
         const value = r && r.owed > 0n ? r.owed.toString() : "0";
         owedCache.set(key, { value, at: nowMs });
         return value;
