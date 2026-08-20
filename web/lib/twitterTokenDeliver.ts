@@ -75,16 +75,30 @@ export async function deliverPendingTokenSides(): Promise<DeliverResult> {
         return { ran: false, reason: `Claimed scan failed: ${e instanceof Error ? e.message : String(e)}` };
     }
 
-    // positionId (decimal string) -> { slot -> recipient }. Each slot is claimed once.
-    const claimedBy = new Map<string, { 0?: Address; 1?: Address }>();
+    // positionId (decimal string) -> { slot -> latest-claim recipient }. The escrow
+    // slot REOPENS after each claim, so a handle owner can re-verify and claim from a
+    // new wallet; we must deliver the token side to the MOST RECENT claim (highest
+    // block, then logIndex), not whatever the scan happened to visit last (audit M-2).
+    type Winner = { recipient: Address; block: bigint; logIndex: number };
+    const claimedBy = new Map<string, { 0?: Winner; 1?: Winner }>();
     for (const log of logs) {
-        const a = (log as { args?: { positionId?: bigint; slotIndex?: bigint; recipient?: string } }).args;
+        const l = log as {
+            args?: { positionId?: bigint; slotIndex?: bigint; recipient?: string };
+            blockNumber?: bigint;
+            logIndex?: number;
+        };
+        const a = l.args;
         if (!a || a.positionId === undefined || a.slotIndex === undefined || !a.recipient) continue;
         const slot = a.slotIndex === 0n ? 0 : a.slotIndex === 1n ? 1 : -1;
         if (slot < 0) continue;
+        const block = l.blockNumber ?? 0n;
+        const logIndex = l.logIndex ?? 0;
         const key = a.positionId.toString();
         const entry = claimedBy.get(key) ?? {};
-        entry[slot as 0 | 1] = a.recipient as Address;
+        const cur = entry[slot as 0 | 1];
+        if (!cur || block > cur.block || (block === cur.block && logIndex > cur.logIndex)) {
+            entry[slot as 0 | 1] = { recipient: a.recipient as Address, block, logIndex };
+        }
         claimedBy.set(key, entry);
     }
 
@@ -101,7 +115,7 @@ export async function deliverPendingTokenSides(): Promise<DeliverResult> {
         const claims = claimedBy.get(positionId.toString());
         if (!claims) continue; // nobody has claimed this pool yet -> nothing to deliver
         for (const slot of [0, 1] as const) {
-            const recipient = claims[slot];
+            const recipient = claims[slot]?.recipient;
             if (!recipient) continue;
             try {
                 const r = await forwardTokenSide(poolId, slot, recipient, token as Address);

@@ -3,7 +3,13 @@ import { privateKeyToAccount } from "viem/accounts";
 
 import { ARC_CHAIN, serverPublicClient, serverReadClient } from "@/lib/serverRpc";
 import { ADDRESSES } from "@/lib/constants";
-import { getTokenFwd, advanceTokenFwdIf, getReplyLaunchByPool } from "@/lib/twitterLaunchPersistence";
+import {
+    getTokenFwd,
+    advanceTokenFwdIf,
+    getReplyLaunchByPool,
+    acquireForwardLock,
+    releaseForwardLock,
+} from "@/lib/twitterLaunchPersistence";
 import { REPLY_SPLIT_BPS } from "@/lib/twitterLaunch";
 
 const TOKEN_FORWARDER_ABI = [
@@ -215,6 +221,27 @@ export async function previewTokenSideOwed(
  * `recipient`. `launchToken` is the token whose fees we forward.
  */
 export async function forwardTokenSide(
+    poolIdHex: string,
+    slotIndex: 0 | 1,
+    recipient: Address,
+    launchToken: Address,
+): Promise<ForwardResult> {
+    // Serialize per pool (audit M-1): concurrent forwards (the client claim POST +
+    // the delivery cron(s)) must not read the same live balanceOf mid-transfer and
+    // mis-split a reply 50/50. A lock loser skips this run; delivery is idempotent so
+    // a later run/cron completes it. Neon serverless has no session advisory locks,
+    // so this is a DB lease lock.
+    if (!(await acquireForwardLock(poolIdHex))) {
+        return { ok: true, forwarded: false, reason: "locked (concurrent forward)" };
+    }
+    try {
+        return await forwardTokenSideInner(poolIdHex, slotIndex, recipient, launchToken);
+    } finally {
+        await releaseForwardLock(poolIdHex);
+    }
+}
+
+async function forwardTokenSideInner(
     poolIdHex: string,
     slotIndex: 0 | 1,
     recipient: Address,

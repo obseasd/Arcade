@@ -193,6 +193,46 @@ export async function advanceSlot1CreditedIf(
     return rows.length > 0;
 }
 
+let _fwdLockTableEnsured = false;
+
+/**
+ * Per-pool lease lock so concurrent token forwards (the client claim POST + the
+ * delivery cron(s)) SERIALIZE per pool -- Neon serverless has no session advisory
+ * locks (each query is a fresh HTTP connection). Returns true if acquired; a loser
+ * should skip the pool this run (delivery is idempotent, so a later run completes
+ * it). Without this, two concurrent forwards read the same live balance mid-transfer
+ * and mis-split a reply 50/50 (audit M-1). A TTL bounds a crashed holder.
+ */
+export async function acquireForwardLock(poolId: string, ttlSecs = 45): Promise<boolean> {
+    if (!isDbConfigured()) return true; // single process, no cross-run concurrency to guard
+    const sql = getSql();
+    if (!_fwdLockTableEnsured) {
+        await sql`CREATE TABLE IF NOT EXISTS fwd_locks (pool_id TEXT PRIMARY KEY, locked_until TIMESTAMPTZ NOT NULL)`;
+        _fwdLockTableEnsured = true;
+    }
+    // Atomic CAS lease: insert if absent, or steal only an EXPIRED lease. A live
+    // lease makes the ON CONFLICT UPDATE's WHERE false -> no row returned -> not held.
+    const rows = (await sql`
+        INSERT INTO fwd_locks (pool_id, locked_until)
+        VALUES (${poolId}, now() + make_interval(secs => ${ttlSecs}))
+        ON CONFLICT (pool_id) DO UPDATE SET locked_until = EXCLUDED.locked_until
+        WHERE fwd_locks.locked_until < now()
+        RETURNING pool_id
+    `) as { pool_id: string }[];
+    return rows.length > 0;
+}
+
+/** Release a pool's forward lease (best-effort; the TTL frees it anyway). */
+export async function releaseForwardLock(poolId: string): Promise<void> {
+    if (!isDbConfigured()) return;
+    try {
+        const sql = getSql();
+        await sql`UPDATE fwd_locks SET locked_until = now() - make_interval(secs => 1) WHERE pool_id = ${poolId}`;
+    } catch {
+        /* best-effort */
+    }
+}
+
 /** All launched handle-launch pools that carry a token, for the token-delivery
  *  cron (Q6). Returns (poolId, token); the RECIPIENT is never trusted from here --
  *  it is taken from the on-chain Claimed event so a delivery can only go to the
