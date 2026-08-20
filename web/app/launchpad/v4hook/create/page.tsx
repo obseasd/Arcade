@@ -51,6 +51,18 @@ function initialCurveTokensOut(usdcInRaw: bigint): bigint {
     return CURVE_VIRT_TOKEN - newToken;
 }
 
+/** Rough tokens out for a CLANKER dev-buy at the launch price. The pool is
+ * seeded single-sided with the full 1B supply at `startMcap`, so the spot price
+ * is startMcap / 1e9 USDC per token; this ignores the (modest, for a small buy)
+ * slippage along the concentrated range, so it is a "≈" figure. */
+function clankerTokensOutAtLaunch(usdcInRaw: bigint, startMcapUsd: number): bigint {
+    if (usdcInRaw <= 0n || !Number.isFinite(startMcapUsd) || startMcapUsd <= 0) return 0n;
+    const supplyRaw = 1_000_000_000n * 10n ** 18n;
+    const mcapRaw = BigInt(Math.round(startMcapUsd * 1e6)); // USDC 6dp
+    if (mcapRaw === 0n) return 0n;
+    return (usdcInRaw * supplyRaw) / mcapRaw;
+}
+
 /** Fallback inline-encode the image as a downscaled JPEG data URL when Pinata
  * is not reachable. Mirrors the V2 launchpad's encodeInlineDataUrl so the V4
  * create flow stays usable on environments without PINATA_JWT. */
@@ -159,12 +171,14 @@ function Inner() {
     const [snipeStartBps, setSnipeStartBps] = useState(0);
     const [snipeDecayMinutes, setSnipeDecayMinutes] = useState(0);
 
-    // PUMP-only optional "creator buy": USDC the launcher spends on the curve
-    // atomically inside createLaunch (12th arg). Provably first buy, one tx.
+    // Optional "creator buy": USDC the launcher spends atomically inside
+    // createLaunch (12th arg). On PUMP it is the provable first buy on the curve;
+    // on CLANKER the hook swaps it USDC->token on the freshly seeded pool right
+    // after the seed, in the same tx, exempt from the per-buy cap (dev-buy).
     const [creatorBuy, setCreatorBuy] = useState("");
     const creatorBuyRaw = (() => {
         try {
-            if (isClanker || !creatorBuy || Number(creatorBuy) <= 0) return 0n;
+            if (!creatorBuy || Number(creatorBuy) <= 0) return 0n;
             return parseUnits(creatorBuy, 6);
         } catch {
             return 0n;
@@ -389,9 +403,10 @@ function Inner() {
                     // seeded at, in USDC micro-units. PUMP ignores it (bonding
                     // curve sets its own start price).
                     isClanker ? parseUnits(String(startMcap), 6) : 0n,
-                    // PUMP: optional creator buy, executed ATOMICALLY inside
-                    // createLaunch (the provable first buy, unbypassable). 0 on
-                    // CLANKER (the hook reverts a creator-buy there).
+                    // Optional creator/dev buy, executed ATOMICALLY inside
+                    // createLaunch (the provable first buy, unbypassable). PUMP:
+                    // runs on the curve. CLANKER: swapped USDC->token on the
+                    // freshly seeded pool right after seed, exempt from the cap.
                     creatorBuyRaw,
                 ],
             });
@@ -824,11 +839,10 @@ function Inner() {
                     </label>
                 )}
 
-                {/* Creator buy (PUMP only) -------------------------------- */}
-                {!isClanker && (
+                {/* Creator buy / dev-buy (both modes) --------------------- */}
                 <div className="space-y-2 rounded-xl border border-arc-border bg-arc-bg-elevated p-4">
                     <span className="text-sm font-medium text-arc-text">
-                        Creator buy (optional)
+                        {isClanker ? "Dev buy (optional)" : "Creator buy (optional)"}
                     </span>
                     <label className="block text-sm">
                         <span className="text-arc-text-muted">USDC to buy at launch</span>
@@ -846,16 +860,16 @@ function Inner() {
                     </label>
                     {creatorBuyRaw > 0n && (
                         <p className="text-xs text-arc-text-muted">
-                            ≈ {(Number(initialCurveTokensOut(creatorBuyRaw)) / 1e18).toLocaleString(undefined, { maximumFractionDigits: 0 })}{" "}
-                            {symbol || "tokens"} on the first buy.
+                            ≈ {(Number(isClanker ? clankerTokensOutAtLaunch(creatorBuyRaw, startMcap) : initialCurveTokensOut(creatorBuyRaw)) / 1e18).toLocaleString(undefined, { maximumFractionDigits: 0 })}{" "}
+                            {symbol || "tokens"}{isClanker ? " at the launch price" : " on the first buy"}.
                         </p>
                     )}
                     <p className="text-xs text-arc-text-faint">
-                        Your buy runs in the SAME transaction as the launch, so it is the
-                        provable first buy on the curve - no bot can front-run it.
+                        {isClanker
+                            ? "Your buy runs in the SAME transaction as the launch, right after the pool is seeded, so it is the provable first buy - no bot can front-run it. The dev buy is exempt from the per-wallet buy cap."
+                            : "Your buy runs in the SAME transaction as the launch, so it is the provable first buy on the curve - no bot can front-run it."}
                     </p>
                 </div>
-                )}
 
                 {/* Fee summary --------------------------------------------- */}
                 <div className="space-y-1 rounded-lg border border-arc-border bg-arc-bg-elevated px-3 py-2 text-sm">
