@@ -25,6 +25,7 @@ import {
 } from "@/lib/twitterLaunch";
 import { hasLaunchIntent, parseLaunchWithClaude } from "@/lib/twitterLaunchParse";
 import { forwarderAddress } from "@/lib/twitterTokenForward";
+import { deliverPendingTokenSides } from "@/lib/twitterTokenDeliver";
 import { postLaunchReply } from "@/lib/twitterReply";
 import {
     isTweetProcessed,
@@ -438,6 +439,17 @@ export async function POST(req: NextRequest) {
     // ones stay behind it and re-fetch next run). Reserve/idempotency dedupes.
     if (cursorId && cursorId !== sinceId) await setSinceId(cursorId);
 
+    // Q6 safety net (piggyback): re-deliver any token-side a claim's client POST
+    // missed, on this cron's existing trigger. Best-effort + idempotent; the
+    // recipient is bound to the on-chain Claimed event, so it can only pay the real
+    // claimant. Never fail the tweet cron on a delivery error.
+    let tokenDelivery: Awaited<ReturnType<typeof deliverPendingTokenSides>> | { ran: false; reason: string };
+    try {
+        tokenDelivery = await deliverPendingTokenSides();
+    } catch (e) {
+        tokenDelivery = { ran: false, reason: e instanceof Error ? e.message : String(e) };
+    }
+
     dbg("[tweet-launch] done:", summary);
-    return NextResponse.json({ ran: true, sinceId: sinceId ?? null, ...summary });
+    return NextResponse.json({ ran: true, sinceId: sinceId ?? null, ...summary, tokenDelivery });
 }
