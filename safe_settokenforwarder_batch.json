@@ -3,15 +3,15 @@
   "chainId": "5042002",
   "createdAt": 1787659200000,
   "meta": {
-    "name": "setTokenForwarder on new V4 hook (0x8171)",
-    "description": "Wire tokenForwarder=0x3a0Dd9 on the new ArcadeHook 0x81715Ba8 (dev-buy gen) so Twitter-handle CLANKER launches forward their TOKEN-side creator fees. USDC side already escrowed; escrow.setCrediter(newHook 0x8171) already done, old hook 0x53Bd revoked.",
+    "name": "setTokenForwarder on new V4 hook (0xa128)",
+    "description": "Wire tokenForwarder=0x3a0Dd9 on the new ArcadeHook 0xa1289C88 (5% dev-buy cap gen) so Twitter-handle CLANKER launches forward their TOKEN-side creator fees. USDC side already escrowed; escrow.setCrediter(newHook 0xa128) already done, old hook 0x8171 revoked.",
     "txBuilderVersion": "1.16.5",
     "createdFromSafeAddress": "0x0bDE09e3Bfc9b2Ee7b94e56A6A06e0a14706195D",
     "createdFromOwnerAddress": ""
   },
   "transactions": [
     {
-      "to": "0x81715Ba8B110f806E09f59766c0a64Ede4F03ECE",
+      "to": "0xa1289C880AfaaB6bb217C29733eb15213085feCE",
       "value": "0",
       "data": "0x2b85fe8c0000000000000000000000003a0dd90212838f32a953acd4b32596b62859324a",
       "contractMethod": null,

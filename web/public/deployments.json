@@ -29,16 +29,16 @@
     "autoCompounder": "0x2DC0ABb9945506F78bf2490332329BA05E6541a8",
     "identityIssuer": "0x05dF2B0784EC4ECb6101a20204587152C4D6ff49",
     "identityRegistry": "0x8004A818BFB912233c491871b3d84c89A494BD9e",
-    "arcadeHook": "0x81715Ba8B110f806E09f59766c0a64Ede4F03ECE",
+    "arcadeHook": "0xa1289C880AfaaB6bb217C29733eb15213085feCE",
     "arcadeV4Math": "0x0931aa1082b1ee184f3fa70b8720500d80c226a2",
-    "arcadeHookDeployBlock": 57976421,
+    "arcadeHookDeployBlock": 58014040,
     "splitterFactory": "0x9562Cd54476E4caaD727A2C88a76Aa89a6117c70",
     "airdropDistributor": "0xB398D1569498A9bED4dc72fAa9b2C7ADC715510B",
     "lockedVault": "0xD5c8D6228cEe11d10b6ee4210486B40b036B0E3b",
     "v4PoolManager": "0xb89EC0dB3EFE2a8Ba111791882B6c6C564073112",
-    "v4StateView": "0x4F381DA898d5A2C43411DbE1B03758073EC6e946",
-    "v4Quoter": "0x6A1076930F9BF1763601334285BC7589De7b8C9b",
-    "v4Router": "0xD44a0E5dBae5F5a9b9ecD015C8d1a9D6C74EB9Ff",
+    "v4StateView": "0x3418BEF6Ea14bc44B1ABa90B073a7dD768721879",
+    "v4Quoter": "0x27E66B320a51F18cF9d5C432a62a6EDcf9806b54",
+    "v4Router": "0xE25C1AbB8Ea8637891D2427474fdc9d3608021e7",
     "seedETH": "0xcA34959A856c82214Bb3b2b7777342dE30459F83",
     "twitterEscrow": "0x41B0341dd65d3B7c350225b551c9826787325901",
     "twitterEscrowSigner": "0x3a0Dd90212838f32a953Acd4B32596b62859324A",
@@ -96,5 +96,5 @@
       }
     }
   },
-  "arcadeHookDeployBlock": 57976421
+  "arcadeHookDeployBlock": 58014040
 }
