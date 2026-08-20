@@ -192,29 +192,8 @@ export function V4ClaimCard({
             await publicClient.waitForTransactionReceipt({ hash: cHash });
             const claimedUsd = Number(formatUnits(sweptMicros, USDC_DECIMALS));
 
-            // Forward the TOKEN-side creator fees too. CLANKER fees have a token-
-            // denominated leg the escrow doesn't hold (it sits on the operator);
-            // the backend transfers it to us, proven by this claim tx. Best-effort.
-            let tokenMsg = "";
-            try {
-                const fr = await fetch("/api/twitter-launch/forward-token", {
-                    method: "POST",
-                    headers: { "content-type": "application/json" },
-                    body: JSON.stringify({
-                        token: payload.token,
-                        slotIndex: payload.slotIndex,
-                        recipient: payload.recipient,
-                        claimTxHash: cHash,
-                    }),
-                });
-                const fj = (await fr.json()) as { result?: { forwarded?: boolean; amountRaw?: string } };
-                if (fj?.result?.forwarded && fj.result.amountRaw) {
-                    const n = Number(formatUnits(BigInt(fj.result.amountRaw), 18));
-                    tokenMsg = ` + ${n.toLocaleString(undefined, { maximumFractionDigits: 2 })} ${tokenSymbol}`;
-                }
-            } catch {
-                /* token forward is best-effort; USDC already claimed */
-            }
+            // Forward the TOKEN-side creator fees too (see forwardTokenSide).
+            const tokenMsg = await forwardTokenSide(cHash);
 
             pushToast({
                 kind: "info",
@@ -231,6 +210,36 @@ export function V4ClaimCard({
         }
     }
 
+    // Deliver the TOKEN-side creator fees from the forwarder wallet to the claimer.
+    // CLANKER fees have a token-denominated leg the escrow can't hold (single fee
+    // token per slot), so it accrues on the forwarder wallet; the backend transfers
+    // it, proven by the on-chain Claimed event in `claimTxHash` (idempotent server
+    // side). Wired on BOTH claim paths -- timelock 0 (onClaim) AND timelock > 0
+    // (onFinish) -- so the token side is delivered no matter which path is taken.
+    // Returns a " + N SYM" suffix for the success message, or "" if nothing owed.
+    async function forwardTokenSide(claimTxHash: `0x${string}`): Promise<string> {
+        try {
+            const fr = await fetch("/api/twitter-launch/forward-token", {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({
+                    token: payload.token,
+                    slotIndex: payload.slotIndex,
+                    recipient: payload.recipient,
+                    claimTxHash,
+                }),
+            });
+            const fj = (await fr.json()) as { result?: { forwarded?: boolean; amountRaw?: string } };
+            if (fj?.result?.forwarded && fj.result.amountRaw) {
+                const n = Number(formatUnits(BigInt(fj.result.amountRaw), 18));
+                return ` + ${n.toLocaleString(undefined, { maximumFractionDigits: 2 })} ${tokenSymbol}`;
+            }
+        } catch {
+            /* token forward is best-effort; USDC already claimed on-chain */
+        }
+        return "";
+    }
+
     async function onFinish() {
         if (!publicClient) return;
         setBusy(true);
@@ -243,8 +252,17 @@ export function V4ClaimCard({
                 args: [payload.nonce],
             });
             await publicClient.waitForTransactionReceipt({ hash: cHash });
+            // Deliver the token side too. The prior version skipped this on the
+            // two-step (timelock > 0) path, stranding the token-side fees on the
+            // forwarder wallet -- the fix that makes tweet-launch tokens claimable.
+            const tokenMsg = await forwardTokenSide(cHash);
             setDone(true);
-            setMsg("Claimed. Redirecting…");
+            pushToast({
+                kind: "info",
+                title: "Creator fees claimed",
+                message: `Claimed${tokenMsg}`,
+            });
+            setMsg(`Claimed${tokenMsg}. Redirecting…`);
             redirectToToken();
         } catch (e) {
             setMsg(e instanceof Error ? e.message.slice(0, 200) : "Claim failed");
