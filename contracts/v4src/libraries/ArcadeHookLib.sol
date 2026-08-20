@@ -56,6 +56,17 @@ library ArcadeHookLib {
     event Graduated(PoolId indexed poolId, uint256 finalUsdcReserve, uint256 tokensInLP);
 
     error ZeroAmount();
+    /// @dev The creator's atomic dev-buy delivered more than CREATOR_DEV_BUY_MAX_BPS
+    ///      (5%) of TOTAL_SUPPLY. Reverts the whole createLaunch.
+    error DevBuyExceedsCap();
+
+    /// @dev Hard ceiling on the creator's atomic launch dev-buy: at most this
+    ///      share of TOTAL_SUPPLY. The dev-buy is un-frontrunnable (it runs inline
+    ///      in createLaunch before any other account can trade) but is still
+    ///      BOUNDED so a launch can never hand the creator an unlimited opening
+    ///      position. Enforced HERE (not in afterSwap: the PoolManager does not
+    ///      re-enter the hook's afterSwap on the hook's own kind-4 swap).
+    uint16 internal constant CREATOR_DEV_BUY_MAX_BPS = 500; // 5%
 
     // -------------------------------------------------------------------
     // Internal money-movement helpers (inlined into the public entrypoints)
@@ -432,6 +443,13 @@ library ArcadeHookLib {
             if (inDelta < 0) _settleSide(pm, inputCurrency, uint256(uint128(-inDelta)));
             // Deliver the bought token to the launch creator (set at createLaunch).
             uint256 outAmount = outDelta > 0 ? uint256(uint128(outDelta)) : 0;
+            // Bound the dev-buy to CREATOR_DEV_BUY_MAX_BPS (5%) of supply on the
+            // amount actually delivered. The hook's afterSwap is NOT re-entered on
+            // this self-swap, so the ceiling is enforced here; over-cap unwinds
+            // the whole createLaunch.
+            if (outAmount > (ArcadeV4Curve.TOTAL_SUPPLY * CREATOR_DEV_BUY_MAX_BPS) / 10_000) {
+                revert DevBuyExceedsCap();
+            }
             pm.take(outputCurrency, curveStates[dpid].creator, outAmount);
             return "";
         }

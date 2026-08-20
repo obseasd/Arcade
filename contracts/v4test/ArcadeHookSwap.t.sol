@@ -979,7 +979,7 @@ contract ArcadeHookSwapTest is Test {
     }
 
     function test_clankerDevBuy_noUsdcStrandedInHook() public {
-        _launchClankerDevBuy(2_500e6);
+        _launchClankerDevBuy(1_500e6);
         // The exact-input swap consumes the ENTIRE creatorBuyUsdc the hook held,
         // so nothing is left stranded in the hook.
         assertEq(usdc.balanceOf(address(hook)), 0, "exact-in consumed all dev-buy USDC");
@@ -988,21 +988,39 @@ contract ArcadeHookSwapTest is Test {
     function test_clankerDevBuy_biggerInputBuysMoreTokens() public {
         (address tokenA,) = _launchClankerDevBuy(500e6);
         uint256 bagA = IERC20(tokenA).balanceOf(CREATOR);
-        (address tokenB,) = _launchClankerDevBuy(2_000e6);
+        (address tokenB,) = _launchClankerDevBuy(1_500e6);
         uint256 bagB = IERC20(tokenB).balanceOf(CREATOR);
         assertGt(bagA, 0, "small dev-buy delivered");
         assertGt(bagB, bagA, "larger dev-buy input -> larger token bag");
     }
 
-    /// The dev-buy is EXEMPT from the first-window anti-snipe cap: a buy large
-    /// enough to blow through the cap succeeds AND delivers more than the cap's
-    /// worth of tokens (proving it bypassed the cap rather than being clamped).
-    function test_clankerDevBuy_exemptFromBuyCap() public {
+    /// The dev-buy is NOT subject to the third-party first-window cap: with the
+    /// public cap at 1%, a dev-buy above 1% (but within the 5% dev ceiling)
+    /// succeeds and delivers more than the 1% cap's worth of tokens.
+    function test_clankerDevBuy_notSubjectToPublicCap() public {
         vm.prank(OWNER);
         hook.setClankerBuyCap(100, 300); // 1% of supply, 5 min window
-        (address token,) = _launchClankerDevBuy(10_000e6);
-        uint256 capTokens = (ArcadeV4Curve.TOTAL_SUPPLY * 100) / 10_000; // 1%
-        assertGt(IERC20(token).balanceOf(CREATOR), capTokens, "dev-buy delivered MORE than the 1% cap");
+        (address token,) = _launchClankerDevBuy(1_000e6); // ~2-3% of supply: > 1% public cap, < 5% dev cap
+        uint256 publicCapTokens = (ArcadeV4Curve.TOTAL_SUPPLY * 100) / 10_000; // 1%
+        assertGt(IERC20(token).balanceOf(CREATOR), publicCapTokens, "dev-buy delivered MORE than the public 1% cap");
+    }
+
+    /// The dev-buy is itself BOUNDED at CREATOR_DEV_BUY_MAX_BPS (5%) of supply:
+    /// a dev-buy whose token output tops 5% reverts BuyExceedsCap, unwinding the
+    /// whole createLaunch. At the $35k default mcap 5,000 USDC buys well over 5%.
+    function test_clankerDevBuy_cappedAt5pctOfSupply() public {
+        vm.prank(CREATOR);
+        vm.expectRevert(); // BuyExceedsCap in the dev-buy afterSwap unwinds createLaunch
+        hook.createLaunch("ClkBig", "CLKB", "ipfs://demo", 1, address(0), 0, 0, 0, 1, "", 0, 5_000e6);
+    }
+
+    /// A dev-buy just under the 5% ceiling succeeds and stays within it.
+    function test_clankerDevBuy_justUnder5pctPasses() public {
+        (address token,) = _launchClankerDevBuy(1_500e6); // ~4% of supply
+        uint256 fivePct = (ArcadeV4Curve.TOTAL_SUPPLY * 500) / 10_000; // CREATOR_DEV_BUY_MAX_BPS = 5%
+        uint256 bag = IERC20(token).balanceOf(CREATOR);
+        assertGt(bag, 0, "under-cap dev-buy delivered");
+        assertLe(bag, fivePct, "bag within the 5% ceiling");
     }
 
     /// The exemption is dev-buy ONLY: with the SAME cap live, a third party's

@@ -301,13 +301,15 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
 
     /// @dev Transient flag set ONLY for the duration of a CLANKER atomic dev-buy
     ///      (the creator's frontrun-proof first buy, executed inline in
-    ///      createLaunch through the kind-4 unlock). While true, the dev-buy's
-    ///      afterSwap is exempt from `_enforceClankerBuyCap` -- the buy is
-    ///      provably un-frontrunnable (nobody else can touch the pool before
-    ///      createLaunch returns), exactly like PUMP's creator buy. It is set
-    ///      just before the unlock and cleared immediately after; any revert
-    ///      unwinds the whole (nonReentrant) tx, so it can never leak `true`
-    ///      into an unrelated swap. Third-party block-0 buys stay capped.
+    ///      createLaunch through the kind-4 unlock). The dev-buy's 5% ceiling is
+    ///      enforced in the kind-4 handler (ArcadeHookLib) on the delivered amount,
+    ///      because the PoolManager does NOT re-enter this hook's afterSwap on its
+    ///      own swap. This flag remains as a defensive gate in `_enforceClankerBuyCap`
+    ///      so that, should afterSwap ever be reached with it set, the dev-buy is
+    ///      not blocked by (or counted against) the third-party first-window cap.
+    ///      It is set just before the unlock and cleared immediately after; any
+    ///      revert unwinds the whole (nonReentrant) tx, so it can never leak `true`
+    ///      into an unrelated swap.
     bool internal _creatorBuying;
     /// @notice Launch token => PoolId so `currentSnipeBps` callers (the hook
     ///         itself + indexers) can look up the curve state from a token addr.
@@ -713,9 +715,11 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
             // wedge ahead of it. The hook must HOLD the USDC to settle the swap
             // input, so pull it in first. minOut = 0 is safe: the buy is atomic
             // against a fresh, deterministic-price pool (matches PUMP's argument).
-            // The dev-buy is exempt from the first-window anti-snipe cap
-            // (_creatorBuying gate in _enforceClankerBuyCap); third-party block-0
-            // buys stay capped.
+            // The dev-buy is not subject to the third-party first-window cap but
+            // is itself bounded to CREATOR_DEV_BUY_MAX_BPS (5%) of supply, checked
+            // on the delivered amount inside the kind-4 handler (ArcadeHookLib);
+            // over-cap reverts the whole launch. Third-party block-0 buys stay
+            // capped at clankerMaxBuyBps.
             if (creatorBuyUsdc > 0) {
                 IERC20(Currency.unwrap(USDC)).safeTransferFrom(msg.sender, address(this), creatorBuyUsdc);
                 _creatorBuying = true;
@@ -1499,11 +1503,12 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
     ///      can't carry a take-based tax, so this revert is its only block-0
     ///      snipe defense. Sells and post-window buys pass through.
     function _enforceClankerBuyCap(PoolKey calldata key, SwapParams calldata params, BalanceDelta delta) internal {
-        // The creator's atomic dev-buy at launch is provably un-frontrunnable
-        // (it runs inline in createLaunch before any other account can trade),
-        // so it is exempt from the first-window cap -- mirroring PUMP's creator
-        // buy, which also bypasses anti-snipe. Third-party block-0 buys are NOT
-        // exempt: _creatorBuying is only ever true during the kind-4 dev-buy.
+        // The creator's atomic dev-buy is un-frontrunnable and is bounded to
+        // CREATOR_DEV_BUY_MAX_BPS (5%) directly in the kind-4 handler (afterSwap
+        // is NOT re-entered on the hook's own swap, so the cap can't live here).
+        // This gate stays as defense-in-depth: were afterSwap ever reached with
+        // the flag set, the dev-buy must still not consume the public per-block
+        // budget or be blocked by the third-party first-window cap.
         if (_creatorBuying) return;
         uint16 capBps = clankerMaxBuyBps;
         if (capBps == 0) return;

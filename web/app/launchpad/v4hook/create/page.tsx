@@ -236,6 +236,15 @@ function Inner() {
         (recipientMode === "other" && otherAddrValid) ||
         (recipientMode === "twitter" && feeHandle.trim().replace(/^@/, "").length > 0);
 
+    // The hook bounds the CLANKER dev-buy to 5% of supply (it reverts above),
+    // so guard the form: a too-large dev-buy must be caught here rather than
+    // reverting on-chain. The estimate is spot (no slippage), so it slightly
+    // OVER-states the delivered amount -- a conservative gate that never lets a
+    // truly-over-cap buy through.
+    const DEV_BUY_MAX_TOKENS = 50_000_000n * 10n ** 18n; // 5% of the 1B supply
+    const devBuyOverCap =
+        isClanker && creatorBuyRaw > 0n && clankerTokensOutAtLaunch(creatorBuyRaw, startMcap) > DEV_BUY_MAX_TOKENS;
+
     const formValid =
         name.trim().length > 0 &&
         symbol.trim().length > 0 &&
@@ -247,6 +256,7 @@ function Inner() {
         (mode === ARCADE_HOOK_MODE.PUMP || mode === ARCADE_HOOK_MODE.CLANKER) &&
         recipientValid &&
         startMcapValid &&
+        !devBuyOverCap &&
         !imageUploading;
 
     /**
@@ -862,6 +872,11 @@ function Inner() {
                         <p className="text-xs text-arc-text-muted">
                             ≈ {(Number(isClanker ? clankerTokensOutAtLaunch(creatorBuyRaw, startMcap) : initialCurveTokensOut(creatorBuyRaw)) / 1e18).toLocaleString(undefined, { maximumFractionDigits: 0 })}{" "}
                             {symbol || "tokens"}{isClanker ? " at the launch price" : " on the first buy"}.
+                        </p>
+                    )}
+                    {devBuyOverCap && (
+                        <p className="text-xs text-arc-danger">
+                            The dev buy is capped at 5% of supply. Lower the amount (or raise the start market cap) to launch.
                         </p>
                     )}
                     <p className="text-xs text-arc-text-faint">
