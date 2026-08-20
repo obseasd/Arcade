@@ -233,18 +233,77 @@ export async function releaseForwardLock(poolId: string): Promise<void> {
     }
 }
 
-/** All launched handle-launch pools that carry a token, for the token-delivery
- *  cron (Q6). Returns (poolId, token); the RECIPIENT is never trusted from here --
- *  it is taken from the on-chain Claimed event so a delivery can only go to the
- *  wallet that actually claimed. */
-export async function getDeliverablePools(): Promise<{ poolId: string; token: string }[]> {
-    if (!isDbConfigured()) return [];
+let _deliverColsEnsured = false;
+/** Idempotently add the persisted-recipient columns the delivery cron reads. */
+async function ensureDeliverCols(): Promise<void> {
+    if (_deliverColsEnsured || !isDbConfigured()) return;
+    const sql = getSql();
+    await sql`ALTER TABLE twitter_launches ADD COLUMN IF NOT EXISTS slot0_recipient TEXT`;
+    await sql`ALTER TABLE twitter_launches ADD COLUMN IF NOT EXISTS slot1_recipient TEXT`;
+    _deliverColsEnsured = true;
+}
+
+/** Persist the LATEST claim recipient for a (pool, slot), discovered from an
+ *  on-chain Claimed event. Lets the delivery cron retry a failed token-forward
+ *  indefinitely from the DB without re-scanning the whole chain each run (Q6
+ *  LOW-1). Callers pass the newest-claim recipient (the escrow slot reopens on
+ *  re-claim, so the latest wallet wins). */
+export async function recordClaimRecipient(poolId: string, slot: 0 | 1, recipient: string): Promise<void> {
+    if (!isDbConfigured()) return;
+    await ensureDeliverCols();
+    const sql = getSql();
+    if (slot === 0) {
+        await sql`UPDATE twitter_launches SET slot0_recipient = ${recipient} WHERE pool_id = ${poolId}`;
+    } else {
+        await sql`UPDATE twitter_launches SET slot1_recipient = ${recipient} WHERE pool_id = ${poolId}`;
+    }
+}
+
+/** The delivery cron's scan watermark (last block scanned for Claimed events). */
+export async function getDeliverScannedBlock(): Promise<bigint> {
+    if (!isDbConfigured()) return 0n;
     const sql = getSql();
     const rows = (await sql`
-        SELECT pool_id, token FROM twitter_launches
+        SELECT value FROM twitter_launch_state WHERE key = 'deliver_scanned_block' LIMIT 1
+    `) as { value: string }[];
+    if (rows.length === 0) return 0n;
+    try {
+        return BigInt(rows[0].value);
+    } catch {
+        return 0n;
+    }
+}
+
+/** Advance the delivery cron's scan watermark. */
+export async function setDeliverScannedBlock(block: bigint): Promise<void> {
+    if (!isDbConfigured()) return;
+    const sql = getSql();
+    await sql`
+        INSERT INTO twitter_launch_state (key, value) VALUES ('deliver_scanned_block', ${block.toString()})
+        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+    `;
+}
+
+/** All launched handle-launch pools that carry a token + their persisted claim
+ *  recipients, for the token-delivery cron (Q6). The recipient is written only
+ *  from an on-chain Claimed event (recordClaimRecipient), so a delivery can only
+ *  ever go to the wallet that actually claimed. */
+export async function getDeliverablePools(): Promise<
+    { poolId: string; token: string; slot0Recipient: string | null; slot1Recipient: string | null }[]
+> {
+    if (!isDbConfigured()) return [];
+    await ensureDeliverCols();
+    const sql = getSql();
+    const rows = (await sql`
+        SELECT pool_id, token, slot0_recipient, slot1_recipient FROM twitter_launches
         WHERE status = 'launched' AND token IS NOT NULL AND pool_id IS NOT NULL
-    `) as { pool_id: string; token: string }[];
-    return rows.map((r) => ({ poolId: r.pool_id, token: r.token }));
+    `) as { pool_id: string; token: string; slot0_recipient: string | null; slot1_recipient: string | null }[];
+    return rows.map((r) => ({
+        poolId: r.pool_id,
+        token: r.token,
+        slot0Recipient: r.slot0_recipient,
+        slot1Recipient: r.slot1_recipient,
+    }));
 }
 
 /** Current token-forward cursors (raw 18-dp launch-token) for a pool's slots. */

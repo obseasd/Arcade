@@ -2,10 +2,20 @@ import { parseAbiItem, type Address } from "viem";
 
 import { ADDRESSES, ARCADE_HOOK_DEPLOY_BLOCK } from "@/lib/constants";
 import { serverReadClient } from "@/lib/serverRpc";
-import { scanLogsChunked, CHUNK_SMALL } from "@/lib/eventScan";
+import { scanLogsChunked, CHUNK_SMALL, MAX_BACK_BLOCKS } from "@/lib/eventScan";
 import { forwardTokenSide, forwarderMismatch } from "@/lib/twitterTokenForward";
-import { getDeliverablePools } from "@/lib/twitterLaunchPersistence";
+import {
+    getDeliverablePools,
+    getDeliverScannedBlock,
+    setDeliverScannedBlock,
+    recordClaimRecipient,
+} from "@/lib/twitterLaunchPersistence";
 import { isDbConfigured } from "@/lib/db";
+
+/** Re-scan overlap (blocks): a partial previous scan (RPC stress) gets a second
+ *  chance before the watermark skips its range. Arc has instant finality (no
+ *  re-org), so a small overlap is plenty. */
+const SCAN_OVERLAP_BLOCKS = 5_000n;
 
 /**
  * Q6 token-delivery safety net (shared by the dedicated cron route AND the
@@ -48,9 +58,6 @@ export async function deliverPendingTokenSides(): Promise<DeliverResult> {
     const escrow = ADDRESSES.twitterEscrow as Address;
     if (!escrow || /^0x0*$/.test(escrow)) return { ran: false, reason: "escrow not configured" };
 
-    const pools = await getDeliverablePools();
-    if (pools.length === 0) return { ran: true, pools: 0, delivered: [] };
-
     const client = serverReadClient();
     let head: bigint;
     try {
@@ -58,11 +65,24 @@ export async function deliverPendingTokenSides(): Promise<DeliverResult> {
     } catch (e) {
         return { ran: false, reason: `getBlockNumber failed: ${e instanceof Error ? e.message : String(e)}` };
     }
-    const deployBlock = ARCADE_HOOK_DEPLOY_BLOCK > 0n ? ARCADE_HOOK_DEPLOY_BLOCK : 0n;
-    const maxBack = head > deployBlock ? head - deployBlock + 1n : head + 1n;
 
-    // One chunked scan of every Claimed event (Arc caps getLogs at ~10k blocks and
-    // ignores indexed-topic filters, so scanLogsChunked walks windows; we key in JS).
+    const pools = await getDeliverablePools();
+    if (pools.length === 0) return { ran: true, pools: 0, delivered: [] };
+
+    // Bounded, WATERMARKED scan (Q6 LOW-1): scan only blocks since the last run's
+    // watermark (minus a small overlap) so per-run cost stays constant instead of
+    // growing with chain age, and cap the FIRST run (empty watermark) so it can't
+    // blow the budget. Discovered recipients are PERSISTED, so a failed delivery is
+    // still retried from the DB indefinitely even after the watermark moves past it.
+    const deployBlock = ARCADE_HOOK_DEPLOY_BLOCK > 0n ? ARCADE_HOOK_DEPLOY_BLOCK : 0n;
+    const watermark = await getDeliverScannedBlock();
+    let fromBlock = watermark > deployBlock ? watermark : deployBlock;
+    fromBlock = fromBlock > deployBlock + SCAN_OVERLAP_BLOCKS ? fromBlock - SCAN_OVERLAP_BLOCKS : deployBlock;
+    let maxBack = head >= fromBlock ? head - fromBlock + 1n : head + 1n;
+    if (maxBack > MAX_BACK_BLOCKS) maxBack = MAX_BACK_BLOCKS;
+
+    // Chunked scan of Claimed events in the bounded window (Arc caps getLogs at ~10k
+    // blocks and ignores indexed-topic filters, so scanLogsChunked walks windows).
     let logs: unknown[];
     try {
         logs = (await scanLogsChunked(
@@ -102,21 +122,31 @@ export async function deliverPendingTokenSides(): Promise<DeliverResult> {
         claimedBy.set(key, entry);
     }
 
-    // Deliver each claimed slot's token side. forwardTokenSide is idempotent
-    // (already-delivered -> no-op), so re-runs and partial runs are safe.
+    // Advance the watermark now that this window is scanned. On a scan error we
+    // returned above, so it only moves after a completed scan.
+    await setDeliverScannedBlock(head).catch(() => {});
+
+    // Deliver each claimed slot's token side, driven by the DB's PERSISTED recipient
+    // (durable across runs) unioned with any recipient freshly seen in this scan (the
+    // latest, for a re-claim). forwardTokenSide is idempotent + per-pool locked.
     const delivered: DeliverResult["delivered"] = [];
-    for (const { poolId, token } of pools) {
+    for (const { poolId, token, slot0Recipient, slot1Recipient } of pools) {
         let positionId: bigint;
         try {
             positionId = BigInt(poolId);
         } catch {
             continue; // malformed pool_id
         }
-        const claims = claimedBy.get(positionId.toString());
-        if (!claims) continue; // nobody has claimed this pool yet -> nothing to deliver
+        const scanned = claimedBy.get(positionId.toString());
         for (const slot of [0, 1] as const) {
-            const recipient = claims[slot]?.recipient;
-            if (!recipient) continue;
+            const scannedRec = scanned?.[slot]?.recipient ?? null;
+            const persisted = (slot === 0 ? slot0Recipient : slot1Recipient) as Address | null;
+            const recipient = scannedRec ?? persisted;
+            if (!recipient) continue; // nobody has claimed this slot yet
+            // Persist a newly-discovered / rotated recipient for durable retry.
+            if (scannedRec && scannedRec.toLowerCase() !== (persisted ?? "").toLowerCase()) {
+                await recordClaimRecipient(poolId, slot, scannedRec).catch(() => {});
+            }
             try {
                 const r = await forwardTokenSide(poolId, slot, recipient, token as Address);
                 if (r.ok && r.forwarded) {

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { timingSafeEqual } from "crypto";
 import {
     createPublicClient,
     createWalletClient,
@@ -221,7 +222,17 @@ export async function POST(req: NextRequest) {
     ].filter((s): s is string => !!s);
     if (secrets.length === 0) return NextResponse.json({ error: "cron secret not configured" }, { status: 500 });
     const auth = req.headers.get("authorization");
-    if (!auth || !secrets.some((s) => auth === `Bearer ${s}`)) {
+    // Constant-time match (audit LOW-2): the length check gates timingSafeEqual
+    // (which throws on unequal lengths) and leaks nothing (fixed "Bearer " prefix +
+    // fixed-width secret), avoiding the byte-by-byte short-circuit of `===`.
+    const authed =
+        !!auth &&
+        secrets.some((s) => {
+            const expected = `Bearer ${s}`;
+            if (auth.length !== expected.length) return false;
+            return timingSafeEqual(Buffer.from(auth), Buffer.from(expected));
+        });
+    if (!authed) {
         return NextResponse.json({ error: "unauthorized" }, { status: 401 });
     }
 
