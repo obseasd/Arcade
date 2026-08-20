@@ -5,16 +5,10 @@ import { Address } from "viem";
 import {
   parseInlineMetadata,
   resolveIpfs,
+  ipfsGatewayUrls,
   type TokenMetadata,
 } from "@/lib/metadata";
 import { useTokenMetadataURI } from "./useTokenMetadataURI";
-
-const GATEWAYS = [
-  // Pinata public gateway (best for content pinned via pinata).
-  "https://gateway.pinata.cloud/ipfs/",
-  // ipfs.io fallback. Slower but resolves anything pinned by any provider.
-  "https://ipfs.io/ipfs/",
-];
 
 /** Fetch + parse a token's metadata JSON. The result is what
  *  `useTokenMetadata` / `useTokenImage` ultimately derive from. */
@@ -36,21 +30,20 @@ async function resolveMetadata(
     return { image: metadataURI } as TokenMetadata;
   }
 
-  // Path 2: ipfs://CID - race the gateways in ORDER (first ok wins). We
-  // don't Promise.all because we only need one success; firing both wastes
-  // bandwidth on the slower gateway.
+  // Path 2: ipfs://CID - try the gateways in ORDER (first ok wins). Uses the
+  // SAME env-first fallback list as the image bytes (NEXT_PUBLIC_IPFS_GATEWAY,
+  // then ipfs.io / dweb.link / pinata) so a fresh pin that the shared, heavily
+  // 429-rate-limited pinata gateway hasn't served yet still resolves via a
+  // public gateway instead of leaving the token image blank (image bug fix).
   if (!metadataURI.startsWith("ipfs://")) return null;
-  const cid = metadataURI.slice("ipfs://".length);
-  for (const gw of GATEWAYS) {
+  for (const url of ipfsGatewayUrls(metadataURI)) {
     if (signal.aborted) return null;
     try {
-      // FSEC-005: dropped `cache: "force-cache"` so a compromised Pinata
-      // edge / DNS poisoning event can't persist a malicious metadata JSON
-      // in the user's browser. React Query already dedupes in-flight
-      // requests by queryKey (= the metadataURI), so the same URI never
-      // double-fetches within a session; we sacrifice across-session cache
-      // for the security win.
-      const res = await fetch(`${gw}${cid}`, { signal });
+      // FSEC-005: no `cache: "force-cache"` so a compromised gateway / DNS
+      // poisoning event can't persist a malicious metadata JSON in the user's
+      // browser. React Query dedupes in-flight requests by queryKey (the
+      // metadataURI), so the same URI never double-fetches within a session.
+      const res = await fetch(url, { signal });
       if (!res.ok) continue;
       return (await res.json()) as TokenMetadata;
     } catch {

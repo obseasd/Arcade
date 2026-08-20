@@ -294,6 +294,11 @@ export function V4ClaimCard({
                     Verified as <span className="text-arc-text">@{payload.handle}</span>
                     {payload.slotIndex === 1 ? " · reply-to-launch share" : ""}
                 </div>
+                {!done && !(tokenOwed != null && tokenOwed > 0) && (
+                    <div className="mt-1 text-xs text-arc-text-faint">
+                        Your launch-token fees are harvested and delivered together with this claim.
+                    </div>
+                )}
 
                 {done ? (
                     <div className="mt-5 rounded-xl bg-arc-success/10 p-3 text-sm text-arc-success">

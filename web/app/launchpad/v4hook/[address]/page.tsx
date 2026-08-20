@@ -594,6 +594,10 @@ function FeesRecipientPanel({
     // not overstate the creator cut. (PUMP audit L1.)
     const creatorFeePortion = isCurvePhase ? 0.5 : 0.8;
     const creatorFeesUsd = feesUsd * creatorFeePortion * recipientShare;
+    // Fees already collected/distributed via harvest, the counterpart to the pending
+    // estimate. exactFeesUsd is the subgraph's DISTRIBUTED number (0 until a collect
+    // or claim), so this reflects what the creator side has effectively realized.
+    const claimedUsd = exactFeesUsd != null && exactFeesUsd > 0 ? exactFeesUsd * creatorFeePortion : 0;
     const recipientAddr = fo
         ? fo.creator2 !== zeroAddress && Number(fo.creator2Bps) >= 10_000
             ? fo.creator2
@@ -652,6 +656,11 @@ function FeesRecipientPanel({
                 args: [token],
             });
             if (publicClient) await publicClient.waitForTransactionReceipt({ hash });
+            // Optimistically flip "Not collected yet" -> "Last collected just now":
+            // collectFees emits FeeHarvested (not the escrow Claimed the subgraph
+            // indexes), so nothing else would update this for a wallet recipient.
+            setLastClaimSec(Math.floor(Date.now() / 1000));
+            setClaimChecked(true);
             pushToast({ kind: "info", title: "Fees collected", message: "Harvested to the creator recipient." });
         } catch (e) {
             const msg = e instanceof Error ? e.message : "Failed";
@@ -664,14 +673,21 @@ function FeesRecipientPanel({
     return (
         <div className="arc-card space-y-3 p-5">
             <div className="flex items-center justify-between text-sm">
-                <span className="text-arc-text-muted">Fees generated</span>
+                <span className="text-arc-text-muted">Pending fees</span>
                 <span className="tabular-nums font-medium">
                     ${(isReplySplit ? totalCreatorFeesUsd : creatorFeesUsd).toLocaleString(undefined, { maximumFractionDigits: 2 })}
                     {isEstimate && <span className="text-[10px] text-arc-text-faint"> (est.)</span>}
                 </span>
             </div>
             <div className="border-t border-arc-border pt-3">
-                <div className="text-xs text-arc-text-muted">Fees recipient</div>
+                <div className="flex items-center justify-between gap-2">
+                    <div className="text-xs text-arc-text-muted">Fees recipient</div>
+                    {claimedUsd > 0 && (
+                        <span className="shrink-0 tabular-nums text-[10px] text-arc-text-faint">
+                            ${claimedUsd.toLocaleString(undefined, { maximumFractionDigits: 2 })} already claimed
+                        </span>
+                    )}
+                </div>
                 {isTwitter ? (
                     <div className="mt-1 space-y-1">
                         <div className="flex items-center justify-between gap-2">

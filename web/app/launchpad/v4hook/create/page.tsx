@@ -620,13 +620,6 @@ function Inner() {
                                 )}
                             />
                         </label>
-                        <p className="text-xs text-arc-text-faint">
-                            The full supply is seeded single-sided at this valuation. Because 100%
-                            of the supply is live from the first block, this is also the FDV. The
-                            price only moves as people buy (${CLANKER_MIN_START_MCAP.toLocaleString()}{" "}
-                            to ${CLANKER_MAX_START_MCAP.toLocaleString()}, default $
-                            {CLANKER_DEFAULT_START_MCAP.toLocaleString()}).
-                        </p>
                     </div>
                 )}
 
@@ -717,10 +710,9 @@ function Inner() {
                                         className="mt-1 w-full rounded-lg border border-arc-border bg-arc-bg px-3 py-2 text-sm focus:border-arc-cta-hover focus:outline-none"
                                     />
                                     <p className="mt-1 text-xs text-arc-text-faint">
-                                        The USDC side of the creator fees is escrowed for the @ (claimable
-                                        once its verified owner connects a wallet); the launch-token side
-                                        goes to your connected wallet. To route <em>both</em> sides to the
-                                        @, launch by tweeting @ArcadeSwap instead. Useful when launching on
+                                        <em>Both</em> sides of the creator fees go to the @: the USDC is
+                                        escrowed and the launch-token side is delivered too, both claimable
+                                        once its verified owner connects a wallet. Handy for launching on
                                         behalf of someone who has not joined yet.
                                     </p>
                                 </label>
