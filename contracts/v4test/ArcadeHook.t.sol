@@ -177,13 +177,28 @@ contract ArcadeHookTest is Test {
         assertGe(spent, 3e6 + buyAmt - buyAmt / 100, "at most the full 1% fee rebated");
     }
 
-    function test_createLaunch_creatorBuy_revertsOnClanker() public {
-        usdc.mint(ALICE, 1_000e6);
+    /// CLANKER now supports the atomic dev-buy too: createLaunch seeds the
+    /// single-sided pool and, in the SAME tx, swaps creatorBuyUsdc through it,
+    /// delivering the launch token to the creator. (Full behaviour + both
+    /// currency orderings are covered in ArcadeHookSwap.t.sol.)
+    function test_createLaunch_creatorBuy_clankerDeliversTokensToCreator() public {
+        usdc.mint(ALICE, 10_000e6);
         vm.startPrank(ALICE);
         usdc.approve(address(hook), type(uint256).max);
-        vm.expectRevert(ArcadeHook.InvalidMode.selector);
-        hook.createLaunch("Demo", "DEMO", "ipfs://demo", 1, address(0), 0, 0, 0, 1, "", 0, 100e6);
+        uint256 usdcBefore = usdc.balanceOf(ALICE);
+        uint256 buyAmt = 1_000e6;
+        (address tokenAddr,) =
+            hook.createLaunch("Demo", "DEMO", "ipfs://demo", 1, address(0), 0, 0, 0, 1, "", 0, buyAmt);
         vm.stopPrank();
+
+        // The creator received the bought bag from the atomic dev-buy.
+        assertGt(TestERC20(tokenAddr).balanceOf(ALICE), 0, "creator got the dev-buy bag");
+        // Net spend = 3 USDC creation fee + the full buy (CLANKER's tier fee
+        // stays inside the pool as LP fee, no rebate to the creator).
+        uint256 spent = usdcBefore - usdc.balanceOf(ALICE);
+        assertEq(spent, 3e6 + buyAmt, "spent = creation fee + dev-buy");
+        // No USDC stranded in the hook: the exact-in swap consumed it all.
+        assertEq(usdc.balanceOf(address(hook)), 0, "no USDC stranded in the hook");
     }
 
     function test_createLaunch_revertsOnEmptyName() public {

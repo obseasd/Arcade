@@ -10,7 +10,8 @@ import {Currency} from "v4-core/types/Currency.sol";
 import {PoolId, PoolIdLibrary} from "v4-core/types/PoolId.sol";
 import {PoolKey} from "v4-core/types/PoolKey.sol";
 import {BalanceDelta} from "v4-core/types/BalanceDelta.sol";
-import {ModifyLiquidityParams} from "v4-core/types/PoolOperation.sol";
+import {ModifyLiquidityParams, SwapParams} from "v4-core/types/PoolOperation.sol";
+import {TickMath} from "v4-core/libraries/TickMath.sol";
 import {IHooks} from "v4-core/interfaces/IHooks.sol";
 
 import {ArcadeV4Curve} from "./ArcadeV4Curve.sol";
@@ -398,6 +399,41 @@ library ArcadeHookLib {
                 (usdcOut, tokenOut) = usdcIs0 ? (out0, out1) : (out1, out0);
             }
             return abi.encode(usdcOut, tokenOut);
+        }
+
+        // kind 4 = CLANKER atomic DEV BUY: swap the full `amount0` of USDC the
+        // hook is holding INTO the freshly-seeded single-sided pool and deliver
+        // the bought launch token to the CREATOR. Exact-INPUT for the whole
+        // creatorBuyUsdc (no minOut -- atomic against a fresh, deterministic-price
+        // pool, mirroring PUMP's creator buy). The exact-in swap consumes exactly
+        // `amount0` USDC (we settle precisely what the pool debits, so nothing is
+        // stranded in the hook). Runs SEQUENTIALLY after launchDirect's unlock has
+        // already returned -- this is a fresh top-level unlock, not nested.
+        if (kind == 4) {
+            PoolId dpid = key.toId();
+            bool usdcIs0 = Currency.unwrap(key.currency0) == Currency.unwrap(usdc);
+            bool zeroForOne = usdcIs0; // USDC -> token
+            BalanceDelta sd = pm.swap(
+                key,
+                SwapParams({
+                    zeroForOne: zeroForOne,
+                    amountSpecified: -int256(amount0),
+                    sqrtPriceLimitX96: zeroForOne ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
+                }),
+                ""
+            );
+            // Delta is from the swap's perspective: negative on the side we owe
+            // (USDC in), positive on the side we're owed (token out).
+            (Currency inputCurrency, Currency outputCurrency, int128 inDelta, int128 outDelta) = zeroForOne
+                ? (key.currency0, key.currency1, sd.amount0(), sd.amount1())
+                : (key.currency1, key.currency0, sd.amount1(), sd.amount0());
+            // Settle exactly what the pool debited (== amount0 for a fresh pool,
+            // so no residual USDC lingers in the hook).
+            if (inDelta < 0) _settleSide(pm, inputCurrency, uint256(uint128(-inDelta)));
+            // Deliver the bought token to the launch creator (set at createLaunch).
+            uint256 outAmount = outDelta > 0 ? uint256(uint128(outDelta)) : 0;
+            pm.take(outputCurrency, curveStates[dpid].creator, outAmount);
+            return "";
         }
 
         int24 tickLower;

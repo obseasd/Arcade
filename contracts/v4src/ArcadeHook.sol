@@ -298,6 +298,17 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         uint192 bought;
     }
     mapping(address => BlockBuy) internal clankerBlockBuy;
+
+    /// @dev Transient flag set ONLY for the duration of a CLANKER atomic dev-buy
+    ///      (the creator's frontrun-proof first buy, executed inline in
+    ///      createLaunch through the kind-4 unlock). While true, the dev-buy's
+    ///      afterSwap is exempt from `_enforceClankerBuyCap` -- the buy is
+    ///      provably un-frontrunnable (nobody else can touch the pool before
+    ///      createLaunch returns), exactly like PUMP's creator buy. It is set
+    ///      just before the unlock and cleared immediately after; any revert
+    ///      unwinds the whole (nonReentrant) tx, so it can never leak `true`
+    ///      into an unrelated swap. Third-party block-0 buys stay capped.
+    bool internal _creatorBuying;
     /// @notice Launch token => PoolId so `currentSnipeBps` callers (the hook
     ///         itself + indexers) can look up the curve state from a token addr.
     mapping(address => PoolId) public poolIdOf;
@@ -569,10 +580,12 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
         if (mode == uint8(LaunchMode.PUMP) && (creator2 != address(0) || creator2Bps > 0)) {
             revert InvalidFeeOwner();
         }
-        // The atomic creator-buy is a PUMP-curve feature (CLANKER has no curve;
-        // its launcher buys on the router post-seed). Reject it on CLANKER rather
-        // than silently ignore USDC the caller approved. (Creator-buy 2026-07-22.)
-        if (mode != uint8(LaunchMode.PUMP) && creatorBuyUsdc > 0) revert InvalidMode();
+        // The atomic creator-buy ("dev buy") is supported on BOTH modes. On PUMP
+        // it runs on the bonding curve; on CLANKER it swaps through the freshly-
+        // seeded single-sided pool (see the CLANKER seed block below). Any mode
+        // other than PUMP/CLANKER already reverted InvalidMode at the top of this
+        // function (`mode >= CLANKER_V3`), so no extra guard is needed here.
+        // (Creator-buy 2026-07-22; CLANKER dev-buy 2026-08-20.)
 
         // CLANKER creators pick a fixed fee tier (1/2/3 = 1%/2%/3%) and a
         // starting market cap for the single-sided seed. PUMP ignores both and
@@ -690,6 +703,25 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
             // Seed the graveyard clock: the single-sided LP exists from now, so
             // an untraded CLANKER pool can only be swept graveyardPeriod later.
             lastTradeAt[poolId] = uint40(block.timestamp);
+
+            // CLANKER optional atomic DEV BUY: swap creatorBuyUsdc USDC -> the
+            // launch token through the pool we just seeded, in the SAME tx as
+            // the launch, delivering the token to the creator (msg.sender).
+            // Because it runs inline here -- after launchDirect's unlock has
+            // RETURNED (a SEQUENTIAL unlock, never nested) and before createLaunch
+            // returns -- the creator is provably the first buyer and no bot can
+            // wedge ahead of it. The hook must HOLD the USDC to settle the swap
+            // input, so pull it in first. minOut = 0 is safe: the buy is atomic
+            // against a fresh, deterministic-price pool (matches PUMP's argument).
+            // The dev-buy is exempt from the first-window anti-snipe cap
+            // (_creatorBuying gate in _enforceClankerBuyCap); third-party block-0
+            // buys stay capped.
+            if (creatorBuyUsdc > 0) {
+                IERC20(Currency.unwrap(USDC)).safeTransferFrom(msg.sender, address(this), creatorBuyUsdc);
+                _creatorBuying = true;
+                POOL_MANAGER.unlock(abi.encode(uint8(4), tokenAddr, creatorBuyUsdc, uint256(0), int24(0)));
+                _creatorBuying = false;
+            }
         }
 
         // PUMP optional CREATOR BUY: an atomic first purchase in the SAME tx as
@@ -1467,6 +1499,12 @@ contract ArcadeHook is IHooks, IUnlockCallback, Ownable2Step, Pausable, Reentran
     ///      can't carry a take-based tax, so this revert is its only block-0
     ///      snipe defense. Sells and post-window buys pass through.
     function _enforceClankerBuyCap(PoolKey calldata key, SwapParams calldata params, BalanceDelta delta) internal {
+        // The creator's atomic dev-buy at launch is provably un-frontrunnable
+        // (it runs inline in createLaunch before any other account can trade),
+        // so it is exempt from the first-window cap -- mirroring PUMP's creator
+        // buy, which also bypasses anti-snipe. Third-party block-0 buys are NOT
+        // exempt: _creatorBuying is only ever true during the kind-4 dev-buy.
+        if (_creatorBuying) return;
         uint16 capBps = clankerMaxBuyBps;
         if (capBps == 0) return;
         if (!_isUsdcToTokenSwap(key, params, USDC)) return; // buys only

@@ -953,6 +953,106 @@ contract ArcadeHookSwapTest is Test {
         _sellViaV4(key, token, ALICE, bal); // sells are never capped -> ok
     }
 
+    // -------------------------------------------------------------------
+    // CLANKER atomic DEV BUY: the creator's frontrun-proof first buy,
+    // executed inline in createLaunch by swapping creatorBuyUsdc through the
+    // freshly-seeded single-sided pool and delivering the token to the creator.
+    // Inherited by the currency0 subclass -> exercised in BOTH orderings.
+    // -------------------------------------------------------------------
+
+    /// @dev CLANKER launch (tier 1) that ALSO performs an atomic dev-buy of
+    ///      `buyUsdc`. Launched as CREATOR, so the bought bag lands on CREATOR.
+    function _launchClankerDevBuy(uint256 buyUsdc) internal returns (address tokenAddr, PoolKey memory key) {
+        vm.prank(CREATOR);
+        (tokenAddr,) = hook.createLaunch("ClkDev", "CLKD", "ipfs://demo", 1, address(0), 0, 0, 0, 1, "", 0, buyUsdc);
+        key = _buildKey(tokenAddr);
+    }
+
+    function test_clankerDevBuy_deliversTokensToCreator() public {
+        uint256 creatorUsdcBefore = usdc.balanceOf(CREATOR);
+        (address token,) = _launchClankerDevBuy(1_000e6);
+        // The creator (launcher) received the bought bag from the atomic dev-buy.
+        assertGt(IERC20(token).balanceOf(CREATOR), 0, "creator received the dev-buy bag");
+        // Net spend = 3 USDC creation fee + the full buy input. CLANKER's tier
+        // fee stays in the pool as an LP fee (no rebate), so spend is exact.
+        assertEq(creatorUsdcBefore - usdc.balanceOf(CREATOR), 3e6 + 1_000e6, "spent = creation fee + dev-buy");
+    }
+
+    function test_clankerDevBuy_noUsdcStrandedInHook() public {
+        _launchClankerDevBuy(2_500e6);
+        // The exact-input swap consumes the ENTIRE creatorBuyUsdc the hook held,
+        // so nothing is left stranded in the hook.
+        assertEq(usdc.balanceOf(address(hook)), 0, "exact-in consumed all dev-buy USDC");
+    }
+
+    function test_clankerDevBuy_biggerInputBuysMoreTokens() public {
+        (address tokenA,) = _launchClankerDevBuy(500e6);
+        uint256 bagA = IERC20(tokenA).balanceOf(CREATOR);
+        (address tokenB,) = _launchClankerDevBuy(2_000e6);
+        uint256 bagB = IERC20(tokenB).balanceOf(CREATOR);
+        assertGt(bagA, 0, "small dev-buy delivered");
+        assertGt(bagB, bagA, "larger dev-buy input -> larger token bag");
+    }
+
+    /// The dev-buy is EXEMPT from the first-window anti-snipe cap: a buy large
+    /// enough to blow through the cap succeeds AND delivers more than the cap's
+    /// worth of tokens (proving it bypassed the cap rather than being clamped).
+    function test_clankerDevBuy_exemptFromBuyCap() public {
+        vm.prank(OWNER);
+        hook.setClankerBuyCap(100, 300); // 1% of supply, 5 min window
+        (address token,) = _launchClankerDevBuy(10_000e6);
+        uint256 capTokens = (ArcadeV4Curve.TOTAL_SUPPLY * 100) / 10_000; // 1%
+        assertGt(IERC20(token).balanceOf(CREATOR), capTokens, "dev-buy delivered MORE than the 1% cap");
+    }
+
+    /// The exemption is dev-buy ONLY: with the SAME cap live, a third party's
+    /// large buy in the first window still reverts BuyExceedsCap.
+    function test_clankerDevBuy_thirdPartyStillCappedInWindow() public {
+        vm.prank(OWNER);
+        hook.setClankerBuyCap(100, 300); // 1%, 5 min
+        // Launch WITH a modest dev-buy (exempt), then a third party tries a huge
+        // buy in the same window -> capped.
+        (, PoolKey memory key) = _launchClankerDevBuy(100e6);
+
+        vm.startPrank(ALICE);
+        usdc.approve(address(swapRouter), type(uint256).max);
+        bool zeroForOne = Currency.unwrap(key.currency0) == address(usdc);
+        uint160 priceLimit = zeroForOne ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1;
+        vm.expectRevert();
+        swapRouter.swap(
+            key,
+            SwapParams({zeroForOne: zeroForOne, amountSpecified: -int256(uint256(8_000e6)), sqrtPriceLimitX96: priceLimit}),
+            PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}),
+            ""
+        );
+        vm.stopPrank();
+    }
+
+    /// The dev-buy is a SWAP against the locked seed; it never touches the
+    /// hook-owned position. The pool stays fully tradeable afterwards.
+    function test_clankerDevBuy_poolStillTradeableAfterDevBuy() public {
+        (address token, PoolKey memory key) = _launchClankerDevBuy(1_000e6);
+        _buyViaV4(key, ALICE, 100e6);
+        assertGt(IERC20(token).balanceOf(ALICE), 0, "third party can still trade the intact pool");
+    }
+
+    /// The dev-buy's afterSwap stamps the graveyard clock at the launch block
+    /// (same value the seed already wrote -- no double-count issue).
+    function test_clankerDevBuy_stampsLastTradeAt() public {
+        (, PoolKey memory key) = _launchClankerDevBuy(1_000e6);
+        assertEq(uint256(hook.lastTradeAt(key.toId())), block.timestamp, "dev-buy stamped lastTradeAt");
+    }
+
+    /// A CLANKER launch with creatorBuyUsdc == 0 is unchanged: nothing pulled
+    /// beyond the creation fee, the creator holds no tokens.
+    function test_clankerDevBuy_zeroInputUnchanged() public {
+        uint256 creatorUsdcBefore = usdc.balanceOf(CREATOR);
+        (address token,) = _launchClanker(); // creatorBuyUsdc = 0
+        assertEq(IERC20(token).balanceOf(CREATOR), 0, "no dev-buy -> creator holds nothing");
+        assertEq(creatorUsdcBefore - usdc.balanceOf(CREATOR), 3e6, "only the creation fee pulled");
+        assertEq(usdc.balanceOf(address(hook)), 0, "no USDC in the hook");
+    }
+
     function test_clankerFee_tier1_is1pct() public {
         (address token,) = _graduateClankerTier(1);
         assertEq(hook.currentFeeBps(token), 100, "tier 1 = 1%");
