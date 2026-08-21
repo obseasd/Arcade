@@ -25,6 +25,7 @@ import {
   FeeHarvested,
 } from "../generated/ArcadeHookV4/ArcadeHook";
 import { Credited, Claimed } from "../generated/TwitterEscrowV4/ArcadeTwitterEscrowV4";
+import { Forwarded } from "../generated/TokenFeeForwarder/TokenFeeForwarder";
 import { Swap as V4Swap } from "../generated/PoolManagerV4/PoolManagerV4";
 import {
   Trade,
@@ -50,6 +51,7 @@ import {
   V4TreasuryFee,
   Comment,
   Harvest,
+  TokenForward,
 } from "../generated/schema";
 import { Memo } from "../generated/MemoContract/MemoAbi";
 
@@ -1472,4 +1474,24 @@ export function handleEscrowClaimed(event: Claimed): void {
   s.balance = BigDecimal.fromString("0");
   s.lastUpdate = event.block.timestamp.toI32();
   s.save();
+}
+
+// The TOKEN leg of a CLANKER claim, delivered by the TokenFeeForwarder in its
+// own tx. Stores the amount RAW (launch-token decimals) -- NEVER via usdcVolume
+// (÷1e6 would corrupt an 18-dp token by 1e12). The frontend joins it to the
+// escrow Claim by claimTxHash / (positionId, slotIndex) and formats by decimals.
+export function handleTokenForwarded(event: Forwarded): void {
+  const f = new TokenForward(
+    event.transaction.hash.toHexString() + "-" + event.logIndex.toString(),
+  );
+  f.token = event.params.token;
+  f.recipient = event.params.recipient;
+  f.amountRaw = event.params.amount;
+  f.positionId = event.params.positionId;
+  f.slotIndex = event.params.slotIndex;
+  f.claimTxHash = event.params.claimTxHash;
+  f.blockTime = event.block.timestamp.toI32();
+  f.blockNumber = event.block.number;
+  f.txHash = event.transaction.hash;
+  f.save();
 }

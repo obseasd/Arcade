@@ -155,6 +155,12 @@ export async function POST(req: NextRequest) {
         /* non-fatal: forwardTokenSide degrades to "unknown pool" if the row is absent */
     }
 
-    const result = await forwardTokenSide(poolIdHex, slotIndex, recipient as Address, token as Address);
+    const result = await forwardTokenSide(
+        poolIdHex,
+        slotIndex,
+        recipient as Address,
+        token as Address,
+        claimTxHash as Hex,
+    );
     return NextResponse.json({ ok: true, result });
 }

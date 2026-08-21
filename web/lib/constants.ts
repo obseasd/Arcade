@@ -74,6 +74,13 @@ export const ADDRESSES = {
   seedEth: safeAddress(process.env.NEXT_PUBLIC_SEED_ETH_ADDRESS ?? DEPLOYMENTS.seedETH),
   /** ArcadeTwitterEscrow: holds Clanker LP fees attributed to a Twitter @handle. */
   twitterEscrow: safeAddress(process.env.NEXT_PUBLIC_TWITTER_ESCROW_ADDRESS ?? DEPLOYMENTS.twitterEscrow),
+  /** TokenFeeForwarder: relays the CLANKER token-leg fees and emits an indexed
+   *  Forwarded event the subgraph joins to the escrow's USDC-side Claim, so the
+   *  launchpad activity shows both legs. Zero/unset => backend falls back to a
+   *  bare ERC-20 transfer (no on-chain marker), the legacy behaviour. */
+  tokenFeeForwarder: safeAddress(
+    process.env.NEXT_PUBLIC_TOKEN_FEE_FORWARDER_ADDRESS ?? (DEPLOYMENTS as { tokenFeeForwarder?: string }).tokenFeeForwarder,
+  ),
   /** ArcadeAutoCompounder: V3 LP custody vault that auto-collects fees and
    *  either pushes them to the depositor wallet (RECEIVE mode) or
    *  re-deposits them into the position (COMPOUND mode). Deployed; carries the

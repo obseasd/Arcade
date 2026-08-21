@@ -1,4 +1,4 @@
-import { createWalletClient, http, erc20Abi, keccak256, encodePacked, type Address, type Hex } from "viem";
+import { createWalletClient, http, erc20Abi, keccak256, encodePacked, maxUint256, type Address, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 
 import { ARC_CHAIN, serverPublicClient, serverReadClient } from "@/lib/serverRpc";
@@ -16,6 +16,27 @@ const TOKEN_FORWARDER_ABI = [
     { type: "function", name: "tokenForwarder", stateMutability: "view", inputs: [], outputs: [{ type: "address" }] },
 ] as const;
 const ZERO_ADDR = "0x0000000000000000000000000000000000000000";
+
+// TokenFeeForwarder.forward(token, recipient, amount, positionId, slotIndex, claimTxHash).
+// Pulls the token from the caller (the forwarder wallet) and emits Forwarded so
+// the subgraph can join the token leg to the escrow's USDC-side Claim.
+const TOKEN_FEE_FORWARDER_ABI = [
+    {
+        type: "function",
+        name: "forward",
+        stateMutability: "nonpayable",
+        inputs: [
+            { name: "token", type: "address" },
+            { name: "recipient", type: "address" },
+            { name: "amount", type: "uint256" },
+            { name: "positionId", type: "uint256" },
+            { name: "slotIndex", type: "uint256" },
+            { name: "claimTxHash", type: "bytes32" },
+        ],
+        outputs: [],
+    },
+] as const;
+const ZERO_BYTES32 = ("0x" + "0".repeat(64)) as Hex;
 
 /**
  * Guard the cross-domain invariant: when the hook's on-chain tokenForwarder is
@@ -338,6 +359,7 @@ export async function forwardTokenSide(
     slotIndex: 0 | 1,
     recipient: Address,
     launchToken: Address,
+    claimTxHash?: Hex,
 ): Promise<ForwardResult> {
     // Refuse to forward into a mis-split state if the on-chain tokenForwarder
     // disagrees with our key (rollout window). Checked BEFORE the lock so the
@@ -356,7 +378,7 @@ export async function forwardTokenSide(
         return { ok: true, forwarded: false, reason: "locked (concurrent forward)" };
     }
     try {
-        return await forwardTokenSideInner(poolIdHex, slotIndex, recipient, launchToken);
+        return await forwardTokenSideInner(poolIdHex, slotIndex, recipient, launchToken, claimTxHash);
     } finally {
         await releaseForwardLock(poolIdHex);
     }
@@ -367,6 +389,7 @@ async function forwardTokenSideInner(
     slotIndex: 0 | 1,
     recipient: Address,
     launchToken: Address,
+    claimTxHash?: Hex,
 ): Promise<ForwardResult> {
     // forwarderMismatch is checked by the caller (forwardTokenSide) before the lock.
     const fwdKey = forwarderKey();
@@ -392,15 +415,61 @@ async function forwardTokenSideInner(
     const client = serverPublicClient();
     const account = privateKeyToAccount(fwdKey);
     const walletClient = createWalletClient({ account, chain: ARC_CHAIN, transport: http() });
+
+    // Prefer routing through the TokenFeeForwarder: it delivers the SAME token to
+    // the SAME recipient but also emits an indexed Forwarded event the subgraph
+    // joins to the escrow Claim (so the activity feed shows both legs). If the
+    // forwarder isn't configured (zero address) fall back to a bare ERC-20
+    // transfer -- the legacy path, no on-chain marker. Either way the amount and
+    // recipient are identical, so the Q5 receipt-confirm recovery below is unchanged.
+    const forwarder = ADDRESSES.tokenFeeForwarder;
+    const useForwarder = !!forwarder && forwarder !== ZERO_ADDR;
     let tx: Hex | undefined;
     try {
-        tx = await walletClient.writeContract({
-            address: launchToken,
-            abi: erc20Abi,
-            functionName: "transfer",
-            args: [recipient, owed],
-        });
-        await client.waitForTransactionReceipt({ hash: tx });
+        if (useForwarder) {
+            // The forwarder pulls via transferFrom, so the wallet must have approved
+            // it for this token. Approve once per token (max) when short.
+            const allowance = (await client.readContract({
+                address: launchToken,
+                abi: erc20Abi,
+                functionName: "allowance",
+                args: [account.address, forwarder as Address],
+            })) as bigint;
+            if (allowance < owed) {
+                const approveTx = await walletClient.writeContract({
+                    address: launchToken,
+                    abi: erc20Abi,
+                    functionName: "approve",
+                    args: [forwarder as Address, maxUint256],
+                });
+                await client.waitForTransactionReceipt({ hash: approveTx });
+            }
+            tx = await walletClient.writeContract({
+                address: forwarder as Address,
+                abi: TOKEN_FEE_FORWARDER_ABI,
+                functionName: "forward",
+                args: [launchToken, recipient, owed, BigInt(poolIdHex), BigInt(slotIndex), claimTxHash ?? ZERO_BYTES32],
+            });
+        } else {
+            tx = await walletClient.writeContract({
+                address: launchToken,
+                abi: erc20Abi,
+                functionName: "transfer",
+                args: [recipient, owed],
+            });
+        }
+        const rcpt = await client.waitForTransactionReceipt({ hash: tx });
+        // waitForTransactionReceipt RESOLVES (does not throw) for a tx that mined
+        // REVERTED. A forward that passes gas estimation but reverts on execution
+        // (e.g. the forwarder key not yet on allowedCaller during a rollout, or a
+        // state race) would otherwise fall through as "delivered" with the cursor
+        // advanced but NO tokens sent -> a permanent under-pay. Treat a reverted
+        // receipt like the Q5 "reverted" branch: roll the cursor back so a retry
+        // re-attempts (audit LOW-1).
+        if (rcpt.status !== "success") {
+            await advanceTokenFwdIf(poolIdHex, slotIndex, (already + owed).toString(), already.toString()).catch(() => {});
+            return { ok: false, error: `forward reverted on-chain: ${tx}` };
+        }
     } catch (e) {
         // waitForTransactionReceipt can TIME OUT on Arc even when the transfer
         // actually mined (documented Arc RPC condition). Rolling the cursor back

@@ -284,7 +284,14 @@ function ClaimRow({
       <span className="text-right text-arc-cta-hover">
         ${claim.amountUsdc.toLocaleString(undefined, { maximumFractionDigits: 2 })}
       </span>
-      <span className="text-right text-arc-text-faint">fees</span>
+      <span
+        className="text-right text-arc-text-faint"
+        title={claim.amountToken != null ? `${claim.amountToken.toLocaleString()} tokens` : undefined}
+      >
+        {claim.amountToken != null
+          ? `+${claim.amountToken.toLocaleString(undefined, { notation: "compact", maximumFractionDigits: 1 })}`
+          : "fees"}
+      </span>
       <span className="text-right text-[10px] text-arc-text-faint">{fmtAgo(seconds)}</span>
       <a
         href={`${explorerUrl}/tx/${claim.txHash}`}

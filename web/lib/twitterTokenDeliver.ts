@@ -1,4 +1,4 @@
-import { parseAbiItem, type Address } from "viem";
+import { parseAbiItem, type Address, type Hex } from "viem";
 
 import { ADDRESSES, ARCADE_HOOK_DEPLOY_BLOCK } from "@/lib/constants";
 import { serverReadClient } from "@/lib/serverRpc";
@@ -99,13 +99,14 @@ export async function deliverPendingTokenSides(): Promise<DeliverResult> {
     // slot REOPENS after each claim, so a handle owner can re-verify and claim from a
     // new wallet; we must deliver the token side to the MOST RECENT claim (highest
     // block, then logIndex), not whatever the scan happened to visit last (audit M-2).
-    type Winner = { recipient: Address; block: bigint; logIndex: number };
+    type Winner = { recipient: Address; block: bigint; logIndex: number; txHash?: Hex };
     const claimedBy = new Map<string, { 0?: Winner; 1?: Winner }>();
     for (const log of logs) {
         const l = log as {
             args?: { positionId?: bigint; slotIndex?: bigint; recipient?: string };
             blockNumber?: bigint;
             logIndex?: number;
+            transactionHash?: string;
         };
         const a = l.args;
         if (!a || a.positionId === undefined || a.slotIndex === undefined || !a.recipient) continue;
@@ -117,7 +118,12 @@ export async function deliverPendingTokenSides(): Promise<DeliverResult> {
         const entry = claimedBy.get(key) ?? {};
         const cur = entry[slot as 0 | 1];
         if (!cur || block > cur.block || (block === cur.block && logIndex > cur.logIndex)) {
-            entry[slot as 0 | 1] = { recipient: a.recipient as Address, block, logIndex };
+            // Carry the claim's tx hash so the token-leg Forwarded event can join to
+            // the escrow Claim in the activity feed (audit LOW-2). When we later fall
+            // back to a DB-persisted recipient (claim outside this scan window) the
+            // hash is unavailable and the leg emits ZERO_BYTES32 (still truthful, just
+            // won't display the +amount until a re-scan covers the claim).
+            entry[slot as 0 | 1] = { recipient: a.recipient as Address, block, logIndex, txHash: l.transactionHash as Hex | undefined };
         }
         claimedBy.set(key, entry);
     }
@@ -147,8 +153,11 @@ export async function deliverPendingTokenSides(): Promise<DeliverResult> {
             if (scannedRec && scannedRec.toLowerCase() !== (persisted ?? "").toLowerCase()) {
                 await recordClaimRecipient(poolId, slot, scannedRec).catch(() => {});
             }
+            // Pass the claim tx hash only when THIS scan is the recipient source (so it
+            // matches the recipient we deliver to); a DB-persisted fallback has no hash.
+            const claimTxHash = scannedRec ? scanned?.[slot]?.txHash : undefined;
             try {
-                const r = await forwardTokenSide(poolId, slot, recipient, token as Address);
+                const r = await forwardTokenSide(poolId, slot, recipient, token as Address, claimTxHash);
                 if (r.ok && r.forwarded) {
                     delivered.push({ pool: poolId, slot, recipient, amountRaw: r.amountRaw });
                 } else if (!r.ok) {

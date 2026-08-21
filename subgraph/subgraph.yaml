@@ -167,6 +167,29 @@ dataSources:
         - event: Claimed(indexed uint256,indexed uint256,indexed address,address,uint256)
           handler: handleEscrowClaimed
       file: ./src/mappings.ts
+  # TokenFeeForwarder: the TOKEN leg of a CLANKER claim, emitting Forwarded with
+  # the (positionId, slotIndex, claimTxHash) join metadata so the activity feed
+  # can show both legs (USDC via the escrow Claim + token via this).
+  - kind: ethereum
+    name: TokenFeeForwarder
+    network: arc-testnet
+    source:
+      address: "0xE144c4D952b7D6152d4B167e98E54d43b0c9987E"
+      abi: TokenFeeForwarder
+      startBlock: 58109340
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.9
+      language: wasm/assemblyscript
+      entities:
+        - TokenForward
+      abis:
+        - name: TokenFeeForwarder
+          file: ./abis/TokenFeeForwarder.json
+      eventHandlers:
+        - event: Forwarded(indexed address,indexed address,uint256,indexed uint256,uint256,bytes32)
+          handler: handleTokenForwarded
+      file: ./src/mappings.ts
   # V3 locker: LP fees collected from locked CLANKER_V3 positions. FeesCollected
   # gives the paired (USDC) side directly -> the "V3 LP fees" /admin/fees category.
   - kind: ethereum

@@ -276,6 +276,27 @@ type Claim @entity(immutable: true) {
   txHash: Bytes!
 }
 
+# The TOKEN leg of a CLANKER claim, delivered by the TokenFeeForwarder in a
+# SEPARATE tx from the escrow's USDC-side Claim and carrying the join metadata
+# so the activity feed can show both legs. amountRaw is the RAW token amount
+# (the launch token's own decimals, typically 18) -- format by decimals, never
+# by the USDC 1e6 convention. Joins to a Claim by claimTxHash (== Claim.txHash),
+# and/or by (positionId, slotIndex). Immutable.
+type TokenForward @entity(immutable: true) {
+  # txHash-logIndex of the Forwarded event.
+  id: ID!
+  token: Bytes!
+  recipient: Bytes!
+  amountRaw: BigInt!
+  positionId: BigInt!
+  slotIndex: BigInt!
+  # The escrow USDC-side claim tx this token leg pairs with.
+  claimTxHash: Bytes!
+  blockTime: Int!
+  blockNumber: BigInt!
+  txHash: Bytes!
+}
+
 # Last collectFees (harvest) time per pool, keyed by poolId (the FeeHarvested
 # event's positionKey IS PoolId.unwrap(poolId)). Lets the token page show a
 # durable "Last collected N ago" for a WALLET-recipient CLANKER pool, which emits
