@@ -45,6 +45,8 @@
     "twitterEscrowOwner": "0x3a0Dd90212838f32a953Acd4B32596b62859324A",
     "tokenFeeForwarder": "0xE144c4D952b7D6152d4B167e98E54d43b0c9987E",
     "tokenFeeForwarderDeployBlock": 58109340,
+    "swapFeeRouter": "0xd23eB46297A77aa87Cc8e5962d0881EA2c44e28d",
+    "swapFeeRouterDeployBlock": 58151616,
     "treasuryMultisig": "0x0bDE09e3Bfc9b2Ee7b94e56A6A06e0a14706195D"
   },
   "notes": {

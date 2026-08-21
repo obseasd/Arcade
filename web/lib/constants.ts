@@ -81,6 +81,15 @@ export const ADDRESSES = {
   tokenFeeForwarder: safeAddress(
     process.env.NEXT_PUBLIC_TOKEN_FEE_FORWARDER_ADDRESS ?? (DEPLOYMENTS as { tokenFeeForwarder?: string }).tokenFeeForwarder,
   ),
+  /** ArcadeSwapFeeRouter: the fee-taking hop for EXTERNAL launchpad/memecoin
+   *  swaps (radardex, sharc, canonical Uniswap on Arc). When set, the swap UI
+   *  routes an EXTERNAL-token swap through this contract (0.5% input-side fee to
+   *  the treasury) instead of straight to the venue router; base-asset and
+   *  Arcade-own-token swaps route directly and are never fee'd here. Zero/unset
+   *  => no router fee (legacy direct routing). */
+  swapFeeRouter: safeAddress(
+    process.env.NEXT_PUBLIC_SWAP_FEE_ROUTER_ADDRESS ?? (DEPLOYMENTS as { swapFeeRouter?: string }).swapFeeRouter,
+  ),
   /** ArcadeAutoCompounder: V3 LP custody vault that auto-collects fees and
    *  either pushes them to the depositor wallet (RECEIVE mode) or
    *  re-deposits them into the position (COMPOUND mode). Deployed; carries the
