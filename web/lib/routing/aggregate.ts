@@ -1,4 +1,5 @@
 import { RouteProvider, RouteQuote, QuoteRequest } from "./types";
+import { isTaxableExternalSwap, wrapWithFeeRouter } from "./feePolicy";
 import { synthraV3Provider } from "./synthraV3";
 import { arcadeV4Provider } from "./arcadeV4";
 import { arcadeV3Provider } from "./arcadeV3";
@@ -74,5 +75,15 @@ export async function quoteAllRoutes(
     const results = await Promise.all(
         PROVIDERS.map((p) => p.quote(req, publicClient).catch(() => null)),
     );
-    return sortQuotes(results.filter((r): r is RouteQuote => r !== null));
+    const quotes = results.filter((r): r is RouteQuote => r !== null);
+    // Router-level fee on EXTERNAL launchpad/memecoin swaps: reroute a taxable
+    // external-venue quote through the ArcadeSwapFeeRouter (0.5% input-side to
+    // the treasury). amountOut becomes net-of-fee, so ranking compares what the
+    // trader actually receives. Non-taxable (base<->base, Arcade venues) or
+    // non-wrappable (multi-hop) quotes pass through unchanged. Gated on
+    // ADDRESSES.swapFeeRouter being live -> a no-op until it is set.
+    const priced = quotes.map((q) =>
+        isTaxableExternalSwap(q, req.tokenIn, req.tokenOut) ? (wrapWithFeeRouter(q, req) ?? q) : q,
+    );
+    return sortQuotes(priced);
 }
