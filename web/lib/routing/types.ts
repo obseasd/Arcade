@@ -177,7 +177,7 @@ export const PROVIDER_META: Record<ProviderId, ProviderMeta> = {
   "arclight-v2": {
     id: "arclight-v2",
     label: "Arclight",
-    longLabel: "Arclight launchpad DEX (external Arc token, +0.5% fee)",
+    longLabel: "Arclight launchpad DEX (external Arc token)",
     accent: "text-orange-400",
   },
 };

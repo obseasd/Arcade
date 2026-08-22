@@ -178,8 +178,10 @@ export function wrapWithFeeRouter(quote: RouteQuote, req: QuoteRequest): RouteQu
     return {
         ...quote,
         // Show the net-of-fee output so the displayed number matches delivery.
+        // The fee is baked into amountOut; it is NOT surfaced as a label on
+        // these external venues (product decision -- the quote is the price).
         amountOut: amountOutNet,
-        pathLabel: (quote.pathLabel ?? "") + " · 0.5% fee",
+        pathLabel: quote.pathLabel,
         approval: { token: req.tokenIn, spender: feeRouter, amount: amountIn },
         executor: {
             router: feeRouter,
