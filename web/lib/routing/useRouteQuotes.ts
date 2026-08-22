@@ -33,6 +33,13 @@ const TRUSTED_SPENDERS: ReadonlySet<string> = new Set(
         ADDRESSES.unitflowRouter,
         ADDRESSES.unitflowUniversalRouter,
         ADDRESSES.xyloRouter,
+        // Arclight external launchpad DEX router + the ArcadeSwapFeeRouter that
+        // wraps its swaps. Without these BOTH, every arclight route (wrapped or
+        // not) fails the spender allowlist and is silently dropped (audit HIGH,
+        // fail-closed). Filtered by the !== zero guard below, so they're inert
+        // until their addresses are set.
+        ADDRESSES.arclightDexRouter,
+        ADDRESSES.swapFeeRouter,
         USYC_TELLER_ADDRESS,
         PERMIT2_ADDRESS,
     ]
