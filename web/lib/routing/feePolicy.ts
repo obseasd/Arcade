@@ -1,6 +1,7 @@
 import { Address, encodeFunctionData, Hex } from "viem";
 import { ADDRESSES } from "@/lib/constants";
 import { ProviderId, RouteQuote, QuoteRequest } from "./types";
+import { ARCLIGHT_ROUTER_ABI } from "./arclight";
 
 /**
  * Router-level swap fee policy for EXTERNAL launchpad/memecoin tokens.
@@ -34,40 +35,43 @@ function baseAssetSet(): Set<string> {
     );
 }
 
+type VenueKind = "v3" | "arclight-v2";
+
 /**
- * External LAUNCHPAD venues we reroute through the FeeRouter, mapped to the
- * CLASSIC Uniswap-V3 SwapRouter02 the FeeRouter forwards to (allowance-based).
+ * External LAUNCHPAD venues we reroute through the FeeRouter, with the CLASSIC
+ * (allowance-based) router the FeeRouter forwards to and its swap-calldata shape.
  *
- * INVARIANT: a venue appears here ONLY when its SwapRouter02 is ALSO allow-listed
- * in the deployed FeeRouter -- the two MUST be wired together, or a wrapped swap
- * reverts RouterNotAllowed. So this map is empty until a launchpad venue is
- * explicitly activated, which keeps the whole feature a strict no-op meanwhile.
+ * INVARIANT: a venue appears here ONLY when its router is ALSO allow-listed in
+ * the deployed FeeRouter -- the two MUST be wired together, or a wrapped swap
+ * reverts RouterNotAllowed. So a venue is added on activation only, which keeps
+ * the feature a strict no-op meanwhile.
  *
  * NOT here by design: Arcade's own venues (never fee'd), and third-party generic
- * DEXs like synthra/unitflow (they're DEXs, not launchpads -- out of the "fee on
- * external launchpad tokens" policy). Wire real launchpad venues as we get their
- * addresses: Arclight (testnet), radardex/sharc + canonical Uniswap SwapRouter02
- * 0x53bf6b06... (Arc mainnet). Each addition also needs setRouterAllowed on the
- * FeeRouter from the Safe.
+ * DEXs like synthra/unitflow (DEXs, not launchpads -- out of policy). Wire launch
+ * venues as we get addresses: Arclight (testnet, kind arclight-v2), radardex/sharc
+ * + canonical Uniswap SwapRouter02 0x53bf6b06... (Arc mainnet, kind v3). Each also
+ * needs setRouterAllowed on the FeeRouter from the Safe.
  */
-function externalV3Router(provider: ProviderId): Address | null {
-    const map: Partial<Record<ProviderId, Address | undefined>> = {
-        // e.g. "arclight-v3": ADDRESSES.arclightRouter,  (add on activation)
-    };
-    const r = map[provider];
-    return r && r !== "0x0000000000000000000000000000000000000000" ? r : null;
+function externalVenue(provider: ProviderId): { router: Address; kind: VenueKind } | null {
+    const zero = "0x0000000000000000000000000000000000000000";
+    if (provider === "arclight-v2") {
+        const r = ADDRESSES.arclightDexRouter as Address;
+        return r && r !== zero ? { router: r, kind: "arclight-v2" } : null;
+    }
+    // V3 launchpad venues (radardex/sharc/canonical Uniswap) added on activation.
+    return null;
 }
 
 /**
  * Is this winning route a taxable external-token swap?
- * True iff: (a) the FeeRouter is live, (b) the venue is an external V3 venue we
- * can reroute, (c) at least one side is a non-base token (not base<->base).
+ * True iff: (a) the FeeRouter is live, (b) the venue is an external launchpad
+ * venue we can reroute, (c) at least one side is a non-base token (not base<->base).
  */
 export function isTaxableExternalSwap(quote: RouteQuote, tokenIn: Address, tokenOut: Address): boolean {
     if (!ADDRESSES.swapFeeRouter || ADDRESSES.swapFeeRouter === "0x0000000000000000000000000000000000000000") {
         return false;
     }
-    if (externalV3Router(quote.provider) === null) return false; // arcade venues / unsupported
+    if (externalVenue(quote.provider) === null) return false; // arcade venues / unsupported
     const base = baseAssetSet();
     const inBase = base.has(tokenIn.toLowerCase());
     const outBase = base.has(tokenOut.toLowerCase());
@@ -130,9 +134,8 @@ const FEE_ROUTER_ABI = [
  */
 export function wrapWithFeeRouter(quote: RouteQuote, req: QuoteRequest): RouteQuote | null {
     const feeRouter = ADDRESSES.swapFeeRouter as Address;
-    const venueRouter = externalV3Router(quote.provider);
-    if (!venueRouter) return null;
-    if (quote.fee === undefined) return null; // only single-hop V3 (has a fee tier)
+    const venue = externalVenue(quote.provider);
+    if (!venue) return null;
 
     const amountIn = req.amountIn;
     const net = amountIn - (amountIn * BigInt(SWAP_FEE_BPS)) / 10_000n;
@@ -142,22 +145,35 @@ export function wrapWithFeeRouter(quote: RouteQuote, req: QuoteRequest): RouteQu
     const amountOutNet = (quote.amountOut * net) / amountIn;
     const minOut = (amountOutNet * BigInt(10_000 - req.slippageBps)) / 10_000n;
 
-    // Venue calldata: exactInputSingle on `net`, output back to the FeeRouter.
-    const venueSwapData: Hex = encodeFunctionData({
-        abi: SWAP_ROUTER_02_ABI,
-        functionName: "exactInputSingle",
-        args: [
-            {
-                tokenIn: req.tokenIn,
-                tokenOut: req.tokenOut,
-                fee: quote.fee,
-                recipient: feeRouter,
-                amountIn: net,
-                amountOutMinimum: minOut,
-                sqrtPriceLimitX96: 0n,
-            },
-        ],
-    });
+    // Venue calldata swapping `net`, output back to the FeeRouter (which then
+    // sweeps it to the trader). Shape depends on the venue kind.
+    let venueSwapData: Hex;
+    if (venue.kind === "arclight-v2") {
+        venueSwapData = encodeFunctionData({
+            abi: ARCLIGHT_ROUTER_ABI,
+            functionName: "swapExactTokensForTokens",
+            args: [net, minOut, req.tokenIn, req.tokenOut, feeRouter, req.deadline],
+        });
+    } else {
+        // v3 single-hop: needs a fee tier.
+        if (quote.fee === undefined) return null;
+        venueSwapData = encodeFunctionData({
+            abi: SWAP_ROUTER_02_ABI,
+            functionName: "exactInputSingle",
+            args: [
+                {
+                    tokenIn: req.tokenIn,
+                    tokenOut: req.tokenOut,
+                    fee: quote.fee,
+                    recipient: feeRouter,
+                    amountIn: net,
+                    amountOutMinimum: minOut,
+                    sqrtPriceLimitX96: 0n,
+                },
+            ],
+        });
+    }
+    const venueRouter = venue.router;
 
     return {
         ...quote,

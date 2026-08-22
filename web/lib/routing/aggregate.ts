@@ -7,6 +7,7 @@ import { arcadeV2Provider } from "./arcadeV2";
 import { unitflowV3Provider } from "./unitflowV3";
 import { xylonetV1Provider } from "./xylonetV1";
 import { usycTellerV1Provider } from "./usycTellerV1";
+import { arclightProvider } from "./arclight";
 
 /**
  * Provider fan-out + ranking, with NO React and NO wallet dependency, so the
@@ -30,6 +31,7 @@ export const PROVIDERS: RouteProvider[] = [
     unitflowV3Provider,
     xylonetV1Provider,
     usycTellerV1Provider,
+    arclightProvider,
 ];
 
 // Audit R-10 / M4: strict total order. An earlier comparator bucketed pairs to
@@ -45,6 +47,7 @@ const PROVIDER_RANK: Record<string, number> = {
     "xylonet-v1": 2,
     "synthra-v3": 3,
     "unitflow-v3": 4,
+    "arclight-v2": 5,
 };
 
 export function sortQuotes(quotes: RouteQuote[]): RouteQuote[] {

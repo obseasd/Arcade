@@ -237,6 +237,17 @@ export const ADDRESSES = {
   /** UnitFlow UniversalRouter — required for USDC↔X swaps that need a
    *  WRAP_ETH + V3_SWAP + SWEEP command stream. */
   unitflowUniversalRouter: "0xEaF3195bE51861632cd32850973C9515DA48e76F" as Address,
+  /** Arclight (external Arc-testnet launchpad) DEX: a V2-style AMM where
+   *  graduated Arclight tokens live. Custom interface: factory.getPair(a,b),
+   *  pair.getAmountOut(tokenIn,amountIn), router.swapExactTokensForTokens(
+   *  amountIn,amountOutMin,tokenIn,tokenOut,to,deadline). Used to aggregate +
+   *  fee external launchpad tokens. */
+  arclightDexFactory: safeAddress(
+    process.env.NEXT_PUBLIC_ARCLIGHT_FACTORY_ADDRESS ?? (DEPLOYMENTS as { arclightDexFactory?: string }).arclightDexFactory,
+  ),
+  arclightDexRouter: safeAddress(
+    process.env.NEXT_PUBLIC_ARCLIGHT_ROUTER_ADDRESS ?? (DEPLOYMENTS as { arclightDexRouter?: string }).arclightDexRouter,
+  ),
   /** WUSDC (Wrapped USDC, 18 dec) — UnitFlow + Synthra pools route
    *  through this instead of the native 6-dec USDC. */
   wusdc: "0x911b4000D3422F482F4062a913885f7b035382Df" as Address,
