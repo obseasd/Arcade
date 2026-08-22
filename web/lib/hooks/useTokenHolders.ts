@@ -95,7 +95,7 @@ export function useTokenHolders(
     // a trade. The subgraph count query is a single cheap GraphQL call, so poll it
     // fast (matching the trades feed's responsiveness).
     staleTime: 10_000,
-    refetchInterval: 12_000,
+    refetchInterval: 30_000,
     queryFn: async () => {
       if (!GOLDSKY_URL || !token) return null;
       try {
@@ -126,7 +126,7 @@ export function useTokenHolders(
     // the heavy on-chain Transfer scan only runs on a subgraph miss (rare), so
     // the faster cadence does not add RPC load in practice.
     staleTime: 10_000,
-    refetchInterval: 12_000,
+    refetchInterval: 30_000,
     gcTime: SCAN_STALE_MS * 5,
     queryFn: async () => {
       if (!publicClient || !token) return [];

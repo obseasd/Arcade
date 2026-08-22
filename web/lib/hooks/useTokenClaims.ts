@@ -29,7 +29,7 @@ export function useTokenClaims(positionId: bigint | undefined, enabled = true): 
     queryKey: ["arcade", "token-claims", positionId?.toString() ?? null],
     enabled: enabled && !!GOLDSKY_URL && positionId !== undefined && positionId > 0n,
     staleTime: 15_000,
-    refetchInterval: 10_000,
+    refetchInterval: 30_000,
     queryFn: async () => {
       if (!GOLDSKY_URL || positionId === undefined) return [];
       const pid = positionId.toString();

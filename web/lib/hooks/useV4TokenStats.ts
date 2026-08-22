@@ -78,7 +78,7 @@ export function useV4TokenStats(token: Address | undefined, enabled = true): V4T
     queryKey: ["arcade", "v4-token-stats", tokenKey],
     enabled: enabled && !!GOLDSKY_URL && !!tokenKey,
     staleTime: 10_000,
-    refetchInterval: 15_000,
+    refetchInterval: 30_000,
     queryFn: async () => {
       if (!GOLDSKY_URL || !tokenKey) return { totalVolumeUsdc: 0, usdcLiquidity: 0, createdAtSec: 0 };
       // Prefer the O(1) per-token aggregates the subgraph maintains.

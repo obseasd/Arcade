@@ -22,7 +22,7 @@ export function useV4TokenStatsBatch(tokens: Address[]): { statsMap: V4StatsMap;
     queryKey: ["arcade", "v4-token-stats-batch", ...keys],
     enabled: !!GOLDSKY_URL && keys.length > 0,
     staleTime: 10_000,
-    refetchInterval: 15_000,
+    refetchInterval: 30_000,
     queryFn: async () => {
       const map: V4StatsMap = new Map();
       if (!GOLDSKY_URL || keys.length === 0) return map;

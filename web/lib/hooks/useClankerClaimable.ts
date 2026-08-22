@@ -55,7 +55,7 @@ export function useClankerClaimable(token: Address | undefined, refreshKey?: num
     // page left open in an inactive tab.
     query: {
       enabled: positionId > 0n,
-      refetchInterval: 15_000,
+      refetchInterval: 30_000,
       refetchIntervalInBackground: false,
     },
   });

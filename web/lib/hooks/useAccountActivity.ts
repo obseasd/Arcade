@@ -123,7 +123,7 @@ export function useAccountActivity(account: Address | undefined): AccountActivit
     queryKey: ["arcade", "account-activity", acct ?? null],
     enabled: !!GOLDSKY_URL && !!acct,
     staleTime: 15_000,
-    refetchInterval: 15_000,
+    refetchInterval: 30_000,
     queryFn: () => (acct ? fetchAccountTrades(acct) : Promise.resolve([])),
   });
   return data ?? [];
