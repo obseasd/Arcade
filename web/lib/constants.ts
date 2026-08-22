@@ -248,6 +248,15 @@ export const ADDRESSES = {
   arclightDexRouter: safeAddress(
     process.env.NEXT_PUBLIC_ARCLIGHT_ROUTER_ADDRESS ?? (DEPLOYMENTS as { arclightDexRouter?: string }).arclightDexRouter,
   ),
+  /** Canonical Uniswap V3 on Arc MAINNET (chainId 5042; verified 2026-07-17,
+   *  github Uniswap/contracts/deployments/json/5042.json). Immutable. These are
+   *  MAINNET-only: the uniswap-v3 provider is chainId-gated (dormant on testnet
+   *  5042002 where these have no code), so aggregating radardex/sharc/Uniswap
+   *  tokens + the 0.5% fee switches on automatically at the mainnet cutover.
+   *  NOTE: Arc mainnet has NO WETH, so pools are USDC-paired. */
+  uniswapV3Factory: "0xf0db7b58379503491d857db50ac9ece64c653918" as Address,
+  uniswapV3Quoter: "0x7dfd4f31be6814d2906bde155c3e1b146eac1468" as Address,
+  uniswapV3SwapRouter: "0x53bf6b0684ec7ef91e1387da3d1a1769bc5a6f77" as Address,
   /** WUSDC (Wrapped USDC, 18 dec) — UnitFlow + Synthra pools route
    *  through this instead of the native 6-dec USDC. */
   wusdc: "0x911b4000D3422F482F4062a913885f7b035382Df" as Address,

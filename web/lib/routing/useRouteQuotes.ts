@@ -40,6 +40,9 @@ const TRUSTED_SPENDERS: ReadonlySet<string> = new Set(
         // until their addresses are set.
         ADDRESSES.arclightDexRouter,
         ADDRESSES.swapFeeRouter,
+        // Canonical Uniswap V3 SwapRouter02 (Arc mainnet). The uniswap-v3 provider
+        // is chainId-gated so this only matters on mainnet; harmless on testnet.
+        ADDRESSES.uniswapV3SwapRouter,
         USYC_TELLER_ADDRESS,
         PERMIT2_ADDRESS,
     ]

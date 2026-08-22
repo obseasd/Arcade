@@ -58,7 +58,14 @@ function externalVenue(provider: ProviderId): { router: Address; kind: VenueKind
         const r = ADDRESSES.arclightDexRouter as Address;
         return r && r !== zero ? { router: r, kind: "arclight-v2" } : null;
     }
-    // V3 launchpad venues (radardex/sharc/canonical Uniswap) added on activation.
+    if (provider === "uniswap-v3") {
+        // Canonical Uniswap V3 on Arc mainnet (covers radardex/sharc/Uniswap
+        // tokens). The uniswapV3 provider is chainId-gated to mainnet, so this
+        // only ever fires there; the SwapRouter02 must be setRouterAllowed on the
+        // mainnet FeeRouter (Safe) for the wrap to execute.
+        const r = ADDRESSES.uniswapV3SwapRouter as Address;
+        return r && r !== zero ? { router: r, kind: "v3" } : null;
+    }
     return null;
 }
 

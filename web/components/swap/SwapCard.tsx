@@ -630,7 +630,11 @@ export function SwapCard({ tab, onTabChange }: SwapCardProps) {
       // Arclight (external launchpad DEX): custom V2-style router, classic
       // allowance, no Permit2 -- rides the executor path. When fee-wrapped its
       // executor is the ArcadeSwapFeeRouter (still classic allowance).
-      activeRoute.provider === "arclight-v2");
+      activeRoute.provider === "arclight-v2" ||
+      // Canonical Uniswap V3 (Arc mainnet): SwapRouter02 exactInputSingle,
+      // classic allowance (no Permit2). Same external executor path; fee-wrapped
+      // it targets the ArcadeSwapFeeRouter. Dormant off mainnet.
+      activeRoute.provider === "uniswap-v3");
   // Non-Permit2 external routes (XyloNet, and the USYC Teller deposit leg)
   // execute through their own pre-built executor but still pull the input via
   // transferFrom, so they need a classic ERC20 approve to the route's spender.
